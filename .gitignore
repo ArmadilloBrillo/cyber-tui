@@ -1,4 +1,4 @@
 .env
-cyber-tui
+/cyber-tui
 *.exe
 *.test
