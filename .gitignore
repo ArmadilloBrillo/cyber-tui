@@ -1,0 +1,4 @@
+.env
+cyber-tui
+*.exe
+*.test

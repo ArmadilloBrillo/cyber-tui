@@ -1,0 +1,85 @@
+# CLAUDE.md
+
+This file defines workflow guardrails for Claude. It is not project documentation.
+
+---
+
+## Project Reference
+
+- **What:** TUI client for cyberspace.online (retro text-only social network)
+- **Stack:** Go + Bubble Tea (TUI), Lip Gloss (styling), Wish (SSH hosting)
+- **Project docs:** `docs/` folder — numbered per feature (e.g. `docs/01-auth.md`)
+- **API status:** cyberspace.online API access not yet granted — UI built against mock layer
+
+> Update this section as the project evolves so I can orient without a full code review.
+
+---
+
+## Git Workflow
+
+### Branch structure
+- `main` — releases only, merged from `dev` at milestone completion
+- `dev` — integration branch
+- `feature/short-description` — new features, branched from `dev`
+- `fix/short-description` — bug fixes, branched from `dev`
+- `hotfix/short-description` — critical fixes, branched from `main`, merged back to both `main` and `dev`
+- `chore/short-description` — non-functional changes (tooling, config, deps)
+
+### Commit messages — Conventional Commits
+- `feat:` new feature
+- `fix:` bug fix
+- `docs:` documentation only
+- `test:` test additions or changes
+- `chore:` maintenance, tooling, dependencies
+- `refactor:` code restructure with no behavior change
+
+### Merge rules — **HARD STOPS**
+- **Never merge to `dev` or `main` without explicit user permission**
+- Never merge to `dev` if any test fails
+- Never merge to `dev` if the feature is undocumented
+- Never merge to `dev` if there are linter warnings
+- `dev` → `main` only when a full milestone is complete and user approves
+
+### Releases
+A milestone is a named set of features forming a coherent releasable version. The user defines milestone scope and approves each release.
+
+---
+
+## Coding Rules
+
+- Always explain planned changes before making them
+- Always ask when unsure — do not guess
+- No monoliths: one responsibility per package, docs per feature
+- No linter warnings (`go vet`, `staticcheck` or equivalent must be clean)
+- Never commit secrets, tokens, credentials, or SSH keys
+- `.env` is gitignored; `.env.example` is committed with placeholder values only
+
+---
+
+## Testing
+
+- Write unit tests for all new features
+- After planning a feature, imagine how it could fail — write tests for those failure modes
+- Automated smoke tests for end-to-end flows
+- All tests must pass before requesting a merge to `dev`
+- Always present test results to the user after running tests
+- At the end of every development phase, present a summary table of all tests run with columns: Group | Tests | Result
+
+---
+
+## Definition of Done
+
+A feature is complete when:
+1. All unit tests pass
+2. Automated smoke tests pass
+3. No linter warnings
+4. Feature is documented in `docs/XX-feature-name.md` (number matches feature number)
+5. User has explicitly approved the merge to `dev`
+
+---
+
+## Secrets
+
+- Never commit: API tokens, passwords, SSH host keys, `.env` files
+- Always commit: `.env.example` with placeholder values
+- Credentials are loaded from environment variables at runtime

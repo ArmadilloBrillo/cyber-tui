@@ -1,0 +1,138 @@
+package screens
+
+import (
+	"fmt"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
+)
+
+type ChatroomsModel struct {
+	rooms       []model.Room
+	activeRoom  *model.Room
+	messages    []model.Message
+	viewport    viewport.Model
+	input       textinput.Model
+	ready       bool
+	err         error
+}
+
+type SendRoomMessageMsg struct {
+	RoomID string
+	Body   string
+}
+
+func NewChatroomsModel() ChatroomsModel {
+	input := textinput.New()
+	input.Placeholder = "type a message..."
+	input.Width = 60
+
+	return ChatroomsModel{input: input}
+}
+
+func (m ChatroomsModel) SetRooms(rooms []model.Room) ChatroomsModel {
+	m.rooms = rooms
+	return m
+}
+
+func (m ChatroomsModel) SetActiveRoom(room model.Room, messages []model.Message) ChatroomsModel {
+	m.activeRoom = &room
+	m.messages = messages
+	if m.ready {
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+	}
+	m.input.Focus()
+	return m
+}
+
+func (m ChatroomsModel) Init() tea.Cmd { return textinput.Blink }
+
+func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		if !m.ready {
+			m.viewport = viewport.New(msg.Width-24, msg.Height-6)
+			m.ready = true
+		} else {
+			m.viewport.Width = msg.Width - 24
+			m.viewport.Height = msg.Height - 6
+		}
+		if m.activeRoom != nil {
+			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
+		}
+	case tea.KeyMsg:
+		if msg.String() == "enter" && m.activeRoom != nil {
+			val := m.input.Value()
+			if val == "" {
+				break
+			}
+			m.input.Reset()
+			return m, func() tea.Msg {
+				return SendRoomMessageMsg{RoomID: m.activeRoom.ID, Body: val}
+			}
+		}
+	}
+
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	var vpCmd tea.Cmd
+	m.viewport, vpCmd = m.viewport.Update(msg)
+	return m, tea.Batch(cmd, vpCmd)
+}
+
+func (m ChatroomsModel) renderRoomList() string {
+	out := theme.Title.Render("rooms") + "\n\n"
+	for _, r := range m.rooms {
+		style := theme.Subtle
+		if m.activeRoom != nil && r.ID == m.activeRoom.ID {
+			style = theme.Highlight
+		}
+		out += style.Render(r.Name) + "\n"
+		out += theme.Subtle.Render(fmt.Sprintf("  %d online", r.Members)) + "\n\n"
+	}
+	return out
+}
+
+func (m ChatroomsModel) renderMessages() string {
+	if len(m.messages) == 0 {
+		return theme.Subtle.Render("no messages yet")
+	}
+	var out string
+	for _, msg := range m.messages {
+		ts := theme.Subtle.Render(msg.CreatedAt.Format("15:04"))
+		author := theme.Highlight.Render("@" + msg.From.Username)
+		body := theme.Base.Render(msg.Body)
+		out += lipgloss.JoinHorizontal(lipgloss.Top, ts, "  ", author, "  ", body) + "\n"
+	}
+	return out
+}
+
+func (m ChatroomsModel) View() string {
+	if m.err != nil {
+		return theme.Error.Render(fmt.Sprintf("chatroom error: %s", m.err))
+	}
+
+	roomList := theme.Border.Width(20).Render(m.renderRoomList())
+
+	var chatArea string
+	if m.activeRoom == nil {
+		chatArea = theme.Subtle.Render("\n  select a room with enter")
+	} else {
+		header := theme.Title.Render(m.activeRoom.Name) +
+			"  " + theme.Subtle.Render(m.activeRoom.Description)
+		inputBox := theme.Border.Render(m.input.View())
+		chatArea = lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			m.viewport.View(),
+			inputBox,
+		)
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, roomList, "  ", chatArea)
+}
