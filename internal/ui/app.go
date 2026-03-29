@@ -47,6 +47,11 @@ type App struct {
 	width       int
 	height      int
 
+	// autoEmail and autoPassword are set from environment variables.
+	// When both are non-empty, Init fires loginCmd immediately.
+	autoEmail    string
+	autoPassword string
+
 	login     screens.LoginModel
 	feed      screens.FeedModel
 	chatrooms screens.ChatroomsModel
@@ -67,9 +72,20 @@ func NewApp(client api.Client) App {
 	}
 }
 
+// WithAutoLogin pre-fills credentials loaded from the environment.
+// When both email and password are non-empty, Init skips the login screen.
+func (a App) WithAutoLogin(email, password string) App {
+	a.autoEmail = email
+	a.autoPassword = password
+	return a
+}
+
 // --- init ---
 
 func (a App) Init() tea.Cmd {
+	if a.autoEmail != "" && a.autoPassword != "" {
+		return a.loginCmd(a.autoEmail, a.autoPassword)
+	}
 	return a.login.Init()
 }
 
@@ -81,6 +97,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
+		// Broadcast to all screens so their viewports initialise before they
+		// become active. The active screen gets a second update via delegateUpdate
+		// below, which is harmless (it just re-applies the same size).
+		a.feed, _ = a.feed.Update(msg)
+		a.chatrooms, _ = a.chatrooms.Update(msg)
+		a.dms, _ = a.dms.Update(msg)
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -134,7 +156,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Feed ---
 	case feedLoadedMsg:
-		a.feed = a.feed.SetPosts(msg.posts)
+		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
+
+	case feedPageMsg:
+		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
+
+	case screens.LoadMoreFeedMsg:
+		return a, a.loadFeedPageCmd(msg.Cursor)
 
 	// --- Chatrooms ---
 	case roomsLoadedMsg:
@@ -302,7 +330,14 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	return a.loadFeedCmd()
 }
 
-type feedLoadedMsg struct{ posts []model.Post }
+type feedLoadedMsg struct {
+	posts  []model.Post
+	cursor string
+}
+type feedPageMsg struct {
+	posts  []model.Post
+	cursor string
+}
 type roomsLoadedMsg struct{ rooms []model.Room }
 type convsLoadedMsg struct{ convs []model.Conversation }
 type profileLoadedMsg struct{ user model.User }
@@ -310,11 +345,21 @@ type errMsg struct{ err error }
 
 func (a *App) loadFeedCmd() tea.Cmd {
 	return func() tea.Msg {
-		posts, err := a.client.GetFeed("")
+		posts, cursor, err := a.client.GetFeed("")
 		if err != nil {
 			return errMsg{err}
 		}
-		return feedLoadedMsg{posts}
+		return feedLoadedMsg{posts: posts, cursor: cursor}
+	}
+}
+
+func (a *App) loadFeedPageCmd(cursor string) tea.Cmd {
+	return func() tea.Msg {
+		posts, nextCursor, err := a.client.GetFeed(cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return feedPageMsg{posts: posts, cursor: nextCursor}
 	}
 }
 

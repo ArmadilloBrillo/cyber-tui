@@ -40,7 +40,7 @@ func (m *MockClient) Logout() error {
 	return nil
 }
 
-func (m *MockClient) GetFeed(cursor string) ([]model.Post, error) {
+func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 	return []model.Post{
 		{
 			ID:             "p1",
@@ -66,7 +66,7 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, error) {
 			CreatedAt:      time.Now().Add(-3 * time.Hour),
 			Topics:         []string{"mission"},
 		},
-	}, nil
+	}, "", nil
 }
 
 func (m *MockClient) CreatePost(content string, topics []string) (model.Post, error) {
