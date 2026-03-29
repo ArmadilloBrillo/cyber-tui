@@ -40,6 +40,7 @@ var menuTabs = []struct {
 
 type App struct {
 	client      api.Client
+	tokens      model.Tokens
 	currentUser model.User
 	active      screen
 	focus       focusTarget
@@ -121,7 +122,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Login flow ---
 	case screens.SubmitLoginMsg:
-		return a, a.loginCmd(msg.Username, msg.Password)
+		return a, a.loginCmd(msg.Email, msg.Password)
 
 	case screens.LoginMsg:
 		return a, a.afterLoginCmd()
@@ -278,19 +279,19 @@ func (a App) renderStatusBar() string {
 
 // --- commands ---
 
-func (a *App) loginCmd(username, password string) tea.Cmd {
+func (a *App) loginCmd(email, password string) tea.Cmd {
 	return func() tea.Msg {
-		token, err := a.client.Login(username, password)
+		tokens, err := a.client.Login(email, password)
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		_ = token
-		user, err := a.client.GetProfile(username)
+		a.tokens = tokens
+		user, err := a.client.GetOwnProfile()
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
 		a.currentUser = user
-		a.dms = screens.NewDMsModel(username)
+		a.dms = screens.NewDMsModel(user.Username)
 		return screens.LoginMsg{}
 	}
 }
@@ -309,7 +310,7 @@ type errMsg struct{ err error }
 
 func (a *App) loadFeedCmd() tea.Cmd {
 	return func() tea.Msg {
-		posts, err := a.client.GetFeed(1)
+		posts, err := a.client.GetFeed("")
 		if err != nil {
 			return errMsg{err}
 		}
@@ -339,7 +340,7 @@ func (a *App) loadConvsCmd() tea.Cmd {
 
 func (a *App) loadProfileCmd() tea.Cmd {
 	return func() tea.Msg {
-		user, err := a.client.GetProfile(a.currentUser.Username)
+		user, err := a.client.GetOwnProfile()
 		if err != nil {
 			return errMsg{err}
 		}
@@ -367,7 +368,8 @@ func (a *App) sendDMCmd(convID, body string) tea.Cmd {
 
 func (a *App) saveProfileCmd(bio string) tea.Cmd {
 	return func() tea.Msg {
-		if err := a.client.UpdateProfile(bio); err != nil {
+		update := model.ProfileUpdate{Bio: &bio}
+		if err := a.client.UpdateProfile(update); err != nil {
 			return errMsg{err}
 		}
 		a.currentUser.Bio = bio

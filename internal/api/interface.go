@@ -6,24 +6,25 @@ import "github.com/ragnar/cyber-tui/internal/model"
 // The mock and real implementations both satisfy this interface.
 type Client interface {
 	// Auth
-	Login(username, password string) (token string, err error)
+	Login(email, password string) (model.Tokens, error)
 	Logout() error
 
-	// Feed
-	GetFeed(page int) ([]model.Post, error)
-	CreatePost(body string, topics []string) (model.Post, error)
+	// Feed — pass empty cursor for first page; use returned cursor for next page
+	GetFeed(cursor string) ([]model.Post, error)
+	CreatePost(content string, topics []string) (model.Post, error)
 
-	// Chatrooms
+	// Profile
+	GetOwnProfile() (model.User, error)
+	GetProfile(username string) (model.User, error)
+	UpdateProfile(update model.ProfileUpdate) error
+
+	// Chatrooms — NOTE: real impl uses Firebase RTDB with RTDBToken — pending feature/rtdb-chat
 	GetRooms() ([]model.Room, error)
 	GetRoomMessages(roomID string, limit int) ([]model.Message, error)
 	SendRoomMessage(roomID, body string) error
 
-	// Direct messages
+	// Direct messages — NOTE: real impl uses Firebase RTDB with RTDBToken — pending feature/rtdb-chat
 	GetConversations() ([]model.Conversation, error)
 	GetMessages(conversationID string, limit int) ([]model.Message, error)
 	SendMessage(conversationID, body string) error
-
-	// Profile
-	GetProfile(username string) (model.User, error)
-	UpdateProfile(bio string) error
 }
