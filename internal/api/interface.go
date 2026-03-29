@@ -9,8 +9,9 @@ type Client interface {
 	Login(email, password string) (model.Tokens, error)
 	Logout() error
 
-	// Feed — pass empty cursor for first page; use returned cursor for next page
-	GetFeed(cursor string) ([]model.Post, error)
+	// Feed — pass empty cursor for first page; use returned cursor for next page.
+	// Returns empty next-cursor when there are no more pages.
+	GetFeed(cursor string) ([]model.Post, string, error)
 	CreatePost(content string, topics []string) (model.Post, error)
 
 	// Profile

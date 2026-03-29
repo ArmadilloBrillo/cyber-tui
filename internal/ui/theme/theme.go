@@ -19,7 +19,7 @@ var (
 	ColorYellow     = lipgloss.Color("#FFD700")
 	ColorRed        = lipgloss.Color("#FF003C")
 	ColorBackground = lipgloss.Color("#0D0D0D")
-	ColorMuted      = lipgloss.Color("#444444")
+	ColorMuted      = lipgloss.Color("#888888")
 	ColorWhite      = lipgloss.Color("#E0E0E0")
 )
 
@@ -59,7 +59,7 @@ var (
 		Padding(0, 1)
 
 	Tab = lipgloss.NewStyle().
-		Foreground(ColorMuted).
+		Foreground(ColorDimGreen).
 		Padding(0, 2)
 
 	ActiveTab = lipgloss.NewStyle().

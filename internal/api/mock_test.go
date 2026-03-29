@@ -80,7 +80,7 @@ func TestMockLogout(t *testing.T) {
 
 func TestMockGetFeed_ReturnsPosts(t *testing.T) {
 	m := newMock()
-	posts, err := m.GetFeed("")
+	posts, _, err := m.GetFeed("")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestMockGetFeed_ReturnsPosts(t *testing.T) {
 
 func TestMockGetFeed_PostsHaveID(t *testing.T) {
 	m := newMock()
-	posts, _ := m.GetFeed("")
+	posts, _, _ := m.GetFeed("")
 	for _, p := range posts {
 		if p.ID == "" {
 			t.Errorf("post has empty ID")
@@ -101,7 +101,7 @@ func TestMockGetFeed_PostsHaveID(t *testing.T) {
 
 func TestMockGetFeed_PostsHaveAuthors(t *testing.T) {
 	m := newMock()
-	posts, _ := m.GetFeed("")
+	posts, _, _ := m.GetFeed("")
 	for _, p := range posts {
 		if p.AuthorUsername == "" {
 			t.Errorf("post %q has empty AuthorUsername", p.ID)
@@ -111,7 +111,7 @@ func TestMockGetFeed_PostsHaveAuthors(t *testing.T) {
 
 func TestMockGetFeed_PostsHaveContent(t *testing.T) {
 	m := newMock()
-	posts, _ := m.GetFeed("")
+	posts, _, _ := m.GetFeed("")
 	for _, p := range posts {
 		if strings.TrimSpace(p.Content) == "" {
 			t.Errorf("post %q has empty content", p.ID)
@@ -121,10 +121,21 @@ func TestMockGetFeed_PostsHaveContent(t *testing.T) {
 
 func TestMockGetFeed_CursorIgnored(t *testing.T) {
 	m := newMock()
-	posts1, _ := m.GetFeed("")
-	posts2, _ := m.GetFeed("some-cursor")
+	posts1, _, _ := m.GetFeed("")
+	posts2, _, _ := m.GetFeed("some-cursor")
 	if len(posts1) != len(posts2) {
 		t.Error("mock should return same posts regardless of cursor")
+	}
+}
+
+func TestMockGetFeed_ReturnsEmptyCursor(t *testing.T) {
+	m := newMock()
+	_, cursor, err := m.GetFeed("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cursor != "" {
+		t.Errorf("mock cursor = %q, want empty string", cursor)
 	}
 }
 
