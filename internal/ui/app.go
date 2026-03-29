@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"fmt"
-
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/api"
@@ -21,10 +19,30 @@ const (
 	screenProfile
 )
 
+type focusTarget int
+
+const (
+	focusMenu focusTarget = iota
+	focusList             // reserved for future list navigation
+)
+
+// menuTabs is the ordered list of navigable screens, shared by the
+// renderer and key handler so the order is never out of sync.
+var menuTabs = []struct {
+	label string
+	s     screen
+}{
+	{"feed", screenFeed},
+	{"rooms", screenChatrooms},
+	{"mail", screenDMs},
+	{"profile", screenProfile},
+}
+
 type App struct {
 	client      api.Client
 	currentUser model.User
 	active      screen
+	focus       focusTarget
 	width       int
 	height      int
 
@@ -39,6 +57,7 @@ func NewApp(client api.Client) App {
 	return App{
 		client:    client,
 		active:    screenLogin,
+		focus:     focusMenu,
 		login:     screens.NewLoginModel(),
 		feed:      screens.NewFeedModel(),
 		chatrooms: screens.NewChatroomsModel(),
@@ -63,13 +82,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.height = msg.Height
 
 	case tea.KeyMsg:
-		// Global keys
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if a.active != screenLogin {
 				return a, tea.Quit
 			}
-		// Tab navigation (only when logged in)
+		// Number shortcuts — always jump directly
 		case "1":
 			if a.active != screenLogin {
 				a.active = screenFeed
@@ -89,6 +107,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.active != screenLogin {
 				a.active = screenProfile
 				return a, a.loadProfileCmd()
+			}
+		// Arrow navigation — left/right cycle tabs when no input is focused
+		case "left":
+			if a.active != screenLogin && a.focus == focusMenu && !a.activeScreenHasFocusedInput() {
+				return a, a.navigateTab(-1)
+			}
+		case "right":
+			if a.active != screenLogin && a.focus == focusMenu && !a.activeScreenHasFocusedInput() {
+				return a, a.navigateTab(+1)
 			}
 		}
 
@@ -130,7 +157,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, a.saveProfileCmd(msg.Bio)
 
 	case errMsg:
-		// surface errors to the active screen
 		switch a.active {
 		case screenFeed:
 			a.feed = a.feed.SetError(msg.err)
@@ -139,8 +165,47 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Delegate to active screen
 	return a, a.delegateUpdate(msg)
+}
+
+// activeScreenHasFocusedInput returns true when the current screen has a
+// text input that is focused, preventing arrow keys from being consumed by
+// the tab navigator instead.
+func (a App) activeScreenHasFocusedInput() bool {
+	switch a.active {
+	case screenChatrooms:
+		return a.chatrooms.InputFocused()
+	case screenDMs:
+		return a.dms.InputFocused()
+	}
+	return false
+}
+
+// tabIndex returns the index of the currently active screen within menuTabs.
+func (a App) tabIndex() int {
+	for i, t := range menuTabs {
+		if t.s == a.active {
+			return i
+		}
+	}
+	return 0
+}
+
+// navigateTab moves the active tab by delta (-1 or +1), wrapping at the ends.
+func (a *App) navigateTab(delta int) tea.Cmd {
+	idx := (a.tabIndex() + delta + len(menuTabs)) % len(menuTabs)
+	a.active = menuTabs[idx].s
+	switch a.active {
+	case screenFeed:
+		return a.loadFeedCmd()
+	case screenChatrooms:
+		return a.loadRoomsCmd()
+	case screenDMs:
+		return a.loadConvsCmd()
+	case screenProfile:
+		return a.loadProfileCmd()
+	}
+	return nil
 }
 
 func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
@@ -166,32 +231,25 @@ func (a App) View() string {
 	if a.active == screenLogin {
 		return a.login.View()
 	}
+	// Fix the content area to the available height so the status bar
+	// is always anchored to the bottom regardless of content length.
+	contentHeight := a.height - theme.ChromeHeight
+	content := lipgloss.NewStyle().Height(contentHeight).Render(a.renderActiveScreen())
 	return lipgloss.JoinVertical(lipgloss.Left,
 		a.renderTabBar(),
-		a.renderActiveScreen(),
+		"", // separator row
+		content,
 		a.renderStatusBar(),
 	)
 }
 
 func (a App) renderTabBar() string {
-	tabs := []struct {
-		key   string
-		label string
-		s     screen
-	}{
-		{"1", "feed", screenFeed},
-		{"2", "rooms", screenChatrooms},
-		{"3", "mail", screenDMs},
-		{"4", "profile", screenProfile},
-	}
-
 	var bar string
-	for _, t := range tabs {
-		label := fmt.Sprintf("[%s] %s", t.key, t.label)
+	for _, t := range menuTabs {
 		if a.active == t.s {
-			bar += theme.ActiveTab.Render(label)
+			bar += theme.ActiveTab.Render(t.label)
 		} else {
-			bar += theme.Tab.Render(label)
+			bar += theme.Tab.Render(t.label)
 		}
 	}
 	return bar
@@ -213,7 +271,7 @@ func (a App) renderActiveScreen() string {
 
 func (a App) renderStatusBar() string {
 	user := theme.StatusBar.Render("@" + a.currentUser.Username)
-	hint := theme.StatusBar.Render("  q · quit   1-4 · navigate")
+	hint := theme.StatusBar.Render("  q · quit   ←→ · tabs   1-4 · jump")
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
 	return lipgloss.JoinHorizontal(lipgloss.Top, user, spacer, hint)
 }

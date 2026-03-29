@@ -11,6 +11,9 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
+// localChrome accounts for the header row and bordered input box below the viewport.
+const chatroomLocalChrome = 3
+
 type ChatroomsModel struct {
 	rooms       []model.Room
 	activeRoom  *model.Room
@@ -50,17 +53,22 @@ func (m ChatroomsModel) SetActiveRoom(room model.Room, messages []model.Message)
 	return m
 }
 
+// InputFocused reports whether the message input is currently active.
+// Used by the app to decide whether arrow keys should navigate tabs or the input cursor.
+func (m ChatroomsModel) InputFocused() bool { return m.input.Focused() }
+
 func (m ChatroomsModel) Init() tea.Cmd { return textinput.Blink }
 
 func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		h := msg.Height - theme.ChromeHeight - chatroomLocalChrome
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width-24, msg.Height-6)
+			m.viewport = viewport.New(msg.Width-24, h)
 			m.ready = true
 		} else {
 			m.viewport.Width = msg.Width - 24
-			m.viewport.Height = msg.Height - 6
+			m.viewport.Height = h
 		}
 		if m.activeRoom != nil {
 			m.viewport.SetContent(m.renderMessages())

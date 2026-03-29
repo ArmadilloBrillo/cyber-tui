@@ -40,7 +40,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width, msg.Height-4)
+			m.viewport = viewport.New(msg.Width, msg.Height-theme.ChromeHeight)
 			m.viewport.SetContent(m.renderPosts())
 			m.ready = true
 		} else {

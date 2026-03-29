@@ -11,6 +11,9 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
+// dmLocalChrome accounts for the header row and bordered input box below the viewport.
+const dmLocalChrome = 3
+
 type DMsModel struct {
 	conversations    []model.Conversation
 	activeConv       *model.Conversation
@@ -49,17 +52,22 @@ func (m DMsModel) SetActiveConversation(conv model.Conversation) DMsModel {
 	return m
 }
 
+// InputFocused reports whether the message input is currently active.
+// Used by the app to decide whether arrow keys should navigate tabs or the input cursor.
+func (m DMsModel) InputFocused() bool { return m.input.Focused() }
+
 func (m DMsModel) Init() tea.Cmd { return textinput.Blink }
 
 func (m DMsModel) Update(msg tea.Msg) (DMsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		h := msg.Height - theme.ChromeHeight - dmLocalChrome
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width-28, msg.Height-6)
+			m.viewport = viewport.New(msg.Width-28, h)
 			m.ready = true
 		} else {
 			m.viewport.Width = msg.Width - 28
-			m.viewport.Height = msg.Height - 6
+			m.viewport.Height = h
 		}
 		if m.activeConv != nil {
 			m.viewport.SetContent(m.renderMessages())

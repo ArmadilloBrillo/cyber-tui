@@ -2,6 +2,15 @@ package theme
 
 import "github.com/charmbracelet/lipgloss"
 
+// Layout constants — shared across app and screens so viewport heights
+// are calculated from a single source of truth rather than magic numbers.
+const (
+	TabBarHeight    = 1 // single text row, no border
+	StatusBarHeight = 1
+	SeparatorHeight = 1 // blank row between tab bar and screen content
+	ChromeHeight    = TabBarHeight + StatusBarHeight + SeparatorHeight // = 3
+)
+
 // Cyber palette — green-on-black terminal aesthetic
 var (
 	ColorGreen      = lipgloss.Color("#00FF41")
@@ -54,10 +63,8 @@ var (
 		Padding(0, 2)
 
 	ActiveTab = lipgloss.NewStyle().
+		Background(ColorDimGreen).
 		Foreground(ColorGreen).
 		Bold(true).
-		Padding(0, 2).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderBottom(true).
-		BorderForeground(ColorGreen)
+		Padding(0, 2)
 )
