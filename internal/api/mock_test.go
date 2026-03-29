@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ragnar/cyber-tui/internal/api"
+	"github.com/ragnar/cyber-tui/internal/model"
 )
 
 func newMock() *api.MockClient {
@@ -15,26 +16,43 @@ func newMock() *api.MockClient {
 
 func TestMockLogin_Success(t *testing.T) {
 	m := newMock()
-	token, err := m.Login("neuromancer", "secret")
+	tokens, err := m.Login("neo@matrix.net", "secret")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if token == "" {
-		t.Fatal("expected non-empty token")
+	if tokens.IDToken == "" {
+		t.Fatal("expected non-empty IDToken")
 	}
 }
 
-func TestMockLogin_EmptyUsername(t *testing.T) {
+func TestMockLogin_AllTokensNonEmpty(t *testing.T) {
+	m := newMock()
+	tokens, err := m.Login("neo@matrix.net", "secret")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tokens.IDToken == "" {
+		t.Error("IDToken is empty")
+	}
+	if tokens.RefreshToken == "" {
+		t.Error("RefreshToken is empty")
+	}
+	if tokens.RTDBToken == "" {
+		t.Error("RTDBToken is empty")
+	}
+}
+
+func TestMockLogin_EmptyEmail(t *testing.T) {
 	m := newMock()
 	_, err := m.Login("", "secret")
 	if err == nil {
-		t.Fatal("expected error for empty username")
+		t.Fatal("expected error for empty email")
 	}
 }
 
 func TestMockLogin_EmptyPassword(t *testing.T) {
 	m := newMock()
-	_, err := m.Login("neuromancer", "")
+	_, err := m.Login("neo@matrix.net", "")
 	if err == nil {
 		t.Fatal("expected error for empty password")
 	}
@@ -52,7 +70,7 @@ func TestMockLogin_BothEmpty(t *testing.T) {
 
 func TestMockLogout(t *testing.T) {
 	m := newMock()
-	_, _ = m.Login("neuromancer", "secret")
+	_, _ = m.Login("neo@matrix.net", "secret")
 	if err := m.Logout(); err != nil {
 		t.Fatalf("unexpected error on logout: %v", err)
 	}
@@ -62,7 +80,7 @@ func TestMockLogout(t *testing.T) {
 
 func TestMockGetFeed_ReturnsPosts(t *testing.T) {
 	m := newMock()
-	posts, err := m.GetFeed(1)
+	posts, err := m.GetFeed("")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,23 +89,42 @@ func TestMockGetFeed_ReturnsPosts(t *testing.T) {
 	}
 }
 
-func TestMockGetFeed_PostsHaveAuthors(t *testing.T) {
+func TestMockGetFeed_PostsHaveID(t *testing.T) {
 	m := newMock()
-	posts, _ := m.GetFeed(1)
+	posts, _ := m.GetFeed("")
 	for _, p := range posts {
-		if p.Author.Username == "" {
-			t.Errorf("post %q has empty author username", p.ID)
+		if p.ID == "" {
+			t.Errorf("post has empty ID")
 		}
 	}
 }
 
-func TestMockGetFeed_PostsHaveBody(t *testing.T) {
+func TestMockGetFeed_PostsHaveAuthors(t *testing.T) {
 	m := newMock()
-	posts, _ := m.GetFeed(1)
+	posts, _ := m.GetFeed("")
 	for _, p := range posts {
-		if strings.TrimSpace(p.Body) == "" {
-			t.Errorf("post %q has empty body", p.ID)
+		if p.AuthorUsername == "" {
+			t.Errorf("post %q has empty AuthorUsername", p.ID)
 		}
+	}
+}
+
+func TestMockGetFeed_PostsHaveContent(t *testing.T) {
+	m := newMock()
+	posts, _ := m.GetFeed("")
+	for _, p := range posts {
+		if strings.TrimSpace(p.Content) == "" {
+			t.Errorf("post %q has empty content", p.ID)
+		}
+	}
+}
+
+func TestMockGetFeed_CursorIgnored(t *testing.T) {
+	m := newMock()
+	posts1, _ := m.GetFeed("")
+	posts2, _ := m.GetFeed("some-cursor")
+	if len(posts1) != len(posts2) {
+		t.Error("mock should return same posts regardless of cursor")
 	}
 }
 
@@ -99,8 +136,8 @@ func TestMockCreatePost_ReturnsPost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if post.Body != "hello matrix" {
-		t.Errorf("expected body %q, got %q", "hello matrix", post.Body)
+	if post.Content != "hello matrix" {
+		t.Errorf("expected content %q, got %q", "hello matrix", post.Content)
 	}
 }
 
@@ -192,6 +229,17 @@ func TestMockSendMessage_NoError(t *testing.T) {
 
 // --- Profile ---
 
+func TestMockGetOwnProfile_ReturnsUser(t *testing.T) {
+	m := newMock()
+	user, err := m.GetOwnProfile()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if user.Username == "" {
+		t.Error("expected non-empty username from GetOwnProfile")
+	}
+}
+
 func TestMockGetProfile_KnownUser(t *testing.T) {
 	m := newMock()
 	user, err := m.GetProfile("neuromancer")
@@ -205,9 +253,12 @@ func TestMockGetProfile_KnownUser(t *testing.T) {
 
 func TestMockGetProfile_UnknownUser(t *testing.T) {
 	m := newMock()
-	_, err := m.GetProfile("nobody")
-	if err == nil {
-		t.Fatal("expected error for unknown user")
+	user, err := m.GetProfile("nobody")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if user.Username != "nobody" {
+		t.Errorf("expected generated username %q, got %q", "nobody", user.Username)
 	}
 }
 
@@ -221,7 +272,8 @@ func TestMockGetProfile_EmptyUsername(t *testing.T) {
 
 func TestMockUpdateProfile_NoError(t *testing.T) {
 	m := newMock()
-	if err := m.UpdateProfile("new bio"); err != nil {
+	bio := "new bio"
+	if err := m.UpdateProfile(model.ProfileUpdate{Bio: &bio}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-type LoginMsg struct{ Token string }
+type LoginMsg struct{}
 type LoginErrMsg struct{ Err error }
 
 type LoginModel struct {
@@ -21,7 +21,7 @@ type LoginModel struct {
 
 func NewLoginModel() LoginModel {
 	user := textinput.New()
-	user.Placeholder = "username"
+	user.Placeholder = "email"
 	user.Focus()
 	user.Width = 30
 
@@ -76,14 +76,14 @@ func (m *LoginModel) submitCmd() tea.Cmd {
 	// We send credentials up via a message.
 	return func() tea.Msg {
 		return SubmitLoginMsg{
-			Username: m.inputs[0].Value(),
+			Email:    m.inputs[0].Value(),
 			Password: m.inputs[1].Value(),
 		}
 	}
 }
 
 type SubmitLoginMsg struct {
-	Username string
+	Email    string
 	Password string
 }
 
@@ -98,7 +98,7 @@ func (m LoginModel) View() string {
 
 	subtitle := theme.Subtle.Render("  social media de-imagined  ·  cyberspace.online")
 
-	userLabel := theme.Subtle.Render("username")
+	userLabel := theme.Subtle.Render("email")
 	passLabel := theme.Subtle.Render("password")
 
 	form := lipgloss.JoinVertical(lipgloss.Left,

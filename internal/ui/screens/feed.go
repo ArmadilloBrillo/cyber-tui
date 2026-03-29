@@ -67,10 +67,10 @@ func (m FeedModel) renderPosts() string {
 
 func renderPost(p model.Post) string {
 	header := lipgloss.JoinHorizontal(lipgloss.Top,
-		theme.Highlight.Render("@"+p.Author.Username),
+		theme.Highlight.Render("@"+p.AuthorUsername),
 		theme.Subtle.Render("  "+p.CreatedAt.Format("15:04")),
 	)
-	body := theme.Base.Render(p.Body)
+	body := theme.Base.Render(p.Content)
 
 	topics := ""
 	for _, t := range p.Topics {

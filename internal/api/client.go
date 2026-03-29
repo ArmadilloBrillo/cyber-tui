@@ -7,30 +7,42 @@ import (
 )
 
 // HTTPClient implements Client against the real cyberspace.online API.
-// All methods are stubs until API access is granted.
+// All methods are stubs until the RTDB and HTTP implementation feature branches are complete.
 type HTTPClient struct {
 	baseURL string
-	token   string
+	tokens  model.Tokens
 }
 
 func NewHTTPClient(baseURL string) *HTTPClient {
 	return &HTTPClient{baseURL: baseURL}
 }
 
-func (c *HTTPClient) Login(username, password string) (string, error) {
-	return "", fmt.Errorf("real API not yet implemented")
+func (c *HTTPClient) Login(email, password string) (model.Tokens, error) {
+	return model.Tokens{}, fmt.Errorf("real API not yet implemented")
 }
 
 func (c *HTTPClient) Logout() error {
 	return fmt.Errorf("real API not yet implemented")
 }
 
-func (c *HTTPClient) GetFeed(page int) ([]model.Post, error) {
+func (c *HTTPClient) GetFeed(cursor string) ([]model.Post, error) {
 	return nil, fmt.Errorf("real API not yet implemented")
 }
 
-func (c *HTTPClient) CreatePost(body string, topics []string) (model.Post, error) {
+func (c *HTTPClient) CreatePost(content string, topics []string) (model.Post, error) {
 	return model.Post{}, fmt.Errorf("real API not yet implemented")
+}
+
+func (c *HTTPClient) GetOwnProfile() (model.User, error) {
+	return model.User{}, fmt.Errorf("real API not yet implemented")
+}
+
+func (c *HTTPClient) GetProfile(username string) (model.User, error) {
+	return model.User{}, fmt.Errorf("real API not yet implemented")
+}
+
+func (c *HTTPClient) UpdateProfile(update model.ProfileUpdate) error {
+	return fmt.Errorf("real API not yet implemented")
 }
 
 func (c *HTTPClient) GetRooms() ([]model.Room, error) {
@@ -54,13 +66,5 @@ func (c *HTTPClient) GetMessages(conversationID string, limit int) ([]model.Mess
 }
 
 func (c *HTTPClient) SendMessage(conversationID, body string) error {
-	return fmt.Errorf("real API not yet implemented")
-}
-
-func (c *HTTPClient) GetProfile(username string) (model.User, error) {
-	return model.User{}, fmt.Errorf("real API not yet implemented")
-}
-
-func (c *HTTPClient) UpdateProfile(bio string) error {
 	return fmt.Errorf("real API not yet implemented")
 }
