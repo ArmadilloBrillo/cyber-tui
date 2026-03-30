@@ -1,6 +1,10 @@
 package api
 
-import "github.com/ragnar/cyber-tui/internal/model"
+import (
+	"context"
+
+	"github.com/ragnar/cyber-tui/internal/model"
+)
 
 // Client defines all interactions with the cyberspace.online API.
 // The mock and real implementations both satisfy this interface.
@@ -27,8 +31,12 @@ type Client interface {
 	GetRoomMessages(roomID string, limit int) ([]model.Message, error)
 	SendRoomMessage(roomID, body string) error
 
-	// Direct messages — NOTE: real impl uses Firebase RTDB with RTDBToken — pending feature/rtdb-chat
+	// Direct messages — backed by Firebase RTDB (see internal/rtdb).
 	GetConversations() ([]model.Conversation, error)
 	GetMessages(conversationID string, limit int) ([]model.Message, error)
 	SendMessage(conversationID, body string) error
+	// SubscribeDMs opens a live SSE stream for the given conversation.
+	// Returns a channel of incoming messages and a cancel function.
+	// The channel is closed when cancel is called or the stream ends.
+	SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error)
 }

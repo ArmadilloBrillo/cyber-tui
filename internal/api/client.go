@@ -2,15 +2,19 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/rtdb"
 )
 
 // --- typed errors ---
@@ -132,6 +136,8 @@ type HTTPClient struct {
 	baseURL    string
 	httpClient *http.Client
 	tokens     model.Tokens
+	rtdbClient *rtdb.Client // nil until InitRTDB is called
+	currentUID string       // set from GetOwnProfile after login, used for RTDB paths
 }
 
 // NewHTTPClient creates a production HTTPClient with a 15-second timeout.
@@ -146,6 +152,40 @@ func NewHTTPClient(baseURL string) *HTTPClient {
 // Intended for use in tests only — inject an httptest.Server client here.
 func NewHTTPClientForTesting(baseURL string, hc *http.Client) *HTTPClient {
 	return &HTTPClient{baseURL: baseURL, httpClient: hc}
+}
+
+// InitRTDB parses the rtdbToken to derive the Firebase project ID, constructs
+// an rtdb.Client, and stores it for use by DM/chat methods. Called after login.
+func (c *HTTPClient) InitRTDB(rtdbToken string) error {
+	projectID, err := rtdb.ParseRTDBToken(rtdbToken)
+	if err != nil {
+		if isDebug() {
+			fmt.Printf("[rtdb debug] InitRTDB: ParseRTDBToken failed: %v\n", err)
+			// Print first 100 chars of token to help diagnose format.
+			preview := rtdbToken
+			if len(preview) > 100 {
+				preview = preview[:100] + "..."
+			}
+			fmt.Printf("[rtdb debug] rtdbToken preview: %s\n", preview)
+		}
+		return fmt.Errorf("api: parse rtdb token: %w", err)
+	}
+	baseURL := rtdb.BaseURL(projectID)
+	if isDebug() {
+		fmt.Printf("[rtdb debug] InitRTDB: projectID=%q baseURL=%q\n", projectID, baseURL)
+	}
+	c.rtdbClient = rtdb.New(baseURL, rtdbToken)
+	return nil
+}
+
+// SetRTDBClientForTesting injects a pre-built rtdb.Client. Test use only.
+func (c *HTTPClient) SetRTDBClientForTesting(r *rtdb.Client) {
+	c.rtdbClient = r
+}
+
+// SetCurrentUID stores the logged-in user ID for use in RTDB paths.
+func (c *HTTPClient) SetCurrentUID(uid string) {
+	c.currentUID = uid
 }
 
 // --- helpers ---
@@ -411,28 +451,243 @@ func (c *HTTPClient) UpdateProfile(update model.ProfileUpdate) error {
 	return err
 }
 
-// --- RTDB stubs (pending feature/rtdb-chat) ---
+// --- Chatrooms (RTDB stubs — pending feature/rtdb-chatrooms) ---
 
 func (c *HTTPClient) GetRooms() ([]model.Room, error) {
-	return nil, fmt.Errorf("not implemented: chat uses Firebase RTDB — see feature/rtdb-chat")
+	return nil, fmt.Errorf("not implemented: chatrooms use Firebase RTDB — see feature/rtdb-chatrooms")
 }
 
 func (c *HTTPClient) GetRoomMessages(roomID string, limit int) ([]model.Message, error) {
-	return nil, fmt.Errorf("not implemented: chat uses Firebase RTDB — see feature/rtdb-chat")
+	return nil, fmt.Errorf("not implemented: chatrooms use Firebase RTDB — see feature/rtdb-chatrooms")
 }
 
 func (c *HTTPClient) SendRoomMessage(roomID, body string) error {
-	return fmt.Errorf("not implemented: chat uses Firebase RTDB — see feature/rtdb-chat")
+	return fmt.Errorf("not implemented: chatrooms use Firebase RTDB — see feature/rtdb-chatrooms")
 }
 
+// --- Direct messages (C-Mail) via Firebase RTDB ---
+
+// wireRTDBMessage is the Firebase wire shape for a DM message.
+type wireRTDBMessage struct {
+	SenderID       string  `json:"senderId"`
+	SenderUsername string  `json:"senderUsername"`
+	Content        string  `json:"content"`
+	Timestamp      float64 `json:"timestamp"` // epoch ms (server timestamp arrives as number after roundtrip)
+	Read           bool    `json:"read"`
+}
+
+// wireRTDBSSEData is the shape of the data field in a Firebase SSE event.
+type wireRTDBSSEData struct {
+	Path string          `json:"path"`
+	Data json.RawMessage `json:"data"`
+}
+
+// wireRTDBConversation is the Firebase shape for a conversation entry under /user_conversations/<uid>.
+// TODO: confirm this RTDB path with the API owner — probing /user_conversations/<userId>.
+type wireRTDBConversation struct {
+	ConversationID   string `json:"conversationId"`
+	OtherUserID      string `json:"otherUserId"`
+	OtherUsername    string `json:"otherUsername"`
+	LastMessage      string `json:"lastMessage"`
+	LastTimestamp    float64 `json:"lastTimestamp"`
+}
+
+func (c *HTTPClient) rtdbOrErr() (*rtdb.Client, error) {
+	if c.rtdbClient == nil {
+		return nil, fmt.Errorf("api: RTDB client not initialised (call InitRTDB after login)")
+	}
+	return c.rtdbClient, nil
+}
+
+// GetConversations fetches the list of DM conversations for the logged-in user.
+// RTDB path: /user_conversations/<uid> — returns empty slice (not error) when null.
 func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
-	return nil, fmt.Errorf("not implemented: DMs use Firebase RTDB — see feature/rtdb-chat")
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, err
+	}
+	if c.currentUID == "" {
+		return nil, fmt.Errorf("api: currentUID not set — call GetOwnProfile after login")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	path := "/user_conversations/" + c.currentUID
+	if isDebug() {
+		fmt.Printf("[rtdb debug] GetConversations: querying path %q\n", path)
+	}
+
+	body, err := r.Get(ctx, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("api: GetConversations: %w", err)
+	}
+
+	if isDebug() {
+		preview := string(body)
+		if len(preview) > 300 {
+			preview = preview[:300] + "..."
+		}
+		fmt.Printf("[rtdb debug] GetConversations: response body: %s\n", preview)
+	}
+
+	// Firebase returns "null" when the path doesn't exist — treat as empty.
+	if string(body) == "null" {
+		return []model.Conversation{}, nil
+	}
+
+	// Firebase returns an object keyed by push ID.
+	var raw map[string]wireRTDBConversation
+	if err := json.Unmarshal(body, &raw); err != nil {
+		if isDebug() {
+			fmt.Printf("[rtdb debug] GetConversations: unmarshal failed: %v\n", err)
+		}
+		return []model.Conversation{}, nil
+	}
+
+	convs := make([]model.Conversation, 0, len(raw))
+	for _, wc := range raw {
+		id := wc.ConversationID
+		if id == "" {
+			continue
+		}
+		other := model.User{ID: wc.OtherUserID, Username: wc.OtherUsername}
+		self := model.User{ID: c.currentUID}
+		convs = append(convs, model.Conversation{
+			ID:           id,
+			Participants: []model.User{self, other},
+		})
+	}
+	return convs, nil
 }
 
+// GetMessages fetches up to limit recent messages for a conversation from RTDB.
 func (c *HTTPClient) GetMessages(conversationID string, limit int) ([]model.Message, error) {
-	return nil, fmt.Errorf("not implemented: DMs use Firebase RTDB — see feature/rtdb-chat")
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	params := url.Values{
+		"orderBy":     {`"timestamp"`},
+		"limitToLast": {fmt.Sprintf("%d", limit)},
+	}
+	body, err := r.Get(ctx, "/dm_messages/"+conversationID, params)
+	if err != nil {
+		return nil, fmt.Errorf("api: GetMessages: %w", err)
+	}
+
+	if string(body) == "null" {
+		return []model.Message{}, nil
+	}
+
+	var raw map[string]wireRTDBMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("api: GetMessages decode: %w", err)
+	}
+
+	msgs := make([]model.Message, 0, len(raw))
+	for id, wm := range raw {
+		msgs = append(msgs, wireRTDBMessageToModel(id, wm))
+	}
+	sort.Slice(msgs, func(i, j int) bool {
+		return msgs[i].CreatedAt.Before(msgs[j].CreatedAt)
+	})
+	return msgs, nil
 }
 
+// SendMessage sends a DM to conversationID via RTDB PUT.
 func (c *HTTPClient) SendMessage(conversationID, body string) error {
-	return fmt.Errorf("not implemented: DMs use Firebase RTDB — see feature/rtdb-chat")
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return err
+	}
+
+	msgID := fmt.Sprintf("%s-%d", c.currentUID, time.Now().UnixNano())
+	payload := struct {
+		SenderID       string `json:"senderId"`
+		SenderUsername string `json:"senderUsername"`
+		Content        string `json:"content"`
+		Timestamp      any    `json:"timestamp"`
+		Read           bool   `json:"read"`
+	}{
+		SenderID:  c.currentUID,
+		Content:   body,
+		Timestamp: map[string]string{".sv": "timestamp"},
+		Read:      false,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := r.Put(ctx, "/dm_messages/"+conversationID+"/"+msgID, payload); err != nil {
+		return fmt.Errorf("api: SendMessage: %w", err)
+	}
+	return nil
+}
+
+// SubscribeDMs opens a live SSE stream for a conversation.
+// Returns a message channel and a cancel function.
+// The channel is closed when cancel is called or the stream ends.
+// The initial Firebase snapshot (path="/") is skipped; only new messages are emitted.
+func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error) {
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	params := url.Values{"orderBy": {`"timestamp"`}}
+	sseEvents := r.Subscribe(ctx, "/dm_messages/"+convID, params)
+
+	out := make(chan model.Message, 8)
+	go func() {
+		defer close(out)
+		for ev := range sseEvents {
+			if ev.Err != nil {
+				return
+			}
+			if ev.Event != "put" {
+				continue
+			}
+			var d wireRTDBSSEData
+			if err := json.Unmarshal(ev.Data, &d); err != nil {
+				continue
+			}
+			// Skip the initial full-snapshot event (path="/").
+			if d.Path == "/" {
+				continue
+			}
+			var wm wireRTDBMessage
+			if err := json.Unmarshal(d.Data, &wm); err != nil {
+				continue
+			}
+			// Derive the message ID from the path (e.g. "/msgId").
+			msgID := strings.TrimPrefix(d.Path, "/")
+			select {
+			case out <- wireRTDBMessageToModel(msgID, wm):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return out, cancel, nil
+}
+
+func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
+	return model.Message{
+		ID:        id,
+		From:      model.User{ID: wm.SenderID, Username: wm.SenderUsername},
+		Body:      wm.Content,
+		CreatedAt: time.UnixMilli(int64(wm.Timestamp)),
+	}
+}
+
+func isDebug() bool {
+	v := os.Getenv("CYBERSPACE_DEBUG")
+	return v == "1" || strings.EqualFold(v, "true")
 }

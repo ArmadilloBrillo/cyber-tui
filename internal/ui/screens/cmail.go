@@ -44,6 +44,12 @@ type SendCMailMsg struct {
 	Body           string
 }
 
+// SelectConvMsg is emitted when the user opens a conversation (Enter on left pane).
+// The app uses this to start the RTDB subscription for that conversation.
+type SelectConvMsg struct {
+	ConversationID string
+}
+
 // NewCMailModel creates a new CMailModel for the given authenticated user.
 func NewCMailModel(currentUser string) CMailModel {
 	input := textinput.New()
@@ -54,6 +60,12 @@ func NewCMailModel(currentUser string) CMailModel {
 		currentUser: currentUser,
 		focusPane:   FocusCMailLeft,
 	}
+}
+
+// SetError stores an error to display in the C-Mail view.
+func (m CMailModel) SetError(err error) CMailModel {
+	m.err = err
+	return m
 }
 
 // SetConversations replaces the conversation list, clamping the selection cursor if needed.
@@ -141,6 +153,8 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 					}
 					m.input.Focus()
 					m.focusPane = FocusCMailRight
+					convID := conv.ID
+					return m, func() tea.Msg { return SelectConvMsg{ConversationID: convID} }
 				}
 				return m, nil
 			case "tab":
@@ -227,6 +241,38 @@ func (m CMailModel) renderMessages() string {
 		out += lipgloss.JoinHorizontal(lipgloss.Top, ts, "  ", author, "  ", body) + "\n"
 	}
 	return out
+}
+
+// SetConversationMessages replaces the message history for the active conversation.
+// No-op if convID doesn't match the currently open conversation.
+func (m CMailModel) SetConversationMessages(convID string, msgs []model.Message) CMailModel {
+	if m.activeConv == nil || m.activeConv.ID != convID {
+		return m
+	}
+	conv := *m.activeConv
+	conv.Messages = msgs
+	m.activeConv = &conv
+	if m.ready {
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+	}
+	return m
+}
+
+// AppendMessage adds a live incoming message to the currently open conversation.
+// No-op when no conversation is open.
+func (m CMailModel) AppendMessage(msg model.Message) CMailModel {
+	if m.activeConv == nil {
+		return m
+	}
+	conv := *m.activeConv
+	conv.Messages = append(conv.Messages, msg)
+	m.activeConv = &conv
+	if m.ready {
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+	}
+	return m
 }
 
 func (m CMailModel) View() string {

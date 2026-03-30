@@ -10,6 +10,7 @@ import (
 
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/rtdb"
 )
 
 // --- helpers ---
@@ -398,5 +399,100 @@ func TestHTTPGetFeed_EmptyCursorWhenLastPage(t *testing.T) {
 	}
 	if cursor != "" {
 		t.Errorf("cursor = %q, want empty string", cursor)
+	}
+}
+
+// --- RTDB / DM tests ---
+
+func newClientWithRTDB(t *testing.T, rtdbHandler http.Handler) (*api.HTTPClient, *httptest.Server) {
+	t.Helper()
+	rtdbSrv := httptest.NewServer(rtdbHandler)
+	t.Cleanup(rtdbSrv.Close)
+
+	c := api.NewHTTPClientForTesting("http://unused", nil)
+	rc := rtdb.NewForTesting(rtdbSrv.URL, "test-tok", rtdbSrv.Client())
+	c.SetRTDBClientForTesting(rc)
+	c.SetCurrentUID("uid-me")
+	return c, rtdbSrv
+}
+
+func TestHTTPGetMessages_ParsesFirebaseObject(t *testing.T) {
+	// Firebase returns a JSON object keyed by push ID.
+	firebaseResp := `{
+		"msg1": {"senderId":"uid-a","senderUsername":"molly","content":"hello","timestamp":1700000001000,"read":false},
+		"msg2": {"senderId":"uid-b","senderUsername":"case","content":"world","timestamp":1700000002000,"read":true}
+	}`
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(firebaseResp))
+	}))
+
+	msgs, err := c.GetMessages("conv1", 50)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+	}
+	// Should be sorted by timestamp (ascending).
+	if msgs[0].Body != "hello" {
+		t.Errorf("msgs[0].Body = %q, want hello", msgs[0].Body)
+	}
+	if msgs[1].Body != "world" {
+		t.Errorf("msgs[1].Body = %q, want world", msgs[1].Body)
+	}
+	if msgs[0].From.Username != "molly" {
+		t.Errorf("msgs[0].From.Username = %q, want molly", msgs[0].From.Username)
+	}
+}
+
+func TestHTTPSendMessage_PutsCorrectShape(t *testing.T) {
+	type capturedPayload struct {
+		SenderID  string         `json:"senderId"`
+		Content   string         `json:"content"`
+		Timestamp map[string]any `json:"timestamp"`
+		Read      bool           `json:"read"`
+	}
+
+	var captured capturedPayload
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("method = %q, want PUT", r.Method)
+		}
+		json.NewDecoder(r.Body).Decode(&captured)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+
+	err := c.SendMessage("conv1", "hi there")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.SenderID != "uid-me" {
+		t.Errorf("senderId = %q, want uid-me", captured.SenderID)
+	}
+	if captured.Content != "hi there" {
+		t.Errorf("content = %q, want hi there", captured.Content)
+	}
+	if captured.Timestamp[".sv"] != "timestamp" {
+		t.Errorf("timestamp sentinel = %v, want timestamp", captured.Timestamp[".sv"])
+	}
+	if captured.Read {
+		t.Error("read should be false on new message")
+	}
+}
+
+func TestHTTPGetConversations_NullReturnsEmpty(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`null`))
+	}))
+
+	convs, err := c.GetConversations()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(convs) != 0 {
+		t.Errorf("len(convs) = %d, want 0", len(convs))
 	}
 }

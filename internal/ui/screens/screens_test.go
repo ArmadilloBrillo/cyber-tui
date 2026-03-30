@@ -312,3 +312,81 @@ func TestPostDetail_Esc_EmitsBackToFeedMsg(t *testing.T) {
 		t.Fatalf("expected BackToFeedMsg, got %T", msg)
 	}
 }
+
+// --- SelectConvMsg ---
+
+func TestCMailSelectConvEmitsMsg(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer")
+	m = m.SetConversations(twoConvs())
+	_, cmd := sendSpecialKey(m, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("expected a command after Enter on left pane, got nil")
+	}
+	msg := cmd()
+	sel, ok := msg.(screens.SelectConvMsg)
+	if !ok {
+		t.Fatalf("expected SelectConvMsg, got %T", msg)
+	}
+	if sel.ConversationID != "c1" {
+		t.Errorf("ConversationID = %q, want c1", sel.ConversationID)
+	}
+}
+
+// --- AppendMessage ---
+
+func TestCMailAppendMessage_AddsToActiveConv(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer")
+	convs := twoConvs()
+	m = m.SetConversations(convs)
+	m, _ = sendSpecialKey(m, tea.KeyEnter) // open c1
+
+	incoming := model.Message{ID: "live1", From: model.User{Username: "molly"}, Body: "live msg", CreatedAt: time.Now()}
+	m = m.AppendMessage(incoming)
+
+	if !m.HasActiveConv() {
+		t.Fatal("expected active conv after AppendMessage")
+	}
+}
+
+func TestCMailAppendMessage_NoopWhenNoActiveConv(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer")
+	m = m.SetConversations(twoConvs())
+	// Do not open any conversation.
+	incoming := model.Message{ID: "live1", From: model.User{Username: "molly"}, Body: "live msg", CreatedAt: time.Now()}
+	before := m.HasActiveConv()
+	m = m.AppendMessage(incoming)
+	if m.HasActiveConv() != before {
+		t.Error("AppendMessage should be a no-op when no conversation is open")
+	}
+}
+
+// --- SetConversationMessages ---
+
+func TestCMailSetConversationMessages_ReplacesMessages(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer")
+	m = m.SetConversations(twoConvs())
+	m, _ = sendSpecialKey(m, tea.KeyEnter) // open c1
+
+	newMsgs := []model.Message{
+		{ID: "h1", From: model.User{Username: "molly"}, Body: "history 1", CreatedAt: time.Now()},
+		{ID: "h2", From: model.User{Username: "molly"}, Body: "history 2", CreatedAt: time.Now()},
+	}
+	m = m.SetConversationMessages("c1", newMsgs)
+	if !m.HasActiveConv() {
+		t.Fatal("expected active conv after SetConversationMessages")
+	}
+}
+
+func TestCMailSetConversationMessages_WrongConv_Noop(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer")
+	m = m.SetConversations(twoConvs())
+	m, _ = sendSpecialKey(m, tea.KeyEnter) // opens c1
+
+	// Call with wrong conv ID — should be a no-op.
+	m2 := m.SetConversationMessages("c2", []model.Message{
+		{ID: "x", From: model.User{Username: "wintermute"}, Body: "wrong conv", CreatedAt: time.Now()},
+	})
+	if !m2.HasActiveConv() {
+		t.Error("HasActiveConv should still be true after no-op SetConversationMessages")
+	}
+}

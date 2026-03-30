@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -153,4 +154,25 @@ func (m *MockClient) GetMessages(conversationID string, limit int) ([]model.Mess
 
 func (m *MockClient) SendMessage(conversationID, body string) error {
 	return nil
+}
+
+// SubscribeDMs returns a channel that delivers one fake incoming message after
+// 3 seconds (to exercise the live-stream UI path), then closes.
+func (m *MockClient) SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan model.Message, 1)
+	go func() {
+		defer close(ch)
+		select {
+		case <-time.After(3 * time.Second):
+			ch <- model.Message{
+				ID:        "mock-live-1",
+				From:      mockUsers[1],
+				Body:      "incoming mock message",
+				CreatedAt: time.Now(),
+			}
+		case <-ctx.Done():
+		}
+	}()
+	return ch, cancel, nil
 }
