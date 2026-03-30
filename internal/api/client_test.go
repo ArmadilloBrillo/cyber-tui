@@ -332,6 +332,61 @@ func TestHTTPGetFeed_ReturnsCursor(t *testing.T) {
 	}
 }
 
+func TestHTTPGetPostReplies_ParsesReplies(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{
+				"replyId":        "r1",
+				"postId":         "p1",
+				"authorId":       "u1",
+				"authorUsername": "molly_millions",
+				"content":        "interesting perspective",
+				"parentReplyId":  "",
+				"createdAt":      "2025-01-01T12:00:00.000Z",
+			},
+			{
+				"replyId":        "r2",
+				"postId":         "p1",
+				"authorId":       "u2",
+				"authorUsername": "wintermute",
+				"content":        "i arranged for this",
+				"parentReplyId":  "",
+				"createdAt":      "2025-01-01T12:05:00.000Z",
+			},
+		})
+	}))
+
+	replies, err := c.GetPostReplies("p1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(replies) != 2 {
+		t.Fatalf("len(replies) = %d, want 2", len(replies))
+	}
+	if replies[0].ID != "r1" {
+		t.Errorf("replies[0].ID = %q, want r1", replies[0].ID)
+	}
+	if replies[0].AuthorUsername != "molly_millions" {
+		t.Errorf("AuthorUsername = %q, want molly_millions", replies[0].AuthorUsername)
+	}
+	if replies[0].PostID != "p1" {
+		t.Errorf("PostID = %q, want p1", replies[0].PostID)
+	}
+}
+
+func TestHTTPGetPostReplies_UsesPostID(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOK(t, w, []any{})
+	}))
+
+	c.GetPostReplies("my-post-id") //nolint:errcheck
+	if !strings.Contains(gotURL, "my-post-id") {
+		t.Errorf("postID not in URL: %s", gotURL)
+	}
+}
+
 func TestHTTPGetFeed_EmptyCursorWhenLastPage(t *testing.T) {
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeOK(t, w, []any{})

@@ -80,6 +80,16 @@ type wireUser struct {
 	LocationName string `json:"locationName"`
 }
 
+type wireReply struct {
+	ReplyID        string `json:"replyId"`
+	PostID         string `json:"postId"`
+	AuthorID       string `json:"authorId"`
+	AuthorUsername string `json:"authorUsername"`
+	Content        string `json:"content"`
+	ParentReplyID  string `json:"parentReplyId"`
+	CreatedAt      string `json:"createdAt"`
+}
+
 type createPostRequest struct {
 	Content  string   `json:"content"`
 	Topics   []string `json:"topics"`
@@ -262,6 +272,19 @@ func wirePostToModel(w wirePost) model.Post {
 	}
 }
 
+func wireReplyToModel(w wireReply) model.Reply {
+	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	return model.Reply{
+		ID:             w.ReplyID,
+		PostID:         w.PostID,
+		AuthorID:       w.AuthorID,
+		AuthorUsername: w.AuthorUsername,
+		Content:        w.Content,
+		ParentReplyID:  w.ParentReplyID,
+		CreatedAt:      t,
+	}
+}
+
 func wireUserToModel(w wireUser) model.User {
 	return model.User{
 		ID:           w.UserID,
@@ -318,6 +341,23 @@ func (c *HTTPClient) GetFeed(cursor string) ([]model.Post, string, error) {
 		posts[i] = wirePostToModel(w)
 	}
 	return posts, env.Cursor, nil
+}
+
+func (c *HTTPClient) GetPostReplies(postID string) ([]model.Reply, error) {
+	path := "/v1/posts/" + url.PathEscape(postID) + "/replies?limit=20"
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireReply
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	replies := make([]model.Reply, len(wire))
+	for i, w := range wire {
+		replies[i] = wireReplyToModel(w)
+	}
+	return replies, nil
 }
 
 func (c *HTTPClient) CreatePost(content string, topics []string) (model.Post, error) {

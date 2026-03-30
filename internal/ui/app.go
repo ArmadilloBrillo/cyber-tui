@@ -17,6 +17,7 @@ const (
 	screenChatrooms
 	screenCMail
 	screenProfile
+	screenPostDetail
 )
 
 type focusTarget int
@@ -52,23 +53,25 @@ type App struct {
 	autoEmail    string
 	autoPassword string
 
-	login     screens.LoginModel
-	feed      screens.FeedModel
-	chatrooms screens.ChatroomsModel
-	cmail     screens.CMailModel
-	profile   screens.ProfileModel
+	login      screens.LoginModel
+	feed       screens.FeedModel
+	chatrooms  screens.ChatroomsModel
+	cmail      screens.CMailModel
+	profile    screens.ProfileModel
+	postDetail screens.PostDetailModel
 }
 
 func NewApp(client api.Client) App {
 	return App{
-		client:    client,
-		active:    screenLogin,
-		focus:     focusMenu,
-		login:     screens.NewLoginModel(),
-		feed:      screens.NewFeedModel(),
-		chatrooms: screens.NewChatroomsModel(),
-		cmail:     screens.NewCMailModel(""),
-		profile:   screens.NewProfileModel(),
+		client:     client,
+		active:     screenLogin,
+		focus:      focusMenu,
+		login:      screens.NewLoginModel(),
+		feed:       screens.NewFeedModel(),
+		chatrooms:  screens.NewChatroomsModel(),
+		cmail:      screens.NewCMailModel(""),
+		profile:    screens.NewProfileModel(),
+		postDetail: screens.NewPostDetailModel(),
 	}
 }
 
@@ -103,6 +106,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.feed, _ = a.feed.Update(msg)
 		a.chatrooms, _ = a.chatrooms.Update(msg)
 		a.cmail, _ = a.cmail.Update(msg)
+		a.postDetail, _ = a.postDetail.Update(msg)
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -133,11 +137,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		// Arrow navigation — left/right cycle tabs when no input is focused
 		case "left":
-			if a.active != screenLogin && a.focus == focusMenu && !a.activeScreenHasFocusedInput() {
+			if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu && !a.activeScreenHasFocusedInput() {
 				return a, a.navigateTab(-1)
 			}
 		case "right":
-			if a.active != screenLogin && a.focus == focusMenu && !a.activeScreenHasFocusedInput() {
+			if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu && !a.activeScreenHasFocusedInput() {
 				return a, a.navigateTab(+1)
 			}
 		}
@@ -163,6 +167,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case screens.LoadMoreFeedMsg:
 		return a, a.loadFeedPageCmd(msg.Cursor)
+
+	case screens.ShowPostMsg:
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.Post)
+		return a, a.loadRepliesCmd(msg.Post.ID)
+
+	case repliesLoadedMsg:
+		a.postDetail = a.postDetail.SetReplies(msg.replies)
+
+	case screens.BackToFeedMsg:
+		a.active = screenFeed
 
 	// --- Chatrooms ---
 	case roomsLoadedMsg:
@@ -191,6 +206,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.feed = a.feed.SetError(msg.err)
 		case screenProfile:
 			a.profile = a.profile.SetError(msg.err)
+		case screenPostDetail:
+			a.postDetail = a.postDetail.SetError(msg.err)
 		}
 	}
 
@@ -250,6 +267,8 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 		a.cmail, cmd = a.cmail.Update(msg)
 	case screenProfile:
 		a.profile, cmd = a.profile.Update(msg)
+	case screenPostDetail:
+		a.postDetail, cmd = a.postDetail.Update(msg)
 	}
 	return cmd
 }
@@ -294,6 +313,8 @@ func (a App) renderActiveScreen() string {
 		return a.cmail.View()
 	case screenProfile:
 		return a.profile.View()
+	case screenPostDetail:
+		return a.postDetail.View()
 	}
 	return ""
 }
@@ -305,7 +326,7 @@ func (a App) renderStatusBar() string {
 	case screenCMail:
 		hintStr = "  Tab · switch pane   ↑↓ · navigate   Enter · open/send   1-4 · jump"
 	default:
-		hintStr = "  q · quit   ←→ · tabs   1-4 · jump"
+		hintStr = "  q · quit   ←→ · tabs   ↑↓/jk · navigate   1-4 · jump"
 	}
 	hint := theme.StatusBar.Render(hintStr)
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
@@ -348,6 +369,7 @@ type feedPageMsg struct {
 type roomsLoadedMsg struct{ rooms []model.Room }
 type convsLoadedMsg struct{ convs []model.Conversation }
 type profileLoadedMsg struct{ user model.User }
+type repliesLoadedMsg struct{ replies []model.Reply }
 type errMsg struct{ err error }
 
 func (a *App) loadFeedCmd() tea.Cmd {
@@ -415,6 +437,16 @@ func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 			return errMsg{err}
 		}
 		return nil
+	}
+}
+
+func (a *App) loadRepliesCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		replies, err := a.client.GetPostReplies(postID)
+		if err != nil {
+			return errMsg{err}
+		}
+		return repliesLoadedMsg{replies: replies}
 	}
 }
 

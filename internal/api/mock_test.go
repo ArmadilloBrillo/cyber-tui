@@ -289,6 +289,28 @@ func TestMockUpdateProfile_NoError(t *testing.T) {
 	}
 }
 
+// --- Replies ---
+
+func TestMockGetPostReplies_ReturnsReplies(t *testing.T) {
+	m := newMock()
+	replies, err := m.GetPostReplies("p1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(replies) == 0 {
+		t.Fatal("expected at least one reply")
+	}
+}
+
+func TestMockGetPostReplies_AnyPostID(t *testing.T) {
+	m := newMock()
+	r1, _ := m.GetPostReplies("post-a")
+	r2, _ := m.GetPostReplies("post-b")
+	if len(r1) != len(r2) {
+		t.Errorf("expected same number of replies for any postID, got %d vs %d", len(r1), len(r2))
+	}
+}
+
 // --- Interface compliance ---
 
 func TestMockClient_ImplementsClientInterface(t *testing.T) {

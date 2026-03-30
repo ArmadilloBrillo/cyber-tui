@@ -14,6 +14,9 @@ type Client interface {
 	GetFeed(cursor string) ([]model.Post, string, error)
 	CreatePost(content string, topics []string) (model.Post, error)
 
+	// Replies — first page only (pagination deferred).
+	GetPostReplies(postID string) ([]model.Reply, error)
+
 	// Profile
 	GetOwnProfile() (model.User, error)
 	GetProfile(username string) (model.User, error)

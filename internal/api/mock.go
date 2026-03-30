@@ -69,6 +69,15 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 	}, "", nil
 }
 
+func (m *MockClient) GetPostReplies(postID string) ([]model.Reply, error) {
+	return []model.Reply{
+		{ID: "r1", PostID: postID, AuthorID: "2", AuthorUsername: "molly_millions",
+			Content: "interesting perspective", CreatedAt: time.Now().Add(-8 * time.Minute)},
+		{ID: "r2", PostID: postID, AuthorID: "3", AuthorUsername: "wintermute",
+			Content: "i arranged for this conversation to happen", CreatedAt: time.Now().Add(-4 * time.Minute)},
+	}, nil
+}
+
 func (m *MockClient) CreatePost(content string, topics []string) (model.Post, error) {
 	return model.Post{
 		ID:             "new-1",

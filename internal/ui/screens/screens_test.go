@@ -1,6 +1,8 @@
 package screens_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,5 +224,91 @@ func TestCMailSidebarWidth_200(t *testing.T) {
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 200, Height: 24})
 	if m.SidebarWidth() != 32 {
 		t.Errorf("expected sidebarWidth=32 (clamped) at width=200, got %d", m.SidebarWidth())
+	}
+}
+
+// --- PostDetailModel ---
+
+func makePost() model.Post {
+	return model.Post{
+		ID:             "p1",
+		AuthorUsername: "molly",
+		Content:        "hello, matrix",
+		CreatedAt:      time.Now(),
+	}
+}
+
+func makeReplies() []model.Reply {
+	return []model.Reply{
+		{ID: "r1", PostID: "p1", AuthorUsername: "wintermute", Content: "interesting", CreatedAt: time.Now()},
+	}
+}
+
+func TestPostDetail_SetPost_SetsLoading(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	m = m.SetPost(makePost())
+	if !m.Loading() {
+		t.Error("expected Loading=true after SetPost")
+	}
+}
+
+func TestPostDetail_SetPost_ClearsReplies(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	m = m.SetPost(makePost())
+	m = m.SetReplies(makeReplies())
+	// Setting a new post must clear replies and re-enter loading.
+	m = m.SetPost(model.Post{ID: "p2", AuthorUsername: "neuromancer", Content: "second", CreatedAt: time.Now()})
+	if !m.Loading() {
+		t.Error("expected Loading=true after SetPost on a model that already had replies")
+	}
+}
+
+func TestPostDetail_SetReplies_ClearsLoading(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	m = m.SetPost(makePost())
+	m = m.SetReplies(makeReplies())
+	if m.Loading() {
+		t.Error("expected Loading=false after SetReplies")
+	}
+}
+
+func TestPostDetail_SetError_ClearsLoading(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	m = m.SetPost(makePost())
+	m = m.SetError(fmt.Errorf("connection refused"))
+	if m.Loading() {
+		t.Error("expected Loading=false after SetError")
+	}
+}
+
+func TestPostDetail_SetError_ShowsErrorInView(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetError(fmt.Errorf("connection refused"))
+	if !strings.Contains(m.View(), "connection refused") {
+		t.Errorf("expected error message in view, got: %s", m.View())
+	}
+}
+
+func TestPostDetail_WindowSizeMsg_SetsReady(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	if m.Ready() {
+		t.Error("expected Ready=false before any WindowSizeMsg")
+	}
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if !m.Ready() {
+		t.Error("expected Ready=true after WindowSizeMsg")
+	}
+}
+
+func TestPostDetail_Esc_EmitsBackToFeedMsg(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected a command after Esc, got nil")
+	}
+	msg := cmd()
+	if _, ok := msg.(screens.BackToFeedMsg); !ok {
+		t.Fatalf("expected BackToFeedMsg, got %T", msg)
 	}
 }
