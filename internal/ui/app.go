@@ -15,7 +15,7 @@ const (
 	screenLogin screen = iota
 	screenFeed
 	screenChatrooms
-	screenDMs
+	screenCMail
 	screenProfile
 )
 
@@ -34,7 +34,7 @@ var menuTabs = []struct {
 }{
 	{"feed", screenFeed},
 	{"rooms", screenChatrooms},
-	{"mail", screenDMs},
+	{"c-mail", screenCMail},
 	{"profile", screenProfile},
 }
 
@@ -55,7 +55,7 @@ type App struct {
 	login     screens.LoginModel
 	feed      screens.FeedModel
 	chatrooms screens.ChatroomsModel
-	dms       screens.DMsModel
+	cmail     screens.CMailModel
 	profile   screens.ProfileModel
 }
 
@@ -67,7 +67,7 @@ func NewApp(client api.Client) App {
 		login:     screens.NewLoginModel(),
 		feed:      screens.NewFeedModel(),
 		chatrooms: screens.NewChatroomsModel(),
-		dms:       screens.NewDMsModel(""),
+		cmail:     screens.NewCMailModel(""),
 		profile:   screens.NewProfileModel(),
 	}
 }
@@ -102,7 +102,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// below, which is harmless (it just re-applies the same size).
 		a.feed, _ = a.feed.Update(msg)
 		a.chatrooms, _ = a.chatrooms.Update(msg)
-		a.dms, _ = a.dms.Update(msg)
+		a.cmail, _ = a.cmail.Update(msg)
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -123,7 +123,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "3":
 			if a.active != screenLogin {
-				a.active = screenDMs
+				a.active = screenCMail
 				return a, a.loadConvsCmd()
 			}
 		case "4":
@@ -171,12 +171,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body)
 
-	// --- DMs ---
+	// --- C-Mail ---
 	case convsLoadedMsg:
-		a.dms = a.dms.SetConversations(msg.convs)
+		a.cmail = a.cmail.SetConversations(msg.convs)
 
-	case screens.SendDMMsg:
-		return a, a.sendDMCmd(msg.ConversationID, msg.Body)
+	case screens.SendCMailMsg:
+		return a, a.sendCMailCmd(msg.ConversationID, msg.Body)
 
 	// --- Profile ---
 	case profileLoadedMsg:
@@ -204,8 +204,8 @@ func (a App) activeScreenHasFocusedInput() bool {
 	switch a.active {
 	case screenChatrooms:
 		return a.chatrooms.InputFocused()
-	case screenDMs:
-		return a.dms.InputFocused()
+	case screenCMail:
+		return a.cmail.InputFocused()
 	}
 	return false
 }
@@ -229,7 +229,7 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 		return a.loadFeedCmd()
 	case screenChatrooms:
 		return a.loadRoomsCmd()
-	case screenDMs:
+	case screenCMail:
 		return a.loadConvsCmd()
 	case screenProfile:
 		return a.loadProfileCmd()
@@ -246,8 +246,8 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 		a.feed, cmd = a.feed.Update(msg)
 	case screenChatrooms:
 		a.chatrooms, cmd = a.chatrooms.Update(msg)
-	case screenDMs:
-		a.dms, cmd = a.dms.Update(msg)
+	case screenCMail:
+		a.cmail, cmd = a.cmail.Update(msg)
 	case screenProfile:
 		a.profile, cmd = a.profile.Update(msg)
 	}
@@ -290,8 +290,8 @@ func (a App) renderActiveScreen() string {
 		return a.feed.View()
 	case screenChatrooms:
 		return a.chatrooms.View()
-	case screenDMs:
-		return a.dms.View()
+	case screenCMail:
+		return a.cmail.View()
 	case screenProfile:
 		return a.profile.View()
 	}
@@ -300,7 +300,14 @@ func (a App) renderActiveScreen() string {
 
 func (a App) renderStatusBar() string {
 	user := theme.StatusBar.Render("@" + a.currentUser.Username)
-	hint := theme.StatusBar.Render("  q · quit   ←→ · tabs   1-4 · jump")
+	var hintStr string
+	switch a.active {
+	case screenCMail:
+		hintStr = "  Tab · switch pane   ↑↓ · navigate   Enter · open/send   1-4 · jump"
+	default:
+		hintStr = "  q · quit   ←→ · tabs   1-4 · jump"
+	}
+	hint := theme.StatusBar.Render(hintStr)
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
 	return lipgloss.JoinHorizontal(lipgloss.Top, user, spacer, hint)
 }
@@ -319,7 +326,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 			return screens.LoginErrMsg{Err: err}
 		}
 		a.currentUser = user
-		a.dms = screens.NewDMsModel(user.Username)
+		a.cmail = screens.NewCMailModel(user.Username)
 		return screens.LoginMsg{}
 	}
 }
@@ -402,7 +409,7 @@ func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	}
 }
 
-func (a *App) sendDMCmd(convID, body string) tea.Cmd {
+func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.SendMessage(convID, body); err != nil {
 			return errMsg{err}

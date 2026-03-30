@@ -68,7 +68,7 @@ func TestNavigateTab_RightFromProfile_Wraps(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	expected := []screen{screenChatrooms, screenDMs, screenProfile, screenFeed}
+	expected := []screen{screenChatrooms, screenCMail, screenProfile, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(+1)
 		if a.active != want {
@@ -80,7 +80,7 @@ func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	expected := []screen{screenProfile, screenDMs, screenChatrooms, screenFeed}
+	expected := []screen{screenProfile, screenCMail, screenChatrooms, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(-1)
 		if a.active != want {
