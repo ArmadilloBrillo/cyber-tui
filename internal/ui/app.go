@@ -121,6 +121,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.postDetail, _ = a.postDetail.Update(msg)
 
 	case tea.KeyMsg:
+		// When any screen has a focused text input, let it consume all key events.
+		// Only ctrl+c is kept as a hard escape hatch.
+		if a.activeScreenHasFocusedInput() {
+			if msg.String() == "ctrl+c" {
+				return a, tea.Quit
+			}
+			break
+		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if a.active != screenLogin {
@@ -152,11 +160,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		// Arrow navigation — left/right cycle tabs when no input is focused
 		case "left":
-			if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu && !a.activeScreenHasFocusedInput() {
+			if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
 				return a, a.navigateTab(-1)
 			}
 		case "right":
-			if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu && !a.activeScreenHasFocusedInput() {
+			if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
 				return a, a.navigateTab(+1)
 			}
 		}
