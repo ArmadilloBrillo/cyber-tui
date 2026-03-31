@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -499,183 +498,26 @@ func (c *HTTPClient) rtdbOrErr() (*rtdb.Client, error) {
 	return c.rtdbClient, nil
 }
 
-// GetConversations fetches the list of DM conversations for the logged-in user.
-// RTDB path: /user_conversations/<uid> — returns empty slice (not error) when null.
+// GetConversations returns empty — server-side RTDB paths not yet finalised.
 func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
-	r, err := c.rtdbOrErr()
-	if err != nil {
-		return nil, err
-	}
-	if c.currentUID == "" {
-		return nil, fmt.Errorf("api: currentUID not set — call GetOwnProfile after login")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	path := "/user_conversations/" + c.currentUID
-	if isDebug() {
-		fmt.Printf("[rtdb debug] GetConversations: querying path %q\n", path)
-	}
-
-	body, err := r.Get(ctx, path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("api: GetConversations: %w", err)
-	}
-
-	if isDebug() {
-		preview := string(body)
-		if len(preview) > 300 {
-			preview = preview[:300] + "..."
-		}
-		fmt.Printf("[rtdb debug] GetConversations: response body: %s\n", preview)
-	}
-
-	// Firebase returns "null" when the path doesn't exist — treat as empty.
-	if string(body) == "null" {
-		return []model.Conversation{}, nil
-	}
-
-	// Firebase returns an object keyed by push ID.
-	var raw map[string]wireRTDBConversation
-	if err := json.Unmarshal(body, &raw); err != nil {
-		if isDebug() {
-			fmt.Printf("[rtdb debug] GetConversations: unmarshal failed: %v\n", err)
-		}
-		return []model.Conversation{}, nil
-	}
-
-	convs := make([]model.Conversation, 0, len(raw))
-	for _, wc := range raw {
-		id := wc.ConversationID
-		if id == "" {
-			continue
-		}
-		other := model.User{ID: wc.OtherUserID, Username: wc.OtherUsername}
-		self := model.User{ID: c.currentUID}
-		convs = append(convs, model.Conversation{
-			ID:           id,
-			Participants: []model.User{self, other},
-		})
-	}
-	return convs, nil
+	return []model.Conversation{}, nil
 }
 
-// GetMessages fetches up to limit recent messages for a conversation from RTDB.
+// GetMessages returns empty — server-side RTDB paths not yet finalised.
 func (c *HTTPClient) GetMessages(conversationID string, limit int) ([]model.Message, error) {
-	r, err := c.rtdbOrErr()
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	params := url.Values{
-		"orderBy":     {`"timestamp"`},
-		"limitToLast": {fmt.Sprintf("%d", limit)},
-	}
-	body, err := r.Get(ctx, "/dm_messages/"+conversationID, params)
-	if err != nil {
-		return nil, fmt.Errorf("api: GetMessages: %w", err)
-	}
-
-	if string(body) == "null" {
-		return []model.Message{}, nil
-	}
-
-	var raw map[string]wireRTDBMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("api: GetMessages decode: %w", err)
-	}
-
-	msgs := make([]model.Message, 0, len(raw))
-	for id, wm := range raw {
-		msgs = append(msgs, wireRTDBMessageToModel(id, wm))
-	}
-	sort.Slice(msgs, func(i, j int) bool {
-		return msgs[i].CreatedAt.Before(msgs[j].CreatedAt)
-	})
-	return msgs, nil
+	return []model.Message{}, nil
 }
 
-// SendMessage sends a DM to conversationID via RTDB PUT.
+// SendMessage is a no-op — server-side RTDB paths not yet finalised.
 func (c *HTTPClient) SendMessage(conversationID, body string) error {
-	r, err := c.rtdbOrErr()
-	if err != nil {
-		return err
-	}
-
-	msgID := fmt.Sprintf("%s-%d", c.currentUID, time.Now().UnixNano())
-	payload := struct {
-		SenderID       string `json:"senderId"`
-		SenderUsername string `json:"senderUsername"`
-		Content        string `json:"content"`
-		Timestamp      any    `json:"timestamp"`
-		Read           bool   `json:"read"`
-	}{
-		SenderID:  c.currentUID,
-		Content:   body,
-		Timestamp: map[string]string{".sv": "timestamp"},
-		Read:      false,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	if err := r.Put(ctx, "/dm_messages/"+conversationID+"/"+msgID, payload); err != nil {
-		return fmt.Errorf("api: SendMessage: %w", err)
-	}
 	return nil
 }
 
-// SubscribeDMs opens a live SSE stream for a conversation.
-// Returns a message channel and a cancel function.
-// The channel is closed when cancel is called or the stream ends.
-// The initial Firebase snapshot (path="/") is skipped; only new messages are emitted.
+// SubscribeDMs returns an immediately-closed channel — server-side RTDB paths not yet finalised.
 func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error) {
-	r, err := c.rtdbOrErr()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	params := url.Values{"orderBy": {`"timestamp"`}}
-	sseEvents := r.Subscribe(ctx, "/dm_messages/"+convID, params)
-
-	out := make(chan model.Message, 8)
-	go func() {
-		defer close(out)
-		for ev := range sseEvents {
-			if ev.Err != nil {
-				return
-			}
-			if ev.Event != "put" {
-				continue
-			}
-			var d wireRTDBSSEData
-			if err := json.Unmarshal(ev.Data, &d); err != nil {
-				continue
-			}
-			// Skip the initial full-snapshot event (path="/").
-			if d.Path == "/" {
-				continue
-			}
-			var wm wireRTDBMessage
-			if err := json.Unmarshal(d.Data, &wm); err != nil {
-				continue
-			}
-			// Derive the message ID from the path (e.g. "/msgId").
-			msgID := strings.TrimPrefix(d.Path, "/")
-			select {
-			case out <- wireRTDBMessageToModel(msgID, wm):
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	return out, cancel, nil
+	ch := make(chan model.Message)
+	close(ch)
+	return ch, func() {}, nil
 }
 
 func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
