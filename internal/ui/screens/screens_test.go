@@ -390,3 +390,167 @@ func TestCMailSetConversationMessages_WrongConv_Noop(t *testing.T) {
 		t.Error("HasActiveConv should still be true after no-op SetConversationMessages")
 	}
 }
+
+// --- ComposeModel ---
+
+func TestCompose_NewIsInactive(t *testing.T) {
+	c := screens.NewComposeModel(80)
+	if c.IsActive() {
+		t.Error("expected compose to be inactive after New")
+	}
+}
+
+func TestCompose_OpenSetsActive(t *testing.T) {
+	c := screens.NewComposeModel(80)
+	c, _ = c.Open("replying to @molly")
+	if !c.IsActive() {
+		t.Error("expected compose to be active after Open")
+	}
+}
+
+// TestCompose_ContentIsPreservedOnSubmit verifies that the content typed into
+// the compose box is returned in ComposeSubmitMsg when the submit path fires.
+// Ctrl+Enter key delivery depends on terminal capabilities (Kitty protocol),
+// so we exercise the submit path by calling ComposeSubmitMsg directly on the
+// PostDetailModel (see TestPostDetail_ComposeSubmit_* below).
+func TestCompose_ContentIsEmpty_AfterOpen(t *testing.T) {
+	c := screens.NewComposeModel(80)
+	c, _ = c.Open("replying to @molly")
+	if c.Content() != "" {
+		t.Errorf("expected empty content after Open, got %q", c.Content())
+	}
+}
+
+func TestCompose_EscEmitsCancel(t *testing.T) {
+	c := screens.NewComposeModel(80)
+	c, _ = c.Open("replying to @molly")
+	_, cmd := c.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected a command after Esc")
+	}
+	msg := cmd()
+	if _, ok := msg.(screens.ComposeCancelMsg); !ok {
+		t.Errorf("expected ComposeCancelMsg, got %T", msg)
+	}
+}
+
+func TestCompose_CloseSetsInactive(t *testing.T) {
+	c := screens.NewComposeModel(80)
+	c, _ = c.Open("replying to @molly")
+	c = c.Close()
+	if c.IsActive() {
+		t.Error("expected compose to be inactive after Close")
+	}
+}
+
+func TestCompose_BoxHeightMinimum(t *testing.T) {
+	c := screens.NewComposeModel(80)
+	c, _ = c.Open("test")
+	if c.BoxHeight() < 4 { // 3 content + at least 1 overhead
+		t.Errorf("BoxHeight=%d, expected at least 4", c.BoxHeight())
+	}
+}
+
+func TestCompose_InactiveUpdateIsNoop(t *testing.T) {
+	c := screens.NewComposeModel(80)
+	_, cmd := c.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Error("expected nil cmd when compose is inactive")
+	}
+}
+
+// --- PostDetailModel reply keybinding ---
+
+func postDetailReady() screens.PostDetailModel {
+	m := screens.NewPostDetailModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPost(makePost())
+	m = m.SetReplies(makeReplies())
+	return m
+}
+
+func TestPostDetail_R_OpensCompose(t *testing.T) {
+	m := postDetailReady()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if !m.ComposeActive() {
+		t.Error("expected compose to be active after pressing 'r'")
+	}
+}
+
+func TestPostDetail_ComposeCancel_ClosesCompose(t *testing.T) {
+	m := postDetailReady()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	// Esc inside compose emits ComposeCancelMsg which comes back as a message.
+	m, _ = m.Update(screens.ComposeCancelMsg{})
+	if m.ComposeActive() {
+		t.Error("expected compose to be inactive after ComposeCancelMsg")
+	}
+}
+
+func TestPostDetail_ComposeSubmit_EmitsSubmitReplyMsg_PostLevel(t *testing.T) {
+	m := postDetailReady() // selectedReply=-1, replying to the post itself
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	_, cmd := m.Update(screens.ComposeSubmitMsg{Content: "my reply"})
+	if cmd == nil {
+		t.Fatal("expected a command after ComposeSubmitMsg")
+	}
+	msg := cmd()
+	sub, ok := msg.(screens.SubmitReplyMsg)
+	if !ok {
+		t.Fatalf("expected SubmitReplyMsg, got %T", msg)
+	}
+	if sub.PostID != "p1" {
+		t.Errorf("expected PostID=%q, got %q", "p1", sub.PostID)
+	}
+	if sub.ParentReplyID != "" {
+		t.Errorf("expected empty ParentReplyID for top-level reply, got %q", sub.ParentReplyID)
+	}
+	if sub.Content != "my reply" {
+		t.Errorf("expected Content=%q, got %q", "my reply", sub.Content)
+	}
+}
+
+func TestPostDetail_ComposeSubmit_EmitsSubmitReplyMsg_ReplyLevel(t *testing.T) {
+	m := postDetailReady()
+	// Navigate to the first reply.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	// selectedReply=0; open compose targeting that reply.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	_, cmd := m.Update(screens.ComposeSubmitMsg{Content: "nested reply"})
+	if cmd == nil {
+		t.Fatal("expected a command after ComposeSubmitMsg on reply")
+	}
+	msg := cmd()
+	sub, ok := msg.(screens.SubmitReplyMsg)
+	if !ok {
+		t.Fatalf("expected SubmitReplyMsg, got %T", msg)
+	}
+	if sub.ParentReplyID != "r1" {
+		t.Errorf("expected ParentReplyID=%q, got %q", "r1", sub.ParentReplyID)
+	}
+}
+
+// --- FeedModel reply keybinding ---
+
+func makeFeed() screens.FeedModel {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPosts([]model.Post{makePost()}, "")
+	return m
+}
+
+func TestFeed_R_EmitsShowPostForReplyMsg(t *testing.T) {
+	m := makeFeed()
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if cmd == nil {
+		t.Fatal("expected a command after pressing 'r' in feed")
+	}
+	msg := cmd()
+	spr, ok := msg.(screens.ShowPostForReplyMsg)
+	if !ok {
+		t.Fatalf("expected ShowPostForReplyMsg, got %T", msg)
+	}
+	if spr.Post.ID != "p1" {
+		t.Errorf("expected Post.ID=%q, got %q", "p1", spr.Post.ID)
+	}
+}

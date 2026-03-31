@@ -311,6 +311,36 @@ func TestMockGetPostReplies_AnyPostID(t *testing.T) {
 	}
 }
 
+// --- CreateReply ---
+
+func TestMockCreateReply_ReturnsReply(t *testing.T) {
+	m := newMock()
+	r, err := m.CreateReply("p1", "great post", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.ID == "" {
+		t.Error("expected non-empty reply ID")
+	}
+	if r.PostID != "p1" {
+		t.Errorf("expected PostID=%q, got %q", "p1", r.PostID)
+	}
+	if r.Content != "great post" {
+		t.Errorf("expected Content=%q, got %q", "great post", r.Content)
+	}
+}
+
+func TestMockCreateReply_WithParent(t *testing.T) {
+	m := newMock()
+	r, err := m.CreateReply("p1", "nested reply", "r1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.ParentReplyID != "r1" {
+		t.Errorf("expected ParentReplyID=%q, got %q", "r1", r.ParentReplyID)
+	}
+}
+
 // --- Interface compliance ---
 
 func TestMockClient_ImplementsClientInterface(t *testing.T) {

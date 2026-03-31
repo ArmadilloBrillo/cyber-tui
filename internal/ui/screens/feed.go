@@ -20,6 +20,10 @@ type LoadMoreFeedMsg struct{ Cursor string }
 // ShowPostMsg is emitted when the user presses Enter on a selected post.
 type ShowPostMsg struct{ Post model.Post }
 
+// ShowPostForReplyMsg is emitted when the user presses 'r' on a selected post.
+// App navigates to post detail and opens the compose box immediately.
+type ShowPostForReplyMsg struct{ Post model.Post }
+
 type FeedModel struct {
 	posts         []model.Post
 	postOffsets   []int // start line of each post within the viewport content
@@ -136,6 +140,11 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) {
 				post := m.posts[m.selectedIndex]
 				return m, func() tea.Msg { return ShowPostMsg{Post: post} }
+			}
+		case "r":
+			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) {
+				post := m.posts[m.selectedIndex]
+				return m, func() tea.Msg { return ShowPostForReplyMsg{Post: post} }
 			}
 		case "down", "j":
 			if m.selectedIndex < len(m.posts)-1 {

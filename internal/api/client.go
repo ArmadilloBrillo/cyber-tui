@@ -104,6 +104,16 @@ type createPostResponseData struct {
 	PostID string `json:"postId"`
 }
 
+type createReplyRequest struct {
+	PostID        string `json:"postId"`
+	Content       string `json:"content"`
+	ParentReplyID string `json:"parentReplyId,omitempty"`
+}
+
+type createReplyResponseData struct {
+	ReplyID string `json:"replyId"`
+}
+
 type updateProfileRequest struct {
 	Bio          *string `json:"bio,omitempty"`
 	DisplayName  *string `json:"displayName,omitempty"`
@@ -413,6 +423,22 @@ func (c *HTTPClient) CreatePost(content string, topics []string) (model.Post, er
 	}
 	// API returns only postId on creation; return a minimal Post.
 	return model.Post{ID: data.PostID, Content: content, Topics: topics}, nil
+}
+
+func (c *HTTPClient) CreateReply(postID, content, parentReplyID string) (model.Reply, error) {
+	env, err := c.doJSON("POST", "/v1/replies", createReplyRequest{
+		PostID:        postID,
+		Content:       content,
+		ParentReplyID: parentReplyID,
+	})
+	if err != nil {
+		return model.Reply{}, err
+	}
+	var data createReplyResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return model.Reply{}, err
+	}
+	return model.Reply{ID: data.ReplyID, PostID: postID, Content: content, ParentReplyID: parentReplyID}, nil
 }
 
 func (c *HTTPClient) GetOwnProfile() (model.User, error) {

@@ -14,6 +14,14 @@ import (
 // BackToFeedMsg is emitted when the user presses Esc to return to the feed.
 type BackToFeedMsg struct{}
 
+// SubmitReplyMsg is emitted when the compose box is submitted.
+// App intercepts this, calls CreateReply, then reloads replies.
+type SubmitReplyMsg struct {
+	PostID        string
+	ParentReplyID string
+	Content       string
+}
+
 type PostDetailModel struct {
 	post          model.Post
 	replies       []model.Reply
@@ -21,13 +29,20 @@ type PostDetailModel struct {
 	selectedReply int
 	viewport      viewport.Model
 	width         int
+	height        int
 	ready         bool
 	loading       bool
 	err           error
+
+	compose      ComposeModel
+	replyPostID  string // postID set when compose opens
+	replyParentID string // parentReplyID set when compose opens (empty = top-level)
 }
 
 func NewPostDetailModel() PostDetailModel {
-	return PostDetailModel{}
+	return PostDetailModel{
+		compose: NewComposeModel(0),
+	}
 }
 
 func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
@@ -60,10 +75,46 @@ func (m PostDetailModel) Loading() bool { return m.loading }
 // Ready reports whether the viewport has been initialised (i.e. a WindowSizeMsg was received).
 func (m PostDetailModel) Ready() bool { return m.ready }
 
+// ComposeActive reports whether the compose box is currently open.
+func (m PostDetailModel) ComposeActive() bool { return m.compose.IsActive() }
+
 func (m PostDetailModel) SetError(err error) PostDetailModel {
 	m.err = err
 	m.loading = false
 	return m
+}
+
+// OpenCompose opens the compose box targeting the currently selected item.
+// Returns (model, cmd) where cmd starts the cursor blink animation.
+func (m PostDetailModel) OpenCompose() (PostDetailModel, tea.Cmd) {
+	m.replyPostID = m.post.ID
+	var ctx string
+	if m.selectedReply >= 0 && m.selectedReply < len(m.replies) {
+		m.replyParentID = m.replies[m.selectedReply].ID
+		ctx = "replying to @" + m.replies[m.selectedReply].AuthorUsername
+	} else {
+		m.replyParentID = ""
+		ctx = "replying to @" + m.post.AuthorUsername
+	}
+	var cmd tea.Cmd
+	m.compose, cmd = m.compose.Open(ctx)
+	if m.ready {
+		m.viewport.Height = m.viewportHeight()
+	}
+	return m, cmd
+}
+
+// viewportHeight returns the number of lines the viewport should occupy,
+// accounting for the compose box when it is active.
+func (m PostDetailModel) viewportHeight() int {
+	h := m.height - theme.ChromeHeight
+	if m.compose.IsActive() {
+		h -= m.compose.BoxHeight()
+	}
+	if h < 1 {
+		h = 1
+	}
+	return h
 }
 
 func (m PostDetailModel) refreshContent() PostDetailModel {
@@ -114,21 +165,61 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
+		m.compose = m.compose.SetWidth(msg.Width)
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width, msg.Height-theme.ChromeHeight)
+			m.viewport = viewport.New(msg.Width, m.viewportHeight())
 			m = m.refreshContent()
 			m.ready = true
 		} else {
 			m.viewport.Width = msg.Width
-			m.viewport.Height = msg.Height - theme.ChromeHeight
+			m.viewport.Height = m.viewportHeight()
 			m = m.refreshContent()
 		}
 		return m, nil
 
+	case ComposeSubmitMsg:
+		content := msg.Content
+		postID := m.replyPostID
+		parentID := m.replyParentID
+		m.compose = m.compose.Close()
+		if m.ready {
+			m.viewport.Height = m.viewportHeight()
+		}
+		return m, func() tea.Msg {
+			return SubmitReplyMsg{
+				PostID:        postID,
+				ParentReplyID: parentID,
+				Content:       content,
+			}
+		}
+
+	case ComposeCancelMsg:
+		m.compose = m.compose.Close()
+		if m.ready {
+			m.viewport.Height = m.viewportHeight()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
+		// When compose is open, all key events go to the compose box.
+		if m.compose.IsActive() {
+			prevH := m.compose.BoxHeight()
+			var cmd tea.Cmd
+			m.compose, cmd = m.compose.Update(msg)
+			if m.compose.BoxHeight() != prevH && m.ready {
+				m.viewport.Height = m.viewportHeight()
+			}
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "esc":
 			return m, func() tea.Msg { return BackToFeedMsg{} }
+		case "r":
+			var cmd tea.Cmd
+			m, cmd = m.OpenCompose()
+			return m, cmd
 		case "up", "k":
 			if m.selectedReply >= 0 {
 				m.selectedReply--
@@ -146,9 +237,13 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		}
 	}
 
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(msg)
-	return m, cmd
+	// Viewport scrolling only when compose is closed.
+	if !m.compose.IsActive() {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
 
 // buildContent renders the full post and all replies into a single string for
@@ -262,6 +357,12 @@ func (m PostDetailModel) View() string {
 	}
 	if !m.ready {
 		return theme.Subtle.Render("loading…")
+	}
+	if m.compose.IsActive() {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			m.compose.View(),
+		)
 	}
 	return m.viewport.View()
 }

@@ -188,8 +188,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.postDetail = a.postDetail.SetPost(msg.Post)
 		return a, a.loadRepliesCmd(msg.Post.ID)
 
+	case screens.ShowPostForReplyMsg:
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.Post)
+		var openCmd tea.Cmd
+		a.postDetail, openCmd = a.postDetail.OpenCompose()
+		return a, tea.Batch(a.loadRepliesCmd(msg.Post.ID), openCmd)
+
 	case repliesLoadedMsg:
 		a.postDetail = a.postDetail.SetReplies(msg.replies)
+
+	case screens.SubmitReplyMsg:
+		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID)
+
+	case replyCreatedMsg:
+		return a, a.loadRepliesCmd(msg.postID)
 
 	case screens.BackToFeedMsg:
 		a.active = screenFeed
@@ -272,6 +285,8 @@ func (a App) activeScreenHasFocusedInput() bool {
 		return a.chatrooms.InputFocused()
 	case screenCMail:
 		return a.cmail.InputFocused()
+	case screenPostDetail:
+		return a.postDetail.ComposeActive()
 	}
 	return false
 }
@@ -378,8 +393,14 @@ func (a App) renderStatusBar() string {
 	switch a.active {
 	case screenCMail:
 		hintStr = "  Tab · switch pane   ↑↓ · navigate   Enter · open/send   1-4 · jump"
+	case screenPostDetail:
+		if a.postDetail.ComposeActive() {
+			hintStr = "  Ctrl+Enter · send   Esc · cancel"
+		} else {
+			hintStr = "  esc · back   r · reply   ↑↓/jk · navigate   1-4 · jump"
+		}
 	default:
-		hintStr = "  q · quit   ←→ · tabs   ↑↓/jk · navigate   1-4 · jump"
+		hintStr = "  q · quit   r · reply   ←→ · tabs   ↑↓/jk · navigate   1-4 · jump"
 	}
 	hint := theme.StatusBar.Render(hintStr)
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
@@ -431,6 +452,7 @@ type roomsLoadedMsg struct{ rooms []model.Room }
 type convsLoadedMsg struct{ convs []model.Conversation }
 type profileLoadedMsg struct{ user model.User }
 type repliesLoadedMsg struct{ replies []model.Reply }
+type replyCreatedMsg struct{ postID string }
 type errMsg struct{ err error }
 
 // DM subscription message types.
@@ -562,6 +584,16 @@ func (a *App) loadRepliesCmd(postID string) tea.Cmd {
 			return errMsg{err}
 		}
 		return repliesLoadedMsg{replies: replies}
+	}
+}
+
+func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := a.client.CreateReply(postID, content, parentReplyID)
+		if err != nil {
+			return errMsg{err}
+		}
+		return replyCreatedMsg{postID: postID}
 	}
 }
 

@@ -20,6 +20,8 @@ type Client interface {
 
 	// Replies — first page only (pagination deferred).
 	GetPostReplies(postID string) ([]model.Reply, error)
+	// CreateReply posts a reply to postID. Pass empty parentReplyID for top-level replies.
+	CreateReply(postID, content, parentReplyID string) (model.Reply, error)
 
 	// Profile
 	GetOwnProfile() (model.User, error)
