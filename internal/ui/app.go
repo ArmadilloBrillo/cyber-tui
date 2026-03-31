@@ -241,6 +241,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Profile ---
 	case profileLoadedMsg:
+		a.currentUser = msg.user
 		a.profile = a.profile.SetUser(msg.user)
 
 	case screens.SaveProfileMsg:
@@ -371,7 +372,8 @@ func (a App) renderActiveScreen() string {
 }
 
 func (a App) renderStatusBar() string {
-	user := theme.StatusBar.Render("@" + a.currentUser.Username)
+	userStyle := theme.StatusBar.Copy().Foreground(theme.ColorCyan)
+	user := userStyle.Render("@" + a.currentUser.Username)
 	var hintStr string
 	switch a.active {
 	case screenCMail:
@@ -414,7 +416,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 func (a *App) afterLoginCmd() tea.Cmd {
 	a.active = screenFeed
 	a.profile = a.profile.SetUser(a.currentUser)
-	return a.loadFeedCmd()
+	return tea.Batch(a.loadFeedCmd(), a.loadProfileCmd())
 }
 
 type feedLoadedMsg struct {

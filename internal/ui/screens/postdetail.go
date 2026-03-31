@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,13 +15,15 @@ import (
 type BackToFeedMsg struct{}
 
 type PostDetailModel struct {
-	post     model.Post
-	replies  []model.Reply
-	viewport viewport.Model
-	width    int
-	ready    bool
-	loading  bool
-	err      error
+	post          model.Post
+	replies       []model.Reply
+	replyOffsets  []int // start line of each reply within the viewport content
+	selectedReply int
+	viewport      viewport.Model
+	width         int
+	ready         bool
+	loading       bool
+	err           error
 }
 
 func NewPostDetailModel() PostDetailModel {
@@ -30,6 +33,8 @@ func NewPostDetailModel() PostDetailModel {
 func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 	m.post = post
 	m.replies = nil
+	m.replyOffsets = nil
+	m.selectedReply = -1 // post itself is selected by default
 	m.loading = true
 	m.err = nil
 	if m.ready {
@@ -41,6 +46,7 @@ func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 
 func (m PostDetailModel) SetReplies(replies []model.Reply) PostDetailModel {
 	m.replies = replies
+	m.selectedReply = -1 // keep post selected after replies load
 	m.loading = false
 	if m.ready {
 		m = m.refreshContent()
@@ -61,7 +67,44 @@ func (m PostDetailModel) SetError(err error) PostDetailModel {
 }
 
 func (m PostDetailModel) refreshContent() PostDetailModel {
-	m.viewport.SetContent(m.buildContent())
+	content, offsets := m.buildContent()
+	m.replyOffsets = offsets
+	m.viewport.SetContent(content)
+	return m
+}
+
+// ensureSelectedVisible scrolls the viewport the minimum amount so the
+// selected item (post or reply) is fully visible.
+func (m PostDetailModel) ensureSelectedVisible() PostDetailModel {
+	if !m.ready {
+		return m
+	}
+	var itemStart, itemHeight int
+	if m.selectedReply == -1 {
+		// Post is selected — it always starts at line 0.
+		itemStart = 0
+		itemHeight = lipgloss.Height(m.renderFullPost(true))
+	} else {
+		if len(m.replyOffsets) == 0 || m.selectedReply >= len(m.replies) {
+			return m
+		}
+		itemStart = m.replyOffsets[m.selectedReply]
+		itemHeight = lipgloss.Height(m.renderReply(m.replies[m.selectedReply], false))
+	}
+	itemEnd := itemStart + itemHeight - 1
+
+	viewTop := m.viewport.YOffset
+	viewBottom := viewTop + m.viewport.Height - 1
+
+	if itemStart < viewTop {
+		m.viewport.SetYOffset(itemStart)
+	} else if itemEnd > viewBottom {
+		if itemHeight <= m.viewport.Height {
+			m.viewport.SetYOffset(itemEnd - m.viewport.Height + 1)
+		} else {
+			m.viewport.SetYOffset(itemStart)
+		}
+	}
 	return m
 }
 
@@ -83,8 +126,23 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if msg.String() == "esc" {
+		switch msg.String() {
+		case "esc":
 			return m, func() tea.Msg { return BackToFeedMsg{} }
+		case "up", "k":
+			if m.selectedReply >= 0 {
+				m.selectedReply--
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+			}
+			return m, nil
+		case "down", "j":
+			if m.selectedReply < len(m.replies)-1 {
+				m.selectedReply++
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+			}
+			return m, nil
 		}
 	}
 
@@ -93,27 +151,46 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 	return m, cmd
 }
 
-func (m PostDetailModel) buildContent() string {
-	// Full post — no truncation, ActiveBorder, full width
-	postContent := m.renderFullPost()
-
+// buildContent renders the full post and all replies into a single string for
+// the viewport. It returns the string and the start-line offset of each reply.
+func (m PostDetailModel) buildContent() (string, []int) {
+	postContent := m.renderFullPost(m.selectedReply == -1)
 	repliesHeader := theme.Title.Render(fmt.Sprintf("  %d replies", len(m.replies)))
 
-	var repliesSection string
+	var sb strings.Builder
+	sb.WriteString(postContent)
+	sb.WriteString("\n")
+	sb.WriteString(repliesHeader)
+	sb.WriteString("\n")
+
 	if m.loading {
-		repliesSection = theme.Subtle.Render("  loading replies…")
-	} else if len(m.replies) == 0 {
-		repliesSection = theme.Subtle.Render("  no replies yet")
-	} else {
-		for _, r := range m.replies {
-			repliesSection += m.renderReply(r) + "\n"
-		}
+		sb.WriteString(theme.Subtle.Render("  loading replies…"))
+		sb.WriteString("\n")
+		return sb.String(), nil
+	}
+	if len(m.replies) == 0 {
+		sb.WriteString(theme.Subtle.Render("  no replies yet"))
+		sb.WriteString("\n")
+		return sb.String(), nil
 	}
 
-	return postContent + "\n" + repliesHeader + "\n" + repliesSection
+	// Base line where first reply starts: post height + blank line + header height + blank line.
+	baseLines := lipgloss.Height(postContent) + 1 + lipgloss.Height(repliesHeader) + 1
+	offsets := make([]int, len(m.replies))
+	currentLine := baseLines
+
+	for i, r := range m.replies {
+		offsets[i] = currentLine
+		rendered := m.renderReply(r, i == m.selectedReply)
+		sb.WriteString(rendered)
+		sb.WriteString("\n")
+		currentLine += lipgloss.Height(rendered) + 1
+	}
+
+	return sb.String(), offsets
 }
 
-func (m PostDetailModel) renderFullPost() string {
+func (m PostDetailModel) renderFullPost(selected bool) string {
 	innerWidth := m.width - 4
 
 	header := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -133,7 +210,10 @@ func (m PostDetailModel) renderFullPost() string {
 		topics += theme.Subtle.Render("#"+t) + " "
 	}
 
-	boxStyle := theme.ActiveBorder
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
 	if innerWidth > 0 {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}
@@ -146,7 +226,7 @@ func (m PostDetailModel) renderFullPost() string {
 	)
 }
 
-func (m PostDetailModel) renderReply(r model.Reply) string {
+func (m PostDetailModel) renderReply(r model.Reply, selected bool) string {
 	innerWidth := m.width - 4
 
 	header := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -162,6 +242,9 @@ func (m PostDetailModel) renderReply(r model.Reply) string {
 	}
 
 	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
 	if innerWidth > 0 {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}

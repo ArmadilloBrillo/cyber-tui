@@ -194,10 +194,22 @@ func (m FeedModel) renderPost(p model.Post, selected bool) string {
 	// innerWidth is the usable text area; 0 means not yet initialised (skip wrapping).
 	innerWidth := m.width - 4
 
-	header := lipgloss.JoinHorizontal(lipgloss.Top,
+	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+p.AuthorUsername),
 		theme.Subtle.Render("  "+p.CreatedAt.Format("15:04:05")),
 	)
+	replies := theme.Subtle.Render(fmt.Sprintf("%d replies", p.RepliesCount))
+	var header string
+	if innerWidth > 0 {
+		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(replies)
+		if gap > 0 {
+			header = left + strings.Repeat(" ", gap) + replies
+		} else {
+			header = left
+		}
+	} else {
+		header = left
+	}
 
 	var body string
 	if innerWidth > 0 {
