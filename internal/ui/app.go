@@ -403,7 +403,7 @@ func (a App) renderStatusBar() string {
 		hintStr = "  Tab · switch pane   ↑↓ · navigate   Enter · open/send   1-4 · jump"
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
-			hintStr = "  Alt+Enter · send   Enter · paragraph   Shift+Enter · line break   Esc · cancel"
+			hintStr = "  Alt+Enter · send   Enter · paragraph   Esc · cancel"
 		} else {
 			hintStr = "  esc · back   r · reply   ↑↓/jk · navigate   1-4 · jump"
 		}

@@ -23,7 +23,6 @@ type ComposeCancelMsg struct{}
 // ComposeModel is a reusable expanding multi-line text editor.
 // Embed it in any screen that needs a compose area.
 //   - Enter inserts a paragraph break (\n\n → <p> on the website)
-//   - Shift+Enter inserts a hard line break (\n → <br> on the website)
 //   - Alt+Enter (or Ctrl+Enter with Kitty) submits (emits ComposeSubmitMsg)
 //   - Esc cancels (emits ComposeCancelMsg)
 type ComposeModel struct {
@@ -115,12 +114,10 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 		case "enter":
 			// Paragraph break: insert \n\n so the website renderer (GFM breaks: true)
 			// wraps this in <p> tags, matching the website's own Enter behaviour.
+			// Note: shift+enter cannot be distinguished from enter in most terminals
+			// without Kitty keyboard protocol, so hard line breaks (\n → <br>) are
+			// not supported unless the terminal negotiates Kitty.
 			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			return m.recalcHeight(), nil
-		case "shift+enter":
-			// Hard line break: single \n renders as <br> under GFM breaks: true,
-			// matching the website's Shift+Enter behaviour (no paragraph gap).
 			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			return m.recalcHeight(), nil
 		}
