@@ -2,3 +2,6 @@
 /cyber-tui
 *.exe
 *.test
+
+#CLAUDE
+.claude/
