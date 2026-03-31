@@ -465,38 +465,9 @@ func (c *HTTPClient) SendRoomMessage(roomID, body string) error {
 }
 
 // --- Direct messages (C-Mail) via Firebase RTDB ---
-
-// wireRTDBMessage is the Firebase wire shape for a DM message.
-type wireRTDBMessage struct {
-	SenderID       string  `json:"senderId"`
-	SenderUsername string  `json:"senderUsername"`
-	Content        string  `json:"content"`
-	Timestamp      float64 `json:"timestamp"` // epoch ms (server timestamp arrives as number after roundtrip)
-	Read           bool    `json:"read"`
-}
-
-// wireRTDBSSEData is the shape of the data field in a Firebase SSE event.
-type wireRTDBSSEData struct {
-	Path string          `json:"path"`
-	Data json.RawMessage `json:"data"`
-}
-
-// wireRTDBConversation is the Firebase shape for a conversation entry under /user_conversations/<uid>.
-// TODO: confirm this RTDB path with the API owner — probing /user_conversations/<userId>.
-type wireRTDBConversation struct {
-	ConversationID   string `json:"conversationId"`
-	OtherUserID      string `json:"otherUserId"`
-	OtherUsername    string `json:"otherUsername"`
-	LastMessage      string `json:"lastMessage"`
-	LastTimestamp    float64 `json:"lastTimestamp"`
-}
-
-func (c *HTTPClient) rtdbOrErr() (*rtdb.Client, error) {
-	if c.rtdbClient == nil {
-		return nil, fmt.Errorf("api: RTDB client not initialised (call InitRTDB after login)")
-	}
-	return c.rtdbClient, nil
-}
+// NOTE: server-side RTDB paths are not yet finalised.
+// Full implementation is in git history (commit e41884a).
+// Wire types, rtdbOrErr, and wireRTDBMessageToModel are in that commit.
 
 // GetConversations returns empty — server-side RTDB paths not yet finalised.
 func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
@@ -518,15 +489,6 @@ func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 	ch := make(chan model.Message)
 	close(ch)
 	return ch, func() {}, nil
-}
-
-func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
-	return model.Message{
-		ID:        id,
-		From:      model.User{ID: wm.SenderID, Username: wm.SenderUsername},
-		Body:      wm.Content,
-		CreatedAt: time.UnixMilli(int64(wm.Timestamp)),
-	}
 }
 
 func isDebug() bool {
