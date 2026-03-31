@@ -104,7 +104,9 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
-		case "ctrl+enter":
+		case "ctrl+enter", "alt+enter":
+			// ctrl+enter requires Kitty keyboard protocol; alt+enter (ESC+CR)
+			// works in virtually all terminals and is the reliable fallback.
 			content := m.textarea.Value()
 			return m, func() tea.Msg { return ComposeSubmitMsg{Content: content} }
 		case "esc":
