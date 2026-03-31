@@ -22,8 +22,9 @@ type ComposeCancelMsg struct{}
 
 // ComposeModel is a reusable expanding multi-line text editor.
 // Embed it in any screen that needs a compose area.
-//   - Enter adds a newline
-//   - Ctrl+Enter submits (emits ComposeSubmitMsg)
+//   - Enter inserts a paragraph break (\n\n → <p> on the website)
+//   - Shift+Enter inserts a hard line break (\n → <br> on the website)
+//   - Alt+Enter (or Ctrl+Enter with Kitty) submits (emits ComposeSubmitMsg)
 //   - Esc cancels (emits ComposeCancelMsg)
 type ComposeModel struct {
 	textarea     textarea.Model
@@ -111,13 +112,28 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 			return m, func() tea.Msg { return ComposeSubmitMsg{Content: content} }
 		case "esc":
 			return m, func() tea.Msg { return ComposeCancelMsg{} }
+		case "enter":
+			// Paragraph break: insert \n\n so the website renderer (GFM breaks: true)
+			// wraps this in <p> tags, matching the website's own Enter behaviour.
+			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			return m.recalcHeight(), nil
+		case "shift+enter":
+			// Hard line break: single \n renders as <br> under GFM breaks: true,
+			// matching the website's Shift+Enter behaviour (no paragraph gap).
+			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			return m.recalcHeight(), nil
 		}
 	}
 
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
+	return m.recalcHeight(), cmd
+}
 
-	// Grow or shrink to fit the content, clamped to [min, max].
+// recalcHeight adjusts contentLines and the textarea height to fit the current
+// content, clamped to [composeMinLines, composeMaxLines].
+func (m ComposeModel) recalcHeight() ComposeModel {
 	lines := strings.Count(m.textarea.Value(), "\n") + 1
 	newLines := lines
 	if newLines < composeMinLines {
@@ -130,8 +146,7 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 		m.contentLines = newLines
 		m.textarea.SetHeight(newLines)
 	}
-
-	return m, cmd
+	return m
 }
 
 // View renders the compose box. Returns an empty string when not active.
