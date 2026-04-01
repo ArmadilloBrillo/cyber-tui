@@ -36,6 +36,15 @@ func (m *MockClient) Login(email, password string) (model.Tokens, error) {
 	return m.tokens, nil
 }
 
+func (m *MockClient) LoginWithRefreshToken(refreshToken string) (model.Tokens, error) {
+	m.tokens = model.Tokens{
+		IDToken:      "mock-idtoken-refreshed",
+		RefreshToken: refreshToken,
+		RTDBToken:    "mock-rtdb-refreshed",
+	}
+	return m.tokens, nil
+}
+
 func (m *MockClient) Logout() error {
 	m.tokens = model.Tokens{}
 	return nil

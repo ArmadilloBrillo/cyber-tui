@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/joho/godotenv"
 	"github.com/ragnar/cyber-tui/internal/api"
+	"github.com/ragnar/cyber-tui/internal/config"
 	internalssh "github.com/ragnar/cyber-tui/internal/ssh"
 	"github.com/ragnar/cyber-tui/internal/ui"
 )
@@ -46,7 +47,11 @@ func main() {
 
 	// Local TUI mode
 	app := ui.NewApp(client)
-	if email := os.Getenv("CYBERSPACE_EMAIL"); email != "" {
+	// Prefer saved session (token-based) over env-var credentials.
+	if sess, err := config.Load(); err == nil && sess.RefreshToken != "" {
+		app = app.WithSavedSession(sess)
+	} else if email := os.Getenv("CYBERSPACE_EMAIL"); email != "" {
+		// Dev/CI fallback: auto-login via plaintext credentials in environment.
 		if password := os.Getenv("CYBERSPACE_PASSWORD"); password != "" {
 			app = app.WithAutoLogin(email, password)
 		}

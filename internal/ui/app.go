@@ -2,10 +2,12 @@ package ui
 
 import (
 	"context"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/api"
+	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
@@ -55,6 +57,10 @@ type App struct {
 	autoEmail    string
 	autoPassword string
 
+	// savedSession is set when a session file was loaded at startup.
+	// When non-nil, Init fires tokenLoginCmd instead of showing the login screen.
+	savedSession *config.Session
+
 	// dmSub holds the active RTDB subscription for the open C-Mail conversation.
 	// nil when no conversation is selected or when not on the C-Mail screen.
 	dmSub       *dmSubscription
@@ -95,9 +101,20 @@ func (a App) WithAutoLogin(email, password string) App {
 	return a
 }
 
+// WithSavedSession attaches a persisted session loaded from ~/.cyber-tui.json.
+// When set, Init attempts to resume the session via token refresh instead of
+// showing the login screen.
+func (a App) WithSavedSession(s config.Session) App {
+	a.savedSession = &s
+	return a
+}
+
 // --- init ---
 
 func (a App) Init() tea.Cmd {
+	if a.savedSession != nil && a.savedSession.RefreshToken != "" {
+		return a.tokenLoginCmd(a.savedSession.RefreshToken)
+	}
 	if a.autoEmail != "" && a.autoPassword != "" {
 		return a.loginCmd(a.autoEmail, a.autoPassword)
 	}
@@ -438,6 +455,47 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 			hc.SetCurrentUID(user.ID)
 		}
 		a.cmail = screens.NewCMailModel(user.Username)
+		// Persist the refresh token so subsequent launches auto-login.
+		_ = config.Save(config.Session{
+			RefreshToken: tokens.RefreshToken,
+			Username:     user.Username,
+			Email:        email,
+			SavedAt:      time.Now().UTC(),
+		})
+		return screens.LoginMsg{}
+	}
+}
+
+// tokenLoginCmd resumes a saved session by exchanging the stored refresh token
+// for fresh API tokens, then fetches the user profile. On failure it falls back
+// to the login screen by returning a LoginErrMsg.
+func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
+	return func() tea.Msg {
+		tokens, err := a.client.LoginWithRefreshToken(refreshToken)
+		if err != nil {
+			return screens.LoginErrMsg{Err: err}
+		}
+		a.tokens = tokens
+		if hc, ok := a.client.(*api.HTTPClient); ok {
+			_ = hc.InitRTDB(tokens.RTDBToken)
+		}
+		user, err := a.client.GetOwnProfile()
+		if err != nil {
+			return screens.LoginErrMsg{Err: err}
+		}
+		a.currentUser = user
+		if hc, ok := a.client.(*api.HTTPClient); ok {
+			hc.SetCurrentUID(user.ID)
+		}
+		a.cmail = screens.NewCMailModel(user.Username)
+		// Update savedAt so we know when the session was last used.
+		sess := a.savedSession
+		_ = config.Save(config.Session{
+			RefreshToken: tokens.RefreshToken,
+			Username:     user.Username,
+			Email:        sess.Email,
+			SavedAt:      time.Now().UTC(),
+		})
 		return screens.LoginMsg{}
 	}
 }

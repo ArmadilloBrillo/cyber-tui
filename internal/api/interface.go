@@ -11,6 +11,9 @@ import (
 type Client interface {
 	// Auth
 	Login(email, password string) (model.Tokens, error)
+	// LoginWithRefreshToken exchanges a saved refresh token for a fresh set of
+	// tokens (IDToken + RTDBToken) without requiring the user's password.
+	LoginWithRefreshToken(refreshToken string) (model.Tokens, error)
 	Logout() error
 
 	// Feed — pass empty cursor for first page; use returned cursor for next page.

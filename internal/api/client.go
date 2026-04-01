@@ -366,6 +366,17 @@ func (c *HTTPClient) Login(email, password string) (model.Tokens, error) {
 	return c.tokens, nil
 }
 
+// LoginWithRefreshToken exchanges a saved refresh token for a fresh IDToken and
+// RTDBToken without requiring the user's password. On success the new tokens are
+// stored in the client and returned. On failure ErrUnauthorized is returned.
+func (c *HTTPClient) LoginWithRefreshToken(refreshToken string) (model.Tokens, error) {
+	c.tokens.RefreshToken = refreshToken
+	if err := c.refresh(); err != nil {
+		return model.Tokens{}, err
+	}
+	return c.tokens, nil
+}
+
 // Logout clears the in-memory tokens. The v0.2 API has no server-side logout endpoint.
 func (c *HTTPClient) Logout() error {
 	c.tokens = model.Tokens{}

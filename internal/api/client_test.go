@@ -289,6 +289,58 @@ func TestHTTPTokenRefresh_Failure(t *testing.T) {
 	}
 }
 
+func TestHTTPLoginWithRefreshToken_Success(t *testing.T) {
+	var capturedRefreshToken string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/auth/refresh" {
+			var body struct {
+				RefreshToken string `json:"refreshToken"`
+			}
+			raw, _ := io.ReadAll(r.Body)
+			json.Unmarshal(raw, &body)
+			capturedRefreshToken = body.RefreshToken
+			writeOK(t, w, map[string]string{
+				"idToken":   "fresh-id-token",
+				"rtdbToken": "fresh-rtdb-token",
+			})
+			return
+		}
+		writeErr(w, 404, "NOT_FOUND", "unexpected path")
+	}))
+
+	tokens, err := c.LoginWithRefreshToken("saved-refresh-token")
+	if err != nil {
+		t.Fatalf("LoginWithRefreshToken: %v", err)
+	}
+	if capturedRefreshToken != "saved-refresh-token" {
+		t.Errorf("sent refreshToken = %q, want %q", capturedRefreshToken, "saved-refresh-token")
+	}
+	if tokens.IDToken != "fresh-id-token" {
+		t.Errorf("IDToken = %q, want %q", tokens.IDToken, "fresh-id-token")
+	}
+	if tokens.RTDBToken != "fresh-rtdb-token" {
+		t.Errorf("RTDBToken = %q, want %q", tokens.RTDBToken, "fresh-rtdb-token")
+	}
+}
+
+func TestHTTPLoginWithRefreshToken_Failure(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, 401, "UNAUTHORIZED", "refresh token expired")
+	}))
+
+	_, err := c.LoginWithRefreshToken("expired-token")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.Code != "UNAUTHORIZED" {
+		t.Errorf("Code = %q, want UNAUTHORIZED", apiErr.Code)
+	}
+}
+
 func TestHTTPUpdateProfile_OmitsNilFields(t *testing.T) {
 	var capturedBody []byte
 	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
