@@ -245,6 +245,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case repliesLoadedMsg:
 		a.postDetail = a.postDetail.SetReplies(msg.replies)
 
+	case screens.SubmitNewPostMsg:
+		return a, a.createPostCmd(msg.Content)
+
+	case postCreatedMsg:
+		return a, a.loadFeedCmd()
+
 	case screens.SubmitReplyMsg:
 		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID)
 
@@ -334,6 +340,8 @@ func (a App) activeScreenHasFocusedInput() bool {
 		return a.cmail.InputFocused()
 	case screenPostDetail:
 		return a.postDetail.ComposeActive()
+	case screenFeed:
+		return a.feed.ComposeActive()
 	}
 	return false
 }
@@ -561,6 +569,7 @@ type convsLoadedMsg struct{ convs []model.Conversation }
 type profileLoadedMsg struct{ user model.User }
 type repliesLoadedMsg struct{ replies []model.Reply }
 type replyCreatedMsg struct{ postID string }
+type postCreatedMsg struct{}
 type errMsg struct{ err error }
 
 // DM subscription message types.
@@ -702,6 +711,16 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 			return errMsg{err}
 		}
 		return replyCreatedMsg{postID: postID}
+	}
+}
+
+func (a *App) createPostCmd(content string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := a.client.CreatePost(content, nil)
+		if err != nil {
+			return errMsg{err}
+		}
+		return postCreatedMsg{}
 	}
 }
 

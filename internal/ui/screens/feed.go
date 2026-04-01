@@ -24,11 +24,16 @@ type ShowPostMsg struct{ Post model.Post }
 // App navigates to post detail and opens the compose box immediately.
 type ShowPostForReplyMsg struct{ Post model.Post }
 
+// SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
+type SubmitNewPostMsg struct{ Content string }
+
 type FeedModel struct {
 	posts         []model.Post
 	postOffsets   []int // start line of each post within the viewport content
 	viewport      viewport.Model
+	compose       ComposeModel
 	width         int
+	height        int
 	selectedIndex int
 	ready         bool
 	err           error
@@ -39,7 +44,9 @@ type FeedModel struct {
 }
 
 func NewFeedModel() FeedModel {
-	return FeedModel{}
+	return FeedModel{
+		compose: NewComposeModel(0),
+	}
 }
 
 func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
@@ -120,24 +127,45 @@ func (m FeedModel) ensureSelectedVisible() FeedModel {
 	return m
 }
 
+// ComposeActive reports whether the new-post compose box is open.
+func (m FeedModel) ComposeActive() bool { return m.compose.IsActive() }
+
 func (m FeedModel) Init() tea.Cmd { return nil }
 
 func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
+		m.compose = m.compose.SetWidth(msg.Width)
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width, msg.Height-theme.ChromeHeight)
+			m.viewport = viewport.New(msg.Width, m.viewportHeight())
 			m = m.refreshContent()
 			m.ready = true
 		} else {
 			m.viewport.Width = msg.Width
-			m.viewport.Height = msg.Height - theme.ChromeHeight
+			m.viewport.Height = m.viewportHeight()
 			m = m.refreshContent()
 		}
 		return m, nil
 
+	case ComposeSubmitMsg:
+		content := msg.Content
+		m.compose = m.compose.Close()
+		m.viewport.Height = m.viewportHeight()
+		return m, func() tea.Msg { return SubmitNewPostMsg{Content: content} }
+
+	case ComposeCancelMsg:
+		m.compose = m.compose.Close()
+		m.viewport.Height = m.viewportHeight()
+		return m, nil
+
 	case tea.KeyMsg:
+		if m.compose.IsActive() {
+			var cmd tea.Cmd
+			m.compose, cmd = m.compose.Update(msg)
+			return m, cmd
+		}
 		switch msg.String() {
 		case "up", "k":
 			if m.selectedIndex > 0 {
@@ -156,6 +184,11 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				post := m.posts[m.selectedIndex]
 				return m, func() tea.Msg { return ShowPostForReplyMsg{Post: post} }
 			}
+		case "n":
+			var cmd tea.Cmd
+			m.compose, cmd = m.compose.Open("new post", "what's on your mind…")
+			m.viewport.Height = m.viewportHeight()
+			return m, cmd
 		case "down", "j":
 			if m.selectedIndex < len(m.posts)-1 {
 				m.selectedIndex++
@@ -182,6 +215,19 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	}
 
 	return m, cmd
+}
+
+// viewportHeight returns the viewport height in rows, shrinking to make room for
+// the compose box when it is active.
+func (m FeedModel) viewportHeight() int {
+	h := m.height - theme.ChromeHeight
+	if m.compose.IsActive() {
+		h -= m.compose.BoxHeight()
+	}
+	if h < 1 {
+		h = 1
+	}
+	return h
 }
 
 // buildContent renders all posts into a single string for the viewport and
@@ -278,6 +324,9 @@ func (m FeedModel) View() string {
 	}
 	if !m.ready {
 		return theme.Subtle.Render("loading feed...")
+	}
+	if m.compose.IsActive() {
+		return lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), m.compose.View())
 	}
 	return m.viewport.View()
 }

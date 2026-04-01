@@ -109,7 +109,7 @@ func (m PostDetailModel) OpenCompose() (PostDetailModel, tea.Cmd) {
 		ctx = "replying to @" + m.post.AuthorUsername
 	}
 	var cmd tea.Cmd
-	m.compose, cmd = m.compose.Open(ctx)
+	m.compose, cmd = m.compose.Open(ctx, "write your reply…")
 	if m.ready {
 		m.viewport.Height = m.viewportHeight()
 	}

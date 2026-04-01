@@ -56,10 +56,11 @@ func NewComposeModel(width int) ComposeModel {
 // Open prepares the compose box: sets the context label, clears content,
 // resets height to minimum, and focuses the textarea.
 // Returns the updated model and a Cmd that starts the cursor blink animation.
-func (m ComposeModel) Open(ctx string) (ComposeModel, tea.Cmd) {
+func (m ComposeModel) Open(ctx, placeholder string) (ComposeModel, tea.Cmd) {
 	m.context = ctx
 	m.active = true
 	m.contentLines = composeMinLines
+	m.textarea.Placeholder = placeholder
 	m.textarea.SetValue("")
 	m.textarea.SetHeight(composeMinLines)
 	cmd := m.textarea.Focus()

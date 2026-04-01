@@ -402,7 +402,7 @@ func TestCompose_NewIsInactive(t *testing.T) {
 
 func TestCompose_OpenSetsActive(t *testing.T) {
 	c := screens.NewComposeModel(80)
-	c, _ = c.Open("replying to @molly")
+	c, _ = c.Open("replying to @molly", "write your reply…")
 	if !c.IsActive() {
 		t.Error("expected compose to be active after Open")
 	}
@@ -415,7 +415,7 @@ func TestCompose_OpenSetsActive(t *testing.T) {
 // PostDetailModel (see TestPostDetail_ComposeSubmit_* below).
 func TestCompose_ContentIsEmpty_AfterOpen(t *testing.T) {
 	c := screens.NewComposeModel(80)
-	c, _ = c.Open("replying to @molly")
+	c, _ = c.Open("replying to @molly", "write your reply…")
 	if c.Content() != "" {
 		t.Errorf("expected empty content after Open, got %q", c.Content())
 	}
@@ -423,7 +423,7 @@ func TestCompose_ContentIsEmpty_AfterOpen(t *testing.T) {
 
 func TestCompose_EscEmitsCancel(t *testing.T) {
 	c := screens.NewComposeModel(80)
-	c, _ = c.Open("replying to @molly")
+	c, _ = c.Open("replying to @molly", "write your reply…")
 	_, cmd := c.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
 		t.Fatal("expected a command after Esc")
@@ -436,7 +436,7 @@ func TestCompose_EscEmitsCancel(t *testing.T) {
 
 func TestCompose_CloseSetsInactive(t *testing.T) {
 	c := screens.NewComposeModel(80)
-	c, _ = c.Open("replying to @molly")
+	c, _ = c.Open("replying to @molly", "write your reply…")
 	c = c.Close()
 	if c.IsActive() {
 		t.Error("expected compose to be inactive after Close")
@@ -445,7 +445,7 @@ func TestCompose_CloseSetsInactive(t *testing.T) {
 
 func TestCompose_BoxHeightMinimum(t *testing.T) {
 	c := screens.NewComposeModel(80)
-	c, _ = c.Open("test")
+	c, _ = c.Open("test", "placeholder")
 	if c.BoxHeight() < 4 { // 3 content + at least 1 overhead
 		t.Errorf("BoxHeight=%d, expected at least 4", c.BoxHeight())
 	}
@@ -552,5 +552,48 @@ func TestFeed_R_EmitsShowPostForReplyMsg(t *testing.T) {
 	}
 	if spr.Post.ID != "p1" {
 		t.Errorf("expected Post.ID=%q, got %q", "p1", spr.Post.ID)
+	}
+}
+
+func TestFeed_N_OpensCompose(t *testing.T) {
+	m := makeFeed()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if !m.ComposeActive() {
+		t.Error("expected compose to be active after pressing 'n' in feed")
+	}
+}
+
+func TestFeed_ComposeCancel_ClosesCompose(t *testing.T) {
+	m := makeFeed()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m, _ = m.Update(screens.ComposeCancelMsg{})
+	if m.ComposeActive() {
+		t.Error("expected compose to be inactive after ComposeCancelMsg")
+	}
+}
+
+func TestFeed_ComposeSubmit_EmitsSubmitNewPostMsg(t *testing.T) {
+	m := makeFeed()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	_, cmd := m.Update(screens.ComposeSubmitMsg{Content: "hello world"})
+	if cmd == nil {
+		t.Fatal("expected a command after ComposeSubmitMsg in feed")
+	}
+	msg := cmd()
+	snp, ok := msg.(screens.SubmitNewPostMsg)
+	if !ok {
+		t.Fatalf("expected SubmitNewPostMsg, got %T", msg)
+	}
+	if snp.Content != "hello world" {
+		t.Errorf("expected Content=%q, got %q", "hello world", snp.Content)
+	}
+}
+
+func TestFeed_N_NotActiveInPostDetail(t *testing.T) {
+	// PostDetail should not react to 'n' — compose stays closed.
+	m := postDetailReady()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if m.ComposeActive() {
+		t.Error("expected compose to remain inactive after pressing 'n' in PostDetail")
 	}
 }
