@@ -5,7 +5,6 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/joho/godotenv"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	internalssh "github.com/ragnar/cyber-tui/internal/ssh"
@@ -13,32 +12,34 @@ import (
 )
 
 func main() {
-	// Load .env if present — silently ignored when the file doesn't exist.
-	godotenv.Load() //nolint:errcheck
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Determine which client to use.
-	// Set CYBERSPACE_USE_MOCK=1 to run against mock data (no credentials needed).
+	// Set useMock: true in ~/.cyber-tui.json to run against mock data.
 	var client api.Client
-	if os.Getenv("CYBERSPACE_USE_MOCK") == "1" {
-		fmt.Fprintln(os.Stderr, "CYBERSPACE_USE_MOCK=1 — running with mock data")
+	if cfg.UseMock {
+		fmt.Fprintln(os.Stderr, "useMock=true — running with mock data")
 		client = api.NewMockClient()
 	} else {
-		baseURL := os.Getenv("CYBERSPACE_API_BASE_URL")
+		baseURL := cfg.APIBaseURL
 		if baseURL == "" {
 			baseURL = "https://api.cyberspace.online"
 		}
-		client = api.NewHTTPClient(baseURL)
+		client = api.NewHTTPClient(baseURL).WithDebug(cfg.Debug)
 	}
 
 	// SSH server mode
-	if os.Getenv("SSH_LISTEN_ADDR") != "" {
-		addr := os.Getenv("SSH_LISTEN_ADDR")
-		keyPath := os.Getenv("SSH_HOST_KEY_PATH")
+	if cfg.SSHListenAddr != "" {
+		keyPath := cfg.SSHHostKeyPath
 		if keyPath == "" {
 			keyPath = "./ssh_host_key"
 		}
-		fmt.Fprintf(os.Stderr, "starting SSH server on %s\n", addr)
-		if err := internalssh.Serve(addr, keyPath, client); err != nil {
+		fmt.Fprintf(os.Stderr, "starting SSH server on %s\n", cfg.SSHListenAddr)
+		if err := internalssh.Serve(cfg.SSHListenAddr, keyPath, client); err != nil {
 			fmt.Fprintf(os.Stderr, "ssh server error: %v\n", err)
 			os.Exit(1)
 		}
@@ -47,14 +48,11 @@ func main() {
 
 	// Local TUI mode
 	app := ui.NewApp(client)
-	// Prefer saved session (token-based) over env-var credentials.
-	if sess, err := config.Load(); err == nil && sess.RefreshToken != "" {
-		app = app.WithSavedSession(sess)
-	} else if email := os.Getenv("CYBERSPACE_EMAIL"); email != "" {
-		// Dev/CI fallback: auto-login via plaintext credentials in environment.
-		if password := os.Getenv("CYBERSPACE_PASSWORD"); password != "" {
-			app = app.WithAutoLogin(email, password)
-		}
+	// Prefer saved session (token-based) over autoEmail/autoPassword credentials.
+	if cfg.RefreshToken != "" {
+		app = app.WithSavedSession(cfg)
+	} else if cfg.AutoEmail != "" && cfg.AutoPassword != "" {
+		app = app.WithAutoLogin(cfg.AutoEmail, cfg.AutoPassword)
 	}
 	p := tea.NewProgram(
 		app,

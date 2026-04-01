@@ -52,14 +52,14 @@ type App struct {
 	width       int
 	height      int
 
-	// autoEmail and autoPassword are set from environment variables.
+	// autoEmail and autoPassword are set from the config file.
 	// When both are non-empty, Init fires loginCmd immediately.
 	autoEmail    string
 	autoPassword string
 
-	// savedSession is set when a session file was loaded at startup.
+	// savedSession is set when a config file was loaded at startup.
 	// When non-nil, Init fires tokenLoginCmd instead of showing the login screen.
-	savedSession *config.Session
+	savedSession *config.Config
 
 	// relaxed controls display density: false = dense (default), true = blank lines between items.
 	relaxed bool
@@ -107,7 +107,7 @@ func (a App) WithAutoLogin(email, password string) App {
 // WithSavedSession attaches a persisted session loaded from ~/.cyber-tui.json.
 // When set, Init attempts to resume the session via token refresh instead of
 // showing the login screen.
-func (a App) WithSavedSession(s config.Session) App {
+func (a App) WithSavedSession(s config.Config) App {
 	a.savedSession = &s
 	a.relaxed = s.Density == "relaxed"
 	return a
@@ -494,17 +494,19 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		}
 		a.cmail = screens.NewCMailModel(user.Username)
 		// Persist the refresh token so subsequent launches auto-login.
+		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
 		if a.relaxed {
 			density = "relaxed"
 		}
-		_ = config.Save(config.Session{
-			RefreshToken: tokens.RefreshToken,
-			Username:     user.Username,
-			Email:        email,
-			SavedAt:      time.Now().UTC(),
-			Density:      density,
-		})
+		if cfg, err := config.Load(); err == nil {
+			cfg.RefreshToken = tokens.RefreshToken
+			cfg.Username = user.Username
+			cfg.Email = email
+			cfg.SavedAt = time.Now().UTC()
+			cfg.Density = density
+			_ = config.Save(cfg)
+		}
 		return screens.LoginMsg{}
 	}
 }
@@ -532,18 +534,18 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		}
 		a.cmail = screens.NewCMailModel(user.Username)
 		// Update savedAt so we know when the session was last used.
-		sess := a.savedSession
+		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
 		if a.relaxed {
 			density = "relaxed"
 		}
-		_ = config.Save(config.Session{
-			RefreshToken: tokens.RefreshToken,
-			Username:     user.Username,
-			Email:        sess.Email,
-			SavedAt:      time.Now().UTC(),
-			Density:      density,
-		})
+		if cfg, err := config.Load(); err == nil {
+			cfg.RefreshToken = tokens.RefreshToken
+			cfg.Username = user.Username
+			cfg.SavedAt = time.Now().UTC()
+			cfg.Density = density
+			_ = config.Save(cfg)
+		}
 		return screens.LoginMsg{}
 	}
 }

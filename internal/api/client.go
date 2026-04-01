@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -147,6 +146,7 @@ type HTTPClient struct {
 	tokens     model.Tokens
 	rtdbClient *rtdb.Client // nil until InitRTDB is called
 	currentUID string       // set from GetOwnProfile after login, used for RTDB paths
+	debug      bool
 }
 
 // NewHTTPClient creates a production HTTPClient with a 15-second timeout.
@@ -168,7 +168,7 @@ func NewHTTPClientForTesting(baseURL string, hc *http.Client) *HTTPClient {
 func (c *HTTPClient) InitRTDB(rtdbToken string) error {
 	projectID, err := rtdb.ParseRTDBToken(rtdbToken)
 	if err != nil {
-		if isDebug() {
+		if c.isDebug() {
 			fmt.Printf("[rtdb debug] InitRTDB: ParseRTDBToken failed: %v\n", err)
 			// Print first 100 chars of token to help diagnose format.
 			preview := rtdbToken
@@ -180,7 +180,7 @@ func (c *HTTPClient) InitRTDB(rtdbToken string) error {
 		return fmt.Errorf("api: parse rtdb token: %w", err)
 	}
 	baseURL := rtdb.BaseURL(projectID)
-	if isDebug() {
+	if c.isDebug() {
 		fmt.Printf("[rtdb debug] InitRTDB: projectID=%q baseURL=%q\n", projectID, baseURL)
 	}
 	c.rtdbClient = rtdb.New(baseURL, rtdbToken)
@@ -528,7 +528,10 @@ func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 	return ch, func() {}, nil
 }
 
-func isDebug() bool {
-	v := os.Getenv("CYBERSPACE_DEBUG")
-	return v == "1" || strings.EqualFold(v, "true")
+// WithDebug enables or disables verbose RTDB debug output.
+func (c *HTTPClient) WithDebug(debug bool) *HTTPClient {
+	c.debug = debug
+	return c
 }
+
+func (c *HTTPClient) isDebug() bool { return c.debug }

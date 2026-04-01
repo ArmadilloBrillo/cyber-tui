@@ -33,7 +33,7 @@ func TestLoadMissing(t *testing.T) {
 func TestSaveAndLoad(t *testing.T) {
 	withTempHome(t)
 
-	want := config.Session{
+	want := config.Config{
 		RefreshToken: "tok-abc",
 		Username:     "neuromancer",
 		Email:        "case@tessier-ashpool.co",
@@ -65,7 +65,7 @@ func TestSaveAndLoad(t *testing.T) {
 func TestClear(t *testing.T) {
 	home := withTempHome(t)
 
-	if err := config.Save(config.Session{RefreshToken: "tok"}); err != nil {
+	if err := config.Save(config.Config{RefreshToken: "tok"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -87,7 +87,7 @@ func TestClear(t *testing.T) {
 func TestFilePermissions(t *testing.T) {
 	home := withTempHome(t)
 
-	if err := config.Save(config.Session{RefreshToken: "tok"}); err != nil {
+	if err := config.Save(config.Config{RefreshToken: "tok"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
