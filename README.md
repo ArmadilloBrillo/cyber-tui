@@ -17,45 +17,78 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea). Runs locall
 
 ## Features
 
-- **Feed** — browse posts from the people you follow
+- **Feed** — browse posts from the people you follow; open any post for replies
+- **Post detail** — read and write replies with a pager-style scrollable view
 - **Rooms** — IRC-style chatrooms
-- **CyberMail** — direct messages
-- **Profile** — view and edit your bio
+- **CyberMail** — direct messages over Firebase RTDB with live streaming
+- **Profile** — view your bio and stats
+- Auto-login via saved session token (`~/.cyber-tui.json`)
+- Dense / relaxed display density toggle
 - Green-on-black retro aesthetic
 - SSH hosting via [Wish](https://github.com/charmbracelet/wish)
-
-> **Note:** cyberspace.online API access is not yet public. The app currently runs against mock data. Real API integration will follow once access is available.
 
 ---
 
 ## Requirements
 
-- [Go](https://go.dev) 1.21+
+- [Go](https://go.dev) 1.24+
 
 ---
 
 ## Running locally
 
 ```bash
-# Clone
 git clone git@github.com:ArmadilloBrillo/cyber-tui.git
 cd cyber-tui
-
-# Run with mock data (no credentials needed)
 go run ./cmd/cyber-tui
 ```
 
-Once API access is available, create a `.env` file (see `.env.example`) and export the variables before running.
+On first run you will be prompted to log in. Your session is saved to `~/.cyber-tui.json` and subsequent launches auto-login.
+
+---
+
+## Configuration
+
+All settings live in `~/.cyber-tui.json`. The file is created automatically on first login. You can add any of the following fields manually:
+
+```json
+{
+  "apiBaseURL": "https://api.cyberspace.online",
+  "useMock": false,
+  "debug": false,
+  "autoEmail": "you@example.com",
+  "autoPassword": "your_password",
+  "sshListenAddr": "",
+  "sshHostKeyPath": "./ssh_host_key"
+}
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `apiBaseURL` | `https://api.cyberspace.online` | Override the API endpoint |
+| `useMock` | `false` | Run against mock data (no credentials needed) |
+| `debug` | `false` | Print verbose RTDB debug output |
+| `autoEmail` | — | Pre-fill email for automatic login on startup |
+| `autoPassword` | — | Pre-fill password for automatic login on startup |
+| `sshListenAddr` | — | Enable SSH server mode (e.g. `:2222`) |
+| `sshHostKeyPath` | `./ssh_host_key` | Path to the SSH host key file |
+
+The file is written with mode `0600` (owner read/write only).
 
 ---
 
 ## SSH server mode
 
-To host the TUI so others can connect via `ssh`:
+Set `sshListenAddr` in `~/.cyber-tui.json` to host the TUI so others can connect via `ssh`:
+
+```json
+{
+  "sshListenAddr": ":2222",
+  "sshHostKeyPath": "./ssh_host_key"
+}
+```
 
 ```bash
-export SSH_LISTEN_ADDR=:2222
-export SSH_HOST_KEY_PATH=./ssh_host_key
 go run ./cmd/cyber-tui
 ```
 
@@ -69,27 +102,52 @@ ssh yourserver.com -p 2222
 
 ## Keyboard shortcuts
 
+### Global
+
 | Key | Action |
 |---|---|
-| `←` / `→` | Navigate between tabs |
 | `1` | Feed |
 | `2` | Rooms |
 | `3` | CyberMail |
 | `4` | Profile |
+| `←` / `→` | Cycle tabs |
+| `v` | Toggle dense / relaxed display |
 | `q` / `ctrl+c` | Quit |
+
+### Feed
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | Next post |
+| `k` / `↑` | Previous post |
+| `enter` | Open post detail |
+| `r` | Reply to selected post |
+| `n` | New post |
+
+### Post detail
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | Scroll down / next reply |
+| `k` / `↑` | Scroll up / previous reply |
+| `r` | Reply |
+| `esc` | Back to feed |
+
+### Compose box (reply / new post)
+
+| Key | Action |
+|---|---|
+| `enter` | Paragraph break |
+| `alt+enter` | Submit |
+| `esc` | Cancel |
 
 ---
 
 ## Development
 
 ```bash
-# Run tests
 go test ./...
-
-# Vet
 go vet ./...
-
-# Build binary
 go build -o cyber-tui ./cmd/cyber-tui
 ```
 
