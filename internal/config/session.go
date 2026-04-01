@@ -25,6 +25,8 @@ type Config struct {
 	Density string `json:"density,omitempty"` // "" = dense (default) | "relaxed"
 
 	// App settings — edit manually in ~/.cyber-tui.json.
+	// Theme selects the color palette: "cyber" (default), "c64", "vt320".
+	Theme string `json:"theme,omitempty"`
 	// APIBaseURL overrides the default API endpoint (https://api.cyberspace.online).
 	APIBaseURL string `json:"apiBaseURL,omitempty"`
 	// UseMock runs the app against mock data (no credentials needed).

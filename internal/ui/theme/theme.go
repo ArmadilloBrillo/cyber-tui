@@ -11,7 +11,15 @@ const (
 	ChromeHeight    = TabBarHeight + StatusBarHeight + SeparatorHeight // = 3
 )
 
-// Cyber palette — green-on-black terminal aesthetic
+// currentName tracks the last theme passed to Set.
+var currentName = "cyber"
+
+// CurrentName returns the name of the currently active theme.
+func CurrentName() string {
+	return currentName
+}
+
+// Color vars — reassigned by Set(). Named after the default Cyber palette.
 var (
 	ColorGreen      = lipgloss.Color("#00FF41")
 	ColorDimGreen   = lipgloss.Color("#007A1F")
@@ -25,7 +33,6 @@ var (
 
 var (
 	Base = lipgloss.NewStyle().
-		Background(ColorBackground).
 		Foreground(ColorGreen)
 
 	Title = lipgloss.NewStyle().
@@ -68,3 +75,106 @@ var (
 		Bold(true).
 		Padding(0, 2)
 )
+
+// Set applies the named theme by reassigning all color and style vars.
+// Valid names: "cyber" (default), "c64", "vt320".
+// Unknown or empty names fall back to "cyber".
+func Set(name string) {
+	switch name {
+	case "c64":
+		currentName = "c64"
+		setC64()
+	case "vt320":
+		currentName = "vt320"
+		setVT320()
+	default:
+		currentName = "cyber"
+		setCyber()
+	}
+}
+
+func setCyber() {
+	ColorGreen = lipgloss.Color("#00FF41")
+	ColorDimGreen = lipgloss.Color("#007A1F")
+	ColorCyan = lipgloss.Color("#00FFFF")
+	ColorYellow = lipgloss.Color("#FFD700")
+	ColorRed = lipgloss.Color("#FF003C")
+	ColorBackground = lipgloss.Color("#0D0D0D")
+	ColorMuted = lipgloss.Color("#888888")
+	ColorWhite = lipgloss.Color("#E0E0E0")
+	applyStyles()
+}
+
+// setC64 applies a Commodore 64-inspired palette: dark blue background,
+// light blue-purple text, white titles, C64 yellow highlights.
+func setC64() {
+	ColorGreen = lipgloss.Color("#7869C4")      // C64 light blue (primary text)
+	ColorDimGreen = lipgloss.Color("#4B3BA8")   // C64 dark blue (inactive)
+	ColorCyan = lipgloss.Color("#FFFFFF")       // white (titles)
+	ColorYellow = lipgloss.Color("#F4D020")     // C64 yellow (highlights)
+	ColorRed = lipgloss.Color("#883932")        // C64 red (errors)
+	ColorBackground = lipgloss.Color("#352879") // C64 blue (background)
+	ColorMuted = lipgloss.Color("#5A4E99")      // dimmed blue (subtle text)
+	ColorWhite = lipgloss.Color("#FFFFFF")
+	applyStyles()
+}
+
+// setVT320 applies an amber phosphor terminal palette inspired by DEC VT320.
+func setVT320() {
+	ColorGreen = lipgloss.Color("#FFB000")      // amber (primary text)
+	ColorDimGreen = lipgloss.Color("#8B5E00")   // dark amber (inactive)
+	ColorCyan = lipgloss.Color("#FFD700")       // bright amber (titles)
+	ColorYellow = lipgloss.Color("#FFF176")     // bright yellow-white (highlights)
+	ColorRed = lipgloss.Color("#FF6600")        // orange-red (errors)
+	ColorBackground = lipgloss.Color("#1A1200") // near-black amber background
+	ColorMuted = lipgloss.Color("#6B4800")      // very dim amber (subtle text)
+	ColorWhite = lipgloss.Color("#FFECB3")      // cream
+	applyStyles()
+}
+
+// applyStyles rebuilds all style vars from the current color vars.
+// Must be called after any color vars are changed.
+func applyStyles() {
+	Base = lipgloss.NewStyle().
+		Foreground(ColorGreen)
+
+	Title = lipgloss.NewStyle().
+		Foreground(ColorCyan).
+		Bold(true)
+
+	Subtle = lipgloss.NewStyle().
+		Foreground(ColorMuted)
+
+	Highlight = lipgloss.NewStyle().
+		Foreground(ColorYellow).
+		Bold(true)
+
+	Error = lipgloss.NewStyle().
+		Foreground(ColorRed).
+		Bold(true)
+
+	Border = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(ColorDimGreen).
+		Padding(0, 1)
+
+	ActiveBorder = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(ColorGreen).
+		Padding(0, 1)
+
+	StatusBar = lipgloss.NewStyle().
+		Background(ColorDimGreen).
+		Foreground(ColorBackground).
+		Padding(0, 1)
+
+	Tab = lipgloss.NewStyle().
+		Foreground(ColorDimGreen).
+		Padding(0, 2)
+
+	ActiveTab = lipgloss.NewStyle().
+		Background(ColorDimGreen).
+		Foreground(ColorGreen).
+		Bold(true).
+		Padding(0, 2)
+}

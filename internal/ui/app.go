@@ -2,8 +2,10 @@ package ui
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/api"
@@ -30,6 +32,9 @@ const (
 	focusMenu focusTarget = iota
 	focusList             // reserved for future list navigation
 )
+
+// availableThemes is the ordered list of selectable themes shown in the picker.
+var availableThemes = []string{"cyber", "c64", "vt320"}
 
 // menuTabs is the ordered list of navigable screens, shared by the
 // renderer and key handler so the order is never out of sync.
@@ -63,6 +68,11 @@ type App struct {
 
 	// relaxed controls display density: false = dense (default), true = blank lines between items.
 	relaxed bool
+
+	// themePicker state — open with 't', close with Enter/Esc.
+	themePickerOpen   bool
+	themePickerCursor int    // index into availableThemes
+	themePickerOrig   string // theme name when picker was opened (for Esc revert)
 
 	// dmSub holds the active RTDB subscription for the open C-Mail conversation.
 	// nil when no conversation is selected or when not on the C-Mail screen.
@@ -142,6 +152,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.postDetail, _ = a.postDetail.Update(msg)
 
 	case tea.KeyMsg:
+		// Theme picker intercepts all keys while open.
+		if a.themePickerOpen {
+			return a.handleThemePickerKey(msg)
+		}
 		// When any screen has a focused text input, let it consume all key events.
 		// Only ctrl+c is kept as a hard escape hatch.
 		if a.activeScreenHasFocusedInput() {
@@ -151,6 +165,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		switch msg.String() {
+		case "t":
+			if a.active != screenLogin {
+				a.themePickerOpen = true
+				a.themePickerOrig = theme.CurrentName()
+				a.themePickerCursor = themeIndex(theme.CurrentName())
+			}
 		case "v":
 			if a.active != screenLogin {
 				a.relaxed = !a.relaxed
@@ -405,12 +425,16 @@ func (a App) View() string {
 	// is always anchored to the bottom regardless of content length.
 	contentHeight := a.height - theme.ChromeHeight
 	content := lipgloss.NewStyle().Height(contentHeight).Render(a.renderActiveScreen())
-	return lipgloss.JoinVertical(lipgloss.Left,
+	base := lipgloss.JoinVertical(lipgloss.Left,
 		a.renderTabBar(),
 		"", // separator row
 		content,
 		a.renderStatusBar(),
 	)
+	if a.themePickerOpen {
+		return overlayCenter(base, a.renderThemePicker(), a.width, a.height)
+	}
+	return base
 }
 
 func (a App) renderTabBar() string {
@@ -443,14 +467,15 @@ func (a App) renderActiveScreen() string {
 
 func (a App) renderStatusBar() string {
 	userStyle := theme.StatusBar.Copy().Foreground(theme.ColorCyan)
-	densityStyle := theme.StatusBar.Copy().Foreground(theme.ColorMuted)
+	metaStyle := theme.StatusBar.Copy().Foreground(theme.ColorMuted)
 	densityLabel := "dense"
 	if a.relaxed {
 		densityLabel = "relaxed"
 	}
 	user := lipgloss.JoinHorizontal(lipgloss.Top,
 		userStyle.Render("@"+a.currentUser.Username),
-		densityStyle.Render("  ·  "+densityLabel),
+		metaStyle.Render("  ·  "+densityLabel),
+		metaStyle.Render("  ·  "+theme.CurrentName()),
 	)
 	var hintStr string
 	switch a.active {
@@ -460,14 +485,132 @@ func (a App) renderStatusBar() string {
 		if a.postDetail.ComposeActive() {
 			hintStr = "  Alt+Enter · send   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  esc · back   r · reply   j/k · scroll/navigate   1-4 · jump"
+			hintStr = "  esc · back   r · reply   j/k · scroll/navigate   t · theme   1-4 · jump"
 		}
 	default:
-		hintStr = "  q · quit   r · reply   v · density   ←→ · tabs   ↑↓/jk · navigate   1-4 · jump"
+		hintStr = "  q · quit   r · reply   v · density   t · theme   ←→ · tabs   ↑↓/jk · navigate   1-4 · jump"
 	}
 	hint := theme.StatusBar.Render(hintStr)
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
 	return lipgloss.JoinHorizontal(lipgloss.Top, user, spacer, hint)
+}
+
+// --- theme picker ---
+
+// themeIndex returns the index of name in availableThemes, defaulting to 0.
+func themeIndex(name string) int {
+	for i, t := range availableThemes {
+		if t == name {
+			return i
+		}
+	}
+	return 0
+}
+
+// handleThemePickerKey processes keyboard input while the theme picker is open.
+func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	refreshCmd := func() tea.Msg { return tea.WindowSizeMsg{Width: a.width, Height: a.height} }
+	switch msg.String() {
+	case "up", "k":
+		a.themePickerCursor = (a.themePickerCursor - 1 + len(availableThemes)) % len(availableThemes)
+		theme.Set(availableThemes[a.themePickerCursor])
+		a.refreshViewports()
+	case "down", "j":
+		a.themePickerCursor = (a.themePickerCursor + 1) % len(availableThemes)
+		theme.Set(availableThemes[a.themePickerCursor])
+		a.refreshViewports()
+	case "enter":
+		selected := availableThemes[a.themePickerCursor]
+		a.themePickerOpen = false
+		return a, tea.Batch(
+			refreshCmd,
+			func() tea.Msg {
+				if cfg, err := config.Load(); err == nil {
+					cfg.Theme = selected
+					_ = config.Save(cfg)
+				}
+				return nil
+			},
+		)
+	case "esc":
+		theme.Set(a.themePickerOrig)
+		a.themePickerOpen = false
+		return a, refreshCmd
+	}
+	return a, nil
+}
+
+// refreshViewports forces all screen viewports to re-render with the current
+// theme by re-broadcasting the current terminal size. Called synchronously so
+// View() sees fresh content in the same frame.
+func (a *App) refreshViewports() {
+	msg := tea.WindowSizeMsg{Width: a.width, Height: a.height}
+	a.feed, _ = a.feed.Update(msg)
+	a.chatrooms, _ = a.chatrooms.Update(msg)
+	a.cmail, _ = a.cmail.Update(msg)
+	a.postDetail, _ = a.postDetail.Update(msg)
+}
+
+// renderThemePicker returns the centered overlay box for theme selection.
+func (a App) renderThemePicker() string {
+	title := theme.Title.Render("theme")
+	var items []string
+	for i, name := range availableThemes {
+		if i == a.themePickerCursor {
+			items = append(items, theme.Highlight.Render("▸ "+name))
+		} else {
+			items = append(items, theme.Subtle.Render("  "+name))
+		}
+	}
+	hint := theme.Subtle.Render("↑↓ preview   ⏎ save   esc cancel")
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		lipgloss.JoinVertical(lipgloss.Left, items...),
+		"",
+		hint,
+	)
+	return theme.ActiveBorder.Render(body)
+}
+
+// overlayCenter composites fg centered over bg using ANSI-aware string splicing.
+// Each line of fg replaces the corresponding characters in bg at the centered
+// position, preserving ANSI colour codes on both sides of the splice point.
+func overlayCenter(bg, fg string, bgW, bgH int) string {
+	fgW := lipgloss.Width(fg)
+	fgLines := strings.Split(fg, "\n")
+	fgH := len(fgLines)
+	bgLines := strings.Split(bg, "\n")
+
+	xOff := (bgW - fgW) / 2
+	yOff := (bgH - fgH) / 2
+	if xOff < 0 {
+		xOff = 0
+	}
+	if yOff < 0 {
+		yOff = 0
+	}
+
+	result := make([]string, len(bgLines))
+	copy(result, bgLines)
+
+	for i, fgLine := range fgLines {
+		bi := yOff + i
+		if bi < 0 || bi >= len(result) {
+			continue
+		}
+		bgLine := result[bi]
+		// Pad the background line if it's shorter than the splice end point.
+		bgLineW := ansi.StringWidth(bgLine)
+		needed := xOff + fgW
+		if bgLineW < needed {
+			bgLine += strings.Repeat(" ", needed-bgLineW)
+		}
+		left := ansi.Truncate(bgLine, xOff, "")
+		right := ansi.TruncateLeft(bgLine, xOff+fgW, "")
+		result[bi] = left + fgLine + right
+	}
+	return strings.Join(result, "\n")
 }
 
 // --- commands ---

@@ -9,6 +9,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/config"
 	internalssh "github.com/ragnar/cyber-tui/internal/ssh"
 	"github.com/ragnar/cyber-tui/internal/ui"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 func main() {
@@ -17,6 +18,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
+	theme.Set(cfg.Theme)
 
 	// Determine which client to use.
 	// Set useMock: true in ~/.cyber-tui.json to run against mock data.
