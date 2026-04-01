@@ -91,6 +91,7 @@ func (m PostDetailModel) SetRelaxed(relaxed bool) PostDetailModel {
 	m.relaxed = relaxed
 	if m.ready {
 		m = m.refreshContent()
+		m = m.ensureSelectedVisible()
 	}
 	return m
 }

@@ -76,6 +76,7 @@ func (m FeedModel) SetRelaxed(relaxed bool) FeedModel {
 	m.relaxed = relaxed
 	if m.ready {
 		m = m.refreshContent()
+		m = m.ensureSelectedVisible()
 	}
 	return m
 }
