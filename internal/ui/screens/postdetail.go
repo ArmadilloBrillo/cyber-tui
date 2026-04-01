@@ -225,10 +225,25 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				m.selectedReply--
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()
+			} else {
+				// Post is selected — scroll viewport up (pager behaviour).
+				m.viewport.LineUp(1)
 			}
 			return m, nil
 		case "down", "j":
-			if m.selectedReply < len(m.replies)-1 {
+			if m.selectedReply == -1 {
+				// Post is selected — scroll through it first, then advance to replies.
+				postH := lipgloss.Height(m.renderFullPost(true))
+				viewBottom := m.viewport.YOffset + m.viewport.Height - 1
+				if viewBottom >= postH-1 && len(m.replies) > 0 {
+					// Post bottom is visible — jump to first reply.
+					m.selectedReply = 0
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+				} else {
+					m.viewport.LineDown(1)
+				}
+			} else if m.selectedReply < len(m.replies)-1 {
 				m.selectedReply++
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()

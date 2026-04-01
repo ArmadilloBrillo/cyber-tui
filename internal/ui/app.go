@@ -405,7 +405,7 @@ func (a App) renderStatusBar() string {
 		if a.postDetail.ComposeActive() {
 			hintStr = "  Alt+Enter · send   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  esc · back   r · reply   ↑↓/jk · navigate   1-4 · jump"
+			hintStr = "  esc · back   r · reply   j/k · scroll/navigate   1-4 · jump"
 		}
 	default:
 		hintStr = "  q · quit   r · reply   ←→ · tabs   ↑↓/jk · navigate   1-4 · jump"
