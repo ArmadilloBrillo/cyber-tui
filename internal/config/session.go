@@ -16,6 +16,7 @@ type Session struct {
 	Username     string    `json:"username"`
 	Email        string    `json:"email"`
 	SavedAt      time.Time `json:"savedAt"`
+	Density      string    `json:"density,omitempty"` // "" = dense (default) | "relaxed"
 }
 
 // DefaultPath returns the canonical path for the session file: ~/.cyber-tui.json.

@@ -61,9 +61,12 @@ type App struct {
 	// When non-nil, Init fires tokenLoginCmd instead of showing the login screen.
 	savedSession *config.Session
 
+	// relaxed controls display density: false = dense (default), true = blank lines between items.
+	relaxed bool
+
 	// dmSub holds the active RTDB subscription for the open C-Mail conversation.
 	// nil when no conversation is selected or when not on the C-Mail screen.
-	dmSub       *dmSubscription
+	dmSub        *dmSubscription
 	activeConvID string
 
 	login      screens.LoginModel
@@ -106,6 +109,7 @@ func (a App) WithAutoLogin(email, password string) App {
 // showing the login screen.
 func (a App) WithSavedSession(s config.Session) App {
 	a.savedSession = &s
+	a.relaxed = s.Density == "relaxed"
 	return a
 }
 
@@ -147,6 +151,24 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		switch msg.String() {
+		case "v":
+			if a.active != screenLogin {
+				a.relaxed = !a.relaxed
+				a.feed = a.feed.SetRelaxed(a.relaxed)
+				a.postDetail = a.postDetail.SetRelaxed(a.relaxed)
+				relaxed := a.relaxed
+				return a, func() tea.Msg {
+					if sess, err := config.Load(); err == nil {
+						if relaxed {
+							sess.Density = "relaxed"
+						} else {
+							sess.Density = ""
+						}
+						_ = config.Save(sess)
+					}
+					return nil
+				}
+			}
 		case "ctrl+c", "q":
 			if a.active != screenLogin {
 				return a, tea.Quit
@@ -413,7 +435,15 @@ func (a App) renderActiveScreen() string {
 
 func (a App) renderStatusBar() string {
 	userStyle := theme.StatusBar.Copy().Foreground(theme.ColorCyan)
-	user := userStyle.Render("@" + a.currentUser.Username)
+	densityStyle := theme.StatusBar.Copy().Foreground(theme.ColorMuted)
+	densityLabel := "dense"
+	if a.relaxed {
+		densityLabel = "relaxed"
+	}
+	user := lipgloss.JoinHorizontal(lipgloss.Top,
+		userStyle.Render("@"+a.currentUser.Username),
+		densityStyle.Render("  ·  "+densityLabel),
+	)
 	var hintStr string
 	switch a.active {
 	case screenCMail:
@@ -425,7 +455,7 @@ func (a App) renderStatusBar() string {
 			hintStr = "  esc · back   r · reply   j/k · scroll/navigate   1-4 · jump"
 		}
 	default:
-		hintStr = "  q · quit   r · reply   ←→ · tabs   ↑↓/jk · navigate   1-4 · jump"
+		hintStr = "  q · quit   r · reply   v · density   ←→ · tabs   ↑↓/jk · navigate   1-4 · jump"
 	}
 	hint := theme.StatusBar.Render(hintStr)
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
@@ -456,11 +486,16 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		}
 		a.cmail = screens.NewCMailModel(user.Username)
 		// Persist the refresh token so subsequent launches auto-login.
+		density := ""
+		if a.relaxed {
+			density = "relaxed"
+		}
 		_ = config.Save(config.Session{
 			RefreshToken: tokens.RefreshToken,
 			Username:     user.Username,
 			Email:        email,
 			SavedAt:      time.Now().UTC(),
+			Density:      density,
 		})
 		return screens.LoginMsg{}
 	}
@@ -490,11 +525,16 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		a.cmail = screens.NewCMailModel(user.Username)
 		// Update savedAt so we know when the session was last used.
 		sess := a.savedSession
+		density := ""
+		if a.relaxed {
+			density = "relaxed"
+		}
 		_ = config.Save(config.Session{
 			RefreshToken: tokens.RefreshToken,
 			Username:     user.Username,
 			Email:        sess.Email,
 			SavedAt:      time.Now().UTC(),
+			Density:      density,
 		})
 		return screens.LoginMsg{}
 	}
@@ -503,6 +543,8 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 func (a *App) afterLoginCmd() tea.Cmd {
 	a.active = screenFeed
 	a.profile = a.profile.SetUser(a.currentUser)
+	a.feed = a.feed.SetRelaxed(a.relaxed)
+	a.postDetail = a.postDetail.SetRelaxed(a.relaxed)
 	return tea.Batch(a.loadFeedCmd(), a.loadProfileCmd())
 }
 

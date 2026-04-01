@@ -35,6 +35,7 @@ type FeedModel struct {
 	nextCursor    string
 	loading       bool
 	exhausted     bool // true once API returned an empty cursor
+	relaxed       bool // true = blank line between posts (relaxed density)
 }
 
 func NewFeedModel() FeedModel {
@@ -68,6 +69,14 @@ func (m FeedModel) AppendPosts(posts []model.Post, cursor string) FeedModel {
 func (m FeedModel) SetError(err error) FeedModel {
 	m.err = err
 	m.loading = false
+	return m
+}
+
+func (m FeedModel) SetRelaxed(relaxed bool) FeedModel {
+	m.relaxed = relaxed
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -180,15 +189,20 @@ func (m FeedModel) buildContent() (string, []int) {
 	if len(m.posts) == 0 {
 		return theme.Subtle.Render("  no posts yet"), nil
 	}
+	sep := "\n"
+	lineInc := 0
+	if m.relaxed {
+		sep = "\n\n"
+		lineInc = 1
+	}
 	offsets := make([]int, len(m.posts))
 	var out string
 	currentLine := 0
 	for i, p := range m.posts {
 		offsets[i] = currentLine
 		rendered := m.renderPost(p, i == m.selectedIndex)
-		out += rendered + "\n"
-		// +1: the "\n" separator we append after each post adds one blank line.
-		currentLine += lipgloss.Height(rendered)
+		out += rendered + sep
+		currentLine += lipgloss.Height(rendered) + lineInc
 	}
 	if m.loading {
 		out += theme.Subtle.Render("  loading more…") + "\n"
