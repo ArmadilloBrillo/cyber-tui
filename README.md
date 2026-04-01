@@ -19,13 +19,16 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea). Runs locall
 
 - **Feed** — browse posts from the people you follow; open any post for replies
 - **Post detail** — read and write replies with a pager-style scrollable view
-- **Rooms** — IRC-style chatrooms
-- **CyberMail** — direct messages over Firebase RTDB with live streaming
-- **Profile** — view your bio and stats
-- Auto-login via saved session token (`~/.cyber-tui.json`)
+- **Profile** — view and edit your bio
+- **Session persistence** — refresh token saved to `~/.cyber-tui.json`; login only required when the token expires
 - Dense / relaxed display density toggle
 - Green-on-black retro aesthetic
 - SSH hosting via [Wish](https://github.com/charmbracelet/wish)
+
+**Not yet working** (server-side paths not finalised):
+
+- **Rooms** — UI exists, API not wired
+- **CyberMail** — UI exists, sending and receiving not wired
 
 ---
 
@@ -43,13 +46,15 @@ cd cyber-tui
 go run ./cmd/cyber-tui
 ```
 
-On first run you will be prompted to log in. Your session is saved to `~/.cyber-tui.json` and subsequent launches auto-login.
+On first run you will be prompted to log in. Your session token is saved to `~/.cyber-tui.json` and subsequent launches auto-login — no password stored. Login is only required again when the token expires.
 
 ---
 
 ## Configuration
 
-All settings live in `~/.cyber-tui.json`. The file is created automatically on first login. You can add any of the following fields manually:
+All settings live in `~/.cyber-tui.json`. The file is created automatically on first login and written with mode **`0600`** (owner read/write only — not readable by other users on the system).
+
+You can add any of the following fields manually:
 
 ```json
 {
@@ -69,11 +74,11 @@ All settings live in `~/.cyber-tui.json`. The file is created automatically on f
 | `useMock` | `false` | Run against mock data (no credentials needed) |
 | `debug` | `false` | Print verbose RTDB debug output |
 | `autoEmail` | — | Pre-fill email for automatic login on startup |
-| `autoPassword` | — | Pre-fill password for automatic login on startup |
+| `autoPassword` | — | Pre-fill password for automatic login on startup ⚠️ |
 | `sshListenAddr` | — | Enable SSH server mode (e.g. `:2222`) |
 | `sshHostKeyPath` | `./ssh_host_key` | Path to the SSH host key file |
 
-The file is written with mode `0600` (owner read/write only).
+> ⚠️ **`autoPassword` is not recommended.** Your password is stored in plain text. The preferred flow is to log in once interactively — the app saves a session token and auto-logins on subsequent launches without storing your password. Only set `autoPassword` if you have a specific need (e.g. CI or a kiosk setup) and understand the risk.
 
 ---
 
