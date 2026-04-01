@@ -154,6 +154,14 @@ func (m ComposeModel) recalcHeight() ComposeModel {
 		if growing {
 			val := m.textarea.Value()
 			m.textarea.SetValue(val)
+			// SetValue resets viewport.YOffset to 0 (via Reset→GotoTop). When
+			// content exceeds the viewport height (e.g. ENTER inserts \n\n,
+			// adding 2 lines while the viewport only grows by 1), the cursor
+			// lands off-screen. Sending KeyEnd triggers the textarea's internal
+			// repositionView(), scrolling the viewport down just enough to show
+			// the cursor. It's a no-op for cursor position since the cursor is
+			// already at the end of the last line.
+			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnd})
 		}
 	}
 	return m
