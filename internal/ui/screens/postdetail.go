@@ -26,6 +26,7 @@ type PostDetailModel struct {
 	post          model.Post
 	replies       []model.Reply
 	replyOffsets  []int // start line of each reply within the viewport content
+	replyHeights  []int // rendered height of each reply (matches offsets; set by buildContent)
 	selectedReply int
 	viewport      viewport.Model
 	width         int
@@ -35,8 +36,9 @@ type PostDetailModel struct {
 	err           error
 
 	compose      ComposeModel
-	replyPostID  string // postID set when compose opens
+	replyPostID   string // postID set when compose opens
 	replyParentID string // parentReplyID set when compose opens (empty = top-level)
+	relaxed       bool   // true = blank lines between post, header, and replies
 }
 
 func NewPostDetailModel() PostDetailModel {
@@ -49,6 +51,7 @@ func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 	m.post = post
 	m.replies = nil
 	m.replyOffsets = nil
+	m.replyHeights = nil
 	m.selectedReply = -1 // post itself is selected by default
 	m.loading = true
 	m.err = nil
@@ -81,6 +84,14 @@ func (m PostDetailModel) ComposeActive() bool { return m.compose.IsActive() }
 func (m PostDetailModel) SetError(err error) PostDetailModel {
 	m.err = err
 	m.loading = false
+	return m
+}
+
+func (m PostDetailModel) SetRelaxed(relaxed bool) PostDetailModel {
+	m.relaxed = relaxed
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -118,8 +129,9 @@ func (m PostDetailModel) viewportHeight() int {
 }
 
 func (m PostDetailModel) refreshContent() PostDetailModel {
-	content, offsets := m.buildContent()
+	content, offsets, heights := m.buildContent()
 	m.replyOffsets = offsets
+	m.replyHeights = heights
 	m.viewport.SetContent(content)
 	return m
 }
@@ -140,7 +152,7 @@ func (m PostDetailModel) ensureSelectedVisible() PostDetailModel {
 			return m
 		}
 		itemStart = m.replyOffsets[m.selectedReply]
-		itemHeight = lipgloss.Height(m.renderReply(m.replies[m.selectedReply], false))
+		itemHeight = m.replyHeights[m.selectedReply]
 	}
 	itemEnd := itemStart + itemHeight - 1
 
@@ -222,9 +234,17 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			return m, cmd
 		case "up", "k":
 			if m.selectedReply >= 0 {
-				m.selectedReply--
-				m = m.refreshContent()
-				m = m.ensureSelectedVisible()
+				// Reply is selected — scroll through it first (pager behaviour).
+				replyTop := m.replyOffsets[m.selectedReply]
+				if replyTop < m.viewport.YOffset {
+					// Reply top is above the visible area — scroll up.
+					m.viewport.LineUp(1)
+				} else {
+					// Reply top is visible — move to previous item.
+					m.selectedReply--
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+				}
 			} else {
 				// Post is selected — scroll viewport up (pager behaviour).
 				m.viewport.LineUp(1)
@@ -243,10 +263,20 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				} else {
 					m.viewport.LineDown(1)
 				}
-			} else if m.selectedReply < len(m.replies)-1 {
-				m.selectedReply++
-				m = m.refreshContent()
-				m = m.ensureSelectedVisible()
+			} else {
+				// Reply is selected — scroll through it first (pager behaviour).
+				replyH := m.replyHeights[m.selectedReply]
+				replyBottom := m.replyOffsets[m.selectedReply] + replyH - 1
+				viewBottom := m.viewport.YOffset + m.viewport.Height - 1
+				if replyBottom > viewBottom {
+					// Reply bottom is below the visible area — scroll down.
+					m.viewport.LineDown(1)
+				} else if m.selectedReply < len(m.replies)-1 {
+					// Reply bottom is visible — advance to next reply.
+					m.selectedReply++
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+				}
 			}
 			return m, nil
 		}
@@ -262,42 +292,64 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 }
 
 // buildContent renders the full post and all replies into a single string for
-// the viewport. It returns the string and the start-line offset of each reply.
-func (m PostDetailModel) buildContent() (string, []int) {
+// the viewport. It returns the string, the start-line offset of each reply,
+// and the rendered height of each reply. Heights are measured here once so
+// that ensureSelectedVisible and the pager always use the same values that
+// were used to lay out the content.
+func (m PostDetailModel) buildContent() (string, []int, []int) {
 	postContent := m.renderFullPost(m.selectedReply == -1)
 	repliesHeader := theme.Title.Render(fmt.Sprintf("  %d replies", len(m.replies)))
 
+	sep := "\n"
+	if m.relaxed {
+		sep = "\n\n"
+	}
+
 	var sb strings.Builder
 	sb.WriteString(postContent)
-	sb.WriteString("\n")
+	sb.WriteString(sep)
 	sb.WriteString(repliesHeader)
-	sb.WriteString("\n")
+	sb.WriteString(sep)
 
 	if m.loading {
 		sb.WriteString(theme.Subtle.Render("  loading replies…"))
 		sb.WriteString("\n")
-		return sb.String(), nil
+		return sb.String(), nil, nil
 	}
 	if len(m.replies) == 0 {
 		sb.WriteString(theme.Subtle.Render("  no replies yet"))
 		sb.WriteString("\n")
-		return sb.String(), nil
+		return sb.String(), nil, nil
 	}
 
-	// Base line where first reply starts: post height + blank line + header height + blank line.
-	baseLines := lipgloss.Height(postContent) + 1 + lipgloss.Height(repliesHeader) + 1
+	// Base line where first reply starts.
+	// Relaxed: post + blank + header + blank = H_post+1+H_header+1
+	// Dense:   post + header (no blank lines) = H_post+H_header
+	var baseLines int
+	if m.relaxed {
+		baseLines = lipgloss.Height(postContent) + 1 + lipgloss.Height(repliesHeader) + 1
+	} else {
+		baseLines = lipgloss.Height(postContent) + lipgloss.Height(repliesHeader)
+	}
 	offsets := make([]int, len(m.replies))
+	heights := make([]int, len(m.replies))
 	currentLine := baseLines
 
 	for i, r := range m.replies {
 		offsets[i] = currentLine
 		rendered := m.renderReply(r, i == m.selectedReply)
+		h := lipgloss.Height(rendered)
+		heights[i] = h
 		sb.WriteString(rendered)
-		sb.WriteString("\n")
-		currentLine += lipgloss.Height(rendered) + 1
+		sb.WriteString(sep)
+		if m.relaxed {
+			currentLine += h + 1
+		} else {
+			currentLine += h
+		}
 	}
 
-	return sb.String(), offsets
+	return sb.String(), offsets, heights
 }
 
 func (m PostDetailModel) renderFullPost(selected bool) string {
