@@ -141,8 +141,20 @@ func (m ComposeModel) recalcHeight() ComposeModel {
 		newLines = composeMaxLines
 	}
 	if newLines != m.contentLines {
+		growing := newLines > m.contentLines
 		m.contentLines = newLines
 		m.textarea.SetHeight(newLines)
+		// When the editor grows, the new height fits all content —
+		// viewport.YOffset must be 0. SetHeight only updates the height; it
+		// leaves the internal viewport's YOffset stale from the previous scroll.
+		// Re-setting the value resets the viewport to the top (via
+		// textarea.Reset → GotoTop) and re-inserts the content with cursor at
+		// end. Skipped on shrink to avoid moving the cursor when the user is
+		// deleting content mid-text.
+		if growing {
+			val := m.textarea.Value()
+			m.textarea.SetValue(val)
+		}
 	}
 	return m
 }
