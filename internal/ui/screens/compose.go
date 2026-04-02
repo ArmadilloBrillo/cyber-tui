@@ -67,6 +67,15 @@ func (m ComposeModel) Open(ctx, placeholder string) (ComposeModel, tea.Cmd) {
 	return m, cmd
 }
 
+// OpenWithContent is like Open but pre-fills the textarea with existing content.
+// Use this when editing rather than creating (e.g. bio editing).
+func (m ComposeModel) OpenWithContent(ctx, placeholder, content string) (ComposeModel, tea.Cmd) {
+	m, cmd := m.Open(ctx, placeholder)
+	m.textarea.SetValue(content)
+	m.recalcHeight()
+	return m, cmd
+}
+
 // Close blurs the textarea and marks the compose box inactive.
 func (m ComposeModel) Close() ComposeModel {
 	m.active = false

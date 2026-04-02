@@ -349,6 +349,8 @@ func (a App) activeScreenHasFocusedInput() bool {
 		return a.postDetail.ComposeActive()
 	case screenFeed:
 		return a.feed.ComposeActive()
+	case screenProfile:
+		return a.profile.ComposeActive()
 	}
 	return false
 }
@@ -471,6 +473,12 @@ func (a App) renderStatusBar() string {
 			hintStr = "  Alt+Enter · send   Enter · paragraph   Esc · cancel"
 		} else {
 			hintStr = "  esc · back   r · reply   j/k · scroll/navigate   t · theme"
+		}
+	case screenProfile:
+		if a.profile.ComposeActive() {
+			hintStr = "  Alt+Enter · save   Enter · paragraph   Esc · cancel"
+		} else {
+			hintStr = "  q · quit   v · density   t · theme   ←→ · tabs"
 		}
 	default:
 		hintStr = "  q · quit   r · reply   v · density   t · theme   ←→ · tabs   ↑↓/jk · navigate"
