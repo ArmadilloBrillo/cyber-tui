@@ -148,6 +148,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.chatrooms, _ = a.chatrooms.Update(msg)
 		a.cmail, _ = a.cmail.Update(msg)
 		a.postDetail, _ = a.postDetail.Update(msg)
+		a.profile, _ = a.profile.Update(msg)
 
 	case tea.KeyMsg:
 		// Theme picker intercepts all keys while open.

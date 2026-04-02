@@ -43,7 +43,11 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		m.compose = m.compose.SetWidth(msg.Width)
+		w := msg.Width
+		if w > 80 {
+			w = 80
+		}
+		m.compose = m.compose.SetWidth(w)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -93,7 +97,7 @@ func (m ProfileModel) View() string {
 		saved = theme.Highlight.Render("saved.")
 	}
 
-	return theme.Border.Render(
+	return theme.Border.Width(76).Render(
 		lipgloss.JoinVertical(lipgloss.Left,
 			username,
 			"",
