@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -10,11 +11,13 @@ import (
 )
 
 // withTempHome redirects os.UserHomeDir to a temp directory for the duration
-// of the test by setting $HOME.
+// of the test. It sets both HOME (Unix) and USERPROFILE (Windows) so that
+// os.UserHomeDir resolves to the temp dir on all platforms.
 func withTempHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 	return dir
 }
 
@@ -85,6 +88,9 @@ func TestClear(t *testing.T) {
 }
 
 func TestFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not supported on Windows")
+	}
 	home := withTempHome(t)
 
 	if err := config.Save(config.Config{RefreshToken: "tok"}); err != nil {

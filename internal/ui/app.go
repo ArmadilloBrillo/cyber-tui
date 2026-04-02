@@ -110,13 +110,22 @@ func NewApp(client api.Client) App {
 		active:     screenLogin,
 		focus:      focusMenu,
 		loc:        time.UTC,
-		login:      screens.NewLoginModel(),
+		login:      screens.NewLoginModel(""),
 		feed:       screens.NewFeedModel(),
 		chatrooms:  screens.NewChatroomsModel(),
 		cmail:      screens.NewCMailModel(""),
 		profile:    screens.NewProfileModel(),
 		postDetail: screens.NewPostDetailModel(),
 	}
+}
+
+// WithSavedEmail pre-fills the email field on the login screen.
+// Used when a previous session email is known but no token is available.
+func (a App) WithSavedEmail(email string) App {
+	if email != "" {
+		a.login = screens.NewLoginModel(email)
+	}
+	return a
 }
 
 // WithAutoLogin pre-fills credentials loaded from the environment.
@@ -267,6 +276,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case feedPageMsg:
 		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
+
+	case screens.RefreshFeedMsg:
+		return a, a.loadFeedCmd()
 
 	case screens.LoadMoreFeedMsg:
 		return a, a.loadFeedPageCmd(msg.Cursor)
@@ -714,9 +726,7 @@ func (a App) renderHelpModal() string {
 		k := theme.Highlight.Render(fmt.Sprintf("%-10s", key))
 		return lipgloss.JoinHorizontal(lipgloss.Top, k, theme.Subtle.Render(desc))
 	}
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		"",
+	col1 := lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render("global"),
 		row("1 / 2", "feed / profile"),
 		row("←→", "cycle tabs"),
@@ -725,6 +735,12 @@ func (a App) renderHelpModal() string {
 		row("v", "density"),
 		row("q", "quit"),
 		"",
+		sectionStyle.Render("compose"),
+		row("Ctrl+S", "send"),
+		row("Enter", "paragraph"),
+		row("Esc", "cancel"),
+	)
+	col2 := lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render("feed"),
 		row("↑↓ / jk", "navigate"),
 		row("enter", "open post"),
@@ -739,11 +755,12 @@ func (a App) renderHelpModal() string {
 		sectionStyle.Render("profile"),
 		row("e", "edit bio"),
 		row("←→", "tabs"),
+	)
+	columns := lipgloss.JoinHorizontal(lipgloss.Top, col1, "    ", col2)
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		title,
 		"",
-		sectionStyle.Render("compose"),
-		row("Ctrl+S", "send"),
-		row("Enter", "paragraph"),
-		row("Esc", "cancel"),
+		columns,
 		"",
 		theme.Subtle.Render("? or any key · close"),
 	)

@@ -55,6 +55,8 @@ func main() {
 		app = app.WithSavedSession(cfg)
 	} else if cfg.AutoEmail != "" && cfg.AutoPassword != "" {
 		app = app.WithAutoLogin(cfg.AutoEmail, cfg.AutoPassword)
+	} else if cfg.Email != "" {
+		app = app.WithSavedEmail(cfg.Email)
 	}
 	p := tea.NewProgram(
 		app,

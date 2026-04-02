@@ -18,6 +18,10 @@ const feedMaxBodyLines = 4
 // and a next-page cursor is available. App intercepts this and fires the API call.
 type LoadMoreFeedMsg struct{ Cursor string }
 
+// RefreshFeedMsg is emitted when the user presses up at the top of the feed.
+// App intercepts this and re-fetches the feed from the start.
+type RefreshFeedMsg struct{}
+
 // ShowPostMsg is emitted when the user presses Enter on a selected post.
 type ShowPostMsg struct{ Post model.Post }
 
@@ -40,6 +44,7 @@ type FeedModel struct {
 	err           error
 	nextCursor    string
 	loading       bool
+	refreshing    bool // true while re-fetching newest posts (up at top)
 	exhausted     bool // true once API returned an empty cursor
 	relaxed       bool             // true = blank line between posts (relaxed density)
 	loc           *time.Location   // timezone for timestamp display; nil = UTC
@@ -56,6 +61,7 @@ func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.loading = false
+	m.refreshing = false
 	m.selectedIndex = 0
 	if m.ready {
 		m = m.refreshContent()
@@ -192,6 +198,10 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				m.selectedIndex--
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()
+			} else if !m.loading && !m.refreshing {
+				m.refreshing = true
+				m = m.refreshContent()
+				return m, func() tea.Msg { return RefreshFeedMsg{} }
 			}
 			return m, nil
 		case "enter":
@@ -253,8 +263,14 @@ func (m FeedModel) viewportHeight() int {
 // buildContent renders all posts into a single string for the viewport and
 // returns the start line of each post so ensureSelectedVisible can scroll accurately.
 func (m FeedModel) buildContent() (string, []int) {
+	var prefix string
+	startLine := 0
+	if m.refreshing {
+		prefix = theme.Subtle.Render("  fetching new posts...") + "\n"
+		startLine = 1
+	}
 	if len(m.posts) == 0 {
-		return theme.Subtle.Render("  no posts yet"), nil
+		return prefix + theme.Subtle.Render("  no posts yet"), nil
 	}
 	sep := "\n"
 	lineInc := 0
@@ -264,7 +280,7 @@ func (m FeedModel) buildContent() (string, []int) {
 	}
 	offsets := make([]int, len(m.posts))
 	var out string
-	currentLine := 0
+	currentLine := startLine
 	for i, p := range m.posts {
 		offsets[i] = currentLine
 		rendered := m.renderPost(p, i == m.selectedIndex)
@@ -276,7 +292,7 @@ func (m FeedModel) buildContent() (string, []int) {
 	} else if m.exhausted {
 		out += theme.Subtle.Render("  — end of feed —") + "\n"
 	}
-	return out, offsets
+	return prefix + out, offsets
 }
 
 func (m FeedModel) renderPost(p model.Post, selected bool) string {

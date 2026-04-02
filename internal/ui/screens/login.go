@@ -19,10 +19,9 @@ type LoginModel struct {
 	loading bool
 }
 
-func NewLoginModel() LoginModel {
+func NewLoginModel(email string) LoginModel {
 	user := textinput.New()
 	user.Placeholder = "email"
-	user.Focus()
 	user.Width = 30
 
 	pass := textinput.New()
@@ -30,7 +29,19 @@ func NewLoginModel() LoginModel {
 	pass.EchoMode = textinput.EchoPassword
 	pass.Width = 30
 
-	return LoginModel{inputs: [2]textinput.Model{user, pass}}
+	focused := 0
+	if email != "" {
+		user.SetValue(email)
+		focused = 1
+	}
+
+	if focused == 0 {
+		user.Focus()
+	} else {
+		pass.Focus()
+	}
+
+	return LoginModel{inputs: [2]textinput.Model{user, pass}, focused: focused}
 }
 
 func (m LoginModel) Init() tea.Cmd { return textinput.Blink }
