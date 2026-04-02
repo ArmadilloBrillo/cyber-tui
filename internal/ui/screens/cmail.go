@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -33,9 +34,10 @@ type CMailModel struct {
 	currentUser   string
 
 	focusPane    CMailFocus
-	selectedConv int // index into conversations
-	sidebarWidth int // inner content width, computed on WindowSizeMsg
-	width        int // terminal width, stored for View()
+	selectedConv int            // index into conversations
+	sidebarWidth int            // inner content width, computed on WindowSizeMsg
+	width        int            // terminal width, stored for View()
+	loc          *time.Location // timezone for timestamp display; nil = UTC
 }
 
 // SendCMailMsg is emitted when the user sends a C-Mail message.
@@ -235,12 +237,30 @@ func (m CMailModel) renderMessages() string {
 	}
 	var out string
 	for _, msg := range m.activeConv.Messages {
-		ts := theme.Subtle.Render(msg.CreatedAt.Format("15:04"))
+		ts := theme.Subtle.Render(formatTime(msg.CreatedAt, m.location(), "15:04"))
 		author := theme.Highlight.Render("@" + msg.From.Username)
 		body := theme.Base.Render(msg.Body)
 		out += lipgloss.JoinHorizontal(lipgloss.Top, ts, "  ", author, "  ", body) + "\n"
 	}
 	return out
+}
+
+func (m CMailModel) location() *time.Location {
+	if m.loc == nil {
+		return time.UTC
+	}
+	return m.loc
+}
+
+func (m CMailModel) SetLocation(loc *time.Location) CMailModel {
+	if loc == nil {
+		loc = time.UTC
+	}
+	m.loc = loc
+	if m.ready {
+		m.viewport.SetContent(m.renderMessages())
+	}
+	return m
 }
 
 // SetConversationMessages replaces the message history for the active conversation.

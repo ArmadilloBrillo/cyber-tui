@@ -3,6 +3,7 @@ package screens
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -40,7 +41,8 @@ type FeedModel struct {
 	nextCursor    string
 	loading       bool
 	exhausted     bool // true once API returned an empty cursor
-	relaxed       bool // true = blank line between posts (relaxed density)
+	relaxed       bool             // true = blank line between posts (relaxed density)
+	loc           *time.Location   // timezone for timestamp display; nil = UTC
 }
 
 func NewFeedModel() FeedModel {
@@ -84,6 +86,24 @@ func (m FeedModel) SetRelaxed(relaxed bool) FeedModel {
 	if m.ready {
 		m = m.refreshContent()
 		m = m.ensureSelectedVisible()
+	}
+	return m
+}
+
+func (m FeedModel) location() *time.Location {
+	if m.loc == nil {
+		return time.UTC
+	}
+	return m.loc
+}
+
+func (m FeedModel) SetLocation(loc *time.Location) FeedModel {
+	if loc == nil {
+		loc = time.UTC
+	}
+	m.loc = loc
+	if m.ready {
+		m = m.refreshContent()
 	}
 	return m
 }
@@ -266,7 +286,7 @@ func (m FeedModel) renderPost(p model.Post, selected bool) string {
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+p.AuthorUsername),
-		theme.Subtle.Render("  "+p.CreatedAt.Format("15:04:05")),
+		theme.Subtle.Render("  "+formatTime(p.CreatedAt, m.location(), "15:04:05")),
 	)
 	replies := theme.Subtle.Render(fmt.Sprintf("%d replies", p.RepliesCount))
 	var header string

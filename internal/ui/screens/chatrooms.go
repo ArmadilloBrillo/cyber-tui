@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -22,6 +23,7 @@ type ChatroomsModel struct {
 	input       textinput.Model
 	ready       bool
 	err         error
+	loc         *time.Location // timezone for timestamp display; nil = UTC
 }
 
 type SendRoomMessageMsg struct {
@@ -39,6 +41,24 @@ func NewChatroomsModel() ChatroomsModel {
 
 func (m ChatroomsModel) SetRooms(rooms []model.Room) ChatroomsModel {
 	m.rooms = rooms
+	return m
+}
+
+func (m ChatroomsModel) location() *time.Location {
+	if m.loc == nil {
+		return time.UTC
+	}
+	return m.loc
+}
+
+func (m ChatroomsModel) SetLocation(loc *time.Location) ChatroomsModel {
+	if loc == nil {
+		loc = time.UTC
+	}
+	m.loc = loc
+	if m.ready {
+		m.viewport.SetContent(m.renderMessages())
+	}
 	return m
 }
 
@@ -113,7 +133,7 @@ func (m ChatroomsModel) renderMessages() string {
 	}
 	var out string
 	for _, msg := range m.messages {
-		ts := theme.Subtle.Render(msg.CreatedAt.Format("15:04"))
+		ts := theme.Subtle.Render(formatTime(msg.CreatedAt, m.location(), "15:04"))
 		author := theme.Highlight.Render("@" + msg.From.Username)
 		body := theme.Base.Render(msg.Body)
 		out += lipgloss.JoinHorizontal(lipgloss.Top, ts, "  ", author, "  ", body) + "\n"

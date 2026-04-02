@@ -72,6 +72,16 @@ type App struct {
 	themePickerCursor int    // index into availableThemes
 	themePickerOrig   string // theme name when picker was opened (for Esc revert)
 
+	// timezonePicker state — open with 'z', close with Enter/Esc.
+	timezonePickerOpen   bool
+	timezonePickerCursor int    // index into config.AvailableTimezones
+	timezonePickerOrig   string // timezone label when picker was opened (for Esc revert)
+
+	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
+	// loc is the parsed *time.Location derived from timezone.
+	timezone string
+	loc      *time.Location
+
 	// dmSub holds the active RTDB subscription for the open C-Mail conversation.
 	// nil when no conversation is selected or when not on the C-Mail screen.
 	dmSub        *dmSubscription
@@ -95,6 +105,7 @@ func NewApp(client api.Client) App {
 		client:     client,
 		active:     screenLogin,
 		focus:      focusMenu,
+		loc:        time.UTC,
 		login:      screens.NewLoginModel(),
 		feed:       screens.NewFeedModel(),
 		chatrooms:  screens.NewChatroomsModel(),
@@ -118,6 +129,8 @@ func (a App) WithAutoLogin(email, password string) App {
 func (a App) WithSavedSession(s config.Config) App {
 	a.savedSession = &s
 	a.relaxed = s.Density == "relaxed"
+	a.timezone = s.Timezone
+	a.loc = s.GetLocation()
 	return a
 }
 
@@ -152,6 +165,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		// Theme picker intercepts all keys while open.
+		if a.timezonePickerOpen {
+			return a.handleTimezonePickerKey(msg)
+		}
 		if a.themePickerOpen {
 			return a.handleThemePickerKey(msg)
 		}
@@ -169,6 +185,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.themePickerOpen = true
 				a.themePickerOrig = theme.CurrentName()
 				a.themePickerCursor = themeIndex(theme.CurrentName())
+			}
+		case "z":
+			if a.active != screenLogin {
+				a.timezonePickerOpen = true
+				a.timezonePickerOrig = a.timezone
+				a.timezonePickerCursor = timezoneIndex(a.timezone)
 			}
 		case "v":
 			if a.active != screenLogin {
@@ -424,6 +446,9 @@ func (a App) View() string {
 	if a.themePickerOpen {
 		return overlayCenter(base, a.renderThemePicker(), a.width, a.height)
 	}
+	if a.timezonePickerOpen {
+		return overlayCenter(base, a.renderTimezonePicker(), a.width, a.height)
+	}
 	return base
 }
 
@@ -462,10 +487,15 @@ func (a App) renderStatusBar() string {
 	if a.relaxed {
 		densityLabel = "relaxed"
 	}
+	tzLabel := a.timezone
+	if tzLabel == "" {
+		tzLabel = "UTC"
+	}
 	user := lipgloss.JoinHorizontal(lipgloss.Top,
 		userStyle.Render("@"+a.currentUser.Username),
 		metaStyle.Render("  ·  "+densityLabel),
 		metaStyle.Render("  ·  "+theme.CurrentName()),
+		metaStyle.Render("  ·  "+tzLabel),
 	)
 	var hintStr string
 	switch a.active {
@@ -473,16 +503,16 @@ func (a App) renderStatusBar() string {
 		if a.postDetail.ComposeActive() {
 			hintStr = "  Alt+Enter · send   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  esc · back   r · reply   j/k · scroll/navigate   t · theme"
+			hintStr = "  esc · back   r · reply   j/k · scroll/navigate   t · theme   z · timezone"
 		}
 	case screenProfile:
 		if a.profile.ComposeActive() {
 			hintStr = "  Alt+Enter · save   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  q · quit   v · density   t · theme   ←→ · tabs"
+			hintStr = "  q · quit   v · density   t · theme   z · timezone   ←→ · tabs"
 		}
 	default:
-		hintStr = "  q · quit   r · reply   v · density   t · theme   ←→ · tabs   ↑↓/jk · navigate"
+		hintStr = "  q · quit   r · reply   v · density   t · theme   z · timezone   ←→ · tabs   ↑↓/jk · navigate"
 	}
 	hint := theme.StatusBar.Render(hintStr)
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
@@ -532,6 +562,93 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, refreshCmd
 	}
 	return a, nil
+}
+
+// --- timezone picker ---
+
+// timezoneIndex returns the index of label in config.AvailableTimezones,
+// defaulting to the index of "UTC".
+func timezoneIndex(label string) int {
+	for i, t := range config.AvailableTimezones {
+		if t == label {
+			return i
+		}
+	}
+	for i, t := range config.AvailableTimezones {
+		if t == "UTC" {
+			return i
+		}
+	}
+	return 0
+}
+
+// handleTimezonePickerKey processes keyboard input while the timezone picker is open.
+func (a App) handleTimezonePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	refreshCmd := func() tea.Msg { return tea.WindowSizeMsg{Width: a.width, Height: a.height} }
+	n := len(config.AvailableTimezones)
+	switch msg.String() {
+	case "up", "k":
+		a.timezonePickerCursor = (a.timezonePickerCursor - 1 + n) % n
+	case "down", "j":
+		a.timezonePickerCursor = (a.timezonePickerCursor + 1) % n
+	case "enter":
+		selected := config.AvailableTimezones[a.timezonePickerCursor]
+		a.timezone = selected
+		a.loc = config.ParseTimezoneLabel(selected)
+		a.timezonePickerOpen = false
+		a.feed = a.feed.SetLocation(a.loc)
+		a.postDetail = a.postDetail.SetLocation(a.loc)
+		a.cmail = a.cmail.SetLocation(a.loc)
+		a.chatrooms = a.chatrooms.SetLocation(a.loc)
+		a.refreshViewports()
+		return a, tea.Batch(
+			refreshCmd,
+			func() tea.Msg {
+				if cfg, err := config.Load(); err == nil {
+					cfg.Timezone = selected
+					_ = config.Save(cfg)
+				}
+				return nil
+			},
+		)
+	case "esc":
+		a.timezonePickerOpen = false
+		return a, refreshCmd
+	}
+	return a, nil
+}
+
+// renderTimezonePicker returns the centered overlay box for timezone selection.
+// Shows a scrolling window of 13 items centered on the cursor.
+func (a App) renderTimezonePicker() string {
+	title := theme.Title.Render("timezone")
+	zones := config.AvailableTimezones
+	n := len(zones)
+	const window = 13
+	start := a.timezonePickerCursor - window/2
+	if start < 0 {
+		start = 0
+	}
+	if start+window > n {
+		start = n - window
+	}
+	var items []string
+	for i := start; i < start+window; i++ {
+		if i == a.timezonePickerCursor {
+			items = append(items, theme.Highlight.Render("▸ "+zones[i]))
+		} else {
+			items = append(items, theme.Subtle.Render("  "+zones[i]))
+		}
+	}
+	hint := theme.Subtle.Render("↑↓ select   ⏎ save   esc cancel")
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		lipgloss.JoinVertical(lipgloss.Left, items...),
+		"",
+		hint,
+	)
+	return theme.ActiveBorder.Render(body)
 }
 
 // refreshViewports forces all screen viewports to re-render with the current
@@ -692,6 +809,10 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	a.profile = a.profile.SetUser(a.currentUser)
 	a.feed = a.feed.SetRelaxed(a.relaxed)
 	a.postDetail = a.postDetail.SetRelaxed(a.relaxed)
+	a.feed = a.feed.SetLocation(a.loc)
+	a.postDetail = a.postDetail.SetLocation(a.loc)
+	a.cmail = a.cmail.SetLocation(a.loc)
+	a.chatrooms = a.chatrooms.SetLocation(a.loc)
 	return tea.Batch(a.loadFeedCmd(), a.loadProfileCmd())
 }
 

@@ -3,6 +3,7 @@ package screens
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -36,9 +37,10 @@ type PostDetailModel struct {
 	err           error
 
 	compose      ComposeModel
-	replyPostID   string // postID set when compose opens
-	replyParentID string // parentReplyID set when compose opens (empty = top-level)
-	relaxed       bool   // true = blank lines between post, header, and replies
+	replyPostID   string         // postID set when compose opens
+	replyParentID string         // parentReplyID set when compose opens (empty = top-level)
+	relaxed       bool           // true = blank lines between post, header, and replies
+	loc           *time.Location // timezone for timestamp display; nil = UTC
 }
 
 func NewPostDetailModel() PostDetailModel {
@@ -92,6 +94,24 @@ func (m PostDetailModel) SetRelaxed(relaxed bool) PostDetailModel {
 	if m.ready {
 		m = m.refreshContent()
 		m = m.ensureSelectedVisible()
+	}
+	return m
+}
+
+func (m PostDetailModel) location() *time.Location {
+	if m.loc == nil {
+		return time.UTC
+	}
+	return m.loc
+}
+
+func (m PostDetailModel) SetLocation(loc *time.Location) PostDetailModel {
+	if loc == nil {
+		loc = time.UTC
+	}
+	m.loc = loc
+	if m.ready {
+		m = m.refreshContent()
 	}
 	return m
 }
@@ -358,7 +378,7 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 
 	header := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+m.post.AuthorUsername),
-		theme.Subtle.Render("  "+m.post.CreatedAt.Format("15:04:05")),
+		theme.Subtle.Render("  "+formatTime(m.post.CreatedAt, m.location(), "15:04:05")),
 	)
 
 	var body string
@@ -394,7 +414,7 @@ func (m PostDetailModel) renderReply(r model.Reply, selected bool) string {
 
 	header := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+r.AuthorUsername),
-		theme.Subtle.Render("  "+r.CreatedAt.Format("15:04:05")),
+		theme.Subtle.Render("  "+formatTime(r.CreatedAt, m.location(), "15:04:05")),
 	)
 
 	var body string

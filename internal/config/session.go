@@ -3,8 +3,10 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -23,6 +25,9 @@ type Config struct {
 
 	// User preferences — written on change.
 	Density string `json:"density,omitempty"` // "" = dense (default) | "relaxed"
+	// Timezone is a fixed UTC offset label, e.g. "UTC+5:30" or "UTC-8".
+	// Empty string defaults to UTC.
+	Timezone string `json:"timezone,omitempty"`
 
 	// App settings — edit manually in ~/.cyber-tui.json.
 	// Theme selects the color palette: "cyber" (default), "c64", "vt320".
@@ -84,6 +89,47 @@ func Save(c Config) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0600)
+}
+
+// AvailableTimezones is the ordered list of UTC offsets shown in the timezone picker.
+// These are fixed offsets — no DST adjustments.
+var AvailableTimezones = []string{
+	"UTC-12", "UTC-11", "UTC-10", "UTC-9", "UTC-8", "UTC-7", "UTC-6",
+	"UTC-5", "UTC-4", "UTC-3", "UTC-2", "UTC-1", "UTC",
+	"UTC+1", "UTC+2", "UTC+3", "UTC+4", "UTC+5", "UTC+5:30", "UTC+5:45",
+	"UTC+6", "UTC+7", "UTC+8", "UTC+9", "UTC+9:30", "UTC+10", "UTC+11",
+	"UTC+12", "UTC+12:45", "UTC+13", "UTC+14",
+}
+
+// GetLocation returns the *time.Location for the configured timezone.
+// Returns time.UTC when Timezone is empty.
+func (c Config) GetLocation() *time.Location {
+	return ParseTimezoneLabel(c.Timezone)
+}
+
+// ParseTimezoneLabel converts a label like "UTC+5:30" or "UTC-8" to a fixed
+// *time.Location. Returns time.UTC for "" or "UTC".
+func ParseTimezoneLabel(label string) *time.Location {
+	if label == "" || label == "UTC" {
+		return time.UTC
+	}
+	rest := label[3:] // strip "UTC"
+	sign := 1
+	if len(rest) > 0 && rest[0] == '-' {
+		sign = -1
+		rest = rest[1:]
+	} else if len(rest) > 0 && rest[0] == '+' {
+		rest = rest[1:]
+	}
+	hours, mins := 0, 0
+	if idx := strings.Index(rest, ":"); idx >= 0 {
+		fmt.Sscanf(rest[:idx], "%d", &hours)
+		fmt.Sscanf(rest[idx+1:], "%d", &mins)
+	} else {
+		fmt.Sscanf(rest, "%d", &hours)
+	}
+	offset := sign * (hours*3600 + mins*60)
+	return time.FixedZone(label, offset)
 }
 
 // Clear removes the config file. Returns nil if the file does not exist.
