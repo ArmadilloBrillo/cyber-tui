@@ -380,12 +380,20 @@ func (m FeedModel) renderPost(p model.Post, selected bool) string {
 		theme.Highlight.Render("@"+p.AuthorUsername),
 		theme.Subtle.Render("  "+formatTime(p.CreatedAt, m.location(), "15:04:05")),
 	)
-	replies := theme.Subtle.Render(fmt.Sprintf("%d replies", p.RepliesCount))
+	var repliesLabel string
+	switch p.RepliesCount {
+	case 0:
+		// show nothing
+	case 1:
+		repliesLabel = theme.Subtle.Render("1 reply")
+	default:
+		repliesLabel = theme.Subtle.Render(fmt.Sprintf("%d replies", p.RepliesCount))
+	}
 	var header string
 	if innerWidth > 0 {
-		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(replies)
+		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(repliesLabel)
 		if gap > 0 {
-			header = left + strings.Repeat(" ", gap) + replies
+			header = left + strings.Repeat(" ", gap) + repliesLabel
 		} else {
 			header = left
 		}

@@ -319,7 +319,14 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 // were used to lay out the content.
 func (m PostDetailModel) buildContent() (string, []int, []int) {
 	postContent := m.renderFullPost(m.selectedReply == -1)
-	repliesHeader := theme.Title.Render(fmt.Sprintf("  %d replies", len(m.replies)))
+	var repliesHeaderText string
+	switch len(m.replies) {
+	case 1:
+		repliesHeaderText = "  1 reply"
+	default:
+		repliesHeaderText = fmt.Sprintf("  %d replies", len(m.replies))
+	}
+	repliesHeader := theme.Title.Render(repliesHeaderText)
 
 	sep := "\n"
 	if m.relaxed {
