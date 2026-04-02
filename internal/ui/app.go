@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -76,6 +77,9 @@ type App struct {
 	timezonePickerOpen   bool
 	timezonePickerCursor int    // index into config.AvailableTimezones
 	timezonePickerOrig   string // timezone label when picker was opened (for Esc revert)
+
+	// helpModal state — open with '?', close with any key.
+	helpModalOpen bool
 
 	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
 	// loc is the parsed *time.Location derived from timezone.
@@ -171,6 +175,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.themePickerOpen {
 			return a.handleThemePickerKey(msg)
 		}
+		if a.helpModalOpen {
+			return a.handleHelpModalKey(msg)
+		}
 		// When any screen has a focused text input, let it consume all key events.
 		// Only ctrl+c is kept as a hard escape hatch.
 		if a.activeScreenHasFocusedInput() {
@@ -209,6 +216,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return nil
 				}
+			}
+		case "?":
+			if a.active != screenLogin {
+				a.helpModalOpen = true
 			}
 		case "ctrl+c", "q":
 			if a.active != screenLogin {
@@ -449,6 +460,9 @@ func (a App) View() string {
 	if a.timezonePickerOpen {
 		return overlayCenter(base, a.renderTimezonePicker(), a.width, a.height)
 	}
+	if a.helpModalOpen {
+		return overlayCenter(base, a.renderHelpModal(), a.width, a.height)
+	}
 	return base
 }
 
@@ -501,18 +515,18 @@ func (a App) renderStatusBar() string {
 	switch a.active {
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
-			hintStr = "  Alt+Enter · send   Enter · paragraph   Esc · cancel"
+			hintStr = "  Ctrl+S · send   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  esc · back   r · reply   j/k · scroll/navigate   t · theme   z · timezone"
+			hintStr = "  ? · help"
 		}
 	case screenProfile:
 		if a.profile.ComposeActive() {
-			hintStr = "  Alt+Enter · save   Enter · paragraph   Esc · cancel"
+			hintStr = "  Ctrl+S · save   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  q · quit   v · density   t · theme   z · timezone   ←→ · tabs"
+			hintStr = "  ? · help"
 		}
 	default:
-		hintStr = "  q · quit   r · reply   v · density   t · theme   z · timezone   ←→ · tabs   ↑↓/jk · navigate"
+		hintStr = "  ? · help"
 	}
 	hint := theme.StatusBar.Render(hintStr)
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
@@ -680,6 +694,58 @@ func (a App) renderThemePicker() string {
 		lipgloss.JoinVertical(lipgloss.Left, items...),
 		"",
 		hint,
+	)
+	return theme.ActiveBorder.Render(body)
+}
+
+// --- help modal ---
+
+// handleHelpModalKey closes the help modal on any keypress.
+func (a App) handleHelpModalKey(_ tea.KeyMsg) (tea.Model, tea.Cmd) {
+	a.helpModalOpen = false
+	return a, nil
+}
+
+// renderHelpModal returns the centered overlay box listing all keyboard shortcuts.
+func (a App) renderHelpModal() string {
+	title := theme.Title.Render("shortcuts")
+	sectionStyle := theme.Subtle.Copy().Bold(true)
+	row := func(key, desc string) string {
+		k := theme.Highlight.Render(fmt.Sprintf("%-10s", key))
+		return lipgloss.JoinHorizontal(lipgloss.Top, k, theme.Subtle.Render(desc))
+	}
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		sectionStyle.Render("global"),
+		row("1 / 2", "feed / profile"),
+		row("←→", "cycle tabs"),
+		row("t", "theme"),
+		row("z", "timezone"),
+		row("v", "density"),
+		row("q", "quit"),
+		"",
+		sectionStyle.Render("feed"),
+		row("↑↓ / jk", "navigate"),
+		row("enter", "open post"),
+		row("n", "new post"),
+		row("r", "reply"),
+		"",
+		sectionStyle.Render("post detail"),
+		row("↑↓ / jk", "scroll / navigate"),
+		row("r", "reply"),
+		row("esc", "back"),
+		"",
+		sectionStyle.Render("profile"),
+		row("e", "edit bio"),
+		row("←→", "tabs"),
+		"",
+		sectionStyle.Render("compose"),
+		row("Ctrl+S", "send"),
+		row("Enter", "paragraph"),
+		row("Esc", "cancel"),
+		"",
+		theme.Subtle.Render("? or any key · close"),
 	)
 	return theme.ActiveBorder.Render(body)
 }

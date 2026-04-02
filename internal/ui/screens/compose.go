@@ -23,7 +23,7 @@ type ComposeCancelMsg struct{}
 // ComposeModel is a reusable expanding multi-line text editor.
 // Embed it in any screen that needs a compose area.
 //   - Enter inserts a paragraph break (\n\n → <p> on the website)
-//   - Alt+Enter (or Ctrl+Enter with Kitty) submits (emits ComposeSubmitMsg)
+//   - Ctrl+S submits (emits ComposeSubmitMsg)
 //   - Esc cancels (emits ComposeCancelMsg)
 type ComposeModel struct {
 	textarea     textarea.Model
@@ -120,9 +120,7 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
-		case "ctrl+enter", "alt+enter":
-			// ctrl+enter requires Kitty keyboard protocol; alt+enter (ESC+CR)
-			// works in virtually all terminals and is the reliable fallback.
+		case "ctrl+s":
 			content := m.textarea.Value()
 			return m, func() tea.Msg { return ComposeSubmitMsg{Content: content} }
 		case "esc":
