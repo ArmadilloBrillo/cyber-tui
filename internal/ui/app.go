@@ -43,8 +43,6 @@ var menuTabs = []struct {
 	s     screen
 }{
 	{"feed", screenFeed},
-	{"rooms", screenChatrooms},
-	{"c-mail", screenCMail},
 	{"profile", screenProfile},
 }
 
