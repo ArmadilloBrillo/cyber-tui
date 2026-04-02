@@ -587,6 +587,9 @@ func TestFeed_ComposeSubmit_EmitsSubmitNewPostMsg(t *testing.T) {
 	if snp.Content != "hello world" {
 		t.Errorf("expected Content=%q, got %q", "hello world", snp.Content)
 	}
+	if len(snp.Topics) != 0 {
+		t.Errorf("expected no topics when tags input is empty, got %v", snp.Topics)
+	}
 }
 
 func TestFeed_N_NotActiveInPostDetail(t *testing.T) {
@@ -595,5 +598,31 @@ func TestFeed_N_NotActiveInPostDetail(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	if m.ComposeActive() {
 		t.Error("expected compose to remain inactive after pressing 'n' in PostDetail")
+	}
+}
+
+func TestParseTopics(t *testing.T) {
+	cases := []struct {
+		input string
+		want  []string
+	}{
+		{"", nil},
+		{"go, tui, programming", []string{"go", "tui", "programming"}},
+		{"my cool topic, other", []string{"my cool topic", "other"}},
+		{"a, b, c, d", []string{"a", "b", "c"}},   // capped at 3
+		{"a,  ,  , b", []string{"a", "b"}},          // empty parts filtered
+		{"  trimmed  ,  spaces  ", []string{"trimmed", "spaces"}}, // whitespace trimmed
+	}
+	for _, tc := range cases {
+		got := screens.ParseTopics(tc.input)
+		if len(got) != len(tc.want) {
+			t.Errorf("ParseTopics(%q): got %v, want %v", tc.input, got, tc.want)
+			continue
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Errorf("ParseTopics(%q)[%d]: got %q, want %q", tc.input, i, got[i], tc.want[i])
+			}
+		}
 	}
 }

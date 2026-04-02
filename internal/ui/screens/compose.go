@@ -29,6 +29,7 @@ type ComposeModel struct {
 	textarea     textarea.Model
 	context      string // label shown above the editor, e.g. "reply to @username"
 	active       bool
+	focused      bool // true = active border; false = dimmed border (topics input has focus)
 	width        int
 	contentLines int // current textarea height in lines, clamped [composeMinLines, composeMaxLines]
 }
@@ -53,12 +54,21 @@ func NewComposeModel(width int) ComposeModel {
 	}
 }
 
+// SetFocused controls whether the compose box renders with the active border
+// (focused=true) or the dimmed border (focused=false). Use this when another
+// input in the same screen takes focus — e.g. the topics input in the feed.
+func (m ComposeModel) SetFocused(focused bool) ComposeModel {
+	m.focused = focused
+	return m
+}
+
 // Open prepares the compose box: sets the context label, clears content,
 // resets height to minimum, and focuses the textarea.
 // Returns the updated model and a Cmd that starts the cursor blink animation.
 func (m ComposeModel) Open(ctx, placeholder string) (ComposeModel, tea.Cmd) {
 	m.context = ctx
 	m.active = true
+	m.focused = true
 	m.contentLines = composeMinLines
 	m.textarea.Placeholder = placeholder
 	m.textarea.SetValue("")
@@ -189,7 +199,10 @@ func (m ComposeModel) View() string {
 		theme.Subtle.Render(m.context),
 		m.textarea.View(),
 	)
-	boxStyle := theme.ActiveBorder
+	boxStyle := theme.Border
+	if m.focused {
+		boxStyle = theme.ActiveBorder
+	}
 	if m.width > 2 {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}

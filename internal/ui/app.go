@@ -299,7 +299,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.postDetail = a.postDetail.SetReplies(msg.replies)
 
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content)
+		return a, a.createPostCmd(msg.Content, msg.Topics)
 
 	case postCreatedMsg:
 		return a, a.loadFeedCmd()
@@ -525,6 +525,12 @@ func (a App) renderStatusBar() string {
 	)
 	var hintStr string
 	switch a.active {
+	case screenFeed:
+		if a.feed.ComposeActive() {
+			hintStr = "  Ctrl+S · send   Tab · topics   Enter · paragraph   Esc · cancel"
+		} else {
+			hintStr = "  ? · help"
+		}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
 			hintStr = "  Ctrl+S · send   Enter · paragraph   Esc · cancel"
@@ -1057,9 +1063,9 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	}
 }
 
-func (a *App) createPostCmd(content string) tea.Cmd {
+func (a *App) createPostCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, nil)
+		_, err := a.client.CreatePost(content, topics)
 		if err != nil {
 			return errMsg{err}
 		}

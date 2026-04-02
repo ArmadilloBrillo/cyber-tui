@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -30,14 +31,19 @@ type ShowPostMsg struct{ Post model.Post }
 type ShowPostForReplyMsg struct{ Post model.Post }
 
 // SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
-type SubmitNewPostMsg struct{ Content string }
+type SubmitNewPostMsg struct {
+	Content string
+	Topics  []string
+}
 
 type FeedModel struct {
-	posts         []model.Post
-	postOffsets   []int // start line of each post within the viewport content
-	viewport      viewport.Model
-	compose       ComposeModel
-	width         int
+	posts          []model.Post
+	postOffsets    []int // start line of each post within the viewport content
+	viewport       viewport.Model
+	compose        ComposeModel
+	topicsInput    textinput.Model
+	topicsFocused  bool
+	width          int
 	height        int
 	selectedIndex int
 	ready         bool
@@ -46,14 +52,33 @@ type FeedModel struct {
 	loading       bool
 	refreshing    bool // true while re-fetching newest posts (up at top)
 	exhausted     bool // true once API returned an empty cursor
-	relaxed       bool             // true = blank line between posts (relaxed density)
-	loc           *time.Location   // timezone for timestamp display; nil = UTC
+	relaxed       bool           // true = blank line between posts (relaxed density)
+	loc           *time.Location // timezone for timestamp display; nil = UTC
 }
 
 func NewFeedModel() FeedModel {
+	ti := textinput.New()
+	ti.Placeholder = "add topics  (go, my topic, …  max 3)"
 	return FeedModel{
-		compose: NewComposeModel(0),
+		compose:     NewComposeModel(0),
+		topicsInput: ti,
 	}
+}
+
+// ParseTopics splits a comma-separated topic string and caps the result at 3.
+// Empty parts are ignored. Leading/trailing whitespace is trimmed.
+func ParseTopics(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		t := strings.TrimSpace(part)
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	return out
 }
 
 func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
@@ -164,6 +189,11 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.compose = m.compose.SetWidth(msg.Width)
+		innerW := msg.Width - 4
+		if innerW < 1 {
+			innerW = 1
+		}
+		m.topicsInput.Width = innerW
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, m.viewportHeight())
 			m = m.refreshContent()
@@ -177,17 +207,59 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 
 	case ComposeSubmitMsg:
 		content := msg.Content
+		topics := ParseTopics(m.topicsInput.Value())
 		m.compose = m.compose.Close()
+		m.topicsFocused = false
+		m.topicsInput.Blur()
 		m.viewport.Height = m.viewportHeight()
-		return m, func() tea.Msg { return SubmitNewPostMsg{Content: content} }
+		return m, func() tea.Msg { return SubmitNewPostMsg{Content: content, Topics: topics} }
 
 	case ComposeCancelMsg:
 		m.compose = m.compose.Close()
+		m.topicsFocused = false
+		m.topicsInput.Blur()
 		m.viewport.Height = m.viewportHeight()
 		return m, nil
 
 	case tea.KeyMsg:
 		if m.compose.IsActive() {
+			switch msg.String() {
+			case "tab":
+				if m.topicsFocused {
+					m.topicsFocused = false
+					m.topicsInput.Blur()
+					m.compose = m.compose.SetFocused(true)
+				} else {
+					m.topicsFocused = true
+					m.compose = m.compose.SetFocused(false)
+					cmd := m.topicsInput.Focus()
+					return m, cmd
+				}
+				return m, nil
+			case "ctrl+s":
+				if m.topicsFocused {
+					content := m.compose.Content()
+					topics := ParseTopics(m.topicsInput.Value())
+					m.compose = m.compose.Close()
+					m.topicsFocused = false
+					m.topicsInput.Blur()
+					m.viewport.Height = m.viewportHeight()
+					return m, func() tea.Msg { return SubmitNewPostMsg{Content: content, Topics: topics} }
+				}
+			case "esc":
+				if m.topicsFocused {
+					m.topicsFocused = false
+					m.topicsInput.Blur()
+					m.compose = m.compose.Close()
+					m.viewport.Height = m.viewportHeight()
+					return m, nil
+				}
+			}
+			if m.topicsFocused {
+				var cmd tea.Cmd
+				m.topicsInput, cmd = m.topicsInput.Update(msg)
+				return m, cmd
+			}
 			var cmd tea.Cmd
 			m.compose, cmd = m.compose.Update(msg)
 			return m, cmd
@@ -215,6 +287,9 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				return m, func() tea.Msg { return ShowPostForReplyMsg{Post: post} }
 			}
 		case "n":
+			m.topicsInput.SetValue("")
+			m.topicsFocused = false
+			m.topicsInput.Blur()
 			var cmd tea.Cmd
 			m.compose, cmd = m.compose.Open("new post", "what's on your mind…")
 			m.viewport.Height = m.viewportHeight()
@@ -248,11 +323,12 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 }
 
 // viewportHeight returns the viewport height in rows, shrinking to make room for
-// the compose box when it is active.
+// the compose box and tags input when active.
 func (m FeedModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight
 	if m.compose.IsActive() {
 		h -= m.compose.BoxHeight()
+		h -= 3 // tags input row: border top + content + border bottom
 	}
 	if h < 1 {
 		h = 1
@@ -362,7 +438,19 @@ func (m FeedModel) View() string {
 		return theme.Subtle.Render("loading feed...")
 	}
 	if m.compose.IsActive() {
-		return lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), m.compose.View())
+		topicsStyle := theme.Border
+		if m.topicsFocused {
+			topicsStyle = theme.ActiveBorder
+		}
+		if m.width > 2 {
+			topicsStyle = topicsStyle.Width(m.width - 2)
+		}
+		topicsBox := topicsStyle.Render(m.topicsInput.View())
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			m.compose.View(),
+			topicsBox,
+		)
 	}
 	return m.viewport.View()
 }
