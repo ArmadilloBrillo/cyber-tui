@@ -55,11 +55,16 @@ func NewComposeModel(width int) ComposeModel {
 }
 
 // SetFocused controls whether the compose box renders with the active border
-// (focused=true) or the dimmed border (focused=false). Use this when another
-// input in the same screen takes focus — e.g. the topics input in the feed.
-func (m ComposeModel) SetFocused(focused bool) ComposeModel {
+// (focused=true) or the dimmed border (focused=false), and blurs/focuses the
+// underlying textarea so the cursor hides when another input takes over.
+func (m ComposeModel) SetFocused(focused bool) (ComposeModel, tea.Cmd) {
 	m.focused = focused
-	return m
+	if focused {
+		cmd := m.textarea.Focus()
+		return m, cmd
+	}
+	m.textarea.Blur()
+	return m, nil
 }
 
 // Open prepares the compose box: sets the context label, clears content,

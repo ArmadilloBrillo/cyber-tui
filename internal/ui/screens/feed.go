@@ -228,14 +228,14 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				if m.topicsFocused {
 					m.topicsFocused = false
 					m.topicsInput.Blur()
-					m.compose = m.compose.SetFocused(true)
-				} else {
-					m.topicsFocused = true
-					m.compose = m.compose.SetFocused(false)
-					cmd := m.topicsInput.Focus()
+					var cmd tea.Cmd
+					m.compose, cmd = m.compose.SetFocused(true)
 					return m, cmd
 				}
-				return m, nil
+				m.topicsFocused = true
+				m.compose, _ = m.compose.SetFocused(false)
+				cmd := m.topicsInput.Focus()
+				return m, cmd
 			case "ctrl+s":
 				if m.topicsFocused {
 					content := m.compose.Content()
