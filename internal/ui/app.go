@@ -198,17 +198,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.active = screenFeed
 				return a, a.loadFeedCmd()
 			}
-		case "2":
-			if a.active != screenLogin {
-				a.cancelDMSubscription()
-				a.active = screenChatrooms
-				return a, a.loadRoomsCmd()
-			}
-		case "3":
-			if a.active != screenLogin {
-				a.active = screenCMail
-				return a, a.loadConvsCmd()
-			}
 		case "4":
 			if a.active != screenLogin {
 				a.cancelDMSubscription()
@@ -477,16 +466,14 @@ func (a App) renderStatusBar() string {
 	)
 	var hintStr string
 	switch a.active {
-	case screenCMail:
-		hintStr = "  Tab · switch pane   ↑↓ · navigate   Enter · open/send   1-4 · jump"
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
 			hintStr = "  Alt+Enter · send   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  esc · back   r · reply   j/k · scroll/navigate   t · theme   1-4 · jump"
+			hintStr = "  esc · back   r · reply   j/k · scroll/navigate   t · theme"
 		}
 	default:
-		hintStr = "  q · quit   r · reply   v · density   t · theme   ←→ · tabs   ↑↓/jk · navigate   1-4 · jump"
+		hintStr = "  q · quit   r · reply   v · density   t · theme   ←→ · tabs   ↑↓/jk · navigate"
 	}
 	hint := theme.StatusBar.Render(hintStr)
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
