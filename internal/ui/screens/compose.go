@@ -93,6 +93,12 @@ func (m ComposeModel) Content() string { return m.textarea.Value() }
 // 2 border rows + 1 context label row + contentLines textarea rows.
 func (m ComposeModel) BoxHeight() int { return m.contentLines + 3 }
 
+// SetCharLimit sets the maximum number of characters the textarea will accept.
+func (m ComposeModel) SetCharLimit(n int) ComposeModel {
+	m.textarea.CharLimit = n
+	return m
+}
+
 // SetWidth resizes the compose area to fit the new terminal width.
 func (m ComposeModel) SetWidth(w int) ComposeModel {
 	m.width = w

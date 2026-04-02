@@ -9,6 +9,8 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
+const bioCharLimit = 127
+
 type ProfileModel struct {
 	user    model.User
 	compose ComposeModel
@@ -20,7 +22,7 @@ type ProfileModel struct {
 type SaveProfileMsg struct{ Bio string }
 
 func NewProfileModel() ProfileModel {
-	return ProfileModel{compose: NewComposeModel(0)}
+	return ProfileModel{compose: NewComposeModel(0).SetCharLimit(bioCharLimit)}
 }
 
 func (m ProfileModel) SetUser(u model.User) ProfileModel {
@@ -83,10 +85,19 @@ func (m ProfileModel) View() string {
 	username := theme.Title.Render("@" + m.user.Username)
 
 	if m.compose.IsActive() {
+		used := len(m.compose.Content())
+		counterStr := fmt.Sprintf("%d / %d", used, bioCharLimit)
+		var counter string
+		if used >= bioCharLimit {
+			counter = theme.Error.Render(counterStr)
+		} else {
+			counter = theme.Subtle.Render(counterStr)
+		}
 		return lipgloss.JoinVertical(lipgloss.Left,
 			username,
 			"",
 			m.compose.View(),
+			counter,
 		)
 	}
 
