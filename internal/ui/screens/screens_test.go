@@ -23,7 +23,7 @@ func TestChatroomsInputFocused_DefaultFalse(t *testing.T) {
 // --- CMailModel.InputFocused ---
 
 func TestCMailInputFocused_DefaultFalse(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	if m.InputFocused() {
 		t.Error("input should not be focused on a freshly created CMailModel")
 	}
@@ -61,7 +61,7 @@ func sendSpecialKey(m screens.CMailModel, keyType tea.KeyType) (screens.CMailMod
 // --- focusLeft navigation ---
 
 func TestCMailCursorDown(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendKey(m, "j")
 	if m.SelectedConv() != 1 {
@@ -70,7 +70,7 @@ func TestCMailCursorDown(t *testing.T) {
 }
 
 func TestCMailCursorUp_ClampsAtZero(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendKey(m, "k")
 	if m.SelectedConv() != 0 {
@@ -79,7 +79,7 @@ func TestCMailCursorUp_ClampsAtZero(t *testing.T) {
 }
 
 func TestCMailCursorDown_ClampsAtBottom(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendKey(m, "j")
 	m, _ = sendKey(m, "j") // already at bottom
@@ -91,7 +91,7 @@ func TestCMailCursorDown_ClampsAtBottom(t *testing.T) {
 // --- Enter in focusLeft opens conversation and shifts to focusRight ---
 
 func TestCMailEnterOpensConversation(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyEnter)
 	if !m.HasActiveConv() {
@@ -108,7 +108,7 @@ func TestCMailEnterOpensConversation(t *testing.T) {
 // --- Tab in focusLeft switches to focusRight ---
 
 func TestCMailTabFromLeft_ShiftsToRight(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyTab)
 	if m.FocusPane() != screens.FocusCMailRight {
@@ -119,7 +119,7 @@ func TestCMailTabFromLeft_ShiftsToRight(t *testing.T) {
 // --- Tab in focusRight switches back to focusLeft ---
 
 func TestCMailTabFromRight_ShiftsToLeft(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	// open conversation first
 	m, _ = sendSpecialKey(m, tea.KeyEnter)
@@ -136,7 +136,7 @@ func TestCMailTabFromRight_ShiftsToLeft(t *testing.T) {
 // --- Enter in focusRight with non-empty input emits SendCMailMsg ---
 
 func TestCMailSend_EmitsMessage(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyEnter) // open conversation
 
@@ -164,7 +164,7 @@ func TestCMailSend_EmitsMessage(t *testing.T) {
 // --- Enter with empty body does not emit a command ---
 
 func TestCMailSend_EmptyBodyNoCmd(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyEnter) // open conversation
 	// input is empty
@@ -181,7 +181,7 @@ func TestCMailSend_EmptyBodyNoCmd(t *testing.T) {
 // --- Esc blurs input when focused, then shifts to focusLeft ---
 
 func TestCMailEsc_BlursInputFirst(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyEnter) // open conversation, input focused
 
@@ -204,7 +204,7 @@ func TestCMailEsc_BlursInputFirst(t *testing.T) {
 // --- WindowSizeMsg sets sidebarWidth correctly ---
 
 func TestCMailSidebarWidth_80(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	if m.SidebarWidth() != 20 {
 		t.Errorf("expected sidebarWidth=20 at width=80, got %d", m.SidebarWidth())
@@ -212,7 +212,7 @@ func TestCMailSidebarWidth_80(t *testing.T) {
 }
 
 func TestCMailSidebarWidth_120(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	if m.SidebarWidth() != 30 {
 		t.Errorf("expected sidebarWidth=30 at width=120, got %d", m.SidebarWidth())
@@ -220,7 +220,7 @@ func TestCMailSidebarWidth_120(t *testing.T) {
 }
 
 func TestCMailSidebarWidth_200(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 200, Height: 24})
 	if m.SidebarWidth() != 32 {
 		t.Errorf("expected sidebarWidth=32 (clamped) at width=200, got %d", m.SidebarWidth())
@@ -313,29 +313,28 @@ func TestPostDetail_Esc_EmitsBackToFeedMsg(t *testing.T) {
 	}
 }
 
-// --- SelectConvMsg ---
+// --- Conversation selection ---
 
-func TestCMailSelectConvEmitsMsg(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+func TestCMailSelectConv_OpensConvAndReturnsCmds(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
-	_, cmd := sendSpecialKey(m, tea.KeyEnter)
+	m2, cmd := sendSpecialKey(m, tea.KeyEnter)
+	// Enter should open the first conversation and return a batch of DM commands.
+	if !m2.HasActiveConv() {
+		t.Error("expected active conversation after Enter on left pane")
+	}
+	if m2.FocusPane() != screens.FocusCMailRight {
+		t.Error("expected focus to move to right pane after Enter")
+	}
 	if cmd == nil {
-		t.Fatal("expected a command after Enter on left pane, got nil")
-	}
-	msg := cmd()
-	sel, ok := msg.(screens.SelectConvMsg)
-	if !ok {
-		t.Fatalf("expected SelectConvMsg, got %T", msg)
-	}
-	if sel.ConversationID != "c1" {
-		t.Errorf("ConversationID = %q, want c1", sel.ConversationID)
+		t.Error("expected non-nil command batch (load messages + open subscription)")
 	}
 }
 
 // --- AppendMessage ---
 
 func TestCMailAppendMessage_AddsToActiveConv(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	convs := twoConvs()
 	m = m.SetConversations(convs)
 	m, _ = sendSpecialKey(m, tea.KeyEnter) // open c1
@@ -349,7 +348,7 @@ func TestCMailAppendMessage_AddsToActiveConv(t *testing.T) {
 }
 
 func TestCMailAppendMessage_NoopWhenNoActiveConv(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	// Do not open any conversation.
 	incoming := model.Message{ID: "live1", From: model.User{Username: "molly"}, Body: "live msg", CreatedAt: time.Now()}
@@ -363,7 +362,7 @@ func TestCMailAppendMessage_NoopWhenNoActiveConv(t *testing.T) {
 // --- SetConversationMessages ---
 
 func TestCMailSetConversationMessages_ReplacesMessages(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyEnter) // open c1
 
@@ -378,7 +377,7 @@ func TestCMailSetConversationMessages_ReplacesMessages(t *testing.T) {
 }
 
 func TestCMailSetConversationMessages_WrongConv_Noop(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer")
+	m := screens.NewCMailModel("neuromancer", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyEnter) // opens c1
 

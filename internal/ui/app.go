@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -86,22 +85,12 @@ type App struct {
 	timezone string
 	loc      *time.Location
 
-	// dmSub holds the active RTDB subscription for the open C-Mail conversation.
-	// nil when no conversation is selected or when not on the C-Mail screen.
-	dmSub        *dmSubscription
-	activeConvID string
-
 	login      screens.LoginModel
 	feed       screens.FeedModel
 	chatrooms  screens.ChatroomsModel
 	cmail      screens.CMailModel
 	profile    screens.ProfileModel
 	postDetail screens.PostDetailModel
-}
-
-type dmSubscription struct {
-	C      <-chan model.Message
-	cancel context.CancelFunc
 }
 
 func NewApp(client api.Client) App {
@@ -113,7 +102,7 @@ func NewApp(client api.Client) App {
 		login:      screens.NewLoginModel(""),
 		feed:       screens.NewFeedModel(),
 		chatrooms:  screens.NewChatroomsModel(),
-		cmail:      screens.NewCMailModel(""),
+		cmail:      screens.NewCMailModel("", client),
 		profile:    screens.NewProfileModel(),
 		postDetail: screens.NewPostDetailModel(),
 	}
@@ -268,13 +257,13 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 	case "1":
 		if a.active != screenLogin {
-			a.cancelDMSubscription()
+			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenFeed
 			return a, a.loadFeedCmd(), true
 		}
 	case "2":
 		if a.active != screenLogin {
-			a.cancelDMSubscription()
+			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenProfile
 			return a, a.loadProfileCmd(), true
 		}
@@ -365,40 +354,13 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 	return a, nil, false
 }
 
-// handleCMail processes C-Mail and RTDB DM subscription messages.
+// handleCMail processes C-Mail messages. DM subscription lifecycle is managed
+// entirely within CMailModel; only the conversation list load and message send
+// are coordinated here.
 func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case convsLoadedMsg:
 		a.cmail = a.cmail.SetConversations(msg.convs)
-		return a, nil, true
-	case screens.SelectConvMsg:
-		a.cancelDMSubscription()
-		a.activeConvID = msg.ConversationID
-		return a, tea.Batch(
-			a.loadConvMessagesCmd(msg.ConversationID),
-			a.openDMSubscriptionCmd(msg.ConversationID),
-		), true
-	case dmSubscribedMsg:
-		// Stale guard: ignore if the user navigated away before subscription connected.
-		if msg.convID != a.activeConvID {
-			msg.sub.cancel()
-			return a, nil, true
-		}
-		a.dmSub = msg.sub
-		return a, waitForDM(a.dmSub), true
-	case msgsLoadedMsg:
-		if msg.convID == a.activeConvID {
-			a.cmail = a.cmail.SetConversationMessages(msg.convID, msg.msgs)
-		}
-		return a, nil, true
-	case dmReceivedMsg:
-		a.cmail = a.cmail.AppendMessage(msg.msg)
-		if a.dmSub != nil {
-			return a, waitForDM(a.dmSub), true
-		}
-		return a, nil, true
-	case dmStreamClosedMsg:
-		a.dmSub = nil
 		return a, nil, true
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
@@ -470,7 +432,7 @@ func (a App) tabIndex() int {
 // navigateTab moves the active tab by delta (-1 or +1), wrapping at the ends.
 func (a *App) navigateTab(delta int) tea.Cmd {
 	if a.active == screenCMail {
-		a.cancelDMSubscription()
+		a.cmail = a.cmail.CancelSubscription()
 	}
 	idx := (a.tabIndex() + delta + len(menuTabs)) % len(menuTabs)
 	a.active = menuTabs[idx].s
@@ -891,7 +853,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			hc.SetCurrentUID(user.ID)
 		}
-		a.cmail = screens.NewCMailModel(user.Username)
+		a.cmail = screens.NewCMailModel(user.Username, a.client)
 		// Persist the refresh token so subsequent launches auto-login.
 		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
@@ -931,7 +893,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			hc.SetCurrentUID(user.ID)
 		}
-		a.cmail = screens.NewCMailModel(user.Username)
+		a.cmail = screens.NewCMailModel(user.Username, a.client)
 		// Update savedAt so we know when the session was last used.
 		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
@@ -977,18 +939,6 @@ type replyCreatedMsg struct{ postID string }
 type postCreatedMsg struct{}
 type errMsg struct{ err error }
 
-// DM subscription message types.
-type dmSubscribedMsg struct {
-	convID string
-	sub    *dmSubscription
-}
-type dmReceivedMsg struct{ msg model.Message }
-type dmStreamClosedMsg struct{}
-type msgsLoadedMsg struct {
-	convID string
-	msgs   []model.Message
-}
-
 func (a *App) loadFeedCmd() tea.Cmd {
 	return func() tea.Msg {
 		posts, cursor, err := a.client.GetFeed("")
@@ -1006,48 +956,6 @@ func (a *App) loadFeedPageCmd(cursor string) tea.Cmd {
 			return errMsg{err}
 		}
 		return feedPageMsg{posts: posts, cursor: nextCursor}
-	}
-}
-
-// cancelDMSubscription stops any active RTDB subscription and clears the state.
-func (a *App) cancelDMSubscription() {
-	if a.dmSub != nil {
-		a.dmSub.cancel()
-		a.dmSub = nil
-	}
-	a.activeConvID = ""
-}
-
-// openDMSubscriptionCmd starts a live RTDB stream for convID.
-func (a *App) openDMSubscriptionCmd(convID string) tea.Cmd {
-	return func() tea.Msg {
-		ch, cancel, err := a.client.SubscribeDMs(context.Background(), convID)
-		if err != nil {
-			return errMsg{err}
-		}
-		return dmSubscribedMsg{convID: convID, sub: &dmSubscription{C: ch, cancel: cancel}}
-	}
-}
-
-// loadConvMessagesCmd fetches message history for a conversation.
-func (a *App) loadConvMessagesCmd(convID string) tea.Cmd {
-	return func() tea.Msg {
-		msgs, err := a.client.GetMessages(convID, 50)
-		if err != nil {
-			return errMsg{err}
-		}
-		return msgsLoadedMsg{convID: convID, msgs: msgs}
-	}
-}
-
-// waitForDM blocks on the subscription channel and returns the next message.
-func waitForDM(sub *dmSubscription) tea.Cmd {
-	return func() tea.Msg {
-		msg, ok := <-sub.C
-		if !ok {
-			return dmStreamClosedMsg{}
-		}
-		return dmReceivedMsg{msg: msg}
 	}
 }
 

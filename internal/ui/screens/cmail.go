@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
@@ -22,6 +24,36 @@ const (
 	FocusCMailLeft  CMailFocus = iota // conversation list pane
 	FocusCMailRight                   // chat + input pane
 )
+
+// dmSubscription holds the live RTDB channel and its cancellation function.
+type dmSubscription struct {
+	C      <-chan model.Message
+	cancel context.CancelFunc
+}
+
+// DM subscription message types — unexported, handled entirely within CMailModel.
+type dmSubscribedMsg struct {
+	convID string
+	sub    *dmSubscription
+}
+type dmReceivedMsg struct{ msg model.Message }
+type dmStreamClosedMsg struct{}
+type cmailMsgsLoadedMsg struct {
+	convID string
+	msgs   []model.Message
+}
+type cmailErrMsg struct{ err error }
+
+// waitForDM blocks on the subscription channel and returns the next message as a tea.Cmd.
+func waitForDM(sub *dmSubscription) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-sub.C
+		if !ok {
+			return dmStreamClosedMsg{}
+		}
+		return dmReceivedMsg{msg: msg}
+	}
+}
 
 // CMailModel is the screen model for C-Mail (private 1-on-1 conversations).
 type CMailModel struct {
@@ -38,6 +70,11 @@ type CMailModel struct {
 	sidebarWidth int            // inner content width, computed on WindowSizeMsg
 	width        int            // terminal width, stored for View()
 	loc          *time.Location // timezone for timestamp display; nil = UTC
+
+	// DM subscription state — managed entirely within CMailModel.
+	client       api.Client
+	dmSub        *dmSubscription
+	activeConvID string
 }
 
 // SendCMailMsg is emitted when the user sends a C-Mail message.
@@ -46,21 +83,62 @@ type SendCMailMsg struct {
 	Body           string
 }
 
-// SelectConvMsg is emitted when the user opens a conversation (Enter on left pane).
-// The app uses this to start the RTDB subscription for that conversation.
-type SelectConvMsg struct {
-	ConversationID string
-}
-
 // NewCMailModel creates a new CMailModel for the given authenticated user.
-func NewCMailModel(currentUser string) CMailModel {
+// Pass nil for client when using the mock or in tests.
+func NewCMailModel(currentUser string, client api.Client) CMailModel {
 	input := textinput.New()
 	input.Placeholder = "compose c-mail..."
 
 	return CMailModel{
 		input:       input,
 		currentUser: currentUser,
+		client:      client,
 		focusPane:   FocusCMailLeft,
+	}
+}
+
+// cancelDMSub stops any active RTDB subscription and clears subscription state.
+func (m CMailModel) cancelDMSub() CMailModel {
+	if m.dmSub != nil {
+		m.dmSub.cancel()
+		m.dmSub = nil
+	}
+	m.activeConvID = ""
+	return m
+}
+
+// CancelSubscription is called by App when navigating away from the C-Mail screen.
+func (m CMailModel) CancelSubscription() CMailModel {
+	return m.cancelDMSub()
+}
+
+// openDMSubscriptionCmd starts a live RTDB stream for convID.
+func (m CMailModel) openDMSubscriptionCmd(convID string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		ch, cancel, err := client.SubscribeDMs(context.Background(), convID)
+		if err != nil {
+			return cmailErrMsg{err}
+		}
+		return dmSubscribedMsg{convID: convID, sub: &dmSubscription{C: ch, cancel: cancel}}
+	}
+}
+
+// loadConvMessagesCmd fetches message history for a conversation.
+func (m CMailModel) loadConvMessagesCmd(convID string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		msgs, err := client.GetMessages(convID, 50)
+		if err != nil {
+			return cmailErrMsg{err}
+		}
+		return cmailMsgsLoadedMsg{convID: convID, msgs: msgs}
 	}
 }
 
@@ -131,6 +209,40 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 			m.viewport.GotoBottom()
 		}
 
+	// --- DM subscription messages ---
+
+	case dmSubscribedMsg:
+		// Stale guard: ignore if the user navigated away before subscription connected.
+		if msg.convID != m.activeConvID {
+			msg.sub.cancel()
+			return m, nil
+		}
+		m.dmSub = msg.sub
+		return m, waitForDM(m.dmSub)
+
+	case cmailMsgsLoadedMsg:
+		if m.activeConv != nil && msg.convID == m.activeConvID {
+			return m.SetConversationMessages(msg.convID, msg.msgs), nil
+		}
+		return m, nil
+
+	case dmReceivedMsg:
+		m = m.AppendMessage(msg.msg)
+		if m.dmSub != nil {
+			return m, waitForDM(m.dmSub)
+		}
+		return m, nil
+
+	case dmStreamClosedMsg:
+		m.dmSub = nil
+		return m, nil
+
+	case cmailErrMsg:
+		m.err = msg.err
+		return m, nil
+
+	// --- Key input ---
+
 	case tea.KeyMsg:
 		switch m.focusPane {
 		case FocusCMailLeft:
@@ -148,6 +260,8 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 			case "enter":
 				if len(m.conversations) > 0 {
 					conv := m.conversations[m.selectedConv]
+					m = m.cancelDMSub()
+					m.activeConvID = conv.ID
 					m.activeConv = &conv
 					if m.ready {
 						m.viewport.SetContent(m.renderMessages())
@@ -155,8 +269,10 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 					}
 					m.input.Focus()
 					m.focusPane = FocusCMailRight
-					convID := conv.ID
-					return m, func() tea.Msg { return SelectConvMsg{ConversationID: convID} }
+					return m, tea.Batch(
+						m.loadConvMessagesCmd(conv.ID),
+						m.openDMSubscriptionCmd(conv.ID),
+					)
 				}
 				return m, nil
 			case "tab":
