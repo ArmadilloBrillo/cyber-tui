@@ -372,25 +372,25 @@ Max message length: 2,048 characters.
 
 ## Rate Limits
 
-| Action | Per Minute | Per Day |
-|---|---|---|
-| Posts | 2 | 10 |
-| Replies | 3 | 10 |
-| Follows/Unfollows | 3 | 10 |
-| Notes | 3 | 20 |
-| Bookmarks | 5 | 50 |
-| Profile/Settings updates | 2 | 10 |
+| Action                   | Per Minute | Per Day |
+| ------------------------ | ---------- | ------- |
+| Posts                    | 2          | 10      |
+| Replies                  | 3          | 10      |
+| Follows/Unfollows        | 3          | 10      |
+| Notes                    | 3          | 20      |
+| Bookmarks                | 5          | 50      |
+| Profile/Settings updates | 2          | 10      |
 
 Read endpoints: 20–30 requests/min depending on endpoint.
 
 ## Content Limits
 
-| Field | Max |
-|---|---|
-| Post/reply/note content | 32,768 chars |
-| Chat/DM message | 2,048 chars |
-| Bio | 127 chars |
-| Display name | 64 chars |
-| Topics per post | 3 |
-| Username | 3–20 chars |
-| Attachments per post/reply | 1 |
+| Field                      | Max          |
+| -------------------------- | ------------ |
+| Post/reply/note content    | 32,768 chars |
+| Chat/DM message            | 2,048 chars  |
+| Bio                        | 127 chars    |
+| Display name               | 64 chars     |
+| Topics per post            | 3            |
+| Username                   | 3–20 chars   |
+| Attachments per post/reply | 1            |
