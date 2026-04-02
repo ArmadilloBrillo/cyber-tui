@@ -587,8 +587,10 @@ func TestFeed_ComposeSubmit_EmitsSubmitNewPostMsg(t *testing.T) {
 	if snp.Content != "hello world" {
 		t.Errorf("expected Content=%q, got %q", "hello world", snp.Content)
 	}
-	if len(snp.Topics) != 0 {
-		t.Errorf("expected no topics when tags input is empty, got %v", snp.Topics)
+	// The topics input is pre-filled with "tui", so a submit without editing
+	// should produce exactly that one topic.
+	if len(snp.Topics) != 1 || snp.Topics[0] != "tui" {
+		t.Errorf("expected topics=[tui] from pre-filled input, got %v", snp.Topics)
 	}
 }
 

@@ -161,225 +161,281 @@ func (a App) Init() tea.Cmd {
 
 // --- update ---
 
+// Update is the top-level Bubble Tea update function. It chains domain
+// handlers so each can claim the message and return early. WindowSizeMsg is
+// handled first and always falls through to delegateUpdate so the active
+// screen can also react to it.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
+	if m, ok := msg.(tea.WindowSizeMsg); ok {
+		a = a.applyWindowSize(m)
+		return a, a.delegateUpdate(msg)
+	}
+	if a2, cmd, ok := a.handleKeys(msg);       ok { return a2, cmd }
+	if a2, cmd, ok := a.handleAuth(msg);       ok { return a2, cmd }
+	if a2, cmd, ok := a.handleFeed(msg);       ok { return a2, cmd }
+	if a2, cmd, ok := a.handlePostDetail(msg); ok { return a2, cmd }
+	if a2, cmd, ok := a.handleChatrooms(msg);  ok { return a2, cmd }
+	if a2, cmd, ok := a.handleCMail(msg);      ok { return a2, cmd }
+	if a2, cmd, ok := a.handleProfile(msg);    ok { return a2, cmd }
+	if a2, cmd, ok := a.handleErr(msg);        ok { return a2, cmd }
+	return a, a.delegateUpdate(msg)
+}
 
-	case tea.WindowSizeMsg:
-		a.width = msg.Width
-		a.height = msg.Height
-		// Broadcast to all screens so their viewports initialise before they
-		// become active. The active screen gets a second update via delegateUpdate
-		// below, which is harmless (it just re-applies the same size).
-		a.feed, _ = a.feed.Update(msg)
-		a.chatrooms, _ = a.chatrooms.Update(msg)
-		a.cmail, _ = a.cmail.Update(msg)
-		a.postDetail, _ = a.postDetail.Update(msg)
-		a.profile, _ = a.profile.Update(msg)
+// applyWindowSize stores the new terminal dimensions and broadcasts the size
+// to all screens so their viewports initialise before they become active.
+func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
+	a.width = m.Width
+	a.height = m.Height
+	// Broadcast to all screens; the active screen gets a second update via
+	// delegateUpdate in Update, which is harmless (re-applies the same size).
+	a.feed, _ = a.feed.Update(m)
+	a.chatrooms, _ = a.chatrooms.Update(m)
+	a.cmail, _ = a.cmail.Update(m)
+	a.postDetail, _ = a.postDetail.Update(m)
+	a.profile, _ = a.profile.Update(m)
+	return a
+}
 
-	case tea.KeyMsg:
-		// Theme picker intercepts all keys while open.
-		if a.timezonePickerOpen {
-			return a.handleTimezonePickerKey(msg)
+// handleKeys processes tea.KeyMsg events: modal intercepts, focused-input
+// bypass, and all global keyboard shortcuts.
+func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
+	m, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return a, nil, false
+	}
+	// Modal overlays intercept all keys while open.
+	if a.timezonePickerOpen {
+		model, cmd := a.handleTimezonePickerKey(m)
+		return model.(App), cmd, true
+	}
+	if a.themePickerOpen {
+		model, cmd := a.handleThemePickerKey(m)
+		return model.(App), cmd, true
+	}
+	if a.helpModalOpen {
+		model, cmd := a.handleHelpModalKey(m)
+		return model.(App), cmd, true
+	}
+	// When a screen has a focused text input, let it consume all keys.
+	// ctrl+c is kept as a hard escape hatch.
+	if a.activeScreenHasFocusedInput() {
+		if m.String() == "ctrl+c" {
+			return a, tea.Quit, true
 		}
-		if a.themePickerOpen {
-			return a.handleThemePickerKey(msg)
+		return a, nil, false // fall through to delegateUpdate
+	}
+	switch m.String() {
+	case "t":
+		if a.active != screenLogin {
+			a.themePickerOpen = true
+			a.themePickerOrig = theme.CurrentName()
+			a.themePickerCursor = themeIndex(theme.CurrentName())
+			return a, nil, true
 		}
-		if a.helpModalOpen {
-			return a.handleHelpModalKey(msg)
+	case "z":
+		if a.active != screenLogin {
+			a.timezonePickerOpen = true
+			a.timezonePickerOrig = a.timezone
+			a.timezonePickerCursor = timezoneIndex(a.timezone)
+			return a, nil, true
 		}
-		// When any screen has a focused text input, let it consume all key events.
-		// Only ctrl+c is kept as a hard escape hatch.
-		if a.activeScreenHasFocusedInput() {
-			if msg.String() == "ctrl+c" {
-				return a, tea.Quit
-			}
-			break
-		}
-		switch msg.String() {
-		case "t":
-			if a.active != screenLogin {
-				a.themePickerOpen = true
-				a.themePickerOrig = theme.CurrentName()
-				a.themePickerCursor = themeIndex(theme.CurrentName())
-			}
-		case "z":
-			if a.active != screenLogin {
-				a.timezonePickerOpen = true
-				a.timezonePickerOrig = a.timezone
-				a.timezonePickerCursor = timezoneIndex(a.timezone)
-			}
-		case "v":
-			if a.active != screenLogin {
-				a.relaxed = !a.relaxed
-				a.feed = a.feed.SetRelaxed(a.relaxed)
-				a.postDetail = a.postDetail.SetRelaxed(a.relaxed)
-				relaxed := a.relaxed
-				return a, func() tea.Msg {
-					if sess, err := config.Load(); err == nil {
-						if relaxed {
-							sess.Density = "relaxed"
-						} else {
-							sess.Density = ""
-						}
-						_ = config.Save(sess)
+	case "v":
+		if a.active != screenLogin {
+			a.relaxed = !a.relaxed
+			a.feed = a.feed.SetRelaxed(a.relaxed)
+			a.postDetail = a.postDetail.SetRelaxed(a.relaxed)
+			relaxed := a.relaxed
+			return a, func() tea.Msg {
+				if sess, err := config.Load(); err == nil {
+					if relaxed {
+						sess.Density = "relaxed"
+					} else {
+						sess.Density = ""
 					}
-					return nil
+					_ = config.Save(sess)
 				}
-			}
-		case "?":
-			if a.active != screenLogin {
-				a.helpModalOpen = true
-			}
-		case "ctrl+c", "q":
-			if a.active != screenLogin {
-				return a, tea.Quit
-			}
-		// Number shortcuts — always jump directly
-		case "1":
-			if a.active != screenLogin {
-				a.cancelDMSubscription()
-				a.active = screenFeed
-				return a, a.loadFeedCmd()
-			}
-		case "2":
-			if a.active != screenLogin {
-				a.cancelDMSubscription()
-				a.active = screenProfile
-				return a, a.loadProfileCmd()
-			}
-		// Arrow navigation — left/right cycle tabs when no input is focused
-		case "left":
-			if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
-				return a, a.navigateTab(-1)
-			}
-		case "right":
-			if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
-				return a, a.navigateTab(+1)
-			}
+				return nil
+			}, true
 		}
+	case "?":
+		if a.active != screenLogin {
+			a.helpModalOpen = true
+			return a, nil, true
+		}
+	case "ctrl+c", "q":
+		if a.active != screenLogin {
+			return a, tea.Quit, true
+		}
+	case "1":
+		if a.active != screenLogin {
+			a.cancelDMSubscription()
+			a.active = screenFeed
+			return a, a.loadFeedCmd(), true
+		}
+	case "2":
+		if a.active != screenLogin {
+			a.cancelDMSubscription()
+			a.active = screenProfile
+			return a, a.loadProfileCmd(), true
+		}
+	case "left":
+		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
+			return a, a.navigateTab(-1), true
+		}
+	case "right":
+		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
+			return a, a.navigateTab(+1), true
+		}
+	}
+	return a, nil, false
+}
 
-	// --- Login flow ---
+// handleAuth processes login/registration flow messages.
+func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case screens.SubmitLoginMsg:
-		return a, a.loginCmd(msg.Email, msg.Password)
-
+		return a, a.loginCmd(msg.Email, msg.Password), true
 	case screens.LoginMsg:
-		return a, a.afterLoginCmd()
-
+		return a, a.afterLoginCmd(), true
 	case screens.LoginErrMsg:
 		var cmd tea.Cmd
 		a.login, cmd = a.login.Update(msg)
-		return a, cmd
+		return a, cmd, true
+	}
+	return a, nil, false
+}
 
-	// --- Feed ---
+// handleFeed processes feed and post-navigation messages.
+func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case feedLoadedMsg:
 		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
-
+		return a, nil, true
 	case feedPageMsg:
 		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
-
+		return a, nil, true
 	case screens.RefreshFeedMsg:
-		return a, a.loadFeedCmd()
-
+		return a, a.loadFeedCmd(), true
 	case screens.LoadMoreFeedMsg:
-		return a, a.loadFeedPageCmd(msg.Cursor)
-
+		return a, a.loadFeedPageCmd(msg.Cursor), true
 	case screens.ShowPostMsg:
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.Post)
-		return a, a.loadRepliesCmd(msg.Post.ID)
-
+		return a, a.loadRepliesCmd(msg.Post.ID), true
 	case screens.ShowPostForReplyMsg:
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.Post)
 		var openCmd tea.Cmd
 		a.postDetail, openCmd = a.postDetail.OpenCompose()
-		return a, tea.Batch(a.loadRepliesCmd(msg.Post.ID), openCmd)
+		return a, tea.Batch(a.loadRepliesCmd(msg.Post.ID), openCmd), true
+	}
+	return a, nil, false
+}
 
+// handlePostDetail processes post detail, reply, and compose messages.
+func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case repliesLoadedMsg:
 		a.postDetail = a.postDetail.SetReplies(msg.replies)
-
+		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Topics)
-
+		return a, a.createPostCmd(msg.Content, msg.Topics), true
 	case postCreatedMsg:
-		return a, a.loadFeedCmd()
-
+		return a, a.loadFeedCmd(), true
 	case screens.SubmitReplyMsg:
-		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID)
-
+		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID), true
 	case replyCreatedMsg:
-		return a, a.loadRepliesCmd(msg.postID)
-
+		return a, a.loadRepliesCmd(msg.postID), true
 	case screens.BackToFeedMsg:
 		a.active = screenFeed
+		return a, nil, true
+	}
+	return a, nil, false
+}
 
-	// --- Chatrooms ---
+// handleChatrooms processes chatroom messages.
+func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case roomsLoadedMsg:
 		a.chatrooms = a.chatrooms.SetRooms(msg.rooms)
-
+		return a, nil, true
 	case screens.SendRoomMessageMsg:
-		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body)
+		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
+	}
+	return a, nil, false
+}
 
-	// --- C-Mail ---
+// handleCMail processes C-Mail and RTDB DM subscription messages.
+func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case convsLoadedMsg:
 		a.cmail = a.cmail.SetConversations(msg.convs)
-
+		return a, nil, true
 	case screens.SelectConvMsg:
 		a.cancelDMSubscription()
 		a.activeConvID = msg.ConversationID
 		return a, tea.Batch(
 			a.loadConvMessagesCmd(msg.ConversationID),
 			a.openDMSubscriptionCmd(msg.ConversationID),
-		)
-
+		), true
 	case dmSubscribedMsg:
-		// Stale guard: ignore if user navigated away before subscription connected.
+		// Stale guard: ignore if the user navigated away before subscription connected.
 		if msg.convID != a.activeConvID {
 			msg.sub.cancel()
-			return a, nil
+			return a, nil, true
 		}
 		a.dmSub = msg.sub
-		return a, waitForDM(a.dmSub)
-
+		return a, waitForDM(a.dmSub), true
 	case msgsLoadedMsg:
 		if msg.convID == a.activeConvID {
 			a.cmail = a.cmail.SetConversationMessages(msg.convID, msg.msgs)
 		}
-
+		return a, nil, true
 	case dmReceivedMsg:
 		a.cmail = a.cmail.AppendMessage(msg.msg)
 		if a.dmSub != nil {
-			return a, waitForDM(a.dmSub)
+			return a, waitForDM(a.dmSub), true
 		}
-
+		return a, nil, true
 	case dmStreamClosedMsg:
 		a.dmSub = nil
-
+		return a, nil, true
 	case screens.SendCMailMsg:
-		return a, a.sendCMailCmd(msg.ConversationID, msg.Body)
+		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
+	}
+	return a, nil, false
+}
 
-	// --- Profile ---
+// handleProfile processes profile load and save messages.
+func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
 	case profileLoadedMsg:
 		a.currentUser = msg.user
 		a.profile = a.profile.SetUser(msg.user)
-
+		return a, nil, true
 	case screens.SaveProfileMsg:
-		return a, a.saveProfileCmd(msg.Bio)
-
-	case errMsg:
-		switch a.active {
-		case screenFeed:
-			a.feed = a.feed.SetError(msg.err)
-		case screenCMail:
-			a.cmail = a.cmail.SetError(msg.err)
-		case screenProfile:
-			a.profile = a.profile.SetError(msg.err)
-		case screenPostDetail:
-			a.postDetail = a.postDetail.SetError(msg.err)
-		}
+		return a, a.saveProfileCmd(msg.Bio), true
 	}
+	return a, nil, false
+}
 
-	return a, a.delegateUpdate(msg)
+// handleErr routes API error messages to the active screen's error display.
+func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
+	m, ok := msg.(errMsg)
+	if !ok {
+		return a, nil, false
+	}
+	switch a.active {
+	case screenFeed:
+		a.feed = a.feed.SetError(m.err)
+	case screenCMail:
+		a.cmail = a.cmail.SetError(m.err)
+	case screenProfile:
+		a.profile = a.profile.SetError(m.err)
+	case screenPostDetail:
+		a.postDetail = a.postDetail.SetError(m.err)
+	}
+	return a, nil, true
 }
 
 // activeScreenHasFocusedInput returns true when the current screen has a
