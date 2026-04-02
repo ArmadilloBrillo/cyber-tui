@@ -287,7 +287,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				return m, func() tea.Msg { return ShowPostForReplyMsg{Post: post} }
 			}
 		case "n":
-			m.topicsInput.SetValue("")
+			m.topicsInput.SetValue("tui")
 			m.topicsFocused = false
 			m.topicsInput.Blur()
 			var cmd tea.Cmd
