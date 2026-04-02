@@ -198,7 +198,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.active = screenFeed
 				return a, a.loadFeedCmd()
 			}
-		case "4":
+		case "2":
 			if a.active != screenLogin {
 				a.cancelDMSubscription()
 				a.active = screenProfile
