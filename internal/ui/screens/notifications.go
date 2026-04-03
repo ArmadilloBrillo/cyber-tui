@@ -267,10 +267,19 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 				return m, nil
 			}
 			n := visible[m.selectedIndex]
-			if n.TargetID == "" || n.Type == "poke" || n.Type == "new_follower" {
+			if n.Type == "poke" || n.Type == "new_follower" {
+				// No post to open — navigate to actor's profile and mark read.
+				m = m.MarkRead(n.ID)
+				notifID, username := n.ID, n.Actor.Username
+				return m, tea.Batch(
+					func() tea.Msg { return MarkNotifReadMsg{ID: notifID} },
+					func() tea.Msg { return ShowUserProfileMsg{Username: username} },
+				)
+			}
+			if n.TargetID == "" {
 				return m, nil
 			}
-			// Optimistically mark as read and navigate.
+			// Optimistically mark as read and navigate to post.
 			m = m.MarkRead(n.ID)
 			notifID, postID, replyID := n.ID, n.TargetID, n.ReplyID
 			return m, func() tea.Msg {
@@ -377,7 +386,7 @@ func notifSummary(n model.Notification) string {
 		}
 		return "replied in a thread you're following."
 	case "poke":
-		return `poked you. ¯\_(ツ)_/¯`
+		return `poked you ¯\_(ツ)_/¯`
 	default:
 		return n.Type
 	}

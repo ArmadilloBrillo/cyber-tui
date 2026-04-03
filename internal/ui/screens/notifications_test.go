@@ -45,6 +45,24 @@ func runKey(m NotificationsModel, key string) (NotificationsModel, tea.Msg) {
 	return m2, cmd()
 }
 
+// runKeyAll sends a single key and returns all resolved messages (handles tea.Batch).
+func runKeyAll(m NotificationsModel, key string) (NotificationsModel, []tea.Msg) {
+	m2, first := runKey(m, key)
+	if first == nil {
+		return m2, nil
+	}
+	if batch, ok := first.(tea.BatchMsg); ok {
+		var msgs []tea.Msg
+		for _, cmd := range batch {
+			if cmd != nil {
+				msgs = append(msgs, cmd())
+			}
+		}
+		return m2, msgs
+	}
+	return m2, []tea.Msg{first}
+}
+
 // --- navigation ---
 
 func TestNotifs_CursorDown_Increments(t *testing.T) {
@@ -221,21 +239,53 @@ func TestNotifs_Enter_Mention_EmitsShowPost(t *testing.T) {
 	}
 }
 
-func TestNotifs_Enter_Poke_IsNoop(t *testing.T) {
+func TestNotifs_Enter_Poke_EmitsShowUserProfileMsg(t *testing.T) {
 	notifs := []model.Notification{makeNotif("n1", "poke", "", false)}
 	m := initNotifs(notifs)
-	_, msg := runKey(m, "enter")
-	if msg != nil {
-		t.Errorf("expected nil for poke enter, got %T", msg)
+	m2, msgs := runKeyAll(m, "enter")
+	var gotProfile bool
+	var gotMarkRead bool
+	for _, msg := range msgs {
+		switch msg.(type) {
+		case ShowUserProfileMsg:
+			gotProfile = true
+		case MarkNotifReadMsg:
+			gotMarkRead = true
+		}
+	}
+	if !gotProfile {
+		t.Error("expected ShowUserProfileMsg for poke enter")
+	}
+	if !gotMarkRead {
+		t.Error("expected MarkNotifReadMsg for poke enter")
+	}
+	if m2.notifs[0].Read != true {
+		t.Error("poke notification should be marked read optimistically")
 	}
 }
 
-func TestNotifs_Enter_NewFollower_IsNoop(t *testing.T) {
+func TestNotifs_Enter_NewFollower_EmitsShowUserProfileMsg(t *testing.T) {
 	notifs := []model.Notification{makeNotif("n1", "new_follower", "", false)}
 	m := initNotifs(notifs)
-	_, msg := runKey(m, "enter")
-	if msg != nil {
-		t.Errorf("expected nil for new_follower enter, got %T", msg)
+	m2, msgs := runKeyAll(m, "enter")
+	var gotProfile bool
+	var gotMarkRead bool
+	for _, msg := range msgs {
+		switch msg.(type) {
+		case ShowUserProfileMsg:
+			gotProfile = true
+		case MarkNotifReadMsg:
+			gotMarkRead = true
+		}
+	}
+	if !gotProfile {
+		t.Error("expected ShowUserProfileMsg for new_follower enter")
+	}
+	if !gotMarkRead {
+		t.Error("expected MarkNotifReadMsg for new_follower enter")
+	}
+	if m2.notifs[0].Read != true {
+		t.Error("new_follower notification should be marked read optimistically")
 	}
 }
 

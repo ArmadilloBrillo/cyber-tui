@@ -105,8 +105,8 @@ type App struct {
 	// notification. After replies load, PostDetail scrolls to this reply, then it is cleared.
 	pendingReplyID string
 
-	// polledUnreadCount is kept fresh by a background poll; used in the tab badge
-	// when the notifications screen hasn't been loaded yet.
+	// polledUnreadCount is the single source of truth for the tab badge unread count.
+	// It is synced from: initial/page load, 60-second poll, m/M key, and enter on a notification.
 	polledUnreadCount int
 }
 
@@ -573,14 +573,8 @@ func (a App) renderTabBar() string {
 	var bar string
 	for _, t := range menuTabs {
 		label := t.label
-		if t.s == screenNotifications {
-			count := a.notifications.UnreadCount()
-			if !a.notifications.IsReady() && a.polledUnreadCount > 0 {
-				count = a.polledUnreadCount
-			}
-			if count > 0 {
-				label = fmt.Sprintf("%s (%d)", label, count)
-			}
+		if t.s == screenNotifications && a.polledUnreadCount > 0 {
+			label = fmt.Sprintf("%s (%d)", label, a.polledUnreadCount)
 		}
 		if a.active == t.s {
 			bar += theme.ActiveTab.Render(label)
@@ -794,6 +788,7 @@ func (a *App) refreshViewports() {
 	a.chatrooms, _ = a.chatrooms.Update(msg)
 	a.cmail, _ = a.cmail.Update(msg)
 	a.postDetail, _ = a.postDetail.Update(msg)
+	a.notifications, _ = a.notifications.Update(msg)
 }
 
 // renderThemePicker returns the centered overlay box for theme selection.
@@ -847,6 +842,14 @@ func (a App) renderHelpModal() string {
 		row("Ctrl+S", "send"),
 		row("Enter", "paragraph"),
 		row("Esc", "cancel"),
+		"",
+		sectionStyle.Render("notifications"),
+		row("↑↓ / jk", "navigate"),
+		row("enter", "open post / profile"),
+		row("m", "mark read"),
+		row("M", "mark all read"),
+		row("u", "toggle unread filter"),
+		row("p", "view profile"),
 	)
 	col2 := lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render("feed"),
@@ -866,14 +869,6 @@ func (a App) renderHelpModal() string {
 		row("e", "edit bio"),
 		row("esc", "back (other profiles)"),
 		row("←→", "tabs"),
-		"",
-		sectionStyle.Render("notifications"),
-		row("↑↓ / jk", "navigate"),
-		row("m", "mark read"),
-		row("M", "mark all read"),
-		row("u", "toggle unread filter"),
-		row("enter", "open post"),
-		row("p", "view profile"),
 	)
 	columns := lipgloss.JoinHorizontal(lipgloss.Top, col1, "    ", col2)
 	body := lipgloss.JoinVertical(lipgloss.Left,
@@ -1171,9 +1166,11 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case notifsLoadedMsg:
 		a.notifications = a.notifications.SetNotifs(msg.notifs, msg.cursor)
+		a.polledUnreadCount = a.notifications.UnreadCount()
 		return a, nil, true
 	case notifsPageMsg:
 		a.notifications = a.notifications.AppendNotifs(msg.notifs, msg.cursor)
+		a.polledUnreadCount = a.notifications.UnreadCount()
 		return a, nil, true
 	case screens.RefreshNotifsMsg:
 		return a, a.loadNotifsCmd(), true
@@ -1181,12 +1178,19 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadNotifsPageCmd(msg.Cursor), true
 	case screens.MarkNotifReadMsg:
 		// Optimistic update already applied in NotificationsModel.Update; fire API call.
+		if a.polledUnreadCount > 0 {
+			a.polledUnreadCount--
+		}
 		return a, a.markNotifReadCmd(msg.ID), true
 	case screens.MarkAllNotifsReadMsg:
 		// Optimistic update already applied in NotificationsModel.Update; fire API call.
+		a.polledUnreadCount = 0
 		return a, a.markAllNotifsReadCmd(), true
 	case screens.ShowNotificationPostMsg:
 		// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
+		if a.polledUnreadCount > 0 {
+			a.polledUnreadCount--
+		}
 		a.pendingReplyID = msg.ReplyID
 		return a, tea.Batch(a.markNotifReadCmd(msg.NotifID), a.loadPostAndShowCmd(msg.PostID)), true
 	case notifPostLoadedMsg:

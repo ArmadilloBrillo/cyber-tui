@@ -18,11 +18,11 @@ func TestSet_Cyber(t *testing.T) {
 
 func TestSet_C64(t *testing.T) {
 	Set("c64")
-	if ColorBackground != lipgloss.Color("#352879") {
-		t.Errorf("c64: ColorBackground = %q, want #352879", ColorBackground)
+	if ColorBackground != lipgloss.Color("#3535CE") {
+		t.Errorf("c64: ColorBackground = %q, want #3535CE", ColorBackground)
 	}
-	if ColorGreen != lipgloss.Color("#7869C4") {
-		t.Errorf("c64: ColorGreen (primary) = %q, want #7869C4", ColorGreen)
+	if ColorGreen != lipgloss.Color("#9490F5") {
+		t.Errorf("c64: ColorGreen (primary) = %q, want #9490F5", ColorGreen)
 	}
 }
 

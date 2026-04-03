@@ -57,7 +57,7 @@ var (
 
 	ActiveBorder = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(ColorGreen).
+		BorderForeground(ColorCyan).
 		Padding(0, 1)
 
 	StatusBar = lipgloss.NewStyle().
@@ -108,13 +108,13 @@ func setCyber() {
 // setC64 applies a Commodore 64-inspired palette: dark blue background,
 // light blue-purple text, white titles, C64 yellow highlights.
 func setC64() {
-	ColorGreen = lipgloss.Color("#7869C4")      // C64 light blue (primary text)
-	ColorDimGreen = lipgloss.Color("#4B3BA8")   // C64 dark blue (inactive)
+	ColorGreen = lipgloss.Color("#9490F5")      // C64 light blue-purple (primary text)
+	ColorDimGreen = lipgloss.Color("#5C5AC0")   // C64 medium blue (inactive/borders)
 	ColorCyan = lipgloss.Color("#FFFFFF")       // white (titles)
 	ColorYellow = lipgloss.Color("#F4D020")     // C64 yellow (highlights)
 	ColorRed = lipgloss.Color("#883932")        // C64 red (errors)
-	ColorBackground = lipgloss.Color("#352879") // C64 blue (background)
-	ColorMuted = lipgloss.Color("#5A4E99")      // dimmed blue (subtle text)
+	ColorBackground = lipgloss.Color("#3535CE") // C64 cobalt blue (background)
+	ColorMuted = lipgloss.Color("#6B69C4")      // dimmed blue-purple (subtle text)
 	ColorWhite = lipgloss.Color("#FFFFFF")
 	applyStyles()
 }
@@ -160,7 +160,7 @@ func applyStyles() {
 
 	ActiveBorder = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(ColorGreen).
+		BorderForeground(ColorCyan).
 		Padding(0, 1)
 
 	StatusBar = lipgloss.NewStyle().
