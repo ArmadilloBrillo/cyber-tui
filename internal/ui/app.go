@@ -431,16 +431,16 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case profileLoadedMsg:
 		a.currentUser = msg.user
-		a.profile = a.profile.SetUser(msg.user)
+		a.profile = a.profile.SetUser(msg.user).SetCanGoBack(false)
 		return a, nil, true
 	case userProfileLoadedMsg:
 		isOwn := msg.user.Username == a.currentUser.Username
-		a.profile = a.profile.SetUser(msg.user).SetReadOnly(!isOwn)
+		a.profile = a.profile.SetUser(msg.user).SetReadOnly(!isOwn).SetCanGoBack(true)
 		a.active = screenProfile
 		return a, nil, true
 	case screens.BackFromProfileMsg:
 		a.active = a.profileReturn
-		a.profile = a.profile.SetReadOnly(false)
+		a.profile = a.profile.SetReadOnly(false).SetCanGoBack(false)
 		return a, nil, true
 	case screens.SaveProfileMsg:
 		return a, a.saveProfileCmd(msg.Bio), true

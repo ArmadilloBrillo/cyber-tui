@@ -17,11 +17,17 @@ type ProfileModel struct {
 	width    int
 	err      error
 	saved    bool
-	readOnly bool
+	readOnly  bool
+	canGoBack bool
 }
 
 func (m ProfileModel) SetReadOnly(readOnly bool) ProfileModel {
 	m.readOnly = readOnly
+	return m
+}
+
+func (m ProfileModel) SetCanGoBack(v bool) ProfileModel {
+	m.canGoBack = v
 	return m
 }
 
@@ -74,7 +80,7 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "esc":
-			if m.readOnly {
+			if m.readOnly || m.canGoBack {
 				return m, func() tea.Msg { return BackFromProfileMsg{} }
 			}
 		case "e":
@@ -130,9 +136,12 @@ func (m ProfileModel) View() string {
 	}
 
 	var hint string
-	if m.readOnly {
+	switch {
+	case m.readOnly:
 		hint = theme.Subtle.Render("esc · back")
-	} else {
+	case m.canGoBack:
+		hint = theme.Subtle.Render("esc · back   e · edit bio")
+	default:
 		hint = theme.Subtle.Render("e · edit bio")
 	}
 

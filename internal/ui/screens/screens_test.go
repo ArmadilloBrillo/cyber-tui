@@ -706,6 +706,41 @@ func TestProfile_ReadOnly_EKeyIsNoop(t *testing.T) {
 	}
 }
 
+func TestProfile_CanGoBack_EscEmitsBackFromProfileMsg(t *testing.T) {
+	// Own profile opened via 'p': readOnly=false but canGoBack=true.
+	m := screens.NewProfileModel()
+	m = m.SetCanGoBack(true)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected a command on ESC when canGoBack=true")
+	}
+	msg := cmd()
+	_, ok := msg.(screens.BackFromProfileMsg)
+	if !ok {
+		t.Fatalf("expected BackFromProfileMsg, got %T", msg)
+	}
+}
+
+func TestProfile_CanGoBack_EKeyStillOpensCompose(t *testing.T) {
+	// Own profile via 'p': editing should still be available.
+	m := screens.NewProfileModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetCanGoBack(true) // readOnly stays false
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if !m.ComposeActive() {
+		t.Error("expected compose to open with canGoBack=true and readOnly=false")
+	}
+}
+
+func TestProfile_Default_EscIsNoop(t *testing.T) {
+	// Tab 3 own profile: neither readOnly nor canGoBack — ESC does nothing.
+	m := screens.NewProfileModel()
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Errorf("expected no command on ESC in default profile, got %T", cmd)
+	}
+}
+
 func TestFeed_N_NotActiveInPostDetail(t *testing.T) {
 	// PostDetail should not react to 'n' — compose stays closed.
 	m := postDetailReady()
