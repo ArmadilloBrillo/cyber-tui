@@ -81,6 +81,9 @@ func (m ChatroomsModel) Init() tea.Cmd { return textinput.Blink }
 
 func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case SharedConfigMsg:
+		return m.SetLocation(msg.Loc), nil
+
 	case tea.WindowSizeMsg:
 		h := msg.Height - theme.ChromeHeight - chatroomLocalChrome
 		if !m.ready {

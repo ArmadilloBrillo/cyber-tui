@@ -209,6 +209,9 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 			m.viewport.GotoBottom()
 		}
 
+	case SharedConfigMsg:
+		return m.SetLocation(msg.Loc), nil
+
 	// --- DM subscription messages ---
 
 	case dmSubscribedMsg:

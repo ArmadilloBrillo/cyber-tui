@@ -196,6 +196,11 @@ func (m PostDetailModel) Init() tea.Cmd { return nil }
 
 func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case SharedConfigMsg:
+		m = m.SetRelaxed(msg.Relaxed)
+		m = m.SetLocation(msg.Loc)
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height

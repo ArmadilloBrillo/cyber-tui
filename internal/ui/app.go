@@ -170,6 +170,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, a.delegateUpdate(msg)
 }
 
+// broadcastConfig pushes the current display settings to all screens.
+// Call this whenever loc, relaxed, or dimensions change outside of a
+// WindowSizeMsg (e.g. after login, timezone change, or density toggle).
+// Adding a new screen only requires handling SharedConfigMsg in that
+// screen's Update — no changes here are needed.
+func (a *App) broadcastConfig() {
+	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed}
+	a.feed, _ = a.feed.Update(msg)
+	a.chatrooms, _ = a.chatrooms.Update(msg)
+	a.cmail, _ = a.cmail.Update(msg)
+	a.postDetail, _ = a.postDetail.Update(msg)
+	a.profile, _ = a.profile.Update(msg)
+}
+
 // applyWindowSize stores the new terminal dimensions and broadcasts the size
 // to all screens so their viewports initialise before they become active.
 func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
@@ -231,8 +245,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	case "v":
 		if a.active != screenLogin {
 			a.relaxed = !a.relaxed
-			a.feed = a.feed.SetRelaxed(a.relaxed)
-			a.postDetail = a.postDetail.SetRelaxed(a.relaxed)
+			a.broadcastConfig()
 			relaxed := a.relaxed
 			return a, func() tea.Msg {
 				if sess, err := config.Load(); err == nil {
@@ -646,10 +659,7 @@ func (a App) handleTimezonePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.timezone = selected
 		a.loc = config.ParseTimezoneLabel(selected)
 		a.timezonePickerOpen = false
-		a.feed = a.feed.SetLocation(a.loc)
-		a.postDetail = a.postDetail.SetLocation(a.loc)
-		a.cmail = a.cmail.SetLocation(a.loc)
-		a.chatrooms = a.chatrooms.SetLocation(a.loc)
+		a.broadcastConfig()
 		a.refreshViewports()
 		return a, tea.Batch(
 			refreshCmd,
@@ -914,12 +924,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 func (a *App) afterLoginCmd() tea.Cmd {
 	a.active = screenFeed
 	a.profile = a.profile.SetUser(a.currentUser)
-	a.feed = a.feed.SetRelaxed(a.relaxed)
-	a.postDetail = a.postDetail.SetRelaxed(a.relaxed)
-	a.feed = a.feed.SetLocation(a.loc)
-	a.postDetail = a.postDetail.SetLocation(a.loc)
-	a.cmail = a.cmail.SetLocation(a.loc)
-	a.chatrooms = a.chatrooms.SetLocation(a.loc)
+	a.broadcastConfig()
 	return tea.Batch(a.loadFeedCmd(), a.loadProfileCmd())
 }
 

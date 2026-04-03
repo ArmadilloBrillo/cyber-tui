@@ -43,6 +43,14 @@ func (m ProfileModel) Init() tea.Cmd { return nil }
 
 func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case SharedConfigMsg:
+		w := msg.Width
+		if w > 80 {
+			w = 80
+		}
+		m.compose = m.compose.SetWidth(w)
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		w := msg.Width
