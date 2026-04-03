@@ -24,6 +24,7 @@ const (
 	screenCMail
 	screenProfile
 	screenPostDetail
+	screenNotifications
 )
 
 type focusTarget int
@@ -43,6 +44,7 @@ var menuTabs = []struct {
 	s     screen
 }{
 	{"feed", screenFeed},
+	{"notifications", screenNotifications},
 	{"profile", screenProfile},
 }
 
@@ -85,12 +87,27 @@ type App struct {
 	timezone string
 	loc      *time.Location
 
-	login      screens.LoginModel
-	feed       screens.FeedModel
-	chatrooms  screens.ChatroomsModel
-	cmail      screens.CMailModel
-	profile    screens.ProfileModel
-	postDetail screens.PostDetailModel
+	login         screens.LoginModel
+	feed          screens.FeedModel
+	chatrooms     screens.ChatroomsModel
+	cmail         screens.CMailModel
+	profile       screens.ProfileModel
+	postDetail    screens.PostDetailModel
+	notifications screens.NotificationsModel
+
+	// postDetailReturn is the screen to go back to when ESC is pressed in PostDetail.
+	postDetailReturn screen
+
+	// profileReturn is the screen to go back to when ESC is pressed in a read-only profile.
+	profileReturn screen
+
+	// pendingReplyID is set when navigating to PostDetail from a reply/thread_reply
+	// notification. After replies load, PostDetail scrolls to this reply, then it is cleared.
+	pendingReplyID string
+
+	// polledUnreadCount is kept fresh by a background poll; used in the tab badge
+	// when the notifications screen hasn't been loaded yet.
+	polledUnreadCount int
 }
 
 func NewApp(client api.Client) App {
@@ -99,12 +116,13 @@ func NewApp(client api.Client) App {
 		active:     screenLogin,
 		focus:      focusMenu,
 		loc:        time.UTC,
-		login:      screens.NewLoginModel(""),
-		feed:       screens.NewFeedModel(),
-		chatrooms:  screens.NewChatroomsModel(),
-		cmail:      screens.NewCMailModel("", client),
-		profile:    screens.NewProfileModel(),
-		postDetail: screens.NewPostDetailModel(),
+		login:         screens.NewLoginModel(""),
+		feed:          screens.NewFeedModel(),
+		chatrooms:     screens.NewChatroomsModel(),
+		cmail:         screens.NewCMailModel("", client),
+		profile:       screens.NewProfileModel(),
+		postDetail:    screens.NewPostDetailModel(),
+		notifications: screens.NewNotificationsModel(),
 	}
 }
 
@@ -165,8 +183,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handlePostDetail(msg); ok { return a2, cmd }
 	if a2, cmd, ok := a.handleChatrooms(msg);  ok { return a2, cmd }
 	if a2, cmd, ok := a.handleCMail(msg);      ok { return a2, cmd }
-	if a2, cmd, ok := a.handleProfile(msg);    ok { return a2, cmd }
-	if a2, cmd, ok := a.handleErr(msg);        ok { return a2, cmd }
+	if a2, cmd, ok := a.handleProfile(msg);        ok { return a2, cmd }
+	if a2, cmd, ok := a.handleNotifications(msg); ok { return a2, cmd }
+	if a2, cmd, ok := a.handleErr(msg);            ok { return a2, cmd }
 	return a, a.delegateUpdate(msg)
 }
 
@@ -182,6 +201,7 @@ func (a *App) broadcastConfig() {
 	a.cmail, _ = a.cmail.Update(msg)
 	a.postDetail, _ = a.postDetail.Update(msg)
 	a.profile, _ = a.profile.Update(msg)
+	a.notifications, _ = a.notifications.Update(msg)
 }
 
 // applyWindowSize stores the new terminal dimensions and broadcasts the size
@@ -196,6 +216,7 @@ func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
 	a.cmail, _ = a.cmail.Update(m)
 	a.postDetail, _ = a.postDetail.Update(m)
 	a.profile, _ = a.profile.Update(m)
+	a.notifications, _ = a.notifications.Update(m)
 	return a
 }
 
@@ -277,6 +298,12 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	case "2":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenNotifications
+			return a, a.loadNotifsCmd(), true
+		}
+	case "3":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenProfile
 			return a, a.loadProfileCmd(), true
 		}
@@ -321,15 +348,23 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.LoadMoreFeedMsg:
 		return a, a.loadFeedPageCmd(msg.Cursor), true
 	case screens.ShowPostMsg:
+		a.postDetailReturn = screenFeed
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.Post)
 		return a, a.loadRepliesCmd(msg.Post.ID), true
 	case screens.ShowPostForReplyMsg:
+		a.postDetailReturn = screenFeed
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.Post)
 		var openCmd tea.Cmd
 		a.postDetail, openCmd = a.postDetail.OpenCompose()
 		return a, tea.Batch(a.loadRepliesCmd(msg.Post.ID), openCmd), true
+	case screens.ShowUserProfileMsg:
+		if a.active != screenFeed {
+			return a, nil, false
+		}
+		a.profileReturn = screenFeed
+		return a, a.loadUserProfileCmd(msg.Username), true
 	}
 	return a, nil, false
 }
@@ -339,6 +374,10 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case repliesLoadedMsg:
 		a.postDetail = a.postDetail.SetReplies(msg.replies)
+		if a.pendingReplyID != "" {
+			a.postDetail = a.postDetail.ScrollToReply(a.pendingReplyID)
+			a.pendingReplyID = ""
+		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
 		return a, a.createPostCmd(msg.Content, msg.Topics), true
@@ -349,8 +388,14 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case replyCreatedMsg:
 		return a, a.loadRepliesCmd(msg.postID), true
 	case screens.BackToFeedMsg:
-		a.active = screenFeed
+		a.active = a.postDetailReturn
 		return a, nil, true
+	case screens.ShowUserProfileMsg:
+		if a.active != screenPostDetail {
+			return a, nil, false
+		}
+		a.profileReturn = screenPostDetail
+		return a, a.loadUserProfileCmd(msg.Username), true
 	}
 	return a, nil, false
 }
@@ -388,6 +433,15 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.currentUser = msg.user
 		a.profile = a.profile.SetUser(msg.user)
 		return a, nil, true
+	case userProfileLoadedMsg:
+		isOwn := msg.user.Username == a.currentUser.Username
+		a.profile = a.profile.SetUser(msg.user).SetReadOnly(!isOwn)
+		a.active = screenProfile
+		return a, nil, true
+	case screens.BackFromProfileMsg:
+		a.active = a.profileReturn
+		a.profile = a.profile.SetReadOnly(false)
+		return a, nil, true
 	case screens.SaveProfileMsg:
 		return a, a.saveProfileCmd(msg.Bio), true
 	}
@@ -409,6 +463,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.profile = a.profile.SetError(m.err)
 	case screenPostDetail:
 		a.postDetail = a.postDetail.SetError(m.err)
+	case screenNotifications:
+		a.notifications = a.notifications.SetError(m.err)
 	}
 	return a, nil, true
 }
@@ -458,6 +514,8 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 		return a.loadConvsCmd()
 	case screenProfile:
 		return a.loadProfileCmd()
+	case screenNotifications:
+		return a.loadNotifsCmd()
 	}
 	return nil
 }
@@ -477,6 +535,8 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 		a.profile, cmd = a.profile.Update(msg)
 	case screenPostDetail:
 		a.postDetail, cmd = a.postDetail.Update(msg)
+	case screenNotifications:
+		a.notifications, cmd = a.notifications.Update(msg)
 	}
 	return cmd
 }
@@ -512,10 +572,20 @@ func (a App) View() string {
 func (a App) renderTabBar() string {
 	var bar string
 	for _, t := range menuTabs {
+		label := t.label
+		if t.s == screenNotifications {
+			count := a.notifications.UnreadCount()
+			if !a.notifications.IsReady() && a.polledUnreadCount > 0 {
+				count = a.polledUnreadCount
+			}
+			if count > 0 {
+				label = fmt.Sprintf("%s (%d)", label, count)
+			}
+		}
 		if a.active == t.s {
-			bar += theme.ActiveTab.Render(t.label)
+			bar += theme.ActiveTab.Render(label)
 		} else {
-			bar += theme.Tab.Render(t.label)
+			bar += theme.Tab.Render(label)
 		}
 	}
 	return bar
@@ -533,6 +603,8 @@ func (a App) renderActiveScreen() string {
 		return a.profile.View()
 	case screenPostDetail:
 		return a.postDetail.View()
+	case screenNotifications:
+		return a.notifications.View()
 	}
 	return ""
 }
@@ -560,13 +632,13 @@ func (a App) renderStatusBar() string {
 		if a.feed.ComposeActive() {
 			hintStr = "  Ctrl+S · send   Tab · topics   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  ? · help"
+			hintStr = "  p · profile   ? · help"
 		}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
 			hintStr = "  Ctrl+S · send   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  ? · help"
+			hintStr = "  p · profile   ? · help"
 		}
 	case screenProfile:
 		if a.profile.ComposeActive() {
@@ -574,6 +646,8 @@ func (a App) renderStatusBar() string {
 		} else {
 			hintStr = "  ? · help"
 		}
+	case screenNotifications:
+		hintStr = "  m · mark read   M · mark all   u · unread filter   enter · open   p · profile   ? · help"
 	default:
 		hintStr = "  ? · help"
 	}
@@ -762,7 +836,7 @@ func (a App) renderHelpModal() string {
 	}
 	col1 := lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render("global"),
-		row("1 / 2", "feed / profile"),
+		row("1 / 2 / 3", "feed / notifs / profile"),
 		row("←→", "cycle tabs"),
 		row("t", "theme"),
 		row("z", "timezone"),
@@ -778,17 +852,28 @@ func (a App) renderHelpModal() string {
 		sectionStyle.Render("feed"),
 		row("↑↓ / jk", "navigate"),
 		row("enter", "open post"),
+		row("p", "view profile"),
 		row("n", "new post"),
 		row("r", "reply"),
 		"",
 		sectionStyle.Render("post detail"),
 		row("↑↓ / jk", "scroll / navigate"),
+		row("p", "view profile"),
 		row("r", "reply"),
 		row("esc", "back"),
 		"",
 		sectionStyle.Render("profile"),
 		row("e", "edit bio"),
+		row("esc", "back (other profiles)"),
 		row("←→", "tabs"),
+		"",
+		sectionStyle.Render("notifications"),
+		row("↑↓ / jk", "navigate"),
+		row("m", "mark read"),
+		row("M", "mark all read"),
+		row("u", "toggle unread filter"),
+		row("enter", "open post"),
+		row("p", "view profile"),
 	)
 	columns := lipgloss.JoinHorizontal(lipgloss.Top, col1, "    ", col2)
 	body := lipgloss.JoinVertical(lipgloss.Left,
@@ -925,7 +1010,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	a.active = screenFeed
 	a.profile = a.profile.SetUser(a.currentUser)
 	a.broadcastConfig()
-	return tea.Batch(a.loadFeedCmd(), a.loadProfileCmd())
+	return tea.Batch(a.loadFeedCmd(), a.loadProfileCmd(), a.schedulePollCmd())
 }
 
 type feedLoadedMsg struct {
@@ -939,10 +1024,22 @@ type feedPageMsg struct {
 type roomsLoadedMsg struct{ rooms []model.Room }
 type convsLoadedMsg struct{ convs []model.Conversation }
 type profileLoadedMsg struct{ user model.User }
+type userProfileLoadedMsg struct{ user model.User }
 type repliesLoadedMsg struct{ replies []model.Reply }
 type replyCreatedMsg struct{ postID string }
 type postCreatedMsg struct{}
 type errMsg struct{ err error }
+type notifsLoadedMsg struct {
+	notifs []model.Notification
+	cursor string
+}
+type notifsPageMsg struct {
+	notifs []model.Notification
+	cursor string
+}
+type notifPostLoadedMsg struct{ post model.Post }
+type pollUnreadTickMsg struct{}
+type unreadCountMsg struct{ count int }
 
 func (a *App) loadFeedCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -991,6 +1088,20 @@ func (a *App) loadProfileCmd() tea.Cmd {
 			return errMsg{err}
 		}
 		return profileLoadedMsg{user}
+	}
+}
+
+func (a *App) loadUserProfileCmd(username string) tea.Cmd {
+	return func() tea.Msg {
+		// Skip the API call if this is the logged-in user's own profile.
+		if username == a.currentUser.Username {
+			return userProfileLoadedMsg{user: a.currentUser}
+		}
+		user, err := a.client.GetProfile(username)
+		if err != nil {
+			return errMsg{err}
+		}
+		return userProfileLoadedMsg{user: user}
 	}
 }
 
@@ -1050,5 +1161,114 @@ func (a *App) saveProfileCmd(bio string) tea.Cmd {
 		}
 		a.currentUser.Bio = bio
 		return profileLoadedMsg{a.currentUser}
+	}
+}
+
+// --- notifications ---
+
+// handleNotifications processes notification load, mark-read, jump-to-post, and poll messages.
+func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case notifsLoadedMsg:
+		a.notifications = a.notifications.SetNotifs(msg.notifs, msg.cursor)
+		return a, nil, true
+	case notifsPageMsg:
+		a.notifications = a.notifications.AppendNotifs(msg.notifs, msg.cursor)
+		return a, nil, true
+	case screens.RefreshNotifsMsg:
+		return a, a.loadNotifsCmd(), true
+	case screens.LoadMoreNotifsMsg:
+		return a, a.loadNotifsPageCmd(msg.Cursor), true
+	case screens.MarkNotifReadMsg:
+		// Optimistic update already applied in NotificationsModel.Update; fire API call.
+		return a, a.markNotifReadCmd(msg.ID), true
+	case screens.MarkAllNotifsReadMsg:
+		// Optimistic update already applied in NotificationsModel.Update; fire API call.
+		return a, a.markAllNotifsReadCmd(), true
+	case screens.ShowNotificationPostMsg:
+		// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
+		a.pendingReplyID = msg.ReplyID
+		return a, tea.Batch(a.markNotifReadCmd(msg.NotifID), a.loadPostAndShowCmd(msg.PostID)), true
+	case notifPostLoadedMsg:
+		a.postDetailReturn = screenNotifications
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.post)
+		return a, a.loadRepliesCmd(msg.post.ID), true
+	case screens.ShowUserProfileMsg:
+		if a.active != screenNotifications {
+			return a, nil, false
+		}
+		a.profileReturn = screenNotifications
+		return a, a.loadUserProfileCmd(msg.Username), true
+	case pollUnreadTickMsg:
+		return a, tea.Batch(a.fetchUnreadCountCmd(), a.schedulePollCmd()), true
+	case unreadCountMsg:
+		a.polledUnreadCount = msg.count
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+func (a *App) loadNotifsCmd() tea.Cmd {
+	return func() tea.Msg {
+		notifs, cursor, err := a.client.GetNotifications("")
+		if err != nil {
+			return errMsg{err}
+		}
+		return notifsLoadedMsg{notifs: notifs, cursor: cursor}
+	}
+}
+
+func (a *App) loadNotifsPageCmd(cursor string) tea.Cmd {
+	return func() tea.Msg {
+		notifs, nextCursor, err := a.client.GetNotifications(cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return notifsPageMsg{notifs: notifs, cursor: nextCursor}
+	}
+}
+
+func (a *App) markNotifReadCmd(id string) tea.Cmd {
+	return func() tea.Msg {
+		_ = a.client.MarkNotificationRead(id) // fire-and-forget; UI already updated
+		return nil
+	}
+}
+
+func (a *App) markAllNotifsReadCmd() tea.Cmd {
+	return func() tea.Msg {
+		_ = a.client.MarkAllNotificationsRead() // fire-and-forget; UI already updated
+		return nil
+	}
+}
+
+func (a *App) schedulePollCmd() tea.Cmd {
+	return tea.Tick(60*time.Second, func(time.Time) tea.Msg { return pollUnreadTickMsg{} })
+}
+
+func (a *App) fetchUnreadCountCmd() tea.Cmd {
+	return func() tea.Msg {
+		notifs, _, err := a.client.GetNotifications("")
+		if err != nil {
+			return nil
+		}
+		count := 0
+		for _, n := range notifs {
+			if !n.Read {
+				count++
+			}
+		}
+		return unreadCountMsg{count}
+	}
+}
+
+func (a *App) loadPostAndShowCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		post, err := a.client.GetPost(postID)
+		if err != nil {
+			return errMsg{err}
+		}
+		return notifPostLoadedMsg{post: post}
 	}
 }

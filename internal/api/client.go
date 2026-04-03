@@ -113,6 +113,23 @@ type createReplyResponseData struct {
 	ReplyID string `json:"replyId"`
 }
 
+type wireNotificationMetadata struct {
+	ReplyID        string `json:"replyId"`
+	AuthorUsername string `json:"authorUsername"`
+}
+
+type wireNotification struct {
+	ID            string                     `json:"id"`
+	Type          string                     `json:"type"`
+	Read          bool                       `json:"read"`
+	CreatedAt     string                     `json:"createdAt"`
+	ActorID       string                     `json:"actorId"`
+	ActorUsername string                     `json:"actorUsername"`
+	TargetID      string                     `json:"targetId"`
+	TargetType    string                     `json:"targetType"`
+	Metadata      wireNotificationMetadata   `json:"metadata"`
+}
+
 type updateProfileRequest struct {
 	Bio          *string `json:"bio,omitempty"`
 	DisplayName  *string `json:"displayName,omitempty"`
@@ -347,6 +364,21 @@ func wireUserToModel(w wireUser) model.User {
 	}
 }
 
+func wireNotificationToModel(w wireNotification) model.Notification {
+	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	return model.Notification{
+		ID:         w.ID,
+		Type:       w.Type,
+		Read:       w.Read,
+		CreatedAt:  t,
+		Actor:      model.NotificationActor{ID: w.ActorID, Username: w.ActorUsername},
+		TargetID:   w.TargetID,
+		TargetType: w.TargetType,
+		ReplyID:              w.Metadata.ReplyID,
+		ThreadAuthorUsername: w.Metadata.AuthorUsername,
+	}
+}
+
 // --- Client interface implementation ---
 
 func (c *HTTPClient) Login(email, password string) (model.Tokens, error) {
@@ -452,6 +484,18 @@ func (c *HTTPClient) CreateReply(postID, content, parentReplyID string) (model.R
 	return model.Reply{ID: data.ReplyID, PostID: postID, Content: content, ParentReplyID: parentReplyID}, nil
 }
 
+func (c *HTTPClient) GetPost(postID string) (model.Post, error) {
+	env, err := c.doRequest("GET", "/v1/posts/"+url.PathEscape(postID), nil)
+	if err != nil {
+		return model.Post{}, err
+	}
+	var wire wirePost
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return model.Post{}, err
+	}
+	return wirePostToModel(wire), nil
+}
+
 func (c *HTTPClient) GetOwnProfile() (model.User, error) {
 	env, err := c.doRequest("GET", "/v1/users/me", nil)
 	if err != nil {
@@ -484,6 +528,38 @@ func (c *HTTPClient) UpdateProfile(update model.ProfileUpdate) error {
 		WebsiteUrl:   update.WebsiteUrl,
 		LocationName: update.LocationName,
 	})
+	return err
+}
+
+// --- Notifications ---
+
+func (c *HTTPClient) GetNotifications(cursor string) ([]model.Notification, string, error) {
+	path := "/v1/notifications?limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []wireNotification
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	notifs := make([]model.Notification, len(wire))
+	for i, w := range wire {
+		notifs[i] = wireNotificationToModel(w)
+	}
+	return notifs, env.Cursor, nil
+}
+
+func (c *HTTPClient) MarkNotificationRead(id string) error {
+	_, err := c.doRequest("PATCH", "/v1/notifications/"+url.PathEscape(id), nil)
+	return err
+}
+
+func (c *HTTPClient) MarkAllNotificationsRead() error {
+	_, err := c.doRequest("POST", "/v1/notifications/read-all", nil)
 	return err
 }
 

@@ -74,8 +74,35 @@ func (m PostDetailModel) SetReplies(replies []model.Reply) PostDetailModel {
 	return m
 }
 
+// ScrollToReply selects and scrolls to the reply with the given ID.
+// If the ID is not found or empty, the model is returned unchanged.
+func (m PostDetailModel) ScrollToReply(replyID string) PostDetailModel {
+	if replyID == "" {
+		return m
+	}
+	for i, r := range m.replies {
+		if r.ID == replyID {
+			m.selectedReply = i
+			if m.ready {
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+			}
+			return m
+		}
+	}
+	return m
+}
+
 // Loading reports whether replies are still being fetched.
 func (m PostDetailModel) Loading() bool { return m.loading }
+
+// SelectedReplyID returns the ID of the currently selected reply, or "" if the post itself is selected.
+func (m PostDetailModel) SelectedReplyID() string {
+	if m.selectedReply >= 0 && m.selectedReply < len(m.replies) {
+		return m.replies[m.selectedReply].ID
+	}
+	return ""
+}
 
 // Ready reports whether the viewport has been initialised (i.e. a WindowSizeMsg was received).
 func (m PostDetailModel) Ready() bool { return m.ready }
@@ -258,6 +285,17 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			var cmd tea.Cmd
 			m, cmd = m.OpenCompose()
 			return m, cmd
+		case "p":
+			if m.post.ID == "" {
+				return m, nil
+			}
+			var username string
+			if m.selectedReply >= 0 && m.selectedReply < len(m.replies) {
+				username = m.replies[m.selectedReply].AuthorUsername
+			} else {
+				username = m.post.AuthorUsername
+			}
+			return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 		case "up", "k":
 			if m.selectedReply >= 0 {
 				// Reply is selected — scroll through it first (pager behaviour).

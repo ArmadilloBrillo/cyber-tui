@@ -79,3 +79,26 @@ type Room struct {
 	Description string
 	Members     int
 }
+
+// NotificationActor is the user who triggered the notification.
+type NotificationActor struct {
+	ID       string
+	Username string
+}
+
+// Notification maps to the shape returned by GET /v1/notifications.
+// TargetID is always a post ID for navigable notifications.
+// TargetType describes the notification category ("post" or "reply"); empty for poke/new_follower.
+// ReplyID is set from metadata.replyId for reply/thread_reply notifications and identifies
+// the specific reply to scroll to in PostDetail.
+type Notification struct {
+	ID         string
+	Type       string // "reply", "thread_reply", "new_post_friend", "new_follower", "poke", etc.
+	Read       bool
+	CreatedAt  time.Time
+	Actor      NotificationActor
+	TargetID   string
+	TargetType string // "post", "reply", or ""
+	ReplyID              string // populated for reply/thread_reply; the specific reply to highlight
+	ThreadAuthorUsername string // set for thread_reply; the original thread's author
+}

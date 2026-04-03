@@ -12,11 +12,17 @@ import (
 const bioCharLimit = 127
 
 type ProfileModel struct {
-	user    model.User
-	compose ComposeModel
-	width   int
-	err     error
-	saved   bool
+	user     model.User
+	compose  ComposeModel
+	width    int
+	err      error
+	saved    bool
+	readOnly bool
+}
+
+func (m ProfileModel) SetReadOnly(readOnly bool) ProfileModel {
+	m.readOnly = readOnly
+	return m
 }
 
 type SaveProfileMsg struct{ Bio string }
@@ -66,11 +72,18 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 			m.compose, cmd = m.compose.Update(msg)
 			return m, cmd
 		}
-		if msg.String() == "e" {
-			m.saved = false
-			var cmd tea.Cmd
-			m.compose, cmd = m.compose.OpenWithContent("bio", "what's your story…", m.user.Bio)
-			return m, cmd
+		switch msg.String() {
+		case "esc":
+			if m.readOnly {
+				return m, func() tea.Msg { return BackFromProfileMsg{} }
+			}
+		case "e":
+			if !m.readOnly {
+				m.saved = false
+				var cmd tea.Cmd
+				m.compose, cmd = m.compose.OpenWithContent("bio", "what's your story…", m.user.Bio)
+				return m, cmd
+			}
 		}
 
 	case ComposeSubmitMsg:
@@ -112,8 +125,15 @@ func (m ProfileModel) View() string {
 	bio := theme.Base.Render(m.user.Bio)
 
 	var saved string
-	if m.saved {
+	if m.saved && !m.readOnly {
 		saved = theme.Highlight.Render("saved.")
+	}
+
+	var hint string
+	if m.readOnly {
+		hint = theme.Subtle.Render("esc · back")
+	} else {
+		hint = theme.Subtle.Render("e · edit bio")
 	}
 
 	return theme.Border.Width(76).Render(
@@ -122,7 +142,7 @@ func (m ProfileModel) View() string {
 			"",
 			bio,
 			"",
-			theme.Subtle.Render("e · edit bio"),
+			hint,
 			saved,
 		),
 	)

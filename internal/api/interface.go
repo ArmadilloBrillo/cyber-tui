@@ -20,6 +20,8 @@ type Client interface {
 	// Returns empty next-cursor when there are no more pages.
 	GetFeed(cursor string) ([]model.Post, string, error)
 	CreatePost(content string, topics []string) (model.Post, error)
+	// GetPost fetches a single post by ID (used when jumping from a notification).
+	GetPost(postID string) (model.Post, error)
 
 	// Replies — first page only (pagination deferred).
 	GetPostReplies(postID string) ([]model.Reply, error)
@@ -35,6 +37,12 @@ type Client interface {
 	GetRooms() ([]model.Room, error)
 	GetRoomMessages(roomID string, limit int) ([]model.Message, error)
 	SendRoomMessage(roomID, body string) error
+
+	// Notifications — cursor-paginated; mark-read methods are fire-and-forget.
+	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.
+	GetNotifications(cursor string) ([]model.Notification, string, error)
+	MarkNotificationRead(id string) error
+	MarkAllNotificationsRead() error
 
 	// Direct messages — backed by Firebase RTDB (see internal/rtdb).
 	GetConversations() ([]model.Conversation, error)

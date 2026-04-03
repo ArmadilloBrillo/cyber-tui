@@ -14,3 +14,10 @@ type SharedConfigMsg struct {
 	Loc     *time.Location
 	Relaxed bool
 }
+
+// ShowUserProfileMsg is emitted by Feed, PostDetail, and Notifications when
+// the user presses 'p' on the highlighted item.
+type ShowUserProfileMsg struct{ Username string }
+
+// BackFromProfileMsg is emitted by ProfileModel in read-only mode when ESC is pressed.
+type BackFromProfileMsg struct{}

@@ -272,6 +272,43 @@ func TestPostDetail_SetReplies_ClearsLoading(t *testing.T) {
 	}
 }
 
+func TestPostDetail_ScrollToReply_SelectsReply(t *testing.T) {
+	replies := []model.Reply{
+		{ID: "r1", PostID: "p1", AuthorUsername: "a", Content: "first", CreatedAt: time.Now()},
+		{ID: "r2", PostID: "p1", AuthorUsername: "b", Content: "second", CreatedAt: time.Now()},
+	}
+	m := screens.NewPostDetailModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPost(makePost())
+	m = m.SetReplies(replies)
+	m = m.ScrollToReply("r2")
+	if m.SelectedReplyID() != "r2" {
+		t.Errorf("expected SelectedReplyID r2, got %q", m.SelectedReplyID())
+	}
+}
+
+func TestPostDetail_ScrollToReply_UnknownID_NoOp(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPost(makePost())
+	m = m.SetReplies(makeReplies())
+	m = m.ScrollToReply("nonexistent")
+	if m.SelectedReplyID() != "" {
+		t.Errorf("expected no selection change for unknown ID, got %q", m.SelectedReplyID())
+	}
+}
+
+func TestPostDetail_ScrollToReply_EmptyID_NoOp(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	m = m.SetPost(makePost())
+	m = m.SetReplies(makeReplies())
+	before := m.SelectedReplyID()
+	m = m.ScrollToReply("")
+	if m.SelectedReplyID() != before {
+		t.Errorf("expected no change for empty ID")
+	}
+}
+
 func TestPostDetail_SetError_ClearsLoading(t *testing.T) {
 	m := screens.NewPostDetailModel()
 	m = m.SetPost(makePost())
@@ -590,6 +627,82 @@ func TestFeed_ComposeSubmit_EmitsSubmitNewPostMsg(t *testing.T) {
 	// should produce exactly that one topic.
 	if len(snp.Topics) != 1 || snp.Topics[0] != "tui" {
 		t.Errorf("expected topics=[tui] from pre-filled input, got %v", snp.Topics)
+	}
+}
+
+func TestFeed_P_EmitsShowUserProfileMsg(t *testing.T) {
+	m := makeFeed()
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd == nil {
+		t.Fatal("expected a command after pressing 'p' in feed")
+	}
+	msg := cmd()
+	sp, ok := msg.(screens.ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", msg)
+	}
+	if sp.Username != "molly" {
+		t.Errorf("expected Username=%q, got %q", "molly", sp.Username)
+	}
+}
+
+func TestPostDetail_P_PostSelected_EmitsShowUserProfileMsg(t *testing.T) {
+	m := postDetailReady() // selectedReply=-1, post selected
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd == nil {
+		t.Fatal("expected a command after pressing 'p' in postdetail (post selected)")
+	}
+	msg := cmd()
+	sp, ok := msg.(screens.ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", msg)
+	}
+	if sp.Username != "molly" {
+		t.Errorf("expected post author %q, got %q", "molly", sp.Username)
+	}
+}
+
+func TestPostDetail_P_ReplySelected_EmitsShowUserProfileMsg(t *testing.T) {
+	m := postDetailReady()
+	// Navigate j to move into the first reply.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd == nil {
+		t.Fatal("expected a command after pressing 'p' with reply selected")
+	}
+	msg := cmd()
+	sp, ok := msg.(screens.ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", msg)
+	}
+	if sp.Username != "wintermute" {
+		t.Errorf("expected reply author %q, got %q", "wintermute", sp.Username)
+	}
+}
+
+func TestProfile_ReadOnly_EscEmitsBackFromProfileMsg(t *testing.T) {
+	m := screens.NewProfileModel()
+	m = m.SetReadOnly(true)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("esc")})
+	// esc is a special key, use KeyEsc type
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected a command on ESC in read-only profile")
+	}
+	msg := cmd()
+	_, ok := msg.(screens.BackFromProfileMsg)
+	if !ok {
+		t.Fatalf("expected BackFromProfileMsg, got %T", msg)
+	}
+}
+
+func TestProfile_ReadOnly_EKeyIsNoop(t *testing.T) {
+	m := screens.NewProfileModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetReadOnly(true)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if m.ComposeActive() {
+		t.Error("expected compose to stay inactive in read-only profile")
 	}
 }
 

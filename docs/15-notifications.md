@@ -1,0 +1,195 @@
+# 15 — Notifications
+
+## Overview
+
+A full notifications screen accessible from the menu bar at tab position 2, between Feed and Profile.
+
+---
+
+## UI
+
+### Tab bar
+
+The notifications tab shows an unread count badge when there are unread notifications:
+
+```
+feed   notifications (3)   profile
+```
+
+The count is maintained by:
+- Optimistic in-memory updates (mark read, mark all) when the screen is loaded.
+- A background poll every 60 seconds that fetches the first page of notifications and counts unread items when the screen is not yet loaded.
+
+### Layout
+
+Each notification renders as a single line inside a bordered box:
+
+```
+↩ @molly_millions replied to your post.                         5m ago
+★ @wintermute published something.                             20m ago
+```
+
+- Leading symbol is type-specific (see table below); highlighted when unread, subtle when read.
+- Actor username rendered in highlight colour.
+- Right-aligned relative timestamp.
+- Selected notification uses the active border style.
+
+### Type icons
+
+| Type | Icon |
+|------|------|
+| `reply` / `thread_reply` | `↩` |
+| `new_post_friend` / `new_post_following` | `★` |
+| `bookmark` | `♥` |
+| `new_follower` | `+` |
+| `poke` | `~` |
+
+### Day separators
+
+Notifications are grouped by calendar day in the user's configured timezone:
+
+```
+  ── today ──
+● @molly_millions replied to your post.    5m ago
+  ── yesterday ──
+  @wintermute saved your entry.           3h ago
+```
+
+### Relative timestamps
+
+| Age | Format |
+|-----|--------|
+| < 1 min | `just now` |
+| < 1 hour | `5m ago` |
+| < 24 hours | `2h ago` |
+| < 7 days | `3d ago` |
+| ≥ 7 days | `02-Jan` |
+
+---
+
+## Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Move to next notification |
+| `k` / `↑` | Move to previous notification; at top: refresh |
+| `enter` | Open post/reply for navigable notifications |
+| `p` | View actor's profile |
+| `m` | Mark selected notification as read |
+| `M` | Mark all notifications as read |
+| `u` | Toggle unread-only filter |
+| `esc` | (from PostDetail or profile) return to notifications |
+
+### Non-navigable types
+
+Pressing `enter` on `poke` or `new_follower` notifications (or any with an empty target ID) is a no-op.
+
+---
+
+## Notification Types
+
+| Type | Summary text |
+|------|-------------|
+| `new_post_friend` / `new_post_following` | published something. |
+| `bookmark` | saved your entry. |
+| `new_follower` | started following you. |
+| `reply` | replied to your post. |
+| `thread_reply` | replied in @username's thread. (falls back to "a thread you're following" if author unknown) |
+| `poke` | poked you. ¯\_(ツ)_/¯ |
+
+---
+
+## Pagination
+
+- Initial load: fetches first page (`GET /v1/notifications?limit=20`).
+- Pressing `j` at the last item, or scrolling to the bottom of the viewport, emits `LoadMoreNotifsMsg` which appends the next page.
+- When no more pages are available, a `— end —` footer is shown.
+- Pressing `k` at the top emits `RefreshNotifsMsg`, which re-fetches from the beginning and shows `fetching notifications...` while in progress.
+
+---
+
+## Mark as Read
+
+Both actions use optimistic updates: the in-memory state is updated immediately, and the API call runs in the background.
+
+- `m` — mark selected read → `PATCH /v1/notifications/:id`
+- `M` — mark all read → `POST /v1/notifications/read-all`
+- Opening a post via `enter` also marks that notification read optimistically.
+
+---
+
+## Unread Filter
+
+Press `u` to toggle between showing all notifications and showing only unread ones. When the filter is active and all notifications are read, the screen shows `all caught up`.
+
+---
+
+## Back Navigation
+
+Pressing `enter` on a navigable notification opens PostDetail. Pressing `esc` in PostDetail returns to the notifications screen with the previously selected notification visible. This uses a shared `postDetailReturn` field in the App to track which screen to return to (same mechanism used by Feed → PostDetail → Feed).
+
+---
+
+## API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/v1/notifications?limit=20&cursor=…` | Fetch notification page |
+| `PATCH` | `/v1/notifications/:id` | Mark one notification read |
+| `POST` | `/v1/notifications/read-all` | Mark all notifications read |
+| `GET` | `/v1/posts/:id` | Load post when opening from notification |
+
+### Wire format (`GET /v1/notifications`)
+
+```json
+{
+  "notifications": [
+    {
+      "id": "abc",
+      "type": "reply",
+      "read": false,
+      "createdAt": "2026-04-03T10:00:00Z",
+      "actorId": "user-123",
+      "actorUsername": "molly_millions",
+      "targetId": "post-456",
+      "targetType": "post"
+    }
+  ],
+  "nextCursor": "cursor-xyz"
+}
+```
+
+Note: the actor is returned as flat fields (`actorId`, `actorUsername`), not a nested object.
+
+---
+
+## Model
+
+```go
+type Notification struct {
+    ID         string
+    Type       string
+    Read       bool
+    CreatedAt  time.Time
+    Actor      NotificationActor
+    TargetID   string
+    TargetType string // "post", "reply", or ""
+}
+
+type NotificationActor struct {
+    ID       string
+    Username string
+}
+```
+
+`TargetType` is included for future use (e.g., scroll-to-reply when a `GET /v1/replies/:id` endpoint becomes available).
+
+---
+
+## Background Poll
+
+After login, a `tea.Tick(60 * time.Second)` is scheduled. On each tick:
+1. `GET /v1/notifications` (first page) is fetched.
+2. The unread count is computed and stored in `App.polledUnreadCount`.
+3. The tab badge is updated from `polledUnreadCount` when the notifications screen has not yet been loaded (`!notifications.IsReady()`).
+4. The tick reschedules itself.

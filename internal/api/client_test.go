@@ -82,6 +82,28 @@ func loginHandler(t *testing.T, next http.Handler) http.Handler {
 	})
 }
 
+// authHandler handles both /v1/auth/login and /v1/auth/refresh with fixed tokens,
+// delegating all other requests to next. Use this when LoginWithRefreshToken is called.
+func authHandler(t *testing.T, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/auth/login":
+			writeOK(t, w, map[string]string{
+				"idToken":      "test-id-token",
+				"refreshToken": "test-refresh-token",
+				"rtdbToken":    "test-rtdb-token",
+			})
+		case "/v1/auth/refresh":
+			writeOK(t, w, map[string]string{
+				"idToken":   "test-id-token",
+				"rtdbToken": "test-rtdb-token",
+			})
+		default:
+			next.ServeHTTP(w, r)
+		}
+	})
+}
+
 // --- tests ---
 
 func TestHTTPLogin_Success(t *testing.T) {
@@ -504,5 +526,155 @@ func TestHTTPGetConversations_ReturnsEmpty(t *testing.T) {
 	}
 	if len(convs) != 0 {
 		t.Errorf("len(convs) = %d, want 0 (stub)", len(convs))
+	}
+}
+
+// --- notifications & GetPost ---
+
+func TestHTTPGetNotifications_ParsesNotifs(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/notifications" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		writeOKWithCursor(t, w, []map[string]any{
+			{
+				"id":            "n1",
+				"type":          "reply",
+				"read":          false,
+				"createdAt":     "2026-01-01T12:00:00Z",
+				"actorId":       "u1",
+				"actorUsername": "molly_millions",
+				"targetId":      "p1",
+				"targetType":    "reply",
+				"metadata":      map[string]any{"replyId": "r42"},
+			},
+			{
+				"id":            "n2",
+				"type":          "poke",
+				"read":          true,
+				"createdAt":     "2026-01-01T11:00:00Z",
+				"actorId":       "u2",
+				"actorUsername": "wintermute",
+				"targetId":      "",
+			},
+		}, "next-cursor")
+	})))
+	c.LoginWithRefreshToken("tok")
+	notifs, cursor, err := c.GetNotifications("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notifs) != 2 {
+		t.Fatalf("expected 2 notifs, got %d", len(notifs))
+	}
+	if notifs[0].ID != "n1" || notifs[0].Type != "reply" || notifs[0].Read != false {
+		t.Errorf("notifs[0] mismatch: %+v", notifs[0])
+	}
+	if notifs[0].Actor.Username != "molly_millions" {
+		t.Errorf("actor username mismatch: %s", notifs[0].Actor.Username)
+	}
+	if notifs[0].TargetID != "p1" {
+		t.Errorf("targetID mismatch: %s", notifs[0].TargetID)
+	}
+	if notifs[0].ReplyID != "r42" {
+		t.Errorf("replyID mismatch: got %q, want %q", notifs[0].ReplyID, "r42")
+	}
+	if notifs[1].ID != "n2" || notifs[1].Read != true {
+		t.Errorf("notifs[1] mismatch: %+v", notifs[1])
+	}
+	if cursor != "next-cursor" {
+		t.Errorf("cursor mismatch: %s", cursor)
+	}
+}
+
+func TestHTTPGetNotifications_CursorInURL(t *testing.T) {
+	var capturedURL string
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	})))
+	c.LoginWithRefreshToken("tok")
+	c.GetNotifications("cursor-abc")
+	if !strings.Contains(capturedURL, "cursor=cursor-abc") {
+		t.Errorf("expected cursor in URL, got: %s", capturedURL)
+	}
+}
+
+func TestHTTPMarkNotificationRead_Method(t *testing.T) {
+	var capturedMethod, capturedPath string
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"data":null}`)
+	})))
+	c.LoginWithRefreshToken("tok")
+	if err := c.MarkNotificationRead("n1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedMethod != "PATCH" {
+		t.Errorf("expected PATCH, got %s", capturedMethod)
+	}
+	if capturedPath != "/v1/notifications/n1" {
+		t.Errorf("expected /v1/notifications/n1, got %s", capturedPath)
+	}
+}
+
+func TestHTTPMarkAllNotificationsRead_Method(t *testing.T) {
+	var capturedMethod, capturedPath string
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedMethod = r.Method
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"data":null}`)
+	})))
+	c.LoginWithRefreshToken("tok")
+	if err := c.MarkAllNotificationsRead(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("expected POST, got %s", capturedMethod)
+	}
+	if capturedPath != "/v1/notifications/read-all" {
+		t.Errorf("expected /v1/notifications/read-all, got %s", capturedPath)
+	}
+}
+
+func TestHTTPGetPost_ParsesPost(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/posts/p99" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{
+			"postId":         "p99",
+			"authorId":       "u1",
+			"authorUsername": "neuromancer",
+			"content":        "hello world",
+			"topics":         []string{"tui"},
+			"repliesCount":   3,
+			"isPublic":       true,
+			"isNSFW":         false,
+			"deleted":        false,
+			"createdAt":      "2026-01-01T10:00:00Z",
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	post, err := c.GetPost("p99")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if post.ID != "p99" {
+		t.Errorf("ID mismatch: %s", post.ID)
+	}
+	if post.AuthorUsername != "neuromancer" {
+		t.Errorf("AuthorUsername mismatch: %s", post.AuthorUsername)
+	}
+	if post.Content != "hello world" {
+		t.Errorf("Content mismatch: %s", post.Content)
+	}
+	if post.RepliesCount != 3 {
+		t.Errorf("RepliesCount mismatch: %d", post.RepliesCount)
 	}
 }

@@ -291,6 +291,12 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				post := m.posts[m.selectedIndex]
 				return m, func() tea.Msg { return ShowPostForReplyMsg{Post: post} }
 			}
+		case "p":
+			if len(m.posts) > 0 {
+				username := m.posts[m.selectedIndex].AuthorUsername
+				return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+			}
+			return m, nil
 		case "n":
 			m.topicsInput.SetValue("tui")
 			m.topicsFocused = false

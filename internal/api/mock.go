@@ -50,6 +50,54 @@ func (m *MockClient) Logout() error {
 	return nil
 }
 
+var mockNotifications = []model.Notification{
+	{
+		ID: "n1", Type: "reply", Read: false,
+		CreatedAt:  time.Now().Add(-5 * time.Minute),
+		Actor:      model.NotificationActor{ID: "2", Username: "molly_millions"},
+		TargetID:   "p1",
+		TargetType: "reply",
+		ReplyID:    "r1",
+	},
+	{
+		ID: "n6", Type: "thread_reply", Read: false,
+		CreatedAt:            time.Now().Add(-10 * time.Minute),
+		Actor:                model.NotificationActor{ID: "3", Username: "wintermute"},
+		TargetID:             "p1",
+		TargetType:           "reply",
+		ReplyID:              "r2",
+		ThreadAuthorUsername: "neuromancer",
+	},
+	{
+		ID: "n2", Type: "new_post_friend", Read: false,
+		CreatedAt:  time.Now().Add(-20 * time.Minute),
+		Actor:      model.NotificationActor{ID: "3", Username: "wintermute"},
+		TargetID:   "p2",
+		TargetType: "post",
+	},
+	{
+		ID: "n3", Type: "new_follower", Read: true,
+		CreatedAt:  time.Now().Add(-2 * time.Hour),
+		Actor:      model.NotificationActor{ID: "1", Username: "neuromancer"},
+		TargetID:   "",
+		TargetType: "",
+	},
+	{
+		ID: "n4", Type: "poke", Read: false,
+		CreatedAt:  time.Now().Add(-30 * time.Minute),
+		Actor:      model.NotificationActor{ID: "2", Username: "molly_millions"},
+		TargetID:   "",
+		TargetType: "",
+	},
+	{
+		ID: "n5", Type: "bookmark", Read: true,
+		CreatedAt:  time.Now().AddDate(0, 0, -1).Add(-3 * time.Hour),
+		Actor:      model.NotificationActor{ID: "3", Username: "wintermute"},
+		TargetID:   "p1",
+		TargetType: "post",
+	},
+}
+
 func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 	return []model.Post{
 		{
@@ -110,6 +158,24 @@ func (m *MockClient) CreatePost(content string, topics []string) (model.Post, er
 		Topics:         topics,
 	}, nil
 }
+
+func (m *MockClient) GetPost(postID string) (model.Post, error) {
+	posts, _, _ := m.GetFeed("")
+	for _, p := range posts {
+		if p.ID == postID {
+			return p, nil
+		}
+	}
+	return model.Post{ID: postID, AuthorUsername: "unknown", Content: "[post not found]"}, nil
+}
+
+func (m *MockClient) GetNotifications(cursor string) ([]model.Notification, string, error) {
+	return mockNotifications, "", nil
+}
+
+func (m *MockClient) MarkNotificationRead(id string) error { return nil }
+
+func (m *MockClient) MarkAllNotificationsRead() error { return nil }
 
 func (m *MockClient) GetOwnProfile() (model.User, error) {
 	return mockUsers[0], nil
