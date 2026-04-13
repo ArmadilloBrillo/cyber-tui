@@ -144,6 +144,7 @@ type wireNotificationPrefs struct {
 	Poke     bool `json:"poke"`
 }
 
+// wireSettings is used to decode GET /v1/settings responses — includes all fields.
 type wireSettings struct {
 	Notifications      wireNotificationPrefs `json:"notifications"`
 	FilterNSFW         bool                  `json:"filterNSFW"`
@@ -151,10 +152,25 @@ type wireSettings struct {
 	HideImagesInFeed   bool                  `json:"hideImagesInFeed"`
 	HideAudioInFeed    bool                  `json:"hideAudioInFeed"`
 	AutoWatchOnReply   bool                  `json:"autoWatchOnReply"`
-	IconTheme          string                `json:"iconTheme,omitempty"`
-	FollowedTopics     []string              `json:"followedTopics,omitempty"`
-	MutedTopics        []string              `json:"mutedTopics,omitempty"`
-	ImagePixelSize     string                `json:"imagePixelSize,omitempty"`
+	IconTheme          string                `json:"iconTheme"`
+	FollowedTopics     []string              `json:"followedTopics"`
+	MutedTopics        []string              `json:"mutedTopics"`
+	ImagePixelSize     string                `json:"imagePixelSize"`
+	TimeDisplayFormat  string                `json:"timeDisplayFormat"`
+	UseLegacyMenuOrder bool                  `json:"useLegacyMenuOrder"`
+	DefaultPublicPost  bool                  `json:"defaultPublicPost"`
+}
+
+// wirePatchSettings is the PATCH /v1/settings payload — only the 9 fields the
+// UI manages. Deferred fields (iconTheme, imagePixelSize, followedTopics,
+// mutedTopics) are intentionally excluded so the API never receives them.
+type wirePatchSettings struct {
+	Notifications      wireNotificationPrefs `json:"notifications"`
+	FilterNSFW         bool                  `json:"filterNSFW"`
+	ShowFollowerCount  bool                  `json:"showFollowerCount"`
+	HideImagesInFeed   bool                  `json:"hideImagesInFeed"`
+	HideAudioInFeed    bool                  `json:"hideAudioInFeed"`
+	AutoWatchOnReply   bool                  `json:"autoWatchOnReply"`
 	TimeDisplayFormat  string                `json:"timeDisplayFormat"`
 	UseLegacyMenuOrder bool                  `json:"useLegacyMenuOrder"`
 	DefaultPublicPost  bool                  `json:"defaultPublicPost"`
@@ -586,13 +602,11 @@ func (c *HTTPClient) GetSettings() (model.Settings, error) {
 	if err := json.Unmarshal(env.Data, &wire); err != nil {
 		return model.Settings{}, err
 	}
-	fmt.Printf("[settings debug] GET raw: %s\n", env.Data)
-	fmt.Printf("[settings debug] GET imagePixelSize=%q iconTheme=%q\n", wire.ImagePixelSize, wire.IconTheme)
 	return wireSettingsToModel(wire), nil
 }
 
 func (c *HTTPClient) UpdateSettings(update model.Settings) error {
-	payload := wireSettings{
+	_, err := c.doJSON("PATCH", "/v1/settings", wirePatchSettings{
 		Notifications: wireNotificationPrefs{
 			Bookmark: update.Notifications.Bookmark,
 			Reply:    update.Notifications.Reply,
@@ -603,18 +617,10 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 		HideImagesInFeed:   update.HideImagesInFeed,
 		HideAudioInFeed:    update.HideAudioInFeed,
 		AutoWatchOnReply:   update.AutoWatchOnReply,
-		IconTheme:          update.IconTheme,
-		FollowedTopics:     update.FollowedTopics,
-		MutedTopics:        update.MutedTopics,
-		ImagePixelSize:     update.ImagePixelSize,
 		TimeDisplayFormat:  update.TimeDisplayFormat,
 		UseLegacyMenuOrder: update.UseLegacyMenuOrder,
 		DefaultPublicPost:  update.DefaultPublicPost,
-	}
-	if b, err := json.Marshal(payload); err == nil {
-		fmt.Printf("[settings debug] PATCH payload: %s\n", b)
-	}
-	_, err := c.doJSON("PATCH", "/v1/settings", payload)
+	})
 	return err
 }
 
