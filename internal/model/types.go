@@ -100,7 +100,7 @@ type Settings struct {
 	FollowedTopics     []string
 	MutedTopics        []string
 	ImagePixelSize     string // named preset or pixel multiplier, e.g. "sharp", "2"
-	TimeDisplayFormat  string // "12h" or "24h"
+	TimeDisplayFormat  string // "datetime", "relative", "unix", or "swatch"
 	UseLegacyMenuOrder bool
 	DefaultPublicPost  bool
 }

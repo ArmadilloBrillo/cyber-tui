@@ -203,7 +203,7 @@ func (m *MockClient) UpdateProfile(update model.ProfileUpdate) error {
 var mockSettings = model.Settings{
 	Notifications:     model.NotificationPrefs{Bookmark: true, Reply: true, Poke: true},
 	ShowFollowerCount: true,
-	TimeDisplayFormat: "24h",
+	TimeDisplayFormat: "datetime",
 	ImagePixelSize:    "2",
 }
 

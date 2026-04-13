@@ -21,7 +21,7 @@ This feature aligns the codebase with API v0.3.2, which supports 13 preference f
 | `HideAudioInFeed` | bool | Disable audio rendering | Device-roaming |
 | `AutoWatchOnReply` | bool | Auto-subscribe to thread on reply | Device-roaming |
 | `IconTheme` | string | Icon set (not yet modelled) | Device-roaming |
-| `TimeDisplayFormat` | string | Display time as "12h" or "24h" | Device-roaming |
+| `TimeDisplayFormat` | string | Time display: `"datetime"`, `"relative"`, `"unix"`, `"swatch"` | Device-roaming |
 | `FollowedTopics` | []string | Topics subscribed to | Device-roaming |
 | `MutedTopics` | []string | Topics to hide | Device-roaming |
 | `ImagePixelSize` | string | Pixel multiplier or preset (e.g., "sharp", "2") | Device-roaming |
@@ -70,7 +70,7 @@ type Settings struct {
     FollowedTopics     []string
     MutedTopics        []string
     ImagePixelSize     string // preset or multiplier, e.g., "sharp" or "2"
-    TimeDisplayFormat  string // "12h" or "24h"
+    TimeDisplayFormat  string // "datetime", "relative", "unix", or "swatch"
     UseLegacyMenuOrder bool
     DefaultPublicPost  bool
 }
@@ -108,13 +108,13 @@ All fields in the `Settings` struct above. These can be modified from multiple d
 1. **Settings UI screen** — no screen to edit preferences yet; deferred to future feature branch.
 2. **PATCH on change** — no endpoint calls to sync changes back to the server.
 3. **Opaque JSON fields** — `KeyboardBindings` and `MutedUsersByRoom` are not modelled.
-4. **Preference application** — screens read `Settings` but don't yet act on most fields (e.g., filtering NSFW when `FilterNSFW=true`).
+4. **Preference application** — most settings not yet used (e.g., filtering NSFW when `FilterNSFW=true`). **Exception:** `TimeDisplayFormat` is now applied to all timestamp displays.
 
 ---
 
 ## Timezone Note
 
-Timezone (UTC offset) is **not** part of API settings. It remains local-only in `~/.cyber-tui.json` and is controlled via the `z` key picker. The API field `timeDisplayFormat` controls 12/24-hour display format, which *is* synced.
+Timezone (UTC offset) is **not** part of API settings. It remains local-only in `~/.cyber-tui.json` and is controlled via the `z` key picker. The API field `timeDisplayFormat` controls the display format (`"datetime"`, `"relative"`, `"unix"`, or `"swatch"`), which *is* synced.
 
 ---
 

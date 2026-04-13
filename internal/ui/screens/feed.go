@@ -37,23 +37,24 @@ type SubmitNewPostMsg struct {
 }
 
 type FeedModel struct {
-	posts          []model.Post
-	postOffsets    []int // start line of each post within the viewport content
-	viewport       viewport.Model
-	compose        ComposeModel
-	topicsInput    textinput.Model
-	topicsFocused  bool
-	width          int
-	height        int
-	selectedIndex int
-	ready         bool
-	err           error
-	nextCursor    string
-	loading       bool
-	refreshing    bool // true while re-fetching newest posts (up at top)
-	exhausted     bool // true once API returned an empty cursor
-	relaxed       bool           // true = blank line between posts (relaxed density)
-	loc           *time.Location // timezone for timestamp display; nil = UTC
+	posts              []model.Post
+	postOffsets        []int // start line of each post within the viewport content
+	viewport           viewport.Model
+	compose            ComposeModel
+	topicsInput        textinput.Model
+	topicsFocused      bool
+	width              int
+	height            int
+	selectedIndex      int
+	ready              bool
+	err                error
+	nextCursor         string
+	loading            bool
+	refreshing         bool // true while re-fetching newest posts (up at top)
+	exhausted          bool // true once API returned an empty cursor
+	relaxed            bool           // true = blank line between posts (relaxed density)
+	loc                *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
 }
 
 func NewFeedModel() FeedModel {
@@ -186,6 +187,7 @@ func (m FeedModel) Init() tea.Cmd { return nil }
 func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case SharedConfigMsg:
+		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
 		return m, nil
@@ -389,7 +391,7 @@ func (m FeedModel) renderPost(p model.Post, selected bool) string {
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+p.AuthorUsername),
-		theme.Subtle.Render("  "+formatTime(p.CreatedAt, m.location(), "15:04:05")),
+		theme.Subtle.Render("  "+displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
 	var repliesLabel string
 	switch p.RepliesCount {

@@ -48,3 +48,32 @@ func dayLabel(t, now time.Time, loc *time.Location) string {
 		return t.In(loc).Format("Mon 2 Jan")
 	}
 }
+
+// swatchBeats returns the Swatch Internet Time for t as "@NNN" (000–999).
+// BMT (Biel Mean Time) = UTC+1.
+func swatchBeats(t time.Time) string {
+	bmt := t.UTC().Add(time.Hour)
+	secs := bmt.Hour()*3600 + bmt.Minute()*60 + bmt.Second()
+	beats := (secs * 1000) / 86400
+	return fmt.Sprintf("@%03d", beats)
+}
+
+// displayTime formats t according to the timeDisplayFormat API setting.
+// compact=true omits seconds (used in chat/C-Mail where space is tight).
+// Falls back to "datetime" for unknown/empty values.
+func displayTime(t time.Time, loc *time.Location, setting string, compact bool) string {
+	switch setting {
+	case "relative":
+		return formatRelativeTime(t, time.Now(), loc)
+	case "unix":
+		return fmt.Sprintf("%d", t.Unix())
+	case "swatch":
+		return swatchBeats(t)
+	default: // "datetime" or empty
+		tf := "15:04:05"
+		if compact {
+			tf = "15:04"
+		}
+		return formatTime(t, loc, tf)
+	}
+}

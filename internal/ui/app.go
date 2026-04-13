@@ -628,11 +628,16 @@ func (a App) renderStatusBar() string {
 	if tzLabel == "" {
 		tzLabel = "UTC"
 	}
+	timeFmt := a.settings.TimeDisplayFormat
+	if timeFmt == "" {
+		timeFmt = "datetime"
+	}
 	user := lipgloss.JoinHorizontal(lipgloss.Top,
 		userStyle.Render("@"+a.currentUser.Username),
 		metaStyle.Render("  ·  "+densityLabel),
 		metaStyle.Render("  ·  "+theme.CurrentName()),
 		metaStyle.Render("  ·  "+tzLabel),
+		metaStyle.Render("  ·  "+timeFmt),
 	)
 	var hintStr string
 	switch a.active {

@@ -16,14 +16,15 @@ import (
 const chatroomLocalChrome = 3
 
 type ChatroomsModel struct {
-	rooms       []model.Room
-	activeRoom  *model.Room
-	messages    []model.Message
-	viewport    viewport.Model
-	input       textinput.Model
-	ready       bool
-	err         error
-	loc         *time.Location // timezone for timestamp display; nil = UTC
+	rooms              []model.Room
+	activeRoom         *model.Room
+	messages           []model.Message
+	viewport           viewport.Model
+	input              textinput.Model
+	ready              bool
+	err                error
+	loc                *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
 }
 
 type SendRoomMessageMsg struct {
@@ -82,7 +83,9 @@ func (m ChatroomsModel) Init() tea.Cmd { return textinput.Blink }
 func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case SharedConfigMsg:
-		return m.SetLocation(msg.Loc), nil
+		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		m = m.SetLocation(msg.Loc)
+		return m, nil
 
 	case tea.WindowSizeMsg:
 		h := msg.Height - theme.ChromeHeight - chatroomLocalChrome
@@ -136,7 +139,7 @@ func (m ChatroomsModel) renderMessages() string {
 	}
 	var out string
 	for _, msg := range m.messages {
-		ts := theme.Subtle.Render(formatTime(msg.CreatedAt, m.location(), "15:04"))
+		ts := theme.Subtle.Render(displayTime(msg.CreatedAt, m.location(), m.timeDisplayFormat, true))
 		author := theme.Highlight.Render("@" + msg.From.Username)
 		body := theme.Base.Render(msg.Body)
 		out += lipgloss.JoinHorizontal(lipgloss.Top, ts, "  ", author, "  ", body) + "\n"

@@ -36,11 +36,12 @@ type PostDetailModel struct {
 	loading       bool
 	err           error
 
-	compose      ComposeModel
-	replyPostID   string         // postID set when compose opens
-	replyParentID string         // parentReplyID set when compose opens (empty = top-level)
-	relaxed       bool           // true = blank lines between post, header, and replies
-	loc           *time.Location // timezone for timestamp display; nil = UTC
+	compose            ComposeModel
+	replyPostID        string         // postID set when compose opens
+	replyParentID      string         // parentReplyID set when compose opens (empty = top-level)
+	relaxed            bool           // true = blank lines between post, header, and replies
+	loc                *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
 }
 
 func NewPostDetailModel() PostDetailModel {
@@ -224,6 +225,7 @@ func (m PostDetailModel) Init() tea.Cmd { return nil }
 func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case SharedConfigMsg:
+		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
 		return m, nil
@@ -428,7 +430,7 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 
 	header := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+m.post.AuthorUsername),
-		theme.Subtle.Render("  "+formatTime(m.post.CreatedAt, m.location(), "15:04:05")),
+		theme.Subtle.Render("  "+displayTime(m.post.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
 
 	var body string
@@ -464,7 +466,7 @@ func (m PostDetailModel) renderReply(r model.Reply, selected bool) string {
 
 	header := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+r.AuthorUsername),
-		theme.Subtle.Render("  "+formatTime(r.CreatedAt, m.location(), "15:04:05")),
+		theme.Subtle.Render("  "+displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
 
 	var body string
