@@ -118,6 +118,56 @@ Timezone (UTC offset) is **not** part of API settings. It remains local-only in 
 
 ---
 
+## Settings Screen
+
+The Settings screen is the fourth tab (shortcut `4` or tab navigation with `←` / `→`). It is a full-screen, cursor-navigable list of editable preferences grouped under four headers: **notifications**, **content**, **social**, and **display**.
+
+### Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Move cursor down |
+| `k` / `↑` | Move cursor up |
+| `space` / `enter` | Toggle boolean setting |
+| `←` / `→` | Cycle enum option (e.g., time format) |
+| `ctrl+s` | Save all pending changes |
+| `esc` | Revert unsaved changes |
+
+### Save Strategy
+
+Changes are accumulated in memory until `ctrl+s` is pressed. This respects the API rate limit (2 writes/min, 10/day). A dirty indicator appears in the status bar and footer hint area while unsaved changes exist.
+
+### Editable Fields
+
+**Notifications group:**
+- Bookmark alerts (bool)
+- Reply alerts (bool)
+- Poke alerts (bool)
+
+**Content group:**
+- Filter NSFW (bool)
+- Hide images in feed (bool)
+- Hide audio in feed (bool)
+
+**Social group:**
+- Show follower count (bool)
+- Auto-watch on reply (bool)
+- Default public post (bool)
+
+**Display group:**
+- Time format (enum: datetime / relative / unix / swatch)
+- Legacy menu order (bool)
+
+### Deferred Fields
+
+The following settings require complex pickers and are deferred to a future feature branch:
+- `IconTheme` — icon set selection
+- `FollowedTopics` — topic subscription management
+- `MutedTopics` — topic muting
+- `ImagePixelSize` — image scaling or presets
+
+---
+
 ## Integration Checklist
 
 - [x] `Settings` type added to `internal/model/types.go`
@@ -125,6 +175,6 @@ Timezone (UTC offset) is **not** part of API settings. It remains local-only in 
 - [x] Mock and HTTP implementations
 - [x] Fetch on login via `loadSettingsCmd()`
 - [x] Broadcast to screens via `SharedConfigMsg`
-- [ ] Settings UI screen
-- [ ] PATCH on settings change
-- [ ] Use settings to filter/display content in screens
+- [x] Settings UI screen
+- [x] PATCH on settings change
+- [x] Use settings to filter/display content in screens (`TimeDisplayFormat` applied to all timestamp displays)

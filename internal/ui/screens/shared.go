@@ -26,3 +26,10 @@ type ShowUserProfileMsg struct{ Username string }
 
 // BackFromProfileMsg is emitted by ProfileModel in read-only mode when ESC is pressed.
 type BackFromProfileMsg struct{}
+
+// SaveSettingsMsg is emitted by SettingsModel when the user presses ctrl+s
+// with unsaved changes. App.handleSettings calls UpdateSettings and returns
+// settingsSavedMsg or errMsg.
+type SaveSettingsMsg struct {
+	Settings model.Settings
+}

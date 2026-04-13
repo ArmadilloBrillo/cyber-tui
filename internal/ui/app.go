@@ -25,6 +25,7 @@ const (
 	screenProfile
 	screenPostDetail
 	screenNotifications
+	screenSettings
 )
 
 type focusTarget int
@@ -46,6 +47,7 @@ var menuTabs = []struct {
 	{"feed", screenFeed},
 	{"notifications", screenNotifications},
 	{"profile", screenProfile},
+	{"settings", screenSettings},
 }
 
 type App struct {
@@ -94,6 +96,7 @@ type App struct {
 	profile       screens.ProfileModel
 	postDetail    screens.PostDetailModel
 	notifications screens.NotificationsModel
+	settingsScreen screens.SettingsModel
 
 	// postDetailReturn is the screen to go back to when ESC is pressed in PostDetail.
 	postDetailReturn screen
@@ -119,13 +122,14 @@ func NewApp(client api.Client) App {
 		active:     screenLogin,
 		focus:      focusMenu,
 		loc:        time.UTC,
-		login:         screens.NewLoginModel(""),
-		feed:          screens.NewFeedModel(),
-		chatrooms:     screens.NewChatroomsModel(),
-		cmail:         screens.NewCMailModel("", client),
-		profile:       screens.NewProfileModel(),
-		postDetail:    screens.NewPostDetailModel(),
-		notifications: screens.NewNotificationsModel(),
+		login:          screens.NewLoginModel(""),
+		feed:           screens.NewFeedModel(),
+		chatrooms:      screens.NewChatroomsModel(),
+		cmail:          screens.NewCMailModel("", client),
+		profile:        screens.NewProfileModel(),
+		postDetail:     screens.NewPostDetailModel(),
+		notifications:  screens.NewNotificationsModel(),
+		settingsScreen: screens.NewSettingsModel(),
 	}
 }
 
@@ -206,6 +210,7 @@ func (a *App) broadcastConfig() {
 	a.postDetail, _ = a.postDetail.Update(msg)
 	a.profile, _ = a.profile.Update(msg)
 	a.notifications, _ = a.notifications.Update(msg)
+	a.settingsScreen, _ = a.settingsScreen.Update(msg)
 }
 
 // applyWindowSize stores the new terminal dimensions and broadcasts the size
@@ -221,6 +226,7 @@ func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
 	a.postDetail, _ = a.postDetail.Update(m)
 	a.profile, _ = a.profile.Update(m)
 	a.notifications, _ = a.notifications.Update(m)
+	a.settingsScreen, _ = a.settingsScreen.Update(m)
 	return a
 }
 
@@ -311,12 +317,18 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.active = screenProfile
 			return a, a.loadProfileCmd(), true
 		}
+	case "4":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenSettings
+			return a, nil, true  // no load cmd; settings already in memory
+		}
 	case "left":
-		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
+		if a.active != screenLogin && a.active != screenPostDetail && a.active != screenSettings && a.focus == focusMenu {
 			return a, a.navigateTab(-1), true
 		}
 	case "right":
-		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
+		if a.active != screenLogin && a.active != screenPostDetail && a.active != screenSettings && a.focus == focusMenu {
 			return a, a.navigateTab(+1), true
 		}
 	}
@@ -453,13 +465,29 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
-	m, ok := msg.(settingsLoadedMsg)
-	if !ok {
-		return a, nil, false
+	switch msg := msg.(type) {
+	case settingsLoadedMsg:
+		a.settings = msg.settings
+		a.settingsScreen = a.settingsScreen.SetSettings(msg.settings)
+		a.broadcastConfig()
+		return a, nil, true
+
+	case screens.SaveSettingsMsg:
+		s := msg.Settings
+		return a, func() tea.Msg {
+			if err := a.client.UpdateSettings(s); err != nil {
+				return errMsg{err}
+			}
+			return settingsSavedMsg{settings: s}
+		}, true
+
+	case settingsSavedMsg:
+		a.settings = msg.settings
+		a.settingsScreen = a.settingsScreen.SetSaved()
+		a.broadcastConfig()
+		return a, nil, true
 	}
-	a.settings = m.settings
-	a.broadcastConfig()
-	return a, nil, true
+	return a, nil, false
 }
 
 // handleErr routes API error messages to the active screen's error display.
@@ -479,6 +507,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.postDetail = a.postDetail.SetError(m.err)
 	case screenNotifications:
 		a.notifications = a.notifications.SetError(m.err)
+	case screenSettings:
+		a.settingsScreen = a.settingsScreen.SetError(m.err)
 	}
 	return a, nil, true
 }
@@ -530,6 +560,8 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 		return a.loadProfileCmd()
 	case screenNotifications:
 		return a.loadNotifsCmd()
+	case screenSettings:
+		return nil  // no load cmd; settings already in memory
 	}
 	return nil
 }
@@ -551,6 +583,8 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 		a.postDetail, cmd = a.postDetail.Update(msg)
 	case screenNotifications:
 		a.notifications, cmd = a.notifications.Update(msg)
+	case screenSettings:
+		a.settingsScreen, cmd = a.settingsScreen.Update(msg)
 	}
 	return cmd
 }
@@ -613,6 +647,8 @@ func (a App) renderActiveScreen() string {
 		return a.postDetail.View()
 	case screenNotifications:
 		return a.notifications.View()
+	case screenSettings:
+		return a.settingsScreen.View()
 	}
 	return ""
 }
@@ -661,6 +697,12 @@ func (a App) renderStatusBar() string {
 		}
 	case screenNotifications:
 		hintStr = "  m · mark read   M · mark all   u · unread filter   enter · open   p · profile   ? · help"
+	case screenSettings:
+		if a.settingsScreen.IsDirty() {
+			hintStr = "  ctrl+s · save   esc · revert   ? · help"
+		} else {
+			hintStr = "  space/enter · toggle   ←→ · cycle   ? · help"
+		}
 	default:
 		hintStr = "  ? · help"
 	}
@@ -1043,6 +1085,7 @@ type repliesLoadedMsg struct{ replies []model.Reply }
 type replyCreatedMsg struct{ postID string }
 type postCreatedMsg struct{}
 type settingsLoadedMsg struct{ settings model.Settings }
+type settingsSavedMsg struct{ settings model.Settings }
 type errMsg struct{ err error }
 type notifsLoadedMsg struct {
 	notifs []model.Notification
