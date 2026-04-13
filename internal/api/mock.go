@@ -212,6 +212,7 @@ func (m *MockClient) GetSettings() (model.Settings, error) {
 }
 
 func (m *MockClient) UpdateSettings(update model.Settings) error {
+	mockSettings = update
 	return nil
 }
 

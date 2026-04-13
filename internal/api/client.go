@@ -151,10 +151,10 @@ type wireSettings struct {
 	HideImagesInFeed   bool                  `json:"hideImagesInFeed"`
 	HideAudioInFeed    bool                  `json:"hideAudioInFeed"`
 	AutoWatchOnReply   bool                  `json:"autoWatchOnReply"`
-	IconTheme          string                `json:"iconTheme"`
-	FollowedTopics     []string              `json:"followedTopics"`
-	MutedTopics        []string              `json:"mutedTopics"`
-	ImagePixelSize     string                `json:"imagePixelSize"`
+	IconTheme          string                `json:"iconTheme,omitempty"`
+	FollowedTopics     []string              `json:"followedTopics,omitempty"`
+	MutedTopics        []string              `json:"mutedTopics,omitempty"`
+	ImagePixelSize     string                `json:"imagePixelSize,omitempty"`
 	TimeDisplayFormat  string                `json:"timeDisplayFormat"`
 	UseLegacyMenuOrder bool                  `json:"useLegacyMenuOrder"`
 	DefaultPublicPost  bool                  `json:"defaultPublicPost"`
