@@ -155,24 +155,24 @@ func TestSettings_Toggle_FilterNSFW(t *testing.T) {
 
 // --- Enum Tests ---
 
-func TestSettings_Right_CyclesEnum(t *testing.T) {
+func TestSettings_Tab_CyclesEnum(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.cursor = 9 // time format
 	if getEnum(m.settings, 9) != "relative" {
 		t.Error("default TimeDisplayFormat should be 'relative'")
 	}
-	m, _ = m.Update(keyMsg("right"))
+	m, _ = m.Update(keyMsg("tab"))
 	if getEnum(m.settings, 9) != "unix" {
-		t.Error("after right, TimeDisplayFormat should be 'unix'")
+		t.Error("after tab, TimeDisplayFormat should be 'unix'")
 	}
 }
 
-func TestSettings_Left_CyclesEnum(t *testing.T) {
+func TestSettings_ShiftTab_CyclesEnum(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.cursor = 9
-	m, _ = m.Update(keyMsg("left"))
+	m, _ = m.Update(keyMsg("shift+tab"))
 	if getEnum(m.settings, 9) != "datetime" {
-		t.Error("left from 'relative' should cycle to 'datetime'")
+		t.Error("shift+tab from 'relative' should cycle to 'datetime'")
 	}
 }
 
@@ -181,9 +181,9 @@ func TestSettings_Enum_WrapsForward(t *testing.T) {
 	m.cursor = 9
 	// Cycle from relative -> unix -> swatch -> datetime -> relative
 	m.settings = setEnum(m.settings, 9, "swatch")
-	m, _ = m.Update(keyMsg("right"))
+	m, _ = m.Update(keyMsg("tab"))
 	if getEnum(m.settings, 9) != "datetime" {
-		t.Error("right from 'swatch' should wrap to 'datetime'")
+		t.Error("tab from 'swatch' should wrap to 'datetime'")
 	}
 }
 
@@ -191,19 +191,19 @@ func TestSettings_Enum_WrapsBackward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.cursor = 9
 	m.settings = setEnum(m.settings, 9, "datetime")
-	m, _ = m.Update(keyMsg("left"))
+	m, _ = m.Update(keyMsg("shift+tab"))
 	if getEnum(m.settings, 9) != "swatch" {
-		t.Error("left from 'datetime' should wrap to 'swatch'")
+		t.Error("shift+tab from 'datetime' should wrap to 'swatch'")
 	}
 }
 
-func TestSettings_Right_OnBool_IsNoop(t *testing.T) {
+func TestSettings_Tab_OnBool_IsNoop(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.cursor = 0 // bool item
 	original := getBool(m.settings, 0)
-	m, _ = m.Update(keyMsg("right"))
+	m, _ = m.Update(keyMsg("tab"))
 	if getBool(m.settings, 0) != original {
-		t.Error("right on bool should be noop")
+		t.Error("tab on bool should be noop")
 	}
 }
 

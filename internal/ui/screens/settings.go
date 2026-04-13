@@ -260,16 +260,16 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			}
 			return m, nil
 
-		case "left":
+		case "tab":
 			if m.cursor < total && items[m.cursor].kind == "enum" {
-				m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, -1)
+				m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, +1)
 				m.saved = false
 			}
 			return m, nil
 
-		case "right":
+		case "shift+tab":
 			if m.cursor < total && items[m.cursor].kind == "enum" {
-				m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, +1)
+				m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, -1)
 				m.saved = false
 			}
 			return m, nil
@@ -295,7 +295,11 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 
 // View renders the settings screen.
 func (m SettingsModel) View() string {
+	// Calculate available height (account for chrome and footer)
+	availH := max(3, m.height-theme.ChromeHeight-1)
+
 	var rows []string
+	cursorRow := -1
 	flatIdx := 0
 
 	for _, g := range settingsGroups {
@@ -303,8 +307,20 @@ func (m SettingsModel) View() string {
 
 		for _, item := range g.items {
 			selected := m.cursor == flatIdx
-			var value string
+			if selected {
+				cursorRow = len(rows) // track which row the cursor is on
+			}
 
+			var cursor, value, label string
+
+			// Cursor marker
+			if selected {
+				cursor = theme.Highlight.Render("▸ ")
+			} else {
+				cursor = "  "
+			}
+
+			// Value rendering
 			if item.kind == "bool" {
 				if getBool(m.settings, flatIdx) {
 					value = theme.Highlight.Render("[x]")
@@ -316,25 +332,41 @@ func (m SettingsModel) View() string {
 				value = theme.Highlight.Render("< " + cur + " >")
 			}
 
-			label := theme.Base.Render(item.label)
-			rowStyle := theme.Border
+			// Label rendering (highlight if selected)
+			labelStyle := theme.Base
 			if selected {
-				rowStyle = theme.ActiveBorder
+				labelStyle = theme.Highlight
 			}
+			label = labelStyle.Render(item.label)
 
-			// Right-align the value within the available width.
-			innerW := max(20, m.width-6) // account for border + padding, min 20
+			// Layout: cursor + label + gap + value, right-aligned
+			innerW := max(20, m.width-2) // 2 for cursor prefix
 			gap := max(1, innerW-lipgloss.Width(label)-lipgloss.Width(value))
+			line := cursor + label + strings.Repeat(" ", gap) + value
 
-			line := label + strings.Repeat(" ", gap) + value
-			rows = append(rows, rowStyle.Width(innerW).Render(line))
+			rows = append(rows, line)
 			flatIdx++
 		}
 
 		rows = append(rows, "") // blank line between groups
 	}
 
-	// Status footer
+	// Compute scroll offset to keep cursor visible
+	offset := 0
+	if cursorRow >= availH {
+		offset = cursorRow - availH + 1
+	}
+
+	// Slice visible rows
+	visible := rows
+	if offset > 0 && offset < len(rows) {
+		visible = rows[offset:]
+	}
+	if len(visible) > availH {
+		visible = visible[:availH]
+	}
+
+	// Add footer
 	var footer string
 	if m.err != nil {
 		footer = theme.Error.Render("error: " + m.err.Error())
@@ -343,9 +375,9 @@ func (m SettingsModel) View() string {
 	} else if m.IsDirty() {
 		footer = theme.Subtle.Render("ctrl+s · save   esc · revert")
 	} else {
-		footer = theme.Subtle.Render("space/enter · toggle   ←→ · cycle enum")
+		footer = theme.Subtle.Render("space/enter · toggle   tab · cycle enum")
 	}
-	rows = append(rows, footer)
+	visible = append(visible, footer)
 
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	return lipgloss.JoinVertical(lipgloss.Left, visible...)
 }

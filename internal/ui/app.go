@@ -324,11 +324,11 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true  // no load cmd; settings already in memory
 		}
 	case "left":
-		if a.active != screenLogin && a.active != screenPostDetail && a.active != screenSettings && a.focus == focusMenu {
+		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
 			return a, a.navigateTab(-1), true
 		}
 	case "right":
-		if a.active != screenLogin && a.active != screenPostDetail && a.active != screenSettings && a.focus == focusMenu {
+		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
 			return a, a.navigateTab(+1), true
 		}
 	}
@@ -701,7 +701,7 @@ func (a App) renderStatusBar() string {
 		if a.settingsScreen.IsDirty() {
 			hintStr = "  ctrl+s · save   esc · revert   ? · help"
 		} else {
-			hintStr = "  space/enter · toggle   ←→ · cycle   ? · help"
+			hintStr = "  space/enter · toggle   tab/shift+tab · cycle   ? · help"
 		}
 	default:
 		hintStr = "  ? · help"
