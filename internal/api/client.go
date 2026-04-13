@@ -387,6 +387,16 @@ func wireUserToModel(w wireUser) model.User {
 }
 
 func wireSettingsToModel(w wireSettings) model.Settings {
+	// Ensure deferred fields have valid defaults if empty (UI doesn't edit them)
+	imagePixelSize := w.ImagePixelSize
+	if imagePixelSize == "" {
+		imagePixelSize = "2" // sensible default
+	}
+	iconTheme := w.IconTheme
+	if iconTheme == "" {
+		iconTheme = "default" // sensible default
+	}
+
 	return model.Settings{
 		Notifications: model.NotificationPrefs{
 			Bookmark: w.Notifications.Bookmark,
@@ -398,10 +408,10 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 		HideImagesInFeed:   w.HideImagesInFeed,
 		HideAudioInFeed:    w.HideAudioInFeed,
 		AutoWatchOnReply:   w.AutoWatchOnReply,
-		IconTheme:          w.IconTheme,
+		IconTheme:          iconTheme,
 		FollowedTopics:     w.FollowedTopics,
 		MutedTopics:        w.MutedTopics,
-		ImagePixelSize:     w.ImagePixelSize,
+		ImagePixelSize:     imagePixelSize,
 		TimeDisplayFormat:  w.TimeDisplayFormat,
 		UseLegacyMenuOrder: w.UseLegacyMenuOrder,
 		DefaultPublicPost:  w.DefaultPublicPost,
