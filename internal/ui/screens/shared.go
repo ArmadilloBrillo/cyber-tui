@@ -1,6 +1,10 @@
 package screens
 
-import "time"
+import (
+	"time"
+
+	"github.com/ragnar/cyber-tui/internal/model"
+)
 
 // SharedConfigMsg is broadcast by App whenever display-affecting settings change
 // (dimensions, timezone, display density). Each screen handles the fields it cares
@@ -9,10 +13,11 @@ import "time"
 // Adding a new screen only requires handling this message in that screen's Update —
 // no App call sites need changing.
 type SharedConfigMsg struct {
-	Width   int
-	Height  int
-	Loc     *time.Location
-	Relaxed bool
+	Width    int
+	Height   int
+	Loc      *time.Location
+	Relaxed  bool
+	Settings model.Settings
 }
 
 // ShowUserProfileMsg is emitted by Feed, PostDetail, and Notifications when

@@ -108,6 +108,9 @@ type App struct {
 	// polledUnreadCount is the single source of truth for the tab badge unread count.
 	// It is synced from: initial/page load, 60-second poll, m/M key, and enter on a notification.
 	polledUnreadCount int
+
+	// settings holds the user's preferences fetched from GET /v1/settings on login.
+	settings model.Settings
 }
 
 func NewApp(client api.Client) App {
@@ -185,6 +188,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleCMail(msg);      ok { return a2, cmd }
 	if a2, cmd, ok := a.handleProfile(msg);        ok { return a2, cmd }
 	if a2, cmd, ok := a.handleNotifications(msg); ok { return a2, cmd }
+	if a2, cmd, ok := a.handleSettings(msg);       ok { return a2, cmd }
 	if a2, cmd, ok := a.handleErr(msg);            ok { return a2, cmd }
 	return a, a.delegateUpdate(msg)
 }
@@ -195,7 +199,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // Adding a new screen only requires handling SharedConfigMsg in that
 // screen's Update — no changes here are needed.
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed}
+	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings}
 	a.feed, _ = a.feed.Update(msg)
 	a.chatrooms, _ = a.chatrooms.Update(msg)
 	a.cmail, _ = a.cmail.Update(msg)
@@ -446,6 +450,16 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.saveProfileCmd(msg.Bio), true
 	}
 	return a, nil, false
+}
+
+func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
+	m, ok := msg.(settingsLoadedMsg)
+	if !ok {
+		return a, nil, false
+	}
+	a.settings = m.settings
+	a.broadcastConfig()
+	return a, nil, true
 }
 
 // handleErr routes API error messages to the active screen's error display.
@@ -1005,7 +1019,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	a.active = screenFeed
 	a.profile = a.profile.SetUser(a.currentUser)
 	a.broadcastConfig()
-	return tea.Batch(a.loadFeedCmd(), a.loadProfileCmd(), a.schedulePollCmd())
+	return tea.Batch(a.loadFeedCmd(), a.loadProfileCmd(), a.schedulePollCmd(), a.loadSettingsCmd())
 }
 
 type feedLoadedMsg struct {
@@ -1023,6 +1037,7 @@ type userProfileLoadedMsg struct{ user model.User }
 type repliesLoadedMsg struct{ replies []model.Reply }
 type replyCreatedMsg struct{ postID string }
 type postCreatedMsg struct{}
+type settingsLoadedMsg struct{ settings model.Settings }
 type errMsg struct{ err error }
 type notifsLoadedMsg struct {
 	notifs []model.Notification
@@ -1073,6 +1088,16 @@ func (a *App) loadConvsCmd() tea.Cmd {
 			return errMsg{err}
 		}
 		return convsLoadedMsg{convs}
+	}
+}
+
+func (a *App) loadSettingsCmd() tea.Cmd {
+	return func() tea.Msg {
+		s, err := a.client.GetSettings()
+		if err != nil {
+			return errMsg{err}
+		}
+		return settingsLoadedMsg{s}
 	}
 }
 

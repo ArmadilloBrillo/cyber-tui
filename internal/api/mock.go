@@ -200,6 +200,21 @@ func (m *MockClient) UpdateProfile(update model.ProfileUpdate) error {
 	return nil
 }
 
+var mockSettings = model.Settings{
+	Notifications:     model.NotificationPrefs{Bookmark: true, Reply: true, Poke: true},
+	ShowFollowerCount: true,
+	TimeDisplayFormat: "24h",
+	ImagePixelSize:    "2",
+}
+
+func (m *MockClient) GetSettings() (model.Settings, error) {
+	return mockSettings, nil
+}
+
+func (m *MockClient) UpdateSettings(update model.Settings) error {
+	return nil
+}
+
 func (m *MockClient) GetRooms() ([]model.Room, error) {
 	return []model.Room{
 		{ID: "r1", Name: "#zion", Description: "the last human city", Members: 42},

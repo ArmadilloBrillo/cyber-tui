@@ -33,6 +33,10 @@ type Client interface {
 	GetProfile(username string) (model.User, error)
 	UpdateProfile(update model.ProfileUpdate) error
 
+	// Settings
+	GetSettings() (model.Settings, error)
+	UpdateSettings(update model.Settings) error
+
 	// Chatrooms — NOTE: real impl uses Firebase RTDB with RTDBToken — pending feature/rtdb-chat
 	GetRooms() ([]model.Room, error)
 	GetRoomMessages(roomID string, limit int) ([]model.Message, error)

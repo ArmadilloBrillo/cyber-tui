@@ -138,6 +138,28 @@ type updateProfileRequest struct {
 	LocationName *string `json:"locationName,omitempty"`
 }
 
+type wireNotificationPrefs struct {
+	Bookmark bool `json:"bookmark"`
+	Reply    bool `json:"reply"`
+	Poke     bool `json:"poke"`
+}
+
+type wireSettings struct {
+	Notifications      wireNotificationPrefs `json:"notifications"`
+	FilterNSFW         bool                  `json:"filterNSFW"`
+	ShowFollowerCount  bool                  `json:"showFollowerCount"`
+	HideImagesInFeed   bool                  `json:"hideImagesInFeed"`
+	HideAudioInFeed    bool                  `json:"hideAudioInFeed"`
+	AutoWatchOnReply   bool                  `json:"autoWatchOnReply"`
+	IconTheme          string                `json:"iconTheme"`
+	FollowedTopics     []string              `json:"followedTopics"`
+	MutedTopics        []string              `json:"mutedTopics"`
+	ImagePixelSize     string                `json:"imagePixelSize"`
+	TimeDisplayFormat  string                `json:"timeDisplayFormat"`
+	UseLegacyMenuOrder bool                  `json:"useLegacyMenuOrder"`
+	DefaultPublicPost  bool                  `json:"defaultPublicPost"`
+}
+
 type envelope struct {
 	Data   json.RawMessage `json:"data"`
 	Cursor string          `json:"cursor"`
@@ -364,6 +386,28 @@ func wireUserToModel(w wireUser) model.User {
 	}
 }
 
+func wireSettingsToModel(w wireSettings) model.Settings {
+	return model.Settings{
+		Notifications: model.NotificationPrefs{
+			Bookmark: w.Notifications.Bookmark,
+			Reply:    w.Notifications.Reply,
+			Poke:     w.Notifications.Poke,
+		},
+		FilterNSFW:         w.FilterNSFW,
+		ShowFollowerCount:  w.ShowFollowerCount,
+		HideImagesInFeed:   w.HideImagesInFeed,
+		HideAudioInFeed:    w.HideAudioInFeed,
+		AutoWatchOnReply:   w.AutoWatchOnReply,
+		IconTheme:          w.IconTheme,
+		FollowedTopics:     w.FollowedTopics,
+		MutedTopics:        w.MutedTopics,
+		ImagePixelSize:     w.ImagePixelSize,
+		TimeDisplayFormat:  w.TimeDisplayFormat,
+		UseLegacyMenuOrder: w.UseLegacyMenuOrder,
+		DefaultPublicPost:  w.DefaultPublicPost,
+	}
+}
+
 func wireNotificationToModel(w wireNotification) model.Notification {
 	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
 	return model.Notification{
@@ -527,6 +571,43 @@ func (c *HTTPClient) UpdateProfile(update model.ProfileUpdate) error {
 		PinnedPostID: update.PinnedPostID,
 		WebsiteUrl:   update.WebsiteUrl,
 		LocationName: update.LocationName,
+	})
+	return err
+}
+
+// --- Settings ---
+
+func (c *HTTPClient) GetSettings() (model.Settings, error) {
+	env, err := c.doRequest("GET", "/v1/settings", nil)
+	if err != nil {
+		return model.Settings{}, err
+	}
+	var wire wireSettings
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return model.Settings{}, err
+	}
+	return wireSettingsToModel(wire), nil
+}
+
+func (c *HTTPClient) UpdateSettings(update model.Settings) error {
+	_, err := c.doJSON("PATCH", "/v1/settings", wireSettings{
+		Notifications: wireNotificationPrefs{
+			Bookmark: update.Notifications.Bookmark,
+			Reply:    update.Notifications.Reply,
+			Poke:     update.Notifications.Poke,
+		},
+		FilterNSFW:         update.FilterNSFW,
+		ShowFollowerCount:  update.ShowFollowerCount,
+		HideImagesInFeed:   update.HideImagesInFeed,
+		HideAudioInFeed:    update.HideAudioInFeed,
+		AutoWatchOnReply:   update.AutoWatchOnReply,
+		IconTheme:          update.IconTheme,
+		FollowedTopics:     update.FollowedTopics,
+		MutedTopics:        update.MutedTopics,
+		ImagePixelSize:     update.ImagePixelSize,
+		TimeDisplayFormat:  update.TimeDisplayFormat,
+		UseLegacyMenuOrder: update.UseLegacyMenuOrder,
+		DefaultPublicPost:  update.DefaultPublicPost,
 	})
 	return err
 }

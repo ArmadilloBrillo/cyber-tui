@@ -341,6 +341,40 @@ func TestMockCreateReply_WithParent(t *testing.T) {
 	}
 }
 
+// --- Settings ---
+
+func TestMockGetSettings_ReturnsNonZero(t *testing.T) {
+	m := newMock()
+	s, err := m.GetSettings()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.TimeDisplayFormat == "" {
+		t.Error("expected non-empty TimeDisplayFormat")
+	}
+	if s.ImagePixelSize == "" {
+		t.Error("expected non-empty ImagePixelSize")
+	}
+}
+
+func TestMockGetSettings_NotificationsEnabled(t *testing.T) {
+	m := newMock()
+	s, _ := m.GetSettings()
+	if !s.Notifications.Bookmark {
+		t.Error("expected Notifications.Bookmark to be true in mock")
+	}
+	if !s.Notifications.Reply {
+		t.Error("expected Notifications.Reply to be true in mock")
+	}
+}
+
+func TestMockUpdateSettings_NoError(t *testing.T) {
+	m := newMock()
+	if err := m.UpdateSettings(model.Settings{TimeDisplayFormat: "12h"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // --- Interface compliance ---
 
 func TestMockClient_ImplementsClientInterface(t *testing.T) {

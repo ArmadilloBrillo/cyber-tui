@@ -80,6 +80,31 @@ type Room struct {
 	Members     int
 }
 
+// NotificationPrefs maps to the notifications sub-object in GET/PATCH /v1/settings.
+type NotificationPrefs struct {
+	Bookmark bool
+	Reply    bool
+	Poke     bool
+}
+
+// Settings maps to the fields returned by GET /v1/settings.
+// KeyboardBindings and MutedUsersByRoom are opaque JSON objects — not modelled yet.
+type Settings struct {
+	Notifications      NotificationPrefs
+	FilterNSFW         bool
+	ShowFollowerCount  bool
+	HideImagesInFeed   bool
+	HideAudioInFeed    bool
+	AutoWatchOnReply   bool
+	IconTheme          string
+	FollowedTopics     []string
+	MutedTopics        []string
+	ImagePixelSize     string // named preset or pixel multiplier, e.g. "sharp", "2"
+	TimeDisplayFormat  string // "12h" or "24h"
+	UseLegacyMenuOrder bool
+	DefaultPublicPost  bool
+}
+
 // NotificationActor is the user who triggered the notification.
 type NotificationActor struct {
 	ID       string
