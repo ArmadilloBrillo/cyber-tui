@@ -586,11 +586,13 @@ func (c *HTTPClient) GetSettings() (model.Settings, error) {
 	if err := json.Unmarshal(env.Data, &wire); err != nil {
 		return model.Settings{}, err
 	}
+	fmt.Printf("[settings debug] GET raw: %s\n", env.Data)
+	fmt.Printf("[settings debug] GET imagePixelSize=%q iconTheme=%q\n", wire.ImagePixelSize, wire.IconTheme)
 	return wireSettingsToModel(wire), nil
 }
 
 func (c *HTTPClient) UpdateSettings(update model.Settings) error {
-	_, err := c.doJSON("PATCH", "/v1/settings", wireSettings{
+	payload := wireSettings{
 		Notifications: wireNotificationPrefs{
 			Bookmark: update.Notifications.Bookmark,
 			Reply:    update.Notifications.Reply,
@@ -608,7 +610,11 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 		TimeDisplayFormat:  update.TimeDisplayFormat,
 		UseLegacyMenuOrder: update.UseLegacyMenuOrder,
 		DefaultPublicPost:  update.DefaultPublicPost,
-	})
+	}
+	if b, err := json.Marshal(payload); err == nil {
+		fmt.Printf("[settings debug] PATCH payload: %s\n", b)
+	}
+	_, err := c.doJSON("PATCH", "/v1/settings", payload)
 	return err
 }
 
