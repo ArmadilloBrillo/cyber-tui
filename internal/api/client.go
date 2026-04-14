@@ -92,6 +92,26 @@ type wireReply struct {
 	CreatedAt      string `json:"createdAt"`
 }
 
+type wireBookmark struct {
+	BookmarkID string     `json:"bookmarkId"`
+	Type       string     `json:"type"`
+	PostID     string     `json:"postId"`
+	ReplyID    string     `json:"replyId"`
+	Post       *wirePost  `json:"post"`
+	Reply      *wireReply `json:"reply"`
+	CreatedAt  string     `json:"createdAt"`
+}
+
+type createBookmarkRequest struct {
+	PostID  string `json:"postId,omitempty"`
+	ReplyID string `json:"replyId,omitempty"`
+	Type    string `json:"type"`
+}
+
+type createBookmarkResponseData struct {
+	BookmarkID string `json:"bookmarkId"`
+}
+
 type createPostRequest struct {
 	Content  string   `json:"content"`
 	Topics   []string `json:"topics"`
@@ -424,6 +444,26 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 	}
 }
 
+func wireBookmarkToModel(w wireBookmark) model.Bookmark {
+	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	b := model.Bookmark{
+		ID:        w.BookmarkID,
+		Type:      w.Type,
+		PostID:    w.PostID,
+		ReplyID:   w.ReplyID,
+		CreatedAt: t,
+	}
+	if w.Post != nil {
+		p := wirePostToModel(*w.Post)
+		b.Post = &p
+	}
+	if w.Reply != nil {
+		r := wireReplyToModel(*w.Reply)
+		b.Reply = &r
+	}
+	return b
+}
+
 func wireNotificationToModel(w wireNotification) model.Notification {
 	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
 	return model.Notification{
@@ -526,6 +566,18 @@ func (c *HTTPClient) CreatePost(content string, topics []string) (model.Post, er
 	}
 	// API returns only postId on creation; return a minimal Post.
 	return model.Post{ID: data.PostID, Content: content, Topics: topics}, nil
+}
+
+func (c *HTTPClient) GetReply(replyID string) (model.Reply, error) {
+	env, err := c.doRequest("GET", "/v1/replies/"+url.PathEscape(replyID), nil)
+	if err != nil {
+		return model.Reply{}, err
+	}
+	var wire wireReply
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return model.Reply{}, err
+	}
+	return wireReplyToModel(wire), nil
 }
 
 func (c *HTTPClient) CreateReply(postID, content, parentReplyID string) (model.Reply, error) {
@@ -653,6 +705,53 @@ func (c *HTTPClient) MarkNotificationRead(id string) error {
 
 func (c *HTTPClient) MarkAllNotificationsRead() error {
 	_, err := c.doRequest("POST", "/v1/notifications/read-all", nil)
+	return err
+}
+
+// --- Bookmarks ---
+
+func (c *HTTPClient) GetBookmarks(cursor string) ([]model.Bookmark, string, error) {
+	path := "/v1/bookmarks?limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []wireBookmark
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	bookmarks := make([]model.Bookmark, len(wire))
+	for i, w := range wire {
+		bookmarks[i] = wireBookmarkToModel(w)
+	}
+	return bookmarks, env.Cursor, nil
+}
+
+func (c *HTTPClient) CreateBookmark(postID, replyID string) (string, error) {
+	req := createBookmarkRequest{}
+	if postID != "" {
+		req.PostID = postID
+		req.Type = "post"
+	} else {
+		req.ReplyID = replyID
+		req.Type = "reply"
+	}
+	env, err := c.doJSON("POST", "/v1/bookmarks", req)
+	if err != nil {
+		return "", err
+	}
+	var data createBookmarkResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", err
+	}
+	return data.BookmarkID, nil
+}
+
+func (c *HTTPClient) DeleteBookmark(id string) error {
+	_, err := c.doRequest("DELETE", "/v1/bookmarks/"+url.PathEscape(id), nil)
 	return err
 }
 

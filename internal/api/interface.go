@@ -25,6 +25,8 @@ type Client interface {
 
 	// Replies — first page only (pagination deferred).
 	GetPostReplies(postID string) ([]model.Reply, error)
+	// GetReply fetches a single reply by ID (used when opening a reply bookmark).
+	GetReply(replyID string) (model.Reply, error)
 	// CreateReply posts a reply to postID. Pass empty parentReplyID for top-level replies.
 	CreateReply(postID, content, parentReplyID string) (model.Reply, error)
 
@@ -47,6 +49,13 @@ type Client interface {
 	GetNotifications(cursor string) ([]model.Notification, string, error)
 	MarkNotificationRead(id string) error
 	MarkAllNotificationsRead() error
+
+	// Bookmarks — cursor-paginated list; create/delete are fire-and-forget.
+	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.
+	GetBookmarks(cursor string) ([]model.Bookmark, string, error)
+	// CreateBookmark saves a post or reply. Pass postID for posts, replyID for replies (the other empty).
+	CreateBookmark(postID, replyID string) (string, error) // returns bookmarkId
+	DeleteBookmark(id string) error
 
 	// Direct messages — backed by Firebase RTDB (see internal/rtdb).
 	GetConversations() ([]model.Conversation, error)

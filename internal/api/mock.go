@@ -139,6 +139,16 @@ func (m *MockClient) CreateReply(postID, content, parentReplyID string) (model.R
 	}, nil
 }
 
+func (m *MockClient) GetReply(replyID string) (model.Reply, error) {
+	replies, _ := m.GetPostReplies("")
+	for _, r := range replies {
+		if r.ID == replyID {
+			return r, nil
+		}
+	}
+	return model.Reply{}, fmt.Errorf("reply not found: %s", replyID)
+}
+
 func (m *MockClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	return []model.Reply{
 		{ID: "r1", PostID: postID, AuthorID: "2", AuthorUsername: "molly_millions",
@@ -167,6 +177,57 @@ func (m *MockClient) GetPost(postID string) (model.Post, error) {
 		}
 	}
 	return model.Post{ID: postID, AuthorUsername: "unknown", Content: "[post not found]"}, nil
+}
+
+var mockBookmarks = []model.Bookmark{
+	{
+		ID:        "bm1",
+		Type:      "post",
+		PostID:    "p1",
+		Post:      &model.Post{ID: "p1", AuthorUsername: "neuromancer", Content: "flatline is not death, it is elsewhere"},
+		CreatedAt: time.Now().Add(-30 * time.Minute),
+	},
+	{
+		ID:        "bm2",
+		Type:      "post",
+		PostID:    "p2",
+		Post:      &model.Post{ID: "p2", AuthorUsername: "molly_millions", Content: "the matrix has its roots in primitive arcade games"},
+		CreatedAt: time.Now().Add(-2 * time.Hour),
+	},
+}
+
+func (m *MockClient) GetBookmarks(cursor string) ([]model.Bookmark, string, error) {
+	return mockBookmarks, "", nil
+}
+
+func (m *MockClient) CreateBookmark(postID, replyID string) (string, error) {
+	id := fmt.Sprintf("bm-new-%d", len(mockBookmarks)+1)
+	b := model.Bookmark{
+		ID:      id,
+		Type:    "post",
+		PostID:  postID,
+		ReplyID: replyID,
+	}
+	if replyID != "" {
+		b.Type = "reply"
+	}
+	if postID != "" {
+		if p, err := m.GetPost(postID); err == nil {
+			b.Post = &p
+		}
+	}
+	mockBookmarks = append(mockBookmarks, b)
+	return id, nil
+}
+
+func (m *MockClient) DeleteBookmark(id string) error {
+	for i, b := range mockBookmarks {
+		if b.ID == id {
+			mockBookmarks = append(mockBookmarks[:i], mockBookmarks[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("bookmark not found: %s", id)
 }
 
 func (m *MockClient) GetNotifications(cursor string) ([]model.Notification, string, error) {

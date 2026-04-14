@@ -105,6 +105,18 @@ type Settings struct {
 	DefaultPublicPost  bool
 }
 
+// Bookmark maps to the shape returned by GET /v1/bookmarks.
+// Exactly one of Post or Reply is non-nil, depending on Type.
+type Bookmark struct {
+	ID        string
+	Type      string // "post" or "reply"
+	PostID    string // set when Type == "post"
+	ReplyID   string // set when Type == "reply"
+	Post      *Post  // embedded post content (when Type == "post")
+	Reply     *Reply // embedded reply content (when Type == "reply")
+	CreatedAt time.Time
+}
+
 // NotificationActor is the user who triggered the notification.
 type NotificationActor struct {
 	ID       string

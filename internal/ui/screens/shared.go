@@ -33,3 +33,7 @@ type BackFromProfileMsg struct{}
 type SaveSettingsMsg struct {
 	Settings model.Settings
 }
+
+// BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark
+// so it can show transient feedback.
+type BookmarkedMsg struct{ PostID string }

@@ -375,6 +375,59 @@ func TestMockUpdateSettings_NoError(t *testing.T) {
 	}
 }
 
+// --- Bookmarks ---
+
+func TestMockGetBookmarks_ReturnsList(t *testing.T) {
+	m := newMock()
+	bookmarks, cursor, err := m.GetBookmarks("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(bookmarks) == 0 {
+		t.Fatal("expected non-empty bookmarks list")
+	}
+	_ = cursor // cursor may be empty for mock
+}
+
+func TestMockCreateBookmark_Post(t *testing.T) {
+	m := newMock()
+	before, _, _ := m.GetBookmarks("")
+	id, err := m.CreateBookmark("p-new", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id == "" {
+		t.Fatal("expected non-empty bookmarkId")
+	}
+	after, _, _ := m.GetBookmarks("")
+	if len(after) != len(before)+1 {
+		t.Errorf("expected %d bookmarks after create, got %d", len(before)+1, len(after))
+	}
+}
+
+func TestMockDeleteBookmark_RemovesEntry(t *testing.T) {
+	m := newMock()
+	before, _, _ := m.GetBookmarks("")
+	if len(before) == 0 {
+		t.Skip("no bookmarks to delete")
+	}
+	id := before[0].ID
+	if err := m.DeleteBookmark(id); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	after, _, _ := m.GetBookmarks("")
+	if len(after) != len(before)-1 {
+		t.Errorf("expected %d bookmarks after delete, got %d", len(before)-1, len(after))
+	}
+}
+
+func TestMockDeleteBookmark_NotFound(t *testing.T) {
+	m := newMock()
+	if err := m.DeleteBookmark("no-such-id"); err == nil {
+		t.Fatal("expected error for missing bookmark, got nil")
+	}
+}
+
 // --- Interface compliance ---
 
 func TestMockClient_ImplementsClientInterface(t *testing.T) {

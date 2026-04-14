@@ -39,8 +39,8 @@ func TestTabIndex_Notifs(t *testing.T) {
 func TestTabIndex_Profile(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenProfile
-	if got := a.tabIndex(); got != 2 {
-		t.Errorf("expected 2, got %d", got)
+	if got := a.tabIndex(); got != 3 {
+		t.Errorf("expected 3, got %d", got)
 	}
 }
 
@@ -64,19 +64,20 @@ func TestNavigateTab_LeftFromFeed_Wraps(t *testing.T) {
 	}
 }
 
-func TestNavigateTab_RightFromProfile_Wraps(t *testing.T) {
+func TestNavigateTab_RightFromBookmarks_GoesToProfile(t *testing.T) {
 	a := loggedInApp()
-	a.active = screenProfile
+	a.active = screenBookmarks
 	a.navigateTab(+1)
-	if a.active != screenSettings {
-		t.Errorf("expected screenSettings (wrap), got %v", a.active)
+	if a.active != screenProfile {
+		t.Errorf("expected screenProfile, got %v", a.active)
 	}
 }
 
 func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	expected := []screen{screenNotifications, screenProfile, screenSettings, screenFeed}
+	// menuTabs order: feed, notifications, bookmarks, profile, settings
+	expected := []screen{screenNotifications, screenBookmarks, screenProfile, screenSettings, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(+1)
 		if a.active != want {
@@ -88,7 +89,8 @@ func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	expected := []screen{screenSettings, screenProfile, screenNotifications, screenFeed}
+	// menuTabs order: feed, notifications, bookmarks, profile, settings
+	expected := []screen{screenSettings, screenProfile, screenBookmarks, screenNotifications, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(-1)
 		if a.active != want {

@@ -298,6 +298,12 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				username = m.post.AuthorUsername
 			}
 			return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+		case "b":
+			if m.post.ID != "" {
+				postID := m.post.ID
+				return m, func() tea.Msg { return BookmarkPostMsg{PostID: postID} }
+			}
+			return m, nil
 		case "up", "k":
 			if m.selectedReply >= 0 {
 				// Reply is selected — scroll through it first (pager behaviour).

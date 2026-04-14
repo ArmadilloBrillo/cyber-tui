@@ -678,3 +678,164 @@ func TestHTTPGetPost_ParsesPost(t *testing.T) {
 		t.Errorf("RepliesCount mismatch: %d", post.RepliesCount)
 	}
 }
+
+// --- Bookmarks ---
+
+func TestHTTPGetBookmarks_ParsesList(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/bookmarks" {
+			http.NotFound(w, r)
+			return
+		}
+		writeOKWithCursor(t, w, []map[string]any{
+			{
+				"bookmarkId": "bm1",
+				"type":       "post",
+				"postId":     "p1",
+				"post": map[string]any{
+					"postId":         "p1",
+					"authorId":       "u1",
+					"authorUsername": "neuromancer",
+					"content":        "flatline is not death",
+					"topics":         []string{"cyber"},
+					"repliesCount":   0,
+					"bookmarksCount": 1,
+					"isPublic":       false,
+					"isNSFW":         false,
+					"deleted":        false,
+					"createdAt":      "2026-01-01T10:00:00Z",
+				},
+				"createdAt": "2026-01-02T10:00:00Z",
+			},
+		}, "cursor-abc")
+	})))
+	c.Login("u@example.com", "pass")
+
+	bookmarks, cursor, err := c.GetBookmarks("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(bookmarks) != 1 {
+		t.Fatalf("len(bookmarks) = %d, want 1", len(bookmarks))
+	}
+	if bookmarks[0].ID != "bm1" {
+		t.Errorf("ID = %q, want bm1", bookmarks[0].ID)
+	}
+	if bookmarks[0].Type != "post" {
+		t.Errorf("Type = %q, want post", bookmarks[0].Type)
+	}
+	if bookmarks[0].Post == nil {
+		t.Fatal("Post is nil, want embedded post")
+	}
+	if bookmarks[0].Post.ID != "p1" {
+		t.Errorf("Post.ID = %q, want p1", bookmarks[0].Post.ID)
+	}
+	if cursor != "cursor-abc" {
+		t.Errorf("cursor = %q, want cursor-abc", cursor)
+	}
+}
+
+func TestHTTPGetBookmarks_WithCursor(t *testing.T) {
+	var gotCursor string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCursor = r.URL.Query().Get("cursor")
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	_, _, err := c.GetBookmarks("my-cursor-123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotCursor != "my-cursor-123" {
+		t.Errorf("cursor query param = %q, want my-cursor-123", gotCursor)
+	}
+}
+
+func TestHTTPCreateBookmark_Post(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/v1/bookmarks" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]string{"bookmarkId": "bm-new-1"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	id, err := c.CreateBookmark("p1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "bm-new-1" {
+		t.Errorf("bookmarkId = %q, want bm-new-1", id)
+	}
+	if gotBody["type"] != "post" {
+		t.Errorf("type = %v, want post", gotBody["type"])
+	}
+	if gotBody["postId"] != "p1" {
+		t.Errorf("postId = %v, want p1", gotBody["postId"])
+	}
+	if gotBody["replyId"] != nil {
+		t.Errorf("replyId should be omitted, got %v", gotBody["replyId"])
+	}
+}
+
+func TestHTTPCreateBookmark_Reply(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]string{"bookmarkId": "bm-new-2"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	id, err := c.CreateBookmark("", "r5")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "bm-new-2" {
+		t.Errorf("bookmarkId = %q, want bm-new-2", id)
+	}
+	if gotBody["type"] != "reply" {
+		t.Errorf("type = %v, want reply", gotBody["type"])
+	}
+	if gotBody["replyId"] != "r5" {
+		t.Errorf("replyId = %v, want r5", gotBody["replyId"])
+	}
+}
+
+func TestHTTPDeleteBookmark_Success(t *testing.T) {
+	var gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		writeOK(t, w, map[string]any{})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.DeleteBookmark("bm-123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/bookmarks/bm-123" {
+		t.Errorf("path = %q, want /v1/bookmarks/bm-123", gotPath)
+	}
+}
+
+func TestHTTPDeleteBookmark_NotFound(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, 404, "NOT_FOUND", "bookmark not found")
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.DeleteBookmark("no-such-id")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.Code != "NOT_FOUND" {
+		t.Errorf("Code = %q, want NOT_FOUND", apiErr.Code)
+	}
+}
