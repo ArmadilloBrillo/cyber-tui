@@ -38,7 +38,7 @@ Each notification renders as a single line inside a bordered box:
 
 | Type | Icon |
 |------|------|
-| `reply` / `thread_reply` | `↩` |
+| `reply` / `reply_mention` / `thread_reply` | `↩` / `@` |
 | `new_post_friend` / `new_post_following` | `★` |
 | `bookmark` | `♥` |
 | `new_follower` | `+` |
@@ -94,6 +94,7 @@ Pressing `enter` on `poke` or `new_follower` notifications (or any with an empty
 | `bookmark` | saved your entry. |
 | `new_follower` | started following you. |
 | `reply` | replied to your post. |
+| `reply_mention` | mentioned you in a reply. |
 | `thread_reply` | replied in @username's thread. (falls back to "a thread you're following" if author unknown) |
 | `poke` | poked you. ¯\_(ツ)_/¯ |
 
