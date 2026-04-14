@@ -8,6 +8,7 @@ This file defines workflow guardrails for Claude. It is not project documentatio
 
 - **What:** TUI client for cyberspace.online (retro text-only social network)
 - **Stack:** Go + Bubble Tea (TUI), Lip Gloss (styling), Wish (SSH hosting)
+- **Code map:** `docs/00-project-reference.md` — comprehensive architecture, package structure, and file listing; **read this first to understand the codebase before targeting specific files for changes**
 - **Project docs:** `docs/` folder — numbered per feature (e.g. `docs/01-auth.md`)
 - **API status:** v0.2 beta — docs at https://api.cyberspace.online/docs.md — **always fetch before any API work** to catch changes
 - **API snapshot:** `docs/03-api-reference.md` — v0.2 baseline we're building against (check for drift against live URL)
