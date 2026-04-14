@@ -365,6 +365,32 @@ func TestNotifIcon_NewFollower(t *testing.T) {
 	}
 }
 
+func TestNotifSummary_ReplyMention(t *testing.T) {
+	n := model.Notification{Type: "reply_mention"}
+	result := notifSummary(n)
+	if result != "mentioned you in a reply." {
+		t.Errorf("expected 'mentioned you in a reply.', got %q", result)
+	}
+}
+
+func TestNotifIcon_ReplyMention(t *testing.T) {
+	n := model.Notification{Type: "reply_mention", Read: false}
+	icon := notifIcon(n)
+	if !strings.Contains(icon, "@") {
+		t.Errorf("expected @ in icon, got %q", icon)
+	}
+}
+
+func TestNotifs_Enter_ReplyMention_EmitsShowPost(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply_mention", "p2", false)}
+	m := initNotifs(notifs)
+	_, msg := runKey(m, "enter")
+	_, ok := msg.(ShowNotificationPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowNotificationPostMsg, got %T", msg)
+	}
+}
+
 // --- unread filter ---
 
 func TestNotifs_UnreadFilter_Toggle(t *testing.T) {

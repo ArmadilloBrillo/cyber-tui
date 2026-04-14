@@ -118,7 +118,7 @@ type NotificationActor struct {
 // the specific reply to scroll to in PostDetail.
 type Notification struct {
 	ID         string
-	Type       string // "reply", "thread_reply", "new_post_friend", "new_follower", "poke", etc.
+	Type       string // "reply", "reply_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "bookmark", "poke"
 	Read       bool
 	CreatedAt  time.Time
 	Actor      NotificationActor

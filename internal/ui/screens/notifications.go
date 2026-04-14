@@ -380,6 +380,8 @@ func notifSummary(n model.Notification) string {
 		return "started following you."
 	case "reply":
 		return "replied to your post."
+	case "reply_mention":
+		return "mentioned you in a reply."
 	case "thread_reply":
 		if n.ThreadAuthorUsername != "" {
 			return "replied in @" + n.ThreadAuthorUsername + "'s thread."
@@ -399,6 +401,8 @@ func notifIcon(n model.Notification) string {
 	switch n.Type {
 	case "reply", "thread_reply":
 		sym = "↩"
+	case "reply_mention":
+		sym = "@"
 	case "new_post_friend", "new_post_following":
 		sym = "★"
 	case "bookmark":
