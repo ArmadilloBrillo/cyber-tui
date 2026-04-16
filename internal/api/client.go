@@ -102,6 +102,12 @@ type wireBookmark struct {
 	CreatedAt  string     `json:"createdAt"`
 }
 
+type wireTopic struct {
+	TopicID   string `json:"topicId"`
+	Name      string `json:"name"`
+	PostCount int    `json:"postsCount"`
+}
+
 type createBookmarkRequest struct {
 	PostID  string `json:"postId,omitempty"`
 	ReplyID string `json:"replyId,omitempty"`
@@ -479,6 +485,13 @@ func wireNotificationToModel(w wireNotification) model.Notification {
 	}
 }
 
+func wireTopicToModel(w wireTopic) model.Topic {
+	return model.Topic{
+		Slug:      w.TopicID,
+		PostCount: w.PostCount,
+	}
+}
+
 // --- Client interface implementation ---
 
 func (c *HTTPClient) Login(email, password string) (model.Tokens, error) {
@@ -753,6 +766,44 @@ func (c *HTTPClient) CreateBookmark(postID, replyID string) (string, error) {
 func (c *HTTPClient) DeleteBookmark(id string) error {
 	_, err := c.doRequest("DELETE", "/v1/bookmarks/"+url.PathEscape(id), nil)
 	return err
+}
+
+// --- Topics ---
+
+func (c *HTTPClient) GetTopics() ([]model.Topic, error) {
+	env, err := c.doRequest("GET", "/v1/topics", nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireTopic
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	topics := make([]model.Topic, len(wire))
+	for i, w := range wire {
+		topics[i] = wireTopicToModel(w)
+	}
+	return topics, nil
+}
+
+func (c *HTTPClient) GetTopicPosts(slug string, cursor string) ([]model.Post, string, error) {
+	path := "/v1/topics/" + url.PathEscape(slug) + "/posts?limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []wirePost
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	posts := make([]model.Post, len(wire))
+	for i, w := range wire {
+		posts[i] = wirePostToModel(w)
+	}
+	return posts, env.Cursor, nil
 }
 
 // --- Chatrooms (RTDB stubs — pending feature/rtdb-chatrooms) ---

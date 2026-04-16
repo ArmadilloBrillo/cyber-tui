@@ -57,6 +57,13 @@ type Client interface {
 	CreateBookmark(postID, replyID string) (string, error) // returns bookmarkId
 	DeleteBookmark(id string) error
 
+	// Topics — browse topics and posts within them.
+	// GetTopics returns all topics sorted by post count (most popular first).
+	GetTopics() ([]model.Topic, error)
+	// GetTopicPosts returns paginated posts for a topic.
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetTopicPosts(slug string, cursor string) ([]model.Post, string, error)
+
 	// Direct messages — backed by Firebase RTDB (see internal/rtdb).
 	GetConversations() ([]model.Conversation, error)
 	GetMessages(conversationID string, limit int) ([]model.Message, error)

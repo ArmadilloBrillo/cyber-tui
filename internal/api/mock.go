@@ -230,6 +230,25 @@ func (m *MockClient) DeleteBookmark(id string) error {
 	return fmt.Errorf("bookmark not found: %s", id)
 }
 
+func (m *MockClient) GetTopics() ([]model.Topic, error) {
+	return mockTopics, nil
+}
+
+func (m *MockClient) GetTopicPosts(slug string, cursor string) ([]model.Post, string, error) {
+	// Return a filtered subset of posts for the topic
+	feed, _, _ := m.GetFeed("")
+	var topicPosts []model.Post
+	for _, p := range feed {
+		for _, t := range p.Topics {
+			if t == slug {
+				topicPosts = append(topicPosts, p)
+				break
+			}
+		}
+	}
+	return topicPosts, "", nil
+}
+
 func (m *MockClient) GetNotifications(cursor string) ([]model.Notification, string, error) {
 	return mockNotifications, "", nil
 }
@@ -259,6 +278,13 @@ func (m *MockClient) GetProfile(username string) (model.User, error) {
 
 func (m *MockClient) UpdateProfile(update model.ProfileUpdate) error {
 	return nil
+}
+
+var mockTopics = []model.Topic{
+	{Slug: "go", PostCount: 195},
+	{Slug: "programming", PostCount: 195},
+	{Slug: "cyberspace", PostCount: 127},
+	{Slug: "music", PostCount: 87},
 }
 
 var mockSettings = model.Settings{

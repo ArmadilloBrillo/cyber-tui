@@ -27,6 +27,7 @@ const (
 	screenNotifications
 	screenSettings
 	screenBookmarks
+	screenTopics
 )
 
 type focusTarget int
@@ -48,6 +49,7 @@ var menuTabs = []struct {
 	{"feed", screenFeed},
 	{"notifications", screenNotifications},
 	{"bookmarks", screenBookmarks},
+	{"topics", screenTopics},
 	{"profile", screenProfile},
 	{"settings", screenSettings},
 }
@@ -100,6 +102,7 @@ type App struct {
 	notifications  screens.NotificationsModel
 	settingsScreen screens.SettingsModel
 	bookmarks      screens.BookmarksModel
+	topics         screens.TopicsModel
 
 	// postDetailReturn is the screen to go back to when ESC is pressed in PostDetail.
 	postDetailReturn screen
@@ -134,6 +137,7 @@ func NewApp(client api.Client) App {
 		notifications:  screens.NewNotificationsModel(),
 		settingsScreen: screens.NewSettingsModel(),
 		bookmarks:      screens.NewBookmarksModel(),
+		topics:         screens.NewTopicsModel(),
 	}
 }
 
@@ -198,6 +202,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleNotifications(msg); ok { return a2, cmd }
 	if a2, cmd, ok := a.handleSettings(msg);       ok { return a2, cmd }
 	if a2, cmd, ok := a.handleBookmarks(msg);      ok { return a2, cmd }
+	if a2, cmd, ok := a.handleTopics(msg);         ok { return a2, cmd }
 	if a2, cmd, ok := a.handleErr(msg);            ok { return a2, cmd }
 	return a, a.delegateUpdate(msg)
 }
@@ -217,6 +222,7 @@ func (a *App) broadcastConfig() {
 	a.notifications, _ = a.notifications.Update(msg)
 	a.settingsScreen, _ = a.settingsScreen.Update(msg)
 	a.bookmarks, _ = a.bookmarks.Update(msg)
+	a.topics, _ = a.topics.Update(msg)
 }
 
 // applyWindowSize stores the new terminal dimensions and broadcasts the size
@@ -234,6 +240,7 @@ func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
 	a.notifications, _ = a.notifications.Update(m)
 	a.settingsScreen, _ = a.settingsScreen.Update(m)
 	a.bookmarks, _ = a.bookmarks.Update(m)
+	a.topics, _ = a.topics.Update(m)
 	return a
 }
 
@@ -557,6 +564,42 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 	return a, nil, false
 }
 
+// handleTopics processes topic list, topic posts, pagination, and post selection messages.
+func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case screens.RefreshTopicsMsg:
+		return a, a.loadTopicsCmd(), true
+
+	case topicsLoadedMsg:
+		a.topics = a.topics.SetTopics(msg.topics)
+		return a, nil, true
+
+	case screens.LoadTopicPostsMsg:
+		return a, a.loadTopicPostsCmd(msg.Slug), true
+
+	case topicPostsLoadedMsg:
+		a.topics = a.topics.SetTopicPosts(msg.posts, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadMoreTopicPostsMsg:
+		return a, a.loadTopicPostsPageCmd(msg.Slug, msg.Cursor), true
+
+	case topicPostsPageMsg:
+		a.topics = a.topics.AppendTopicPosts(msg.posts, msg.cursor)
+		return a, nil, true
+
+	case screens.RefreshTopicPostsMsg:
+		return a, a.loadTopicPostsCmd(msg.Slug), true
+
+	case screens.ShowTopicPostMsg:
+		a.postDetailReturn = screenTopics
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.Post)
+		return a, a.loadRepliesCmd(msg.Post.ID), true
+	}
+	return a, nil, false
+}
+
 // handleErr routes API error messages to the active screen's error display.
 func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 	m, ok := msg.(errMsg)
@@ -578,6 +621,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.settingsScreen = a.settingsScreen.SetError(m.err)
 	case screenBookmarks:
 		a.bookmarks = a.bookmarks.SetError(m.err)
+	case screenTopics:
+		a.topics = a.topics.SetError(m.err)
 	}
 	return a, nil, true
 }
@@ -633,6 +678,8 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 		return nil // no load cmd; settings already in memory
 	case screenBookmarks:
 		return a.loadBookmarksCmd("")
+	case screenTopics:
+		return a.loadTopicsCmd()
 	}
 	return nil
 }
@@ -658,6 +705,8 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 		a.settingsScreen, cmd = a.settingsScreen.Update(msg)
 	case screenBookmarks:
 		a.bookmarks, cmd = a.bookmarks.Update(msg)
+	case screenTopics:
+		a.topics, cmd = a.topics.Update(msg)
 	}
 	return cmd
 }
@@ -724,6 +773,8 @@ func (a App) renderActiveScreen() string {
 		return a.settingsScreen.View()
 	case screenBookmarks:
 		return a.bookmarks.View()
+	case screenTopics:
+		return a.topics.View()
 	}
 	return ""
 }
@@ -774,6 +825,8 @@ func (a App) renderStatusBar() string {
 		hintStr = "  m · mark read   M · mark all   u · unread filter   enter · open   p · profile   ? · help"
 	case screenBookmarks:
 		hintStr = "  enter · open post   d · delete   ? · help"
+	case screenTopics:
+		hintStr = "  enter · browse/open   esc · back   ? · help"
 	case screenSettings:
 		if a.settingsScreen.IsDirty() {
 			hintStr = "  ctrl+s · save   esc · revert   ? · help"
@@ -928,6 +981,7 @@ func (a *App) refreshViewports() {
 	a.postDetail, _ = a.postDetail.Update(msg)
 	a.notifications, _ = a.notifications.Update(msg)
 	a.bookmarks, _ = a.bookmarks.Update(msg)
+	a.topics, _ = a.topics.Update(msg)
 }
 
 // renderThemePicker returns the centered overlay box for theme selection.
@@ -970,7 +1024,7 @@ func (a App) renderHelpModal() string {
 	}
 	col1 := lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render("global"),
-		row("1-5", "feed/notifs/bookmarks/profile/settings"),
+		row("1-6", "feed/notifs/bookmarks/topics/profile/settings"),
 		row("←→", "cycle tabs"),
 		row("t", "theme"),
 		row("z", "timezone"),
@@ -1185,6 +1239,18 @@ type bookmarkPostLoadedMsg struct{ post model.Post }
 type bookmarkReplyLoadedMsg struct {
 	post    model.Post
 	replyID string
+}
+
+type topicsLoadedMsg struct {
+	topics []model.Topic
+}
+type topicPostsLoadedMsg struct {
+	posts  []model.Post
+	cursor string
+}
+type topicPostsPageMsg struct {
+	posts  []model.Post
+	cursor string
 }
 
 type notifsLoadedMsg struct {
@@ -1475,6 +1541,38 @@ func (a *App) deleteBookmarkCmd(id string) tea.Cmd {
 	return func() tea.Msg {
 		_ = a.client.DeleteBookmark(id) // fire-and-forget; UI already updated
 		return bookmarkDeletedMsg{bookmarkID: id}
+	}
+}
+
+// --- Topics commands ---
+
+func (a *App) loadTopicsCmd() tea.Cmd {
+	return func() tea.Msg {
+		topics, err := a.client.GetTopics()
+		if err != nil {
+			return errMsg{err}
+		}
+		return topicsLoadedMsg{topics: topics}
+	}
+}
+
+func (a *App) loadTopicPostsCmd(slug string) tea.Cmd {
+	return func() tea.Msg {
+		posts, cursor, err := a.client.GetTopicPosts(slug, "")
+		if err != nil {
+			return errMsg{err}
+		}
+		return topicPostsLoadedMsg{posts: posts, cursor: cursor}
+	}
+}
+
+func (a *App) loadTopicPostsPageCmd(slug, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		posts, nextCursor, err := a.client.GetTopicPosts(slug, cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return topicPostsPageMsg{posts: posts, cursor: nextCursor}
 	}
 }
 

@@ -117,6 +117,12 @@ type Bookmark struct {
 	CreatedAt time.Time
 }
 
+// Topic maps to the shape returned by GET /v1/topics.
+type Topic struct {
+	Slug      string
+	PostCount int
+}
+
 // NotificationActor is the user who triggered the notification.
 type NotificationActor struct {
 	ID       string
