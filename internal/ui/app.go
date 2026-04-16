@@ -420,6 +420,22 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		a.profileReturn = screenFeed
 		return a, a.loadUserProfileCmd(msg.Username), true
+	case screens.DeletePostMsg:
+		if a.active != screenFeed {
+			return a, nil, false
+		}
+		postID := msg.PostID
+		return a, a.deletePostCmd(postID, true), true
+	case postDeletedMsg:
+		if msg.fromFeed {
+			// Deleted from feed: remove locally.
+			a.feed = a.feed.RemovePost(msg.postID)
+		} else {
+			// Deleted from post detail: navigate to feed and reload.
+			a.active = screenFeed
+			return a, a.loadFeedCmd(), true
+		}
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -451,6 +467,17 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		a.profileReturn = screenPostDetail
 		return a, a.loadUserProfileCmd(msg.Username), true
+	case screens.DeletePostMsg:
+		if a.active != screenPostDetail {
+			return a, nil, false
+		}
+		postID := msg.PostID
+		return a, a.deletePostCmd(postID, false), true
+	case screens.DeleteReplyMsg:
+		return a, a.deleteReplyCmd(msg.ReplyID), true
+	case replyDeletedMsg:
+		a.postDetail = a.postDetail.RemoveReply(msg.replyID)
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -487,6 +514,9 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 	case profileLoadedMsg:
 		a.currentUser = msg.user
 		a.profile = a.profile.SetUser(msg.user).SetCanGoBack(false)
+		// Propagate the confirmed username to screens that guard own-content actions.
+		a.feed = a.feed.SetCurrentUsername(msg.user.Username)
+		a.postDetail = a.postDetail.SetCurrentUsername(msg.user.Username)
 		return a, nil, true
 	case userProfileLoadedMsg:
 		isOwn := msg.user.Username == a.currentUser.Username
@@ -885,13 +915,13 @@ func (a App) renderStatusBar() string {
 		if a.feed.ComposeActive() {
 			hintStr = "  Ctrl+S · send   Tab · topics   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  p · profile   ? · help"
+			hintStr = "  n · new   r · reply   d · delete own   p · profile   ? · help"
 		}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
 			hintStr = "  Ctrl+S · send   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  p · profile   ? · help"
+			hintStr = "  r · reply   d · delete own   p · profile   ? · help"
 		}
 	case screenProfile:
 		if a.profile.ComposeActive() {
@@ -1137,12 +1167,14 @@ func (a App) renderHelpModal() string {
 		row("b", "bookmark post"),
 		row("n", "new post"),
 		row("r", "reply"),
+		row("d", "delete own post"),
 		"",
 		sectionStyle.Render("post detail"),
 		row("↑↓ / jk", "scroll / navigate"),
 		row("p", "view profile"),
 		row("b", "bookmark post"),
 		row("r", "reply"),
+		row("d", "delete own post/reply"),
 		row("esc", "back"),
 		"",
 		sectionStyle.Render("profile"),
@@ -1284,6 +1316,8 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 func (a *App) afterLoginCmd() tea.Cmd {
 	a.active = screenFeed
 	a.profile = a.profile.SetUser(a.currentUser)
+	a.feed = a.feed.SetCurrentUsername(a.currentUser.Username)
+	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username)
 	a.broadcastConfig()
 	return tea.Batch(a.loadFeedCmd(), a.loadProfileCmd(), a.schedulePollCmd(), a.loadSettingsCmd())
 }
@@ -1308,7 +1342,12 @@ type followResultMsg struct{ followID string }
 type unfollowResultMsg struct{}
 type repliesLoadedMsg struct{ replies []model.Reply }
 type replyCreatedMsg struct{ postID string }
+type replyDeletedMsg struct{ replyID string }
 type postCreatedMsg struct{}
+type postDeletedMsg struct {
+	postID   string
+	fromFeed bool // true = delete was triggered from the feed; false = from post detail
+}
 type settingsLoadedMsg struct{ settings model.Settings }
 type settingsSavedMsg struct{ settings model.Settings }
 type errMsg struct{ err error }
@@ -1780,6 +1819,24 @@ func (a *App) deleteNoteCmd(noteID string) tea.Cmd {
 			return errMsg{err}
 		}
 		return noteDeletedMsg{noteID: noteID}
+	}
+}
+
+func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.DeletePost(postID); err != nil {
+			return errMsg{err}
+		}
+		return postDeletedMsg{postID: postID, fromFeed: fromFeed}
+	}
+}
+
+func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.DeleteReply(replyID); err != nil {
+			return errMsg{err}
+		}
+		return replyDeletedMsg{replyID: replyID}
 	}
 }
 

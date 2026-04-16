@@ -74,6 +74,14 @@ type Client interface {
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetTopicPosts(slug string, cursor string) ([]model.Post, string, error)
 
+	// Posts — deletion.
+	// DeletePost soft-deletes a post owned by the authenticated user.
+	DeletePost(postID string) error
+
+	// Replies — deletion.
+	// DeleteReply soft-deletes a reply owned by the authenticated user.
+	DeleteReply(replyID string) error
+
 	// Notes — private notes visible only to the author.
 	// GetNotes returns the latest revision of each note, newest first.
 	// Pass empty cursor for first page; use returned cursor for next page.

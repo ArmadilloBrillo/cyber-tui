@@ -43,7 +43,7 @@ type FeedModel struct {
 	topicsInput        textinput.Model
 	topicsFocused      bool
 	width              int
-	height            int
+	height             int
 	selectedIndex      int
 	ready              bool
 	err                error
@@ -54,6 +54,9 @@ type FeedModel struct {
 	relaxed            bool           // true = blank line between posts (relaxed density)
 	loc                *time.Location // timezone for timestamp display; nil = UTC
 	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
+
+	currentUsername  string // set after login; used to guard the delete key
+	confirmingDelete bool   // true while the delete-post confirmation overlay is shown
 }
 
 func NewFeedModel() FeedModel {
@@ -109,6 +112,31 @@ func (m FeedModel) AppendPosts(posts []model.Post, cursor string) FeedModel {
 func (m FeedModel) SetError(err error) FeedModel {
 	m.err = err
 	m.loading = false
+	return m
+}
+
+// SetCurrentUsername records the logged-in user's username so the feed can
+// restrict the delete key to the user's own posts.
+func (m FeedModel) SetCurrentUsername(username string) FeedModel {
+	m.currentUsername = username
+	return m
+}
+
+// RemovePost removes a post from the local list by ID (called after a
+// successful DELETE API call so the list reflects the deletion immediately).
+func (m FeedModel) RemovePost(postID string) FeedModel {
+	for i, p := range m.posts {
+		if p.ID == postID {
+			m.posts = append(m.posts[:i], m.posts[i+1:]...)
+			if m.selectedIndex >= len(m.posts) && m.selectedIndex > 0 {
+				m.selectedIndex = len(m.posts) - 1
+			}
+			break
+		}
+	}
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -228,6 +256,25 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Confirmation overlay intercepts all keys while active.
+		if m.confirmingDelete {
+			switch msg.String() {
+			case "y":
+				if m.selectedIndex < len(m.posts) {
+					postID := m.posts[m.selectedIndex].ID
+					m.confirmingDelete = false
+					m.viewport.Height = m.viewportHeight()
+					return m, func() tea.Msg { return DeletePostMsg{PostID: postID} }
+				}
+				m.confirmingDelete = false
+				m.viewport.Height = m.viewportHeight()
+			case "n", "esc":
+				m.confirmingDelete = false
+				m.viewport.Height = m.viewportHeight()
+			}
+			return m, nil
+		}
+
 		if m.compose.IsActive() {
 			switch msg.String() {
 			case "tab":
@@ -304,6 +351,13 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				return m, func() tea.Msg { return BookmarkPostMsg{PostID: postID} }
 			}
 			return m, nil
+		case "d":
+			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) &&
+				m.posts[m.selectedIndex].AuthorUsername == m.currentUsername {
+				m.confirmingDelete = true
+				m.viewport.Height = m.viewportHeight()
+			}
+			return m, nil
 		case "n":
 			m.topicsInput.SetValue("tui")
 			m.topicsFocused = false
@@ -341,12 +395,15 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 }
 
 // viewportHeight returns the viewport height in rows, shrinking to make room for
-// the compose box and tags input when active.
+// the compose box, tags input, and the delete-confirmation overlay when active.
 func (m FeedModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight
 	if m.compose.IsActive() {
 		h -= m.compose.BoxHeight()
 		h -= 3 // tags input row: border top + content + border bottom
+	}
+	if m.confirmingDelete {
+		h -= confirmBoxHeight
 	}
 	if h < 1 {
 		h = 1
@@ -400,6 +457,18 @@ func (m FeedModel) View() string {
 	if !m.ready {
 		return theme.Subtle.Render("loading feed...")
 	}
+
+	if m.confirmingDelete {
+		prompt := theme.Error.Render("Delete this post?") + "  " +
+			theme.Base.Render("[y]es") + "  " +
+			theme.Subtle.Render("[n]o / esc")
+		promptView := theme.ActiveBorder.Width(m.width - 2).Render(prompt)
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			promptView,
+		)
+	}
+
 	if m.compose.IsActive() {
 		topicsStyle := theme.Border
 		if m.topicsFocused {

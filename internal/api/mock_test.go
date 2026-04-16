@@ -532,6 +532,39 @@ func TestMockDeleteNote_NotFound(t *testing.T) {
 	}
 }
 
+// --- DeletePost ---
+
+func TestMockDeletePost_ReturnsNil(t *testing.T) {
+	m := newMock()
+	if err := m.DeletePost("p1"); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestMockDeletePost_UnknownIDReturnsNil(t *testing.T) {
+	m := newMock()
+	// Mock is a no-op; any ID is accepted without error.
+	if err := m.DeletePost("no-such-post"); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+// --- DeleteReply ---
+
+func TestMockDeleteReply_ReturnsNil(t *testing.T) {
+	m := newMock()
+	if err := m.DeleteReply("r1"); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestMockDeleteReply_UnknownIDReturnsNil(t *testing.T) {
+	m := newMock()
+	if err := m.DeleteReply("no-such-reply"); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
 // --- Interface compliance ---
 
 func TestMockClient_ImplementsClientInterface(t *testing.T) {

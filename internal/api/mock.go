@@ -169,6 +169,14 @@ func (m *MockClient) CreatePost(content string, topics []string) (model.Post, er
 	}, nil
 }
 
+func (m *MockClient) DeletePost(postID string) error {
+	return nil // no-op: in-memory feed is rebuilt on each GetFeed call
+}
+
+func (m *MockClient) DeleteReply(replyID string) error {
+	return nil // no-op: in-memory replies are rebuilt on each GetPostReplies call
+}
+
 func (m *MockClient) GetPost(postID string) (model.Post, error) {
 	posts, _, _ := m.GetFeed("")
 	for _, p := range posts {

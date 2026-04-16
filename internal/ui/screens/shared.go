@@ -138,3 +138,14 @@ type SubmitPublishNoteMsg struct {
 
 // SubmitDeleteNoteMsg is emitted by JournalModel when the user confirms deletion.
 type SubmitDeleteNoteMsg struct{ NoteID string }
+
+// DeletePostMsg is emitted by FeedModel or PostDetailModel when the user confirms
+// deleting their own post.
+type DeletePostMsg struct{ PostID string }
+
+// DeleteReplyMsg is emitted by PostDetailModel when the user confirms deleting
+// their own reply.
+type DeleteReplyMsg struct {
+	ReplyID string
+	PostID  string
+}

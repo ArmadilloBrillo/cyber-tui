@@ -645,6 +645,16 @@ func (c *HTTPClient) CreatePost(content string, topics []string) (model.Post, er
 	return model.Post{ID: data.PostID, Content: content, Topics: topics}, nil
 }
 
+func (c *HTTPClient) DeletePost(postID string) error {
+	_, err := c.doRequest("DELETE", "/v1/posts/"+url.PathEscape(postID), nil)
+	return err
+}
+
+func (c *HTTPClient) DeleteReply(replyID string) error {
+	_, err := c.doRequest("DELETE", "/v1/replies/"+url.PathEscape(replyID), nil)
+	return err
+}
+
 func (c *HTTPClient) GetReply(replyID string) (model.Reply, error) {
 	env, err := c.doRequest("GET", "/v1/replies/"+url.PathEscape(replyID), nil)
 	if err != nil {

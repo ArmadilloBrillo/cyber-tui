@@ -32,15 +32,12 @@ Ordered roughly by implementation effort / priority.
 
 | Endpoint | Method | Description | Priority |
 |---|---|---|---|
-| `/v1/posts/:id` | DELETE | Delete own post | Medium — useful quality-of-life feature |
 | `/v1/users/:username/posts` | GET | Paginated post history for a user | Medium — show on profile screen |
 | `/v1/users/:username/replies` | GET | Paginated reply history for a user | Low |
 
 ### Replies
 
-| Endpoint | Method | Description | Priority |
-|---|---|---|---|
-| `/v1/replies/:id` | DELETE | Delete own reply | Medium |
+_(No unimplemented reply endpoints remaining at medium/high priority)_
 
 ### Attachments
 
@@ -81,4 +78,5 @@ Ordered roughly by implementation effort / priority.
 
 | Endpoint | Description | Resolved |
 |---|---|---|
-| _(none yet)_ | | |
+| `DELETE /v1/posts/:id` | Delete own post — wired in client, feed, and post detail; `d` key with y/n confirmation | 2026-04-16 |
+| `DELETE /v1/replies/:id` | Delete own reply — wired in client and post detail; `d` key with y/n confirmation | 2026-04-16 |

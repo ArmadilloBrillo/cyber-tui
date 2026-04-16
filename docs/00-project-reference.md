@@ -136,8 +136,8 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Group | Methods |
 |---|---|
 | Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()` |
-| Feed | `GetFeed(cursor)`, `CreatePost(content, topics)`, `GetPost(postID)` |
-| Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)` |
+| Feed | `GetFeed(cursor)`, `CreatePost(content, topics)`, `GetPost(postID)`, `DeletePost(postID)` |
+| Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)` |
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
 | Follows | `GetFollowing(cursor)`, `Follow(followedID)`, `Unfollow(followID)` |
 | Settings | `GetSettings()`, `UpdateSettings(update)` |
@@ -335,11 +335,13 @@ Home feed of posts from followed users.
 - Emits `ShowPostMsg` on Enter → App navigates to PostDetail
 - Emits `SubmitNewPostMsg` on compose submit (content + topics)
 - `n` opens compose for a new post (with topics input); `r` opens compose for a reply
+- `d` on the selected post (own posts only) shows a y/n confirmation overlay; on `y` emits `DeletePostMsg`
 - Dense/relaxed display modes; post content truncated to 4 lines in list view
 - Timezone-aware timestamps via `displayTime()`
 
-Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg`  
-Key function: `ParseTopics(s string) []string` — splits comma-separated string, caps at 3
+Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg`, `DeletePostMsg`  
+Key function: `ParseTopics(s string) []string` — splits comma-separated string, caps at 3  
+Key methods: `SetCurrentUsername(username)`, `RemovePost(postID)`
 
 #### `postdetail.go`
 
@@ -348,10 +350,12 @@ Single post with all its replies in a scrollable pager.
 - Post rendered at top; replies below with nesting (indicated by `parentReplyID`)
 - `j`/`k` (or arrows) navigate/select post or individual replies
 - `r` on a selected item opens the compose box (top-level or nested reply)
+- `d` on the selected item (own post or own reply) shows a y/n confirmation overlay; on `y` emits `DeletePostMsg` or `DeleteReplyMsg`
 - ESC emits `BackToFeedMsg` → App returns to feed
 - `ScrollToReply(replyID)` scrolls to a specific reply (used by Notifications to deep-link)
 
-Key types: `PostDetailModel`, `BackToFeedMsg`, `SubmitReplyMsg` (postID, parentReplyID, content)
+Key types: `PostDetailModel`, `BackToFeedMsg`, `SubmitReplyMsg` (postID, parentReplyID, content), `DeletePostMsg`, `DeleteReplyMsg`  
+Key methods: `SetCurrentUsername(username)`, `RemoveReply(replyID)`
 
 #### `profile.go`
 
@@ -621,6 +625,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `enter` | Open post detail |
 | `r` | Reply to selected post |
 | `n` | New post |
+| `d` | Delete selected post (own posts only — prompts y/n) |
 | `p` | View author's profile |
 
 ### Post Detail
@@ -630,6 +635,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `j` / `↓` | Scroll down / next reply |
 | `k` / `↑` | Scroll up / previous reply |
 | `r` | Reply to selected post or reply |
+| `d` | Delete selected post or reply (own content only — prompts y/n) |
 | `p` | View author's profile |
 | `esc` | Back to feed |
 
@@ -714,6 +720,6 @@ go vet ./...
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized |
 | **Note updates (PATCH)** | Server returns 500 for all `PATCH /v1/notes/:id` requests — confirmed server-side bug; client code is correct. See `docs/00-api-backlog.md` |
 | **Followers list** | Only "following" is fetched; "followers" list screen is not implemented |
-| **Post/reply deletion** | `DELETE /v1/posts/:id` and `DELETE /v1/replies/:id` exist in API but are not wired in the client |
+| **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |
 | **Attachments** | Image and YouTube audio attachments on posts/replies are not supported in the TUI |
 | **User post/reply history** | `GET /v1/users/:username/posts` and `/replies` are not called; profile screen shows bio only |

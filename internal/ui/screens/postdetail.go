@@ -15,6 +15,15 @@ import (
 // BackToFeedMsg is emitted when the user presses Esc to return to the feed.
 type BackToFeedMsg struct{}
 
+// pdConfirmKind tracks which delete action is awaiting confirmation in PostDetail.
+type pdConfirmKind int
+
+const (
+	pdConfirmNone        pdConfirmKind = iota
+	pdConfirmDeletePost                // d pressed while post is selected
+	pdConfirmDeleteReply               // d pressed while a reply is selected
+)
+
 // SubmitReplyMsg is emitted when the compose box is submitted.
 // App intercepts this, calls CreateReply, then reloads replies.
 type SubmitReplyMsg struct {
@@ -42,6 +51,9 @@ type PostDetailModel struct {
 	relaxed            bool           // true = blank lines between post, header, and replies
 	loc                *time.Location // timezone for timestamp display; nil = UTC
 	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
+
+	currentUsername string        // set after login; guards the delete key to own content
+	confirming      pdConfirmKind // pending delete confirmation
 }
 
 func NewPostDetailModel() PostDetailModel {
@@ -117,6 +129,34 @@ func (m PostDetailModel) SetError(err error) PostDetailModel {
 	return m
 }
 
+// SetCurrentUsername records the logged-in user's username so PostDetail can
+// restrict the delete key to the user's own posts and replies.
+func (m PostDetailModel) SetCurrentUsername(username string) PostDetailModel {
+	m.currentUsername = username
+	return m
+}
+
+// RemoveReply removes a reply from the local list by ID (called after a
+// successful DELETE API call). Adjusts selectedReply to stay in bounds.
+func (m PostDetailModel) RemoveReply(replyID string) PostDetailModel {
+	for i, r := range m.replies {
+		if r.ID == replyID {
+			m.replies = append(m.replies[:i], m.replies[i+1:]...)
+			switch {
+			case len(m.replies) == 0:
+				m.selectedReply = -1
+			case m.selectedReply >= len(m.replies):
+				m.selectedReply = len(m.replies) - 1
+			}
+			break
+		}
+	}
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
 func (m PostDetailModel) SetRelaxed(relaxed bool) PostDetailModel {
 	m.relaxed = relaxed
 	if m.ready {
@@ -165,11 +205,14 @@ func (m PostDetailModel) OpenCompose() (PostDetailModel, tea.Cmd) {
 }
 
 // viewportHeight returns the number of lines the viewport should occupy,
-// accounting for the compose box when it is active.
+// accounting for the compose box and delete confirmation overlay when active.
 func (m PostDetailModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight
 	if m.compose.IsActive() {
 		h -= m.compose.BoxHeight()
+	}
+	if m.confirming != pdConfirmNone {
+		h -= confirmBoxHeight
 	}
 	if h < 1 {
 		h = 1
@@ -269,6 +312,33 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Confirmation overlay intercepts all keys while active.
+		if m.confirming != pdConfirmNone {
+			switch msg.String() {
+			case "y":
+				action := m.confirming
+				m.confirming = pdConfirmNone
+				m.viewport.Height = m.viewportHeight()
+				switch action {
+				case pdConfirmDeletePost:
+					postID := m.post.ID
+					return m, func() tea.Msg { return DeletePostMsg{PostID: postID} }
+				case pdConfirmDeleteReply:
+					if m.selectedReply >= 0 && m.selectedReply < len(m.replies) {
+						replyID := m.replies[m.selectedReply].ID
+						postID := m.post.ID
+						return m, func() tea.Msg {
+							return DeleteReplyMsg{ReplyID: replyID, PostID: postID}
+						}
+					}
+				}
+			case "n", "esc":
+				m.confirming = pdConfirmNone
+				m.viewport.Height = m.viewportHeight()
+			}
+			return m, nil
+		}
+
 		// When compose is open, all key events go to the compose box.
 		if m.compose.IsActive() {
 			prevH := m.compose.BoxHeight()
@@ -283,6 +353,21 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			return m, func() tea.Msg { return BackToFeedMsg{} }
+		case "d":
+			if m.selectedReply == -1 {
+				// Post selected — only allow delete if it's the user's own post.
+				if m.post.ID != "" && m.post.AuthorUsername == m.currentUsername {
+					m.confirming = pdConfirmDeletePost
+					m.viewport.Height = m.viewportHeight()
+				}
+			} else if m.selectedReply >= 0 && m.selectedReply < len(m.replies) {
+				// Reply selected — only allow delete if it's the user's own reply.
+				if m.replies[m.selectedReply].AuthorUsername == m.currentUsername {
+					m.confirming = pdConfirmDeleteReply
+					m.viewport.Height = m.viewportHeight()
+				}
+			}
+			return m, nil
 		case "r":
 			var cmd tea.Cmd
 			m, cmd = m.OpenCompose()
@@ -504,6 +589,33 @@ func (m PostDetailModel) View() string {
 	if !m.ready {
 		return theme.Subtle.Render("loading…")
 	}
+
+	if m.confirming != pdConfirmNone {
+		var promptText string
+		switch m.confirming {
+		case pdConfirmDeletePost:
+			promptText = theme.Error.Render("Delete this post?") + "  " +
+				theme.Base.Render("[y]es") + "  " +
+				theme.Subtle.Render("[n]o / esc")
+		case pdConfirmDeleteReply:
+			promptText = theme.Error.Render("Delete this reply?") + "  " +
+				theme.Base.Render("[y]es") + "  " +
+				theme.Subtle.Render("[n]o / esc")
+		}
+		promptView := theme.ActiveBorder.Width(m.width - 2).Render(promptText)
+		if m.compose.IsActive() {
+			return lipgloss.JoinVertical(lipgloss.Left,
+				m.viewport.View(),
+				m.compose.View(),
+				promptView,
+			)
+		}
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			promptView,
+		)
+	}
+
 	if m.compose.IsActive() {
 		return lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
