@@ -334,10 +334,16 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	case "4":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenTopics
+			return a, a.loadTopicsCmd(), true
+		}
+	case "5":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenProfile
 			return a, a.loadProfileCmd(), true
 		}
-	case "5":
+	case "6":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenSettings

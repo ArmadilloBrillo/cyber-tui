@@ -42,24 +42,25 @@ type TopicsModel struct {
 	topicIndex  int
 
 	// Topic posts state
-	activeTopic string
-	posts       []model.Post
-	postIndex   int
-	nextCursor  string
-	exhausted   bool
-	loading     bool
-	refreshing  bool
+	activeTopic  string
+	posts        []model.Post
+	postIndex    int
+	nextCursor   string
+	exhausted    bool
+	loading      bool
+	refreshing   bool
 
 	// Shared
-	viewport    viewport.Model
-	itemOffsets []int
-	width       int
-	height      int
-	selectedIndex int
-	ready       bool
-	err         error
-	loc         *time.Location
-	relaxed     bool
+	viewport         viewport.Model
+	itemOffsets      []int
+	width            int
+	height           int
+	selectedIndex    int
+	ready            bool
+	err              error
+	loc              *time.Location
+	relaxed          bool
+	timeDisplayFormat string
 }
 
 func NewTopicsModel() TopicsModel {
@@ -120,6 +121,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 		if msg.Loc != nil {
 			m.loc = msg.Loc
 		}
+		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -218,74 +220,78 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 }
 
 func (m TopicsModel) View() string {
-	if !m.ready {
-		return ""
-	}
-
-	var header string
-	if m.view == viewTopicList {
-		header = "  topics  "
-	} else {
-		header = fmt.Sprintf("  %s (%d) ", m.activeTopic, len(m.posts))
-	}
-
-	statusBar := theme.Subtle.Render(fmt.Sprintf("%-*s", m.width, header))
-
-	content := m.viewport.View()
-
-	footer := m.renderFooter()
-
-	return lipgloss.JoinVertical(lipgloss.Left, statusBar, content, footer)
-}
-
-func (m TopicsModel) renderFooter() string {
 	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("Error: %v", m.err))
+		return theme.Error.Render(fmt.Sprintf("topics error: %s", m.err))
 	}
-
-	var status string
-	if m.loading {
-		status = "loading…"
-	} else if m.refreshing {
-		status = "refreshing…"
-	} else if m.view == viewTopicPosts && m.exhausted {
-		status = "— end —"
-	} else if len(m.posts) == 0 && m.view == viewTopicPosts {
-		status = "no posts"
-	} else {
-		status = ""
+	if !m.ready {
+		return theme.Subtle.Render("loading topics...")
 	}
-
-	return theme.Subtle.Render(fmt.Sprintf("%-*s", m.width, status))
+	return m.viewport.View()
 }
 
-func (m TopicsModel) buildContent() string {
+func (m TopicsModel) buildContent() (string, []int) {
 	var lines []string
-	m.itemOffsets = []int{0}
+	var offsets []int
+
+	// Add header line
+	if m.view == viewTopicList {
+		lines = append(lines, theme.Subtle.Render("  topics"))
+		offsets = append(offsets, 0)
+	} else {
+		lines = append(lines, theme.Subtle.Render(fmt.Sprintf("  ← %s", m.activeTopic)))
+		offsets = append(offsets, 0)
+	}
+
+	sep := ""
+	if m.relaxed {
+		sep = "\n"
+	}
 
 	if m.view == viewTopicList {
 		for i := range m.topics {
+			if i > 0 {
+				lines = append(lines, sep)
+				offsets = append(offsets, len(lines))
+			}
 			line := m.renderTopicItem(i)
 			lines = append(lines, line)
 			if i < len(m.topics)-1 {
-				m.itemOffsets = append(m.itemOffsets, len(lines))
+				offsets = append(offsets, len(lines))
 			}
 		}
 	} else {
 		for i := range m.posts {
-			line := m.renderPostItem(i)
-			lines = append(lines, line)
+			if i > 0 {
+				lines = append(lines, sep)
+				offsets = append(offsets, len(lines))
+			}
+			rendered := m.renderPostItem(m.posts[i], i == m.postIndex)
+			for _, l := range strings.Split(rendered, "\n") {
+				lines = append(lines, l)
+			}
 			if i < len(m.posts)-1 {
-				m.itemOffsets = append(m.itemOffsets, len(lines))
+				offsets = append(offsets, len(lines))
 			}
 		}
 	}
 
-	if len(lines) == 0 {
-		return ""
+	// Add footer
+	if m.loading {
+		lines = append(lines, theme.Subtle.Render("  loading…"))
+	} else if m.refreshing {
+		lines = append(lines, theme.Subtle.Render("  refreshing…"))
+	} else if m.view == viewTopicPosts && m.exhausted && len(m.posts) > 0 {
+		lines = append(lines, theme.Subtle.Render("  — end —"))
+	} else if len(lines) == 1 {
+		// Only header, no items
+		if m.view == viewTopicList {
+			lines = append(lines, theme.Subtle.Render("  no topics"))
+		} else {
+			lines = append(lines, theme.Subtle.Render("  no posts"))
+		}
 	}
 
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), offsets
 }
 
 func (m TopicsModel) renderTopicItem(index int) string {
@@ -296,10 +302,13 @@ func (m TopicsModel) renderTopicItem(index int) string {
 	topic := m.topics[index]
 	isSelected := (m.view == viewTopicList && index == m.topicIndex)
 
-	content := fmt.Sprintf("%-*s %6d posts",
-		m.width-20,
-		truncateStr(topic.Slug, m.width-20),
-		topic.PostCount)
+	slug := topic.Slug
+	maxWidth := m.width - 20
+	if len(slug) > maxWidth {
+		slug = slug[:maxWidth]
+	}
+
+	content := fmt.Sprintf("%-*s %6d posts", maxWidth, slug, topic.PostCount)
 
 	if isSelected {
 		return theme.Highlight.Render("▸ " + content)
@@ -307,34 +316,74 @@ func (m TopicsModel) renderTopicItem(index int) string {
 	return "  " + content
 }
 
-func (m TopicsModel) renderPostItem(index int) string {
-	if index < 0 || index >= len(m.posts) {
-		return ""
+func (m TopicsModel) renderPostItem(p model.Post, selected bool) string {
+	// Adapted from feed.go renderPost
+	innerWidth := m.width - 4
+
+	left := lipgloss.JoinHorizontal(lipgloss.Top,
+		theme.Highlight.Render("@"+p.AuthorUsername),
+		theme.Subtle.Render("  "+displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, false)),
+	)
+	var repliesLabel string
+	switch p.RepliesCount {
+	case 0:
+		// show nothing
+	case 1:
+		repliesLabel = theme.Subtle.Render("1 reply")
+	default:
+		repliesLabel = theme.Subtle.Render(fmt.Sprintf("%d replies", p.RepliesCount))
+	}
+	var header string
+	if innerWidth > 0 {
+		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(repliesLabel)
+		if gap > 0 {
+			header = left + strings.Repeat(" ", gap) + repliesLabel
+		} else {
+			header = left
+		}
+	} else {
+		header = left
 	}
 
-	post := m.posts[index]
-	isSelected := (m.view == viewTopicPosts && index == m.postIndex)
-
-	// Format: ▸ @author: preview...
-	author := post.AuthorUsername
-	preview := strings.TrimSpace(post.Content)
-	if len(preview) > 50 {
-		preview = preview[:47] + "..."
+	var body string
+	if innerWidth > 0 {
+		wrapped := theme.Base.Width(innerWidth).Render(p.Content)
+		lines := strings.Split(wrapped, "\n")
+		if len(lines) > feedMaxBodyLines {
+			body = strings.Join(lines[:feedMaxBodyLines], "\n")
+			more := len(lines) - feedMaxBodyLines
+			body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
+		} else {
+			body = wrapped
+		}
+	} else {
+		body = theme.Base.Render(p.Content)
 	}
 
-	content := fmt.Sprintf("@%-*s %s",
-		15,
-		truncateStr(author, 15),
-		truncateStr(preview, m.width-25))
-
-	if isSelected {
-		return theme.Highlight.Render("▸ " + content)
+	topics := ""
+	for _, t := range p.Topics {
+		topics += theme.Subtle.Render("#"+t) + " "
 	}
-	return "  " + content
+
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if innerWidth > 0 {
+		boxStyle = boxStyle.Width(m.width - 2)
+	}
+	return boxStyle.Render(
+		lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			body,
+			fmt.Sprintf("\n%s", topics),
+		),
+	)
 }
 
 func (m TopicsModel) refreshContent() TopicsModel {
-	content := m.buildContent()
+	content, offsets := m.buildContent()
+	m.itemOffsets = offsets
 	m.viewport.SetContent(content)
 	return m.ensureSelectedVisible()
 }
@@ -373,11 +422,13 @@ func (m TopicsModel) viewportHeight() int {
 	return m.height - theme.ChromeHeight
 }
 
-// --- Helpers ---
-
-func truncateStr(s string, maxWidth int) string {
-	if len(s) <= maxWidth {
-		return s
+func (m TopicsModel) location() *time.Location {
+	if m.loc == nil {
+		return time.UTC
 	}
-	return s[:maxWidth]
+	return m.loc
 }
+
+// --- Helpers ---
+// truncate is defined in cmail.go; using same pattern here
+// Rather than import it, we inline a simple implementation in renderTopicItem
