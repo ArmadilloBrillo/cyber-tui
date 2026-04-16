@@ -10,17 +10,21 @@ type Tokens struct {
 }
 
 type User struct {
-	ID             string
-	Username       string
-	DisplayName    string
-	Email          string
-	Bio            string
-	WebsiteUrl     string
-	PinnedPostID   string
-	LocationName   string
-	FollowersCount int
-	FollowingCount int
-	PostsCount     int
+	ID               string
+	Username         string
+	DisplayName      string
+	Email            string
+	Bio              string
+	WebsiteUrl       string
+	WebsiteName      string
+	WebsiteImageUrl  string
+	PinnedPostID     string
+	LocationName     string
+	LocationLatitude  float64
+	LocationLongitude float64
+	FollowersCount   int
+	FollowingCount   int
+	PostsCount       int
 }
 
 // Follow maps to a record returned by GET /v1/follows.
@@ -61,11 +65,15 @@ type Reply struct {
 // ProfileUpdate carries the fields accepted by PATCH /v1/users/me.
 // Pointer fields: only non-nil values are sent in the real HTTP client.
 type ProfileUpdate struct {
-	Bio          *string
-	DisplayName  *string
-	PinnedPostID *string
-	WebsiteUrl   *string
-	LocationName *string
+	Bio               *string
+	DisplayName       *string
+	PinnedPostID      *string
+	WebsiteUrl        *string
+	WebsiteName       *string
+	WebsiteImageUrl   *string
+	LocationName      *string
+	LocationLatitude  *float64
+	LocationLongitude *float64
 }
 
 // Message, Conversation, Room are used by the RTDB chat/DM layer.

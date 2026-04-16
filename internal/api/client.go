@@ -72,17 +72,21 @@ type wirePost struct {
 }
 
 type wireUser struct {
-	UserID         string `json:"userId"`
-	Username       string `json:"username"`
-	DisplayName    string `json:"displayName"`
-	Email          string `json:"email"`
-	Bio            string `json:"bio"`
-	WebsiteUrl     string `json:"websiteUrl"`
-	PinnedPostID   string `json:"pinnedPostId"`
-	LocationName   string `json:"locationName"`
-	FollowersCount int    `json:"followersCount"`
-	FollowingCount int    `json:"followingCount"`
-	PostsCount     int    `json:"postsCount"`
+	UserID            string  `json:"userId"`
+	Username          string  `json:"username"`
+	DisplayName       string  `json:"displayName"`
+	Email             string  `json:"email"`
+	Bio               string  `json:"bio"`
+	WebsiteUrl        string  `json:"websiteUrl"`
+	WebsiteName       string  `json:"websiteName"`
+	WebsiteImageUrl   string  `json:"websiteImageUrl"`
+	PinnedPostID      string  `json:"pinnedPostId"`
+	LocationName      string  `json:"locationName"`
+	LocationLatitude  float64 `json:"locationLatitude"`
+	LocationLongitude float64 `json:"locationLongitude"`
+	FollowersCount    int     `json:"followersCount"`
+	FollowingCount    int     `json:"followingCount"`
+	PostsCount        int     `json:"postsCount"`
 }
 
 type wireFollow struct {
@@ -191,11 +195,15 @@ type wireNotification struct {
 }
 
 type updateProfileRequest struct {
-	Bio          *string `json:"bio,omitempty"`
-	DisplayName  *string `json:"displayName,omitempty"`
-	PinnedPostID *string `json:"pinnedPostId,omitempty"`
-	WebsiteUrl   *string `json:"websiteUrl,omitempty"`
-	LocationName *string `json:"locationName,omitempty"`
+	Bio               *string  `json:"bio,omitempty"`
+	DisplayName       *string  `json:"displayName,omitempty"`
+	PinnedPostID      *string  `json:"pinnedPostId,omitempty"`
+	WebsiteUrl        *string  `json:"websiteUrl,omitempty"`
+	WebsiteName       *string  `json:"websiteName,omitempty"`
+	WebsiteImageUrl   *string  `json:"websiteImageUrl,omitempty"`
+	LocationName      *string  `json:"locationName,omitempty"`
+	LocationLatitude  *float64 `json:"locationLatitude,omitempty"`
+	LocationLongitude *float64 `json:"locationLongitude,omitempty"`
 }
 
 type wireNotificationPrefs struct {
@@ -451,17 +459,21 @@ func wireReplyToModel(w wireReply) model.Reply {
 
 func wireUserToModel(w wireUser) model.User {
 	return model.User{
-		ID:             w.UserID,
-		Username:       w.Username,
-		DisplayName:    w.DisplayName,
-		Email:          w.Email,
-		Bio:            w.Bio,
-		WebsiteUrl:     w.WebsiteUrl,
-		PinnedPostID:   w.PinnedPostID,
-		LocationName:   w.LocationName,
-		FollowersCount: w.FollowersCount,
-		FollowingCount: w.FollowingCount,
-		PostsCount:     w.PostsCount,
+		ID:                w.UserID,
+		Username:          w.Username,
+		DisplayName:       w.DisplayName,
+		Email:             w.Email,
+		Bio:               w.Bio,
+		WebsiteUrl:        w.WebsiteUrl,
+		WebsiteName:       w.WebsiteName,
+		WebsiteImageUrl:   w.WebsiteImageUrl,
+		PinnedPostID:      w.PinnedPostID,
+		LocationName:      w.LocationName,
+		LocationLatitude:  w.LocationLatitude,
+		LocationLongitude: w.LocationLongitude,
+		FollowersCount:    w.FollowersCount,
+		FollowingCount:    w.FollowingCount,
+		PostsCount:        w.PostsCount,
 	}
 }
 
@@ -721,11 +733,15 @@ func (c *HTTPClient) GetProfile(username string) (model.User, error) {
 
 func (c *HTTPClient) UpdateProfile(update model.ProfileUpdate) error {
 	_, err := c.doJSON("PATCH", "/v1/users/me", updateProfileRequest{
-		Bio:          update.Bio,
-		DisplayName:  update.DisplayName,
-		PinnedPostID: update.PinnedPostID,
-		WebsiteUrl:   update.WebsiteUrl,
-		LocationName: update.LocationName,
+		Bio:               update.Bio,
+		DisplayName:       update.DisplayName,
+		PinnedPostID:      update.PinnedPostID,
+		WebsiteUrl:        update.WebsiteUrl,
+		WebsiteName:       update.WebsiteName,
+		WebsiteImageUrl:   update.WebsiteImageUrl,
+		LocationName:      update.LocationName,
+		LocationLatitude:  update.LocationLatitude,
+		LocationLongitude: update.LocationLongitude,
 	})
 	return err
 }

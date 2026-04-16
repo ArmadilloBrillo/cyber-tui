@@ -106,10 +106,10 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | Type | Purpose |
 |---|---|
 | `Tokens` | IDToken, RefreshToken, RTDBToken returned from login |
-| `User` | Profile (ID, username, displayName, email, bio, websiteUrl, pinnedPostID, locationName) |
+| `User` | Profile (ID, username, displayName, email, bio, websiteUrl, websiteName, websiteImageUrl, pinnedPostID, locationName, locationLatitude, locationLongitude) |
 | `Post` | Feed item (ID, authorID, authorUsername, content, topics, repliesCount, bookmarksCount, isPublic, isNSFW, deleted, createdAt) |
 | `Reply` | Comment on a post (ID, postID, authorID, authorUsername, content, parentReplyID, createdAt) |
-| `ProfileUpdate` | Optional fields for PATCH /v1/users/me (all pointer types) |
+| `ProfileUpdate` | Optional fields for PATCH /v1/users/me (all pointer types, includes new website/location fields) |
 | `Message` | DM/chat message (ID, from, body, createdAt) |
 | `Conversation` | 1-on-1 DM thread (ID, participants, messages) |
 | `Room` | Public chatroom (ID, name, description, member count) |
@@ -361,9 +361,10 @@ Key methods: `SetCurrentUsername(username)`, `RemoveReply(replyID)`
 
 View and edit user profiles (own or others').
 
-- Displays username, bio, website, location
-- `e` opens the compose box to edit bio (max 127 chars)
-- Alt+Enter or ctrl+s saves via `SaveProfileMsg`; ESC cancels
+- Displays username, displayName, bio, website (name + url + image url), location (name + coords)
+- `e` opens a multi-field inline editor with all profile fields (8 fields total)
+- Tab/Shift+Tab navigates between fields; bio uses ComposeModel (multi-line), others use textinput
+- Ctrl+S or ComposeSubmitMsg saves all fields via `SaveProfileMsg`; ESC cancels
 - `SetReadOnly(true)` hides edit controls when viewing another user's profile
 - `SetCanGoBack(true)` allows ESC to emit `BackFromProfileMsg` (used when navigating from Feed)
 

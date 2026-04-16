@@ -68,7 +68,7 @@ _(No unimplemented reply endpoints remaining at medium/high priority)_
 | Feature | What's Done | What's Missing |
 |---|---|---|
 | Notes (Journal) | Create, list, delete, publish-as-post | Update (PATCH) blocked by server 500 |
-| Profile | View, edit bio/display name | `websiteName`, `websiteImageUrl`, `locationLatitude`, `locationLongitude` not surfaced in UI |
+| Profile | View and edit all fields | — |
 | Settings | Most fields editable | `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom` not exposed |
 | Follows | Follow, unfollow, list following | Followers list not fetched |
 
@@ -80,3 +80,4 @@ _(No unimplemented reply endpoints remaining at medium/high priority)_
 |---|---|---|
 | `DELETE /v1/posts/:id` | Delete own post — wired in client, feed, and post detail; `d` key with y/n confirmation | 2026-04-16 |
 | `DELETE /v1/replies/:id` | Delete own reply — wired in client and post detail; `d` key with y/n confirmation | 2026-04-16 |
+| `PATCH /v1/users/me` (extended) | `websiteName`, `websiteImageUrl`, `locationLatitude`, `locationLongitude` added to model, wire layer, and profile edit form (`e` key) | 2026-04-16 |

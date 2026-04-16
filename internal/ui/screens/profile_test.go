@@ -150,3 +150,168 @@ func TestProfileView_NoFollowHint_OwnProfile(t *testing.T) {
 		t.Errorf("View should not contain 'f · follow' on own profile, got:\n%s", view)
 	}
 }
+
+// --- new profile fields: display ---
+
+func testUserFull() model.User {
+	u := testUser()
+	u.WebsiteName = "My Blog"
+	u.WebsiteUrl = "https://ragnar.dev"
+	u.WebsiteImageUrl = "https://ragnar.dev/avatar.png"
+	u.LocationName = "Cape Town"
+	u.LocationLatitude = -33.9249
+	u.LocationLongitude = 18.4241
+	return u
+}
+
+func TestProfileView_WebsiteShown(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUserFull())
+	view := m.View()
+	if !strings.Contains(view, "My Blog") {
+		t.Errorf("View should contain websiteName, got:\n%s", view)
+	}
+	if !strings.Contains(view, "ragnar.dev") {
+		t.Errorf("View should contain websiteUrl, got:\n%s", view)
+	}
+}
+
+func TestProfileView_WebsiteImageUrlShown(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUserFull())
+	view := m.View()
+	if !strings.Contains(view, "avatar.png") {
+		t.Errorf("View should contain websiteImageUrl, got:\n%s", view)
+	}
+}
+
+func TestProfileView_LocationShown(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUserFull())
+	view := m.View()
+	if !strings.Contains(view, "Cape Town") {
+		t.Errorf("View should contain locationName, got:\n%s", view)
+	}
+	if !strings.Contains(view, "-33.9249") {
+		t.Errorf("View should contain latitude, got:\n%s", view)
+	}
+}
+
+// --- edit form ---
+
+// sendProfileKey fires a single key through ProfileModel.Update.
+func sendProfileKey(m screens.ProfileModel, key string) (screens.ProfileModel, tea.Cmd) {
+	var msg tea.KeyMsg
+	switch key {
+	case "tab":
+		msg = tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		msg = tea.KeyMsg{Type: tea.KeyShiftTab}
+	case "esc":
+		msg = tea.KeyMsg{Type: tea.KeyEsc}
+	case "ctrl+s":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlS}
+	default:
+		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+	}
+	return m.Update(msg)
+}
+
+func openEditForm(t *testing.T) screens.ProfileModel {
+	t.Helper()
+	m := screens.NewProfileModel().SetUser(testUserFull()).SetReadOnly(false)
+	m, _ = sendProfileKey(m, "e")
+	if !m.ComposeActive() {
+		t.Fatal("expected ComposeActive after pressing e")
+	}
+	return m
+}
+
+func TestProfileEditForm_Opens(t *testing.T) {
+	m := openEditForm(t)
+	view := m.View()
+	if !strings.Contains(view, "Website Name") {
+		t.Errorf("Edit form should contain 'Website Name', got:\n%s", view)
+	}
+	if !strings.Contains(view, "ctrl+s · save") {
+		t.Errorf("Edit form should contain hint, got:\n%s", view)
+	}
+}
+
+func TestProfileEditForm_PrepopulatesFields(t *testing.T) {
+	m := openEditForm(t)
+	view := m.View()
+	if !strings.Contains(view, "My Blog") {
+		t.Errorf("Edit form should prepopulate websiteName, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Cape Town") {
+		t.Errorf("Edit form should prepopulate locationName, got:\n%s", view)
+	}
+}
+
+func TestProfileEditForm_TabCyclesFields(t *testing.T) {
+	m := openEditForm(t)
+	// e opens focused on bio (field 1); tab should move to field 2
+	for i := 0; i < 8; i++ {
+		m, _ = sendProfileKey(m, "tab")
+	}
+	// After 8 tabs from field 1, we're back at field 1 (bio)
+	if !m.ComposeActive() {
+		t.Error("expected ComposeActive to remain true after full tab cycle")
+	}
+}
+
+func TestProfileEditForm_EscCloses(t *testing.T) {
+	m := openEditForm(t)
+	// Tab to a textinput field first (field 2 = websiteName), then Esc.
+	m, _ = sendProfileKey(m, "tab")
+	m, _ = sendProfileKey(m, "esc")
+	if m.ComposeActive() {
+		t.Error("expected ComposeActive to be false after Esc on textinput field")
+	}
+}
+
+func TestProfileEditForm_CtrlS_EmitsSaveMsg(t *testing.T) {
+	m := openEditForm(t)
+	// Tab to a textinput field.
+	m, _ = sendProfileKey(m, "tab")
+	m2, cmd := sendProfileKey(m, "ctrl+s")
+	_ = m2
+	if cmd == nil {
+		t.Fatal("expected a cmd after Ctrl+S, got nil")
+	}
+	msg := cmd()
+	saveMsg, ok := msg.(screens.SaveProfileMsg)
+	if !ok {
+		t.Fatalf("expected SaveProfileMsg, got %T", msg)
+	}
+	if saveMsg.WebsiteName != "My Blog" {
+		t.Errorf("SaveProfileMsg.WebsiteName = %q, want My Blog", saveMsg.WebsiteName)
+	}
+	if saveMsg.LocationName != "Cape Town" {
+		t.Errorf("SaveProfileMsg.LocationName = %q, want Cape Town", saveMsg.LocationName)
+	}
+}
+
+func TestProfileEditForm_ComposeSubmit_EmitsSaveMsg(t *testing.T) {
+	m := openEditForm(t)
+	// bio is focused; send ComposeSubmitMsg directly (as the compose model would).
+	m2, cmd := m.Update(screens.ComposeSubmitMsg{Content: "new bio"})
+	_ = m2
+	if cmd == nil {
+		t.Fatal("expected a cmd after ComposeSubmitMsg, got nil")
+	}
+	msg := cmd()
+	saveMsg, ok := msg.(screens.SaveProfileMsg)
+	if !ok {
+		t.Fatalf("expected SaveProfileMsg, got %T", msg)
+	}
+	if saveMsg.Bio != "new bio" {
+		t.Errorf("SaveProfileMsg.Bio = %q, want new bio", saveMsg.Bio)
+	}
+}
+
+func TestProfileEditForm_ComposeCancel_ClosesForm(t *testing.T) {
+	m := openEditForm(t)
+	m2, _ := m.Update(screens.ComposeCancelMsg{})
+	if m2.ComposeActive() {
+		t.Error("expected ComposeActive to be false after ComposeCancelMsg")
+	}
+}

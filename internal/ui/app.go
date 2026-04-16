@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -528,7 +529,7 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.profile = a.profile.SetReadOnly(false).SetCanGoBack(false).SetFollowState(false, "")
 		return a, nil, true
 	case screens.SaveProfileMsg:
-		return a, a.saveProfileCmd(msg.Bio), true
+		return a, a.saveProfileCmd(msg), true
 	case screens.FollowUserMsg:
 		return a, a.followUserCmd(msg.UserID), true
 	case screens.UnfollowUserMsg:
@@ -925,7 +926,7 @@ func (a App) renderStatusBar() string {
 		}
 	case screenProfile:
 		if a.profile.ComposeActive() {
-			hintStr = "  Ctrl+S · save   Enter · paragraph   Esc · cancel"
+			hintStr = "  Ctrl+S · save   Tab · next field   Esc · cancel"
 		} else {
 			hintStr = "  ? · help"
 		}
@@ -1572,13 +1573,45 @@ func (a *App) createPostCmd(content string, topics []string) tea.Cmd {
 	}
 }
 
-func (a *App) saveProfileCmd(bio string) tea.Cmd {
+func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
 	return func() tea.Msg {
-		update := model.ProfileUpdate{Bio: &bio}
+		update := model.ProfileUpdate{
+			Bio:          &msg.Bio,
+			WebsiteName:  &msg.WebsiteName,
+			LocationName: &msg.LocationName,
+		}
+		// URL fields: send only when non-empty — the API rejects empty strings
+		// as invalid URLs. Leaving them nil means the existing value is unchanged.
+		if msg.WebsiteUrl != "" {
+			update.WebsiteUrl = &msg.WebsiteUrl
+		}
+		if msg.WebsiteImageUrl != "" {
+			update.WebsiteImageUrl = &msg.WebsiteImageUrl
+		}
+		if msg.Latitude != "" {
+			if lat, err := strconv.ParseFloat(msg.Latitude, 64); err == nil {
+				update.LocationLatitude = &lat
+			}
+		}
+		if msg.Longitude != "" {
+			if lon, err := strconv.ParseFloat(msg.Longitude, 64); err == nil {
+				update.LocationLongitude = &lon
+			}
+		}
 		if err := a.client.UpdateProfile(update); err != nil {
 			return errMsg{err}
 		}
-		a.currentUser.Bio = bio
+		a.currentUser.Bio = msg.Bio
+		a.currentUser.WebsiteName = msg.WebsiteName
+		a.currentUser.WebsiteUrl = msg.WebsiteUrl
+		a.currentUser.WebsiteImageUrl = msg.WebsiteImageUrl
+		a.currentUser.LocationName = msg.LocationName
+		if update.LocationLatitude != nil {
+			a.currentUser.LocationLatitude = *update.LocationLatitude
+		}
+		if update.LocationLongitude != nil {
+			a.currentUser.LocationLongitude = *update.LocationLongitude
+		}
 		return profileLoadedMsg{a.currentUser}
 	}
 }

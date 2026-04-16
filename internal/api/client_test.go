@@ -1002,6 +1002,36 @@ func TestHTTPGetProfile_CountFields(t *testing.T) {
 	}
 }
 
+func TestHTTPGetOwnProfile_ParsesNewFields(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]interface{}{
+			"userId":            "u42",
+			"username":          "case",
+			"websiteName":       "My Blog",
+			"websiteImageUrl":   "https://example.com/img.png",
+			"locationLatitude":  -33.9249,
+			"locationLongitude": 18.4241,
+		})
+	}))
+
+	user, err := c.GetOwnProfile()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if user.WebsiteName != "My Blog" {
+		t.Errorf("WebsiteName = %q, want My Blog", user.WebsiteName)
+	}
+	if user.WebsiteImageUrl != "https://example.com/img.png" {
+		t.Errorf("WebsiteImageUrl = %q, want https://example.com/img.png", user.WebsiteImageUrl)
+	}
+	if user.LocationLatitude != -33.9249 {
+		t.Errorf("LocationLatitude = %v, want -33.9249", user.LocationLatitude)
+	}
+	if user.LocationLongitude != 18.4241 {
+		t.Errorf("LocationLongitude = %v, want 18.4241", user.LocationLongitude)
+	}
+}
+
 // --- Notes ---
 
 func TestHTTPGetNotes_ParsesList(t *testing.T) {
