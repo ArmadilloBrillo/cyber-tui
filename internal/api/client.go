@@ -770,20 +770,24 @@ func (c *HTTPClient) DeleteBookmark(id string) error {
 
 // --- Topics ---
 
-func (c *HTTPClient) GetTopics() ([]model.Topic, error) {
-	env, err := c.doRequest("GET", "/v1/topics", nil)
+func (c *HTTPClient) GetTopics(cursor string) ([]model.Topic, string, error) {
+	path := "/v1/topics?limit=50"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var wire []wireTopic
 	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	topics := make([]model.Topic, len(wire))
 	for i, w := range wire {
 		topics[i] = wireTopicToModel(w)
 	}
-	return topics, nil
+	return topics, env.Cursor, nil
 }
 
 func (c *HTTPClient) GetTopicPosts(slug string, cursor string) ([]model.Post, string, error) {

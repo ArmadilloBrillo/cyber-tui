@@ -58,8 +58,9 @@ type Client interface {
 	DeleteBookmark(id string) error
 
 	// Topics — browse topics and posts within them.
-	// GetTopics returns all topics sorted by post count (most popular first).
-	GetTopics() ([]model.Topic, error)
+	// GetTopics returns topics sorted by post count (most popular first).
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetTopics(cursor string) ([]model.Topic, string, error)
 	// GetTopicPosts returns paginated posts for a topic.
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetTopicPosts(slug string, cursor string) ([]model.Post, string, error)

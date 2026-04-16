@@ -230,8 +230,8 @@ func (m *MockClient) DeleteBookmark(id string) error {
 	return fmt.Errorf("bookmark not found: %s", id)
 }
 
-func (m *MockClient) GetTopics() ([]model.Topic, error) {
-	return mockTopics, nil
+func (m *MockClient) GetTopics(cursor string) ([]model.Topic, string, error) {
+	return mockTopics, "", nil
 }
 
 func (m *MockClient) GetTopicPosts(slug string, cursor string) ([]model.Post, string, error) {

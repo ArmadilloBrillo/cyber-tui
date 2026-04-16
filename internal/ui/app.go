@@ -577,7 +577,14 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadTopicsCmd(), true
 
 	case topicsLoadedMsg:
-		a.topics = a.topics.SetTopics(msg.topics)
+		a.topics = a.topics.SetTopics(msg.topics, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadMoreTopicsMsg:
+		return a, a.loadMoreTopicsCmd(msg.Cursor), true
+
+	case topicsPageMsg:
+		a.topics = a.topics.AppendTopics(msg.topics, msg.cursor)
 		return a, nil, true
 
 	case screens.LoadTopicPostsMsg:
@@ -1249,6 +1256,11 @@ type bookmarkReplyLoadedMsg struct {
 
 type topicsLoadedMsg struct {
 	topics []model.Topic
+	cursor string
+}
+type topicsPageMsg struct {
+	topics []model.Topic
+	cursor string
 }
 type topicPostsLoadedMsg struct {
 	posts  []model.Post
@@ -1554,11 +1566,21 @@ func (a *App) deleteBookmarkCmd(id string) tea.Cmd {
 
 func (a *App) loadTopicsCmd() tea.Cmd {
 	return func() tea.Msg {
-		topics, err := a.client.GetTopics()
+		topics, cursor, err := a.client.GetTopics("")
 		if err != nil {
 			return errMsg{err}
 		}
-		return topicsLoadedMsg{topics: topics}
+		return topicsLoadedMsg{topics: topics, cursor: cursor}
+	}
+}
+
+func (a *App) loadMoreTopicsCmd(cursor string) tea.Cmd {
+	return func() tea.Msg {
+		topics, nextCursor, err := a.client.GetTopics(cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return topicsPageMsg{topics: topics, cursor: nextCursor}
 	}
 }
 

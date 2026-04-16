@@ -26,6 +26,8 @@ type RefreshTopicPostsMsg struct{ Slug string }
 
 type ShowTopicPostMsg struct{ Post model.Post }
 
+type LoadMoreTopicsMsg struct{ Cursor string }
+
 // Internal view state for the Topics screen
 type topicsView int
 
@@ -38,8 +40,10 @@ type TopicsModel struct {
 	view topicsView
 
 	// Topic list state
-	topics      []model.Topic
-	topicIndex  int
+	topics           []model.Topic
+	topicIndex       int
+	topicsNextCursor string
+	topicsExhausted  bool
 
 	// Topic posts state
 	activeTopic  string
@@ -67,14 +71,27 @@ func NewTopicsModel() TopicsModel {
 	return TopicsModel{}
 }
 
-func (m TopicsModel) SetTopics(items []model.Topic) TopicsModel {
+func (m TopicsModel) SetTopics(items []model.Topic, cursor string) TopicsModel {
 	m.topics = items
 	m.topicIndex = 0
+	m.topicsNextCursor = cursor
+	m.topicsExhausted = cursor == ""
 	m.loading = false
 	m.refreshing = false
 	if m.ready {
 		m = m.refreshContent()
 		m.viewport.GotoTop()
+	}
+	return m
+}
+
+func (m TopicsModel) AppendTopics(items []model.Topic, cursor string) TopicsModel {
+	m.topics = append(m.topics, items...)
+	m.topicsNextCursor = cursor
+	m.topicsExhausted = cursor == ""
+	m.loading = false
+	if m.ready {
+		m = m.refreshContent()
 	}
 	return m
 }
@@ -173,6 +190,11 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					m.topicIndex++
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
+				} else if !m.topicsExhausted && !m.loading {
+					m.loading = true
+					return m, func() tea.Msg {
+						return LoadMoreTopicsMsg{Cursor: m.topicsNextCursor}
+					}
 				}
 			} else {
 				if m.postIndex < len(m.posts)-1 {
@@ -278,6 +300,8 @@ func (m TopicsModel) buildContent() (string, []int) {
 		// Footer
 		if m.loading {
 			out += theme.Subtle.Render("  loading…")
+		} else if m.topicsExhausted && len(m.topics) > 0 {
+			out += theme.Subtle.Render("  — end —")
 		}
 		return header + "\n" + prefix + strings.TrimRight(out, "\n"), offsets
 	}
