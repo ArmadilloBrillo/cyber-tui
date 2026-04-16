@@ -87,8 +87,16 @@ func (m ComposeModel) Open(ctx, placeholder string) (ComposeModel, tea.Cmd) {
 func (m ComposeModel) OpenWithContent(ctx, placeholder, content string) (ComposeModel, tea.Cmd) {
 	m, cmd := m.Open(ctx, placeholder)
 	m.textarea.SetValue(content)
-	m.recalcHeight()
+	m = m.recalcHeight() // must assign — value receiver returns updated copy
 	return m, cmd
+}
+
+// GotoStart moves the textarea cursor to the beginning of the content and
+// scrolls the internal viewport to show line 1. Call this after OpenWithContent
+// when the editor should open at the top of the note rather than the bottom.
+func (m ComposeModel) GotoStart() ComposeModel {
+	m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyCtrlHome})
+	return m
 }
 
 // Close blurs the textarea and marks the compose box inactive.

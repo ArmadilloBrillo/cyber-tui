@@ -134,6 +134,18 @@ type Topic struct {
 	PostCount int
 }
 
+// Note is a private note visible only to the author.
+// RevisionNumber increments each time the note is updated via PATCH /v1/notes/:id.
+type Note struct {
+	ID             string
+	AuthorID       string
+	Content        string
+	Topics         []string  // max 3; sent on create/update but not returned by the list API
+	RevisionNumber int
+	Deleted        bool
+	CreatedAt      time.Time
+}
+
 // NotificationActor is the user who triggered the notification.
 type NotificationActor struct {
 	ID       string

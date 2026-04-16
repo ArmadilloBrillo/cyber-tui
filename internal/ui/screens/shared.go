@@ -116,3 +116,25 @@ type FollowUserMsg struct{ UserID string }
 
 // UnfollowUserMsg is emitted by ProfileModel when the user presses 'f' to unfollow.
 type UnfollowUserMsg struct{ FollowID string }
+
+// LoadMoreJournalMsg is emitted by JournalModel when the viewport reaches the bottom
+// and a next-page cursor is available. App intercepts this and fires the API call.
+type LoadMoreJournalMsg struct{ Cursor string }
+
+// SubmitSaveNoteMsg is emitted by JournalModel when the user presses ctrl+s in edit mode.
+// NoteID is empty when creating a new note; non-empty when updating an existing one.
+type SubmitSaveNoteMsg struct {
+	NoteID  string
+	Content string
+	Topics  []string
+}
+
+// SubmitPublishNoteMsg is emitted by JournalModel when the user confirms publishing.
+// Publishing creates a post with the note's content via POST /v1/posts.
+type SubmitPublishNoteMsg struct {
+	Content string
+	Topics  []string
+}
+
+// SubmitDeleteNoteMsg is emitted by JournalModel when the user confirms deletion.
+type SubmitDeleteNoteMsg struct{ NoteID string }

@@ -74,6 +74,17 @@ type Client interface {
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetTopicPosts(slug string, cursor string) ([]model.Post, string, error)
 
+	// Notes — private notes visible only to the author.
+	// GetNotes returns the latest revision of each note, newest first.
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetNotes(cursor string) ([]model.Note, string, error)
+	// CreateNote creates a new note. topics is optional (max 3, lowercase).
+	CreateNote(content string, topics []string) (model.Note, error)
+	// UpdateNote creates a new revision on an existing note.
+	UpdateNote(noteID, content string, topics []string) error
+	// DeleteNote soft-deletes all revisions of a note.
+	DeleteNote(noteID string) error
+
 	// Direct messages — backed by Firebase RTDB (see internal/rtdb).
 	GetConversations() ([]model.Conversation, error)
 	GetMessages(conversationID string, limit int) ([]model.Message, error)

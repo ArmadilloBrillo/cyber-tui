@@ -116,6 +116,10 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `NotificationPrefs` | Notification subscription toggles (bookmark, reply, poke) |
 | `Settings` | All user preferences (notifications, content filters, display options) |
 | `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername) |
+| `Bookmark` | Saved post or reply (ID, type, postID/replyID, content snapshot, author, createdAt) |
+| `Topic` | Tag with post count (slug, postCount) |
+| `Follow` | Follow relationship (ID, followerID, followedID, createdAt) |
+| `Note` | Private journal note (ID, authorID, content, topics, revisionNumber, deleted, createdAt) |
 
 ---
 
@@ -133,11 +137,15 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 |---|---|
 | Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()` |
 | Feed | `GetFeed(cursor)`, `CreatePost(content, topics)`, `GetPost(postID)` |
-| Replies | `GetPostReplies(postID)`, `CreateReply(postID, content, parentReplyID)` |
+| Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)` |
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
+| Follows | `GetFollowing(cursor)`, `Follow(followedID)`, `Unfollow(followID)` |
 | Settings | `GetSettings()`, `UpdateSettings(update)` |
 | Rooms | `GetRooms()`, `GetRoomMessages(roomID, limit)`, `SendRoomMessage(roomID, body)` |
 | Notifications | `GetNotifications(cursor)`, `MarkNotificationRead(id)`, `MarkAllNotificationsRead()` |
+| Bookmarks | `GetBookmarks(cursor)`, `CreateBookmark(postID, replyID)`, `DeleteBookmark(id)` |
+| Topics | `GetTopics(cursor)`, `GetTopicPosts(slug, cursor)` |
+| Notes | `GetNotes(cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
 | Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
 
 #### `client.go`
@@ -161,9 +169,9 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 - `doRequest(method, path, body)` — core HTTP wrapper; automatically retries on 401 by calling `refresh()`
 - `doJSON(method, path, body)` — marshals request body and delegates to `doRequest`
 - `refresh()` — token refresh path; does not recurse
-- `wirePostToModel()`, `wireReplyToModel()`, `wireUserToModel()`, `wireSettingsToModel()`, `wireNotificationToModel()` — convert API JSON wire types to `model.*` types
+- `wirePostToModel()`, `wireReplyToModel()`, `wireUserToModel()`, `wireSettingsToModel()`, `wireNotificationToModel()`, `wireNoteToModel()` — convert API JSON wire types to `model.*` types
 
-**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings` — match the JSON envelope shapes returned by the API.
+**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow` — match the JSON envelope shapes returned by the API.
 
 **Note:** `HTTPClient` is not goroutine-safe. The `tokens` field is mutated by `Login` and `refresh`. Bubble Tea's single-update-loop model largely prevents concurrent mutation, but this may need a `sync.Mutex` if command goroutines become truly parallel.
 
@@ -273,7 +281,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 | `WithAutoLogin(email, password)` | method | Pre-fills credentials for programmatic login |
 | `WithSavedEmail(email)` | method | Pre-fills email field on login screen |
 
-**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenSettings`
+**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenTopics`, `screenJournal`, `screenSettings`
 
 **Responsibilities:**
 
@@ -416,6 +424,43 @@ Public chatroom browser and chat (UI complete; API integration deferred).
 Key types: `ChatroomsModel`, `SendRoomMessageMsg`  
 Key methods: `SetRooms(rooms)`, `SetActiveRoom(room, messages)`, `InputFocused()`
 
+#### `bookmarks.go`
+
+Saved posts and replies, cursor-paginated.
+
+- `j`/`k` navigate items; `enter` opens the bookmarked post in PostDetail
+- `d` removes the selected bookmark (emits `DeleteBookmarkMsg`)
+- `b` on a post in Feed/PostDetail toggles a bookmark (emits `ToggleBookmarkMsg`)
+
+Key types: `BookmarksModel`, `DeleteBookmarkMsg`, `ToggleBookmarkMsg`  
+Key methods: `SetBookmarks(items, cursor)`, `AppendBookmarks(items, cursor)`, `RemoveBookmark(id)`
+
+#### `topics.go`
+
+Browse all topics (tags) and drill into posts for a selected topic.
+
+- Two-mode screen: topic list → topic feed
+- Topic list sorted by post count, cursor-paginated; `enter` opens the topic feed
+- Topic feed is a standard paginated post list; `esc` returns to the topic list
+
+Key types: `TopicsModel`, `LoadMoreTopicsMsg`, `LoadTopicPostsMsg`, `LoadMoreTopicPostsMsg`  
+Key methods: `SetTopics(topics, cursor)`, `AppendTopics(topics, cursor)`, `SetTopicPosts(posts, cursor)`, `AppendTopicPosts(posts, cursor)`
+
+#### `journal.go`
+
+Private notes (Journal), cursor-paginated. Notes are visible only to the author.
+
+- List mode: `j`/`k` navigate notes; `enter` opens a note for editing; `n` creates a new note; `d` prompts to delete
+- Edit mode: embeds `ComposeModel` (Ctrl+S saves, Ctrl+P publishes note as a post with confirmation, Esc cancels)
+- `tab` in edit mode toggles focus between the compose area and the topics input
+- Confirmation overlay (y/n) for publish and delete actions
+- Viewport height dynamically adjusts when compose box grows or confirmation overlay appears
+
+Key types: `JournalModel`, `SubmitSaveNoteMsg`, `SubmitPublishNoteMsg`, `SubmitDeleteNoteMsg`, `LoadMoreJournalMsg`  
+Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNote(noteID, content)`, `DeleteNote(noteID)`
+
+**Known limitation:** `UpdateNote` (PATCH /v1/notes/:id) returns a server-side 500 for all callers. Save is wired in the client but will always error until the server bug is fixed. See `docs/00-api-backlog.md`.
+
 #### `compose.go`
 
 Reusable multi-line text editor embedded in Feed, PostDetail, Profile, and C-Mail.
@@ -545,7 +590,13 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 
 | Key | Action |
 |---|---|
-| `1` – `4` | Jump to Feed, Notifications, Profile, Settings |
+| `1` | Feed |
+| `2` | Notifications |
+| `3` | Journal (private notes) |
+| `4` | Bookmarks |
+| `5` | Topics |
+| `6` | Profile |
+| `7` | Settings |
 | `←` / `→` | Cycle tabs left / right |
 | `v` | Toggle dense / relaxed display |
 | `?` | Help modal |
@@ -661,3 +712,8 @@ go vet ./...
 | **C-Mail REST** | Conversation list + history loaded from mock; RTDB subscribe wired; full path confirmed post-beta |
 | **HTTPClient thread safety** | Tokens field mutated by Login/refresh with no mutex; acceptable under Bubble Tea's single-update loop, but may need `sync.Mutex` if command goroutines become truly concurrent |
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized |
+| **Note updates (PATCH)** | Server returns 500 for all `PATCH /v1/notes/:id` requests — confirmed server-side bug; client code is correct. See `docs/00-api-backlog.md` |
+| **Followers list** | Only "following" is fetched; "followers" list screen is not implemented |
+| **Post/reply deletion** | `DELETE /v1/posts/:id` and `DELETE /v1/replies/:id` exist in API but are not wired in the client |
+| **Attachments** | Image and YouTube audio attachments on posts/replies are not supported in the TUI |
+| **User post/reply history** | `GET /v1/users/:username/posts` and `/replies` are not called; profile screen shows bio only |

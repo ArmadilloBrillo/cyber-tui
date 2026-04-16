@@ -28,6 +28,7 @@ const (
 	screenSettings
 	screenBookmarks
 	screenTopics
+	screenJournal
 )
 
 type focusTarget int
@@ -48,6 +49,7 @@ var menuTabs = []struct {
 }{
 	{"feed", screenFeed},
 	{"notifications", screenNotifications},
+	{"journal", screenJournal},
 	{"bookmarks", screenBookmarks},
 	{"topics", screenTopics},
 	{"profile", screenProfile},
@@ -103,6 +105,7 @@ type App struct {
 	settingsScreen screens.SettingsModel
 	bookmarks      screens.BookmarksModel
 	topics         screens.TopicsModel
+	journal        screens.JournalModel
 
 	// postDetailReturn is the screen to go back to when ESC is pressed in PostDetail.
 	postDetailReturn screen
@@ -138,6 +141,7 @@ func NewApp(client api.Client) App {
 		settingsScreen: screens.NewSettingsModel(),
 		bookmarks:      screens.NewBookmarksModel(),
 		topics:         screens.NewTopicsModel(),
+		journal:        screens.NewJournalModel(0),
 	}
 }
 
@@ -203,6 +207,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleSettings(msg);       ok { return a2, cmd }
 	if a2, cmd, ok := a.handleBookmarks(msg);      ok { return a2, cmd }
 	if a2, cmd, ok := a.handleTopics(msg);         ok { return a2, cmd }
+	if a2, cmd, ok := a.handleJournal(msg);        ok { return a2, cmd }
 	if a2, cmd, ok := a.handleErr(msg);            ok { return a2, cmd }
 	return a, a.delegateUpdate(msg)
 }
@@ -223,6 +228,7 @@ func (a *App) broadcastConfig() {
 	a.settingsScreen, _ = a.settingsScreen.Update(msg)
 	a.bookmarks, _ = a.bookmarks.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
+	a.journal, _ = a.journal.Update(msg)
 }
 
 // applyWindowSize stores the new terminal dimensions and broadcasts the size
@@ -241,6 +247,7 @@ func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
 	a.settingsScreen, _ = a.settingsScreen.Update(m)
 	a.bookmarks, _ = a.bookmarks.Update(m)
 	a.topics, _ = a.topics.Update(m)
+	a.journal, _ = a.journal.Update(m)
 	return a
 }
 
@@ -328,22 +335,28 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	case "3":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenJournal
+			return a, a.loadJournalCmd(), true
+		}
+	case "4":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenBookmarks
 			return a, a.loadBookmarksCmd(""), true
 		}
-	case "4":
+	case "5":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenTopics
 			return a, a.loadTopicsCmd(), true
 		}
-	case "5":
+	case "6":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenProfile
 			return a, a.loadProfileCmd(), true
 		}
-	case "6":
+	case "7":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenSettings
@@ -623,6 +636,38 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 	return a, nil, false
 }
 
+// handleJournal processes journal (Notes) load, save, delete, and publish messages.
+func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case journalLoadedMsg:
+		a.journal = a.journal.SetNotes(msg.notes, msg.cursor)
+		return a, nil, true
+	case journalPageMsg:
+		a.journal = a.journal.AppendNotes(msg.notes, msg.cursor)
+		return a, nil, true
+	case screens.LoadMoreJournalMsg:
+		return a, a.loadJournalPageCmd(msg.Cursor), true
+	case screens.SubmitSaveNoteMsg:
+		return a, a.saveNoteCmd(msg.NoteID, msg.Content, msg.Topics), true
+	case noteCreatedMsg:
+		a.journal = a.journal.PrependNote(msg.note)
+		return a, nil, true
+	case noteUpdatedMsg:
+		a.journal = a.journal.UpdateNoteContent(msg.noteID, msg.content, msg.topics)
+		return a, nil, true
+	case screens.SubmitDeleteNoteMsg:
+		return a, a.deleteNoteCmd(msg.NoteID), true
+	case noteDeletedMsg:
+		a.journal = a.journal.DeleteNote(msg.noteID)
+		return a, nil, true
+	case screens.SubmitPublishNoteMsg:
+		return a, a.publishNoteCmd(msg.Content, msg.Topics), true
+	case notePublishedMsg:
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
 // handleErr routes API error messages to the active screen's error display.
 func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 	m, ok := msg.(errMsg)
@@ -646,6 +691,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.bookmarks = a.bookmarks.SetError(m.err)
 	case screenTopics:
 		a.topics = a.topics.SetError(m.err)
+	case screenJournal:
+		a.journal = a.journal.SetError(m.err)
 	}
 	return a, nil, true
 }
@@ -665,6 +712,8 @@ func (a App) activeScreenHasFocusedInput() bool {
 		return a.feed.ComposeActive()
 	case screenProfile:
 		return a.profile.ComposeActive()
+	case screenJournal:
+		return a.journal.ComposeActive()
 	}
 	return false
 }
@@ -703,6 +752,8 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 		return a.loadBookmarksCmd("")
 	case screenTopics:
 		return a.loadTopicsCmd()
+	case screenJournal:
+		return a.loadJournalCmd()
 	}
 	return nil
 }
@@ -730,6 +781,8 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 		a.bookmarks, cmd = a.bookmarks.Update(msg)
 	case screenTopics:
 		a.topics, cmd = a.topics.Update(msg)
+	case screenJournal:
+		a.journal, cmd = a.journal.Update(msg)
 	}
 	return cmd
 }
@@ -798,6 +851,8 @@ func (a App) renderActiveScreen() string {
 		return a.bookmarks.View()
 	case screenTopics:
 		return a.topics.View()
+	case screenJournal:
+		return a.journal.View()
 	}
 	return ""
 }
@@ -846,6 +901,12 @@ func (a App) renderStatusBar() string {
 		}
 	case screenNotifications:
 		hintStr = "  m · mark read   M · mark all   u · unread filter   enter · open   p · profile   ? · help"
+	case screenJournal:
+		if a.journal.ComposeActive() {
+			hintStr = "  Ctrl+S · save   Ctrl+P · publish   Tab · topics   Enter · paragraph   Esc · cancel"
+		} else {
+			hintStr = "  n · new note   enter · edit   d · delete   ? · help"
+		}
 	case screenBookmarks:
 		hintStr = "  enter · open post   d · delete   ? · help"
 	case screenTopics:
@@ -1005,6 +1066,7 @@ func (a *App) refreshViewports() {
 	a.notifications, _ = a.notifications.Update(msg)
 	a.bookmarks, _ = a.bookmarks.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
+	a.journal, _ = a.journal.Update(msg)
 }
 
 // renderThemePicker returns the centered overlay box for theme selection.
@@ -1047,7 +1109,7 @@ func (a App) renderHelpModal() string {
 	}
 	col1 := lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render("global"),
-		row("1-6", "feed/notifs/bookmarks/topics/profile/settings"),
+		row("1-7", "feed/notifs/journal/bookmarks/topics/profile/settings"),
 		row("←→", "cycle tabs"),
 		row("t", "theme"),
 		row("z", "timezone"),
@@ -1269,6 +1331,23 @@ type bookmarkReplyLoadedMsg struct {
 	post    model.Post
 	replyID string
 }
+
+type journalLoadedMsg struct {
+	notes  []model.Note
+	cursor string
+}
+type journalPageMsg struct {
+	notes  []model.Note
+	cursor string
+}
+type noteCreatedMsg struct{ note model.Note }
+type noteUpdatedMsg struct {
+	noteID  string
+	content string
+	topics  []string
+}
+type noteDeletedMsg struct{ noteID string }
+type notePublishedMsg struct{}
 
 type topicsLoadedMsg struct {
 	topics []model.Topic
@@ -1650,6 +1729,68 @@ func (a *App) loadTopicPostsPageCmd(slug, cursor string) tea.Cmd {
 			return errMsg{err}
 		}
 		return topicPostsPageMsg{posts: posts, cursor: nextCursor}
+	}
+}
+
+// --- Journal (Notes) commands ---
+
+func (a *App) loadJournalCmd() tea.Cmd {
+	return func() tea.Msg {
+		notes, cursor, err := a.client.GetNotes("")
+		if err != nil {
+			return errMsg{err}
+		}
+		return journalLoadedMsg{notes: notes, cursor: cursor}
+	}
+}
+
+func (a *App) loadJournalPageCmd(cursor string) tea.Cmd {
+	return func() tea.Msg {
+		notes, nextCursor, err := a.client.GetNotes(cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return journalPageMsg{notes: notes, cursor: nextCursor}
+	}
+}
+
+// saveNoteCmd creates a new note (noteID == "") or updates an existing one.
+func (a *App) saveNoteCmd(noteID, content string, topics []string) tea.Cmd {
+	if noteID == "" {
+		return func() tea.Msg {
+			note, err := a.client.CreateNote(content, topics)
+			if err != nil {
+				return errMsg{err}
+			}
+			return noteCreatedMsg{note: note}
+		}
+	}
+	id := noteID // capture for closure
+	return func() tea.Msg {
+		if err := a.client.UpdateNote(id, content, topics); err != nil {
+			return errMsg{err}
+		}
+		return noteUpdatedMsg{noteID: id, content: content, topics: topics}
+	}
+}
+
+func (a *App) deleteNoteCmd(noteID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.DeleteNote(noteID); err != nil {
+			return errMsg{err}
+		}
+		return noteDeletedMsg{noteID: noteID}
+	}
+}
+
+// publishNoteCmd creates a post from the note's content and topics.
+func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := a.client.CreatePost(content, topics)
+		if err != nil {
+			return errMsg{err}
+		}
+		return notePublishedMsg{}
 	}
 }
 

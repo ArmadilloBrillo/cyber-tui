@@ -1,0 +1,84 @@
+# API Backlog — Outstanding Features & Known Issues
+
+Tracks gaps between the cyberspace.online API (v0.3.2) and what is currently implemented in the TUI client.
+Update this file whenever a feature is implemented or an issue is discovered/resolved.
+
+---
+
+## Known API Issues (Server-Side Bugs)
+
+These bugs exist in the server — no client-side fix is possible. Report to the API maintainer.
+
+| Endpoint | Method | Status | Description | Discovered |
+|---|---|---|---|---|
+| `/v1/notes/:id` | PATCH | **Open** | Returns 500 Internal Server Error for all note update requests, even with a minimal valid body (`{"content":"..."}`). CREATE works fine. Confirmed via curl with a fresh token — not a client bug. | 2026-04-16 |
+
+---
+
+## Unimplemented API Features
+
+Features present in the v0.3.2 API spec that are not yet implemented in this client.
+Ordered roughly by implementation effort / priority.
+
+### Auth
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/auth/register` | POST | User registration (email, password, username) | Low — existing users don't need this; useful for onboarding new users |
+| `/v1/auth/resend-verification` | POST | Resend email verification link | Low |
+| `/v1/auth/check-username` | POST | Check if a username is available (no auth required) | Low — only needed if registration is added |
+
+### Posts
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/posts/:id` | DELETE | Delete own post | Medium — useful quality-of-life feature |
+| `/v1/users/:username/posts` | GET | Paginated post history for a user | Medium — show on profile screen |
+| `/v1/users/:username/replies` | GET | Paginated reply history for a user | Low |
+
+### Replies
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/replies/:id` | DELETE | Delete own reply | Medium |
+
+### Attachments
+
+| Type | Description | Priority |
+|---|---|---|
+| Image (`type: "image"`) | Attach an image URL (max 640×640) to posts/replies | Low — TUI cannot display images natively; could show a clickable URL |
+| Audio (`type: "audio"`, YouTube) | Attach a YouTube link with artist/title/genre metadata | Low — display as metadata card in TUI |
+
+### Follows
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/follows?type=followers` | GET | List the current user's followers (only "following" is currently implemented) | Medium |
+| `/v1/follows?userId=...` | GET | Look up followers/following for another user (currently hardcoded to own account) | Low |
+
+### Notes
+
+| Endpoint | Method | Description | Priority | Blocker |
+|---|---|---|---|---|
+| `/v1/notes/:id` | GET | Fetch a single note (optionally a specific revision) | Low | — |
+| `/v1/notes/:id/revisions` | GET | List all revisions for a note | Low | — |
+| `/v1/notes/:id` | PATCH | Update note (already wired client-side) | High | **Server-side 500 bug — blocked until fixed** |
+
+---
+
+## Partially Implemented Features
+
+| Feature | What's Done | What's Missing |
+|---|---|---|
+| Notes (Journal) | Create, list, delete, publish-as-post | Update (PATCH) blocked by server 500 |
+| Profile | View, edit bio/display name | `websiteName`, `websiteImageUrl`, `locationLatitude`, `locationLongitude` not surfaced in UI |
+| Settings | Most fields editable | `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom` not exposed |
+| Follows | Follow, unfollow, list following | Followers list not fetched |
+
+---
+
+## Resolved Issues
+
+| Endpoint | Description | Resolved |
+|---|---|---|
+| _(none yet)_ | | |

@@ -1001,3 +1001,148 @@ func TestHTTPGetProfile_CountFields(t *testing.T) {
 		t.Errorf("PostsCount = %d, want 6", user.PostsCount)
 	}
 }
+
+// --- Notes ---
+
+func TestHTTPGetNotes_ParsesList(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/notes" {
+			http.NotFound(w, r)
+			return
+		}
+		writeOKWithCursor(t, w, []map[string]any{
+			{
+				"noteId":         "note-1",
+				"authorId":       "uid-abc",
+				"content":        "flatline is not death",
+				"revisionNumber": 1,
+				"deleted":        false,
+				"createdAt":      "2026-04-16T11:22:55.390Z",
+			},
+			{
+				"noteId":         "note-2",
+				"authorId":       "uid-abc",
+				"content":        "another note here",
+				"revisionNumber": 2,
+				"deleted":        false,
+				"createdAt":      "2026-04-16T10:00:00.000Z",
+			},
+		}, "cursor-xyz")
+	})))
+	c.Login("u@example.com", "pass")
+
+	notes, cursor, err := c.GetNotes("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notes) != 2 {
+		t.Fatalf("len(notes) = %d, want 2", len(notes))
+	}
+	if notes[0].ID != "note-1" {
+		t.Errorf("ID = %q, want note-1", notes[0].ID)
+	}
+	if notes[0].Content != "flatline is not death" {
+		t.Errorf("Content = %q, want 'flatline is not death'", notes[0].Content)
+	}
+	if notes[0].RevisionNumber != 1 {
+		t.Errorf("RevisionNumber = %d, want 1", notes[0].RevisionNumber)
+	}
+	if notes[1].ID != "note-2" {
+		t.Errorf("ID = %q, want note-2", notes[1].ID)
+	}
+	if cursor != "cursor-xyz" {
+		t.Errorf("cursor = %q, want cursor-xyz", cursor)
+	}
+}
+
+func TestHTTPGetNotes_WithCursor(t *testing.T) {
+	var gotCursor string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCursor = r.URL.Query().Get("cursor")
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	_, _, err := c.GetNotes("my-note-cursor")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotCursor != "my-note-cursor" {
+		t.Errorf("cursor query param = %q, want my-note-cursor", gotCursor)
+	}
+}
+
+func TestHTTPCreateNote(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/v1/notes" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(201)
+		writeOK(t, w, map[string]string{"noteId": "note-new-1"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	note, err := c.CreateNote("my note content", []string{"journal"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if note.ID != "note-new-1" {
+		t.Errorf("ID = %q, want note-new-1", note.ID)
+	}
+	if note.Content != "my note content" {
+		t.Errorf("Content = %q, want 'my note content'", note.Content)
+	}
+	if gotBody["content"] != "my note content" {
+		t.Errorf("request body content = %v, want 'my note content'", gotBody["content"])
+	}
+}
+
+func TestHTTPUpdateNote(t *testing.T) {
+	var gotBody map[string]any
+	var gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PATCH" {
+			http.NotFound(w, r)
+			return
+		}
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{})
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.UpdateNote("note-abc", "updated content", []string{"idea"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/notes/note-abc" {
+		t.Errorf("PATCH path = %q, want /v1/notes/note-abc", gotPath)
+	}
+	if gotBody["content"] != "updated content" {
+		t.Errorf("request body content = %v, want 'updated content'", gotBody["content"])
+	}
+}
+
+func TestHTTPDeleteNote(t *testing.T) {
+	var gotMethod, gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		writeOK(t, w, map[string]any{})
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.DeleteNote("note-xyz")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/v1/notes/note-xyz" {
+		t.Errorf("path = %q, want /v1/notes/note-xyz", gotPath)
+	}
+}

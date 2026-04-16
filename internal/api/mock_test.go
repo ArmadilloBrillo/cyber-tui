@@ -428,6 +428,110 @@ func TestMockDeleteBookmark_NotFound(t *testing.T) {
 	}
 }
 
+// --- Notes ---
+
+func TestMockGetNotes_ReturnsSeedData(t *testing.T) {
+	m := newMock()
+	notes, cursor, err := m.GetNotes("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notes) == 0 {
+		t.Fatal("expected seed notes, got none")
+	}
+	// cursor is empty (single page of mock data)
+	if cursor != "" {
+		t.Errorf("cursor = %q, want empty string for mock", cursor)
+	}
+	// All seed notes must have non-empty IDs and content.
+	for i, n := range notes {
+		if n.ID == "" {
+			t.Errorf("notes[%d].ID is empty", i)
+		}
+		if n.Content == "" {
+			t.Errorf("notes[%d].Content is empty", i)
+		}
+	}
+}
+
+func TestMockCreateNote_PrependedToList(t *testing.T) {
+	m := newMock()
+	before, _, _ := m.GetNotes("")
+
+	note, err := m.CreateNote("brand new note", []string{"test"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if note.ID == "" {
+		t.Fatal("expected non-empty note ID")
+	}
+	if note.Content != "brand new note" {
+		t.Errorf("Content = %q, want 'brand new note'", note.Content)
+	}
+
+	after, _, _ := m.GetNotes("")
+	if len(after) != len(before)+1 {
+		t.Errorf("expected %d notes after create, got %d", len(before)+1, len(after))
+	}
+	// New note should be first.
+	if after[0].ID != note.ID {
+		t.Errorf("first note ID = %q, want new note ID %q", after[0].ID, note.ID)
+	}
+}
+
+func TestMockUpdateNote_UpdatesContent(t *testing.T) {
+	m := newMock()
+	notes, _, _ := m.GetNotes("")
+	if len(notes) == 0 {
+		t.Skip("no seed notes available")
+	}
+	target := notes[0]
+
+	err := m.UpdateNote(target.ID, "revised content", []string{"updated"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	after, _, _ := m.GetNotes("")
+	if after[0].Content != "revised content" {
+		t.Errorf("Content = %q, want 'revised content'", after[0].Content)
+	}
+	if after[0].RevisionNumber != target.RevisionNumber+1 {
+		t.Errorf("RevisionNumber = %d, want %d", after[0].RevisionNumber, target.RevisionNumber+1)
+	}
+}
+
+func TestMockUpdateNote_NotFound(t *testing.T) {
+	m := newMock()
+	if err := m.UpdateNote("no-such-id", "content", nil); err == nil {
+		t.Fatal("expected error for missing note, got nil")
+	}
+}
+
+func TestMockDeleteNote_RemovesFromList(t *testing.T) {
+	m := newMock()
+	before, _, _ := m.GetNotes("")
+	if len(before) == 0 {
+		t.Skip("no seed notes available")
+	}
+
+	if err := m.DeleteNote(before[0].ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	after, _, _ := m.GetNotes("")
+	if len(after) != len(before)-1 {
+		t.Errorf("expected %d notes after delete, got %d", len(before)-1, len(after))
+	}
+}
+
+func TestMockDeleteNote_NotFound(t *testing.T) {
+	m := newMock()
+	if err := m.DeleteNote("no-such-id"); err == nil {
+		t.Fatal("expected error for missing note, got nil")
+	}
+}
+
 // --- Interface compliance ---
 
 func TestMockClient_ImplementsClientInterface(t *testing.T) {

@@ -124,6 +124,30 @@ type createBookmarkRequest struct {
 	Type    string `json:"type"`
 }
 
+type wireNote struct {
+	NoteID         string   `json:"noteId"`
+	AuthorID       string   `json:"authorId"`
+	Content        string   `json:"content"`
+	Topics         []string `json:"topics"` // optional; omitted by API when empty
+	RevisionNumber int      `json:"revisionNumber"`
+	Deleted        bool     `json:"deleted"`
+	CreatedAt      string   `json:"createdAt"`
+}
+
+type createNoteRequest struct {
+	Content string   `json:"content"`
+	Topics  []string `json:"topics,omitempty"` // omit when empty, matching API response shape
+}
+
+type updateNoteRequest struct {
+	Content string   `json:"content"`
+	Topics  []string `json:"topics,omitempty"` // omit when empty, matching API response shape
+}
+
+type createNoteResponseData struct {
+	NoteID string `json:"noteId"`
+}
+
 type createBookmarkResponseData struct {
 	BookmarkID string `json:"bookmarkId"`
 }
@@ -512,6 +536,23 @@ func wireTopicToModel(w wireTopic) model.Topic {
 	return model.Topic{
 		Slug:      w.TopicID,
 		PostCount: w.PostCount,
+	}
+}
+
+func wireNoteToModel(w wireNote) model.Note {
+	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	topics := w.Topics
+	if topics == nil {
+		topics = []string{}
+	}
+	return model.Note{
+		ID:             w.NoteID,
+		AuthorID:       w.AuthorID,
+		Content:        w.Content,
+		Topics:         topics,
+		RevisionNumber: w.RevisionNumber,
+		Deleted:        w.Deleted,
+		CreatedAt:      t,
 	}
 }
 
@@ -912,6 +953,50 @@ func (c *HTTPClient) Follow(followedID string) (string, error) {
 
 func (c *HTTPClient) Unfollow(followID string) error {
 	_, err := c.doRequest("DELETE", "/v1/follows/"+url.PathEscape(followID), nil)
+	return err
+}
+
+// --- Notes ---
+
+func (c *HTTPClient) GetNotes(cursor string) ([]model.Note, string, error) {
+	path := "/v1/notes?limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []wireNote
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	notes := make([]model.Note, len(wire))
+	for i, w := range wire {
+		notes[i] = wireNoteToModel(w)
+	}
+	return notes, env.Cursor, nil
+}
+
+func (c *HTTPClient) CreateNote(content string, topics []string) (model.Note, error) {
+	env, err := c.doJSON("POST", "/v1/notes", createNoteRequest{Content: content, Topics: topics})
+	if err != nil {
+		return model.Note{}, err
+	}
+	var data createNoteResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return model.Note{}, err
+	}
+	return model.Note{ID: data.NoteID, Content: content, Topics: topics, RevisionNumber: 1, CreatedAt: time.Now()}, nil
+}
+
+func (c *HTTPClient) UpdateNote(noteID, content string, topics []string) error {
+	_, err := c.doJSON("PATCH", "/v1/notes/"+url.PathEscape(noteID), updateNoteRequest{Content: content, Topics: topics})
+	return err
+}
+
+func (c *HTTPClient) DeleteNote(noteID string) error {
+	_, err := c.doRequest("DELETE", "/v1/notes/"+url.PathEscape(noteID), nil)
 	return err
 }
 

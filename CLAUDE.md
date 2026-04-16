@@ -13,6 +13,7 @@ This file defines workflow guardrails for Claude. It is not project documentatio
 - **API status:** v0.2 beta — docs at https://api.cyberspace.online/docs.md — **always fetch before any API work** to catch changes
 - **API snapshot:** `docs/03-api-reference.md` — v0.2 baseline we're building against (check for drift against live URL)
 - **Key API facts:** login uses email (not username) · chat/DMs use Firebase RTDB (SSE), not REST · cursor-based pagination
+- **API backlog:** `docs/00-api-backlog.md` — unimplemented features and known server-side bugs; update whenever issues are found or features land
 
 > Update this section as the project evolves so I can orient without a full code review.
 
@@ -77,7 +78,9 @@ A feature is complete when:
 2. Automated smoke tests pass
 3. No linter warnings
 4. Feature is documented in `docs/XX-feature-name.md` (number matches feature number)
-5. User has explicitly approved the merge to `dev`
+5. `docs/00-project-reference.md` is updated to reflect any new screens, types, API methods, keyboard shortcuts, or known limitations added by the feature
+6. `docs/00-api-backlog.md` is updated — mark implemented items as done, add any new API issues discovered during development
+7. User has explicitly approved the merge to `dev`
 
 ---
 

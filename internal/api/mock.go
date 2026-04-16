@@ -378,3 +378,73 @@ func (m *MockClient) Follow(followedID string) (string, error) {
 func (m *MockClient) Unfollow(followID string) error {
 	return nil
 }
+
+var mockNotes = []model.Note{
+	{
+		ID:             "note1",
+		AuthorID:       "1",
+		Content:        "flatline is not death, it is elsewhere\n\nremember to follow up on this thought.",
+		Topics:         []string{"philosophy"},
+		RevisionNumber: 1,
+		Deleted:        false,
+		CreatedAt:      time.Now().Add(-2 * time.Hour),
+	},
+	{
+		ID:             "note2",
+		AuthorID:       "1",
+		Content:        "the matrix has its roots in primitive arcade games\n\nbut what are its roots in the human condition?",
+		Topics:         []string{"history", "cyberspace"},
+		RevisionNumber: 2,
+		Deleted:        false,
+		CreatedAt:      time.Now().Add(-24 * time.Hour),
+	},
+	{
+		ID:             "note3",
+		AuthorID:       "1",
+		Content:        "shopping list:\n- coffee\n- ice\n- a new deck",
+		Topics:         []string{},
+		RevisionNumber: 1,
+		Deleted:        false,
+		CreatedAt:      time.Now().Add(-72 * time.Hour),
+	},
+}
+
+func (m *MockClient) GetNotes(cursor string) ([]model.Note, string, error) {
+	return mockNotes, "", nil
+}
+
+func (m *MockClient) CreateNote(content string, topics []string) (model.Note, error) {
+	note := model.Note{
+		ID:             fmt.Sprintf("note-new-%d", len(mockNotes)+1),
+		AuthorID:       mockUsers[0].ID,
+		Content:        content,
+		Topics:         topics,
+		RevisionNumber: 1,
+		Deleted:        false,
+		CreatedAt:      time.Now(),
+	}
+	mockNotes = append([]model.Note{note}, mockNotes...)
+	return note, nil
+}
+
+func (m *MockClient) UpdateNote(noteID, content string, topics []string) error {
+	for i, n := range mockNotes {
+		if n.ID == noteID {
+			mockNotes[i].Content = content
+			mockNotes[i].Topics = topics
+			mockNotes[i].RevisionNumber++
+			return nil
+		}
+	}
+	return fmt.Errorf("note not found: %s", noteID)
+}
+
+func (m *MockClient) DeleteNote(noteID string) error {
+	for i, n := range mockNotes {
+		if n.ID == noteID {
+			mockNotes = append(mockNotes[:i], mockNotes[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("note not found: %s", noteID)
+}
