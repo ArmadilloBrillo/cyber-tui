@@ -13,7 +13,6 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-const feedMaxBodyLines = 4
 
 // LoadMoreFeedMsg is emitted by FeedModel when the viewport reaches the bottom
 // and a next-page cursor is available. App intercepts this and fires the API call.
@@ -391,70 +390,7 @@ func (m FeedModel) buildContent() (string, []int) {
 }
 
 func (m FeedModel) renderPost(p model.Post, selected bool) string {
-	// Border has Padding(0,1) = 1 char each side, plus 1 char border each side = 4 total.
-	// innerWidth is the usable text area; 0 means not yet initialised (skip wrapping).
-	innerWidth := m.width - 4
-
-	left := lipgloss.JoinHorizontal(lipgloss.Top,
-		theme.Highlight.Render("@"+p.AuthorUsername),
-		theme.Subtle.Render("  "+displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, false)),
-	)
-	var repliesLabel string
-	switch p.RepliesCount {
-	case 0:
-		// show nothing
-	case 1:
-		repliesLabel = theme.Subtle.Render("1 reply")
-	default:
-		repliesLabel = theme.Subtle.Render(fmt.Sprintf("%d replies", p.RepliesCount))
-	}
-	var header string
-	if innerWidth > 0 {
-		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(repliesLabel)
-		if gap > 0 {
-			header = left + strings.Repeat(" ", gap) + repliesLabel
-		} else {
-			header = left
-		}
-	} else {
-		header = left
-	}
-
-	var body string
-	if innerWidth > 0 {
-		wrapped := theme.Base.Width(innerWidth).Render(p.Content)
-		lines := strings.Split(wrapped, "\n")
-		if len(lines) > feedMaxBodyLines {
-			body = strings.Join(lines[:feedMaxBodyLines], "\n")
-			more := len(lines) - feedMaxBodyLines
-			body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
-		} else {
-			body = wrapped
-		}
-	} else {
-		body = theme.Base.Render(p.Content)
-	}
-
-	topics := ""
-	for _, t := range p.Topics {
-		topics += theme.Subtle.Render("#"+t) + " "
-	}
-
-	boxStyle := theme.Border
-	if selected {
-		boxStyle = theme.ActiveBorder
-	}
-	if innerWidth > 0 {
-		// Width on a lipgloss style sets the content+padding area (border excluded).
-		boxStyle = boxStyle.Width(m.width - 2)
-	}
-	return boxStyle.Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			body,
-			fmt.Sprintf("\n%s", topics),
-		),
-	)
+	return RenderPost(p, selected, m.width, m.location(), m.timeDisplayFormat)
 }
 
 func (m FeedModel) View() string {

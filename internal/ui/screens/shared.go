@@ -1,10 +1,83 @@
 package screens
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
+
+const postMaxBodyLines = 4
+
+// RenderPost renders a model.Post as a bordered card matching the feed style.
+// selected controls the border colour (active vs inactive).
+// width is the full terminal width; loc and timeFormat control the timestamp display.
+func RenderPost(p model.Post, selected bool, width int, loc *time.Location, timeFormat string) string {
+	innerWidth := width - 4
+
+	left := lipgloss.JoinHorizontal(lipgloss.Top,
+		theme.Highlight.Render("@"+p.AuthorUsername),
+		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)),
+	)
+	var repliesLabel string
+	switch p.RepliesCount {
+	case 0:
+		// show nothing
+	case 1:
+		repliesLabel = theme.Subtle.Render("1 reply")
+	default:
+		repliesLabel = theme.Subtle.Render(fmt.Sprintf("%d replies", p.RepliesCount))
+	}
+	var header string
+	if innerWidth > 0 {
+		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(repliesLabel)
+		if gap > 0 {
+			header = left + strings.Repeat(" ", gap) + repliesLabel
+		} else {
+			header = left
+		}
+	} else {
+		header = left
+	}
+
+	var body string
+	if innerWidth > 0 {
+		wrapped := theme.Base.Width(innerWidth).Render(p.Content)
+		lines := strings.Split(wrapped, "\n")
+		if len(lines) > postMaxBodyLines {
+			body = strings.Join(lines[:postMaxBodyLines], "\n")
+			more := len(lines) - postMaxBodyLines
+			body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
+		} else {
+			body = wrapped
+		}
+	} else {
+		body = theme.Base.Render(p.Content)
+	}
+
+	topics := ""
+	for _, t := range p.Topics {
+		topics += theme.Subtle.Render("#"+t) + " "
+	}
+
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if innerWidth > 0 {
+		boxStyle = boxStyle.Width(width - 2)
+	}
+	return boxStyle.Render(
+		lipgloss.JoinVertical(lipgloss.Left,
+			header,
+			body,
+			fmt.Sprintf("\n%s", topics),
+		),
+	)
+}
 
 // SharedConfigMsg is broadcast by App whenever display-affecting settings change
 // (dimensions, timezone, display density). Each screen handles the fields it cares

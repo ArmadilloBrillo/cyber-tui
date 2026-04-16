@@ -147,15 +147,21 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			if m.view == viewTopicList {
 				if m.topicIndex > 0 {
 					m.topicIndex--
+					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-				} else {
+				} else if !m.loading && !m.refreshing {
+					m.refreshing = true
+					m = m.refreshContent()
 					return m, func() tea.Msg { return RefreshTopicsMsg{} }
 				}
 			} else {
 				if m.postIndex > 0 {
 					m.postIndex--
+					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-				} else {
+				} else if !m.loading && !m.refreshing {
+					m.refreshing = true
+					m = m.refreshContent()
 					return m, func() tea.Msg { return RefreshTopicPostsMsg{Slug: m.activeTopic} }
 				}
 			}
@@ -165,11 +171,13 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			if m.view == viewTopicList {
 				if m.topicIndex < len(m.topics)-1 {
 					m.topicIndex++
+					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
 				}
 			} else {
 				if m.postIndex < len(m.posts)-1 {
 					m.postIndex++
+					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
 				} else if !m.exhausted && !m.loading {
 					m.loading = true
@@ -230,68 +238,71 @@ func (m TopicsModel) View() string {
 }
 
 func (m TopicsModel) buildContent() (string, []int) {
-	var lines []string
-	var offsets []int
-
-	// Add header line
-	if m.view == viewTopicList {
-		lines = append(lines, theme.Subtle.Render("  topics"))
-		offsets = append(offsets, 0)
-	} else {
-		lines = append(lines, theme.Subtle.Render(fmt.Sprintf("  ← %s", m.activeTopic)))
-		offsets = append(offsets, 0)
-	}
-
-	sep := ""
+	sep := "\n"
+	lineInc := 1
 	if m.relaxed {
-		sep = "\n"
+		sep = "\n\n"
+		lineInc = 2
+	}
+
+	// Header line: "  topics" or "  ← slug"
+	var header string
+	if m.view == viewTopicList {
+		header = theme.Subtle.Render("  topics")
+	} else {
+		header = theme.Subtle.Render(fmt.Sprintf("  ← %s", m.activeTopic))
+	}
+
+	// State indicators below header
+	var prefix string
+	startLine := 1
+	if m.refreshing {
+		prefix = theme.Subtle.Render("  refreshing…") + "\n"
+		startLine++
 	}
 
 	if m.view == viewTopicList {
+		if len(m.topics) == 0 {
+			content := header + "\n" + prefix + theme.Subtle.Render("  no topics yet")
+			return content, nil
+		}
+		offsets := make([]int, len(m.topics))
+		currentLine := startLine
+		var out string
 		for i := range m.topics {
-			if i > 0 {
-				lines = append(lines, sep)
-				offsets = append(offsets, len(lines))
-			}
-			line := m.renderTopicItem(i)
-			lines = append(lines, line)
-			if i < len(m.topics)-1 {
-				offsets = append(offsets, len(lines))
-			}
+			offsets[i] = currentLine
+			rendered := m.renderTopicItem(i)
+			out += rendered + sep
+			currentLine += lipgloss.Height(rendered) + lineInc - 1
 		}
-	} else {
-		for i := range m.posts {
-			if i > 0 {
-				lines = append(lines, sep)
-				offsets = append(offsets, len(lines))
-			}
-			rendered := m.renderPostItem(m.posts[i], i == m.postIndex)
-			for _, l := range strings.Split(rendered, "\n") {
-				lines = append(lines, l)
-			}
-			if i < len(m.posts)-1 {
-				offsets = append(offsets, len(lines))
-			}
+		// Footer
+		if m.loading {
+			out += theme.Subtle.Render("  loading…")
 		}
+		return header + "\n" + prefix + strings.TrimRight(out, "\n"), offsets
 	}
 
-	// Add footer
+	// viewTopicPosts
+	if len(m.posts) == 0 {
+		content := header + "\n" + prefix + theme.Subtle.Render("  no posts")
+		return content, nil
+	}
+	offsets := make([]int, len(m.posts))
+	currentLine := startLine
+	var out string
+	for i := range m.posts {
+		offsets[i] = currentLine
+		rendered := m.renderPostItem(m.posts[i], i == m.postIndex)
+		out += rendered + sep
+		currentLine += lipgloss.Height(rendered) + lineInc - 1
+	}
+	// Footer
 	if m.loading {
-		lines = append(lines, theme.Subtle.Render("  loading…"))
-	} else if m.refreshing {
-		lines = append(lines, theme.Subtle.Render("  refreshing…"))
-	} else if m.view == viewTopicPosts && m.exhausted && len(m.posts) > 0 {
-		lines = append(lines, theme.Subtle.Render("  — end —"))
-	} else if len(lines) == 1 {
-		// Only header, no items
-		if m.view == viewTopicList {
-			lines = append(lines, theme.Subtle.Render("  no topics"))
-		} else {
-			lines = append(lines, theme.Subtle.Render("  no posts"))
-		}
+		out += theme.Subtle.Render("  loading…")
+	} else if m.exhausted {
+		out += theme.Subtle.Render("  — end —")
 	}
-
-	return strings.Join(lines, "\n"), offsets
+	return header + "\n" + prefix + strings.TrimRight(out, "\n"), offsets
 }
 
 func (m TopicsModel) renderTopicItem(index int) string {
@@ -317,68 +328,7 @@ func (m TopicsModel) renderTopicItem(index int) string {
 }
 
 func (m TopicsModel) renderPostItem(p model.Post, selected bool) string {
-	// Adapted from feed.go renderPost
-	innerWidth := m.width - 4
-
-	left := lipgloss.JoinHorizontal(lipgloss.Top,
-		theme.Highlight.Render("@"+p.AuthorUsername),
-		theme.Subtle.Render("  "+displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, false)),
-	)
-	var repliesLabel string
-	switch p.RepliesCount {
-	case 0:
-		// show nothing
-	case 1:
-		repliesLabel = theme.Subtle.Render("1 reply")
-	default:
-		repliesLabel = theme.Subtle.Render(fmt.Sprintf("%d replies", p.RepliesCount))
-	}
-	var header string
-	if innerWidth > 0 {
-		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(repliesLabel)
-		if gap > 0 {
-			header = left + strings.Repeat(" ", gap) + repliesLabel
-		} else {
-			header = left
-		}
-	} else {
-		header = left
-	}
-
-	var body string
-	if innerWidth > 0 {
-		wrapped := theme.Base.Width(innerWidth).Render(p.Content)
-		lines := strings.Split(wrapped, "\n")
-		if len(lines) > feedMaxBodyLines {
-			body = strings.Join(lines[:feedMaxBodyLines], "\n")
-			more := len(lines) - feedMaxBodyLines
-			body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
-		} else {
-			body = wrapped
-		}
-	} else {
-		body = theme.Base.Render(p.Content)
-	}
-
-	topics := ""
-	for _, t := range p.Topics {
-		topics += theme.Subtle.Render("#"+t) + " "
-	}
-
-	boxStyle := theme.Border
-	if selected {
-		boxStyle = theme.ActiveBorder
-	}
-	if innerWidth > 0 {
-		boxStyle = boxStyle.Width(m.width - 2)
-	}
-	return boxStyle.Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			body,
-			fmt.Sprintf("\n%s", topics),
-		),
-	)
+	return RenderPost(p, selected, m.width, m.location(), m.timeDisplayFormat)
 }
 
 func (m TopicsModel) refreshContent() TopicsModel {
@@ -389,11 +339,24 @@ func (m TopicsModel) refreshContent() TopicsModel {
 }
 
 func (m TopicsModel) ensureSelectedVisible() TopicsModel {
+	if !m.ready || len(m.itemOffsets) == 0 {
+		return m
+	}
+
 	var selectedIndex int
+	var itemHeight int
 	if m.view == viewTopicList {
 		selectedIndex = m.topicIndex
+		if selectedIndex >= len(m.topics) {
+			return m
+		}
+		itemHeight = 1
 	} else {
 		selectedIndex = m.postIndex
+		if selectedIndex >= len(m.posts) {
+			return m
+		}
+		itemHeight = lipgloss.Height(m.renderPostItem(m.posts[selectedIndex], false))
 	}
 
 	if selectedIndex >= len(m.itemOffsets) {
@@ -401,20 +364,20 @@ func (m TopicsModel) ensureSelectedVisible() TopicsModel {
 	}
 
 	itemStart := m.itemOffsets[selectedIndex]
-	itemEnd := itemStart + 1
-	if selectedIndex < len(m.itemOffsets)-1 {
-		itemEnd = m.itemOffsets[selectedIndex+1]
-	}
+	itemEnd := itemStart + itemHeight - 1
 
-	vpTop := m.viewport.YOffset
-	vpBottom := vpTop + m.viewport.Height
+	viewTop := m.viewport.YOffset
+	viewBottom := viewTop + m.viewport.Height - 1
 
-	if itemStart < vpTop {
+	if itemStart < viewTop {
 		m.viewport.SetYOffset(itemStart)
-	} else if itemEnd > vpBottom {
-		m.viewport.SetYOffset(itemEnd - m.viewport.Height)
+	} else if itemEnd > viewBottom {
+		if itemHeight <= m.viewport.Height {
+			m.viewport.SetYOffset(itemEnd - m.viewport.Height + 1)
+		} else {
+			m.viewport.SetYOffset(itemStart)
+		}
 	}
-
 	return m
 }
 
