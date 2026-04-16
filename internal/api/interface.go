@@ -35,6 +35,15 @@ type Client interface {
 	GetProfile(username string) (model.User, error)
 	UpdateProfile(update model.ProfileUpdate) error
 
+	// Follows — cursor-paginated list; follow/unfollow are fire-and-forget.
+	// Pass empty cursor for first page; use returned cursor for subsequent pages.
+	// GetFollowing returns accounts the current user follows.
+	GetFollowing(cursor string) ([]model.Follow, string, error)
+	// Follow follows a user by their user ID. Returns the follow document ID (needed for Unfollow).
+	Follow(followedID string) (string, error)
+	// Unfollow removes a follow relationship by its document ID.
+	Unfollow(followID string) error
+
 	// Settings
 	GetSettings() (model.Settings, error)
 	UpdateSettings(update model.Settings) error

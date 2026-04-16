@@ -839,3 +839,165 @@ func TestHTTPDeleteBookmark_NotFound(t *testing.T) {
 		t.Errorf("Code = %q, want NOT_FOUND", apiErr.Code)
 	}
 }
+
+// --- Follows ---
+
+func TestHTTPGetFollowing_Success(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/follows" {
+			t.Errorf("path = %q, want /v1/follows", r.URL.Path)
+		}
+		if r.URL.Query().Get("type") != "following" {
+			t.Errorf("type = %q, want following", r.URL.Query().Get("type"))
+		}
+		writeOKWithCursor(t, w, []map[string]string{
+			{"followId": "f1", "followerId": "uid-me", "followedId": "uid-them", "createdAt": "2026-01-01T00:00:00Z"},
+		}, "f1")
+	})))
+	c.Login("u@example.com", "pass")
+
+	follows, cursor, err := c.GetFollowing("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(follows) != 1 {
+		t.Fatalf("len(follows) = %d, want 1", len(follows))
+	}
+	if follows[0].ID != "f1" {
+		t.Errorf("ID = %q, want f1", follows[0].ID)
+	}
+	if follows[0].FollowerID != "uid-me" {
+		t.Errorf("FollowerID = %q, want uid-me", follows[0].FollowerID)
+	}
+	if follows[0].FollowedID != "uid-them" {
+		t.Errorf("FollowedID = %q, want uid-them", follows[0].FollowedID)
+	}
+	if cursor != "f1" {
+		t.Errorf("cursor = %q, want f1", cursor)
+	}
+}
+
+func TestHTTPGetFollowing_Cursor(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.URL.Query().Get("cursor")
+		if got != "prev-cursor" {
+			t.Errorf("cursor = %q, want prev-cursor", got)
+		}
+		writeOKWithCursor(t, w, []map[string]string{}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	_, _, err := c.GetFollowing("prev-cursor")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPFollow_Success(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/v1/follows" {
+			t.Errorf("method/path = %s %s, want POST /v1/follows", r.Method, r.URL.Path)
+		}
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["followedId"] != "uid-target" {
+			t.Errorf("followedId = %q, want uid-target", body["followedId"])
+		}
+		writeOK(t, w, map[string]string{"followId": "new-follow-id"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	followID, err := c.Follow("uid-target")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if followID != "new-follow-id" {
+		t.Errorf("followID = %q, want new-follow-id", followID)
+	}
+}
+
+func TestHTTPFollow_Conflict(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, 409, "CONFLICT", "already following")
+	})))
+	c.Login("u@example.com", "pass")
+
+	_, err := c.Follow("uid-target")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.Code != "CONFLICT" {
+		t.Errorf("Code = %q, want CONFLICT", apiErr.Code)
+	}
+}
+
+func TestHTTPUnfollow_Success(t *testing.T) {
+	var gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "DELETE" {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+		gotPath = r.URL.Path
+		w.WriteHeader(200)
+		w.Write([]byte(`{"data":{}}`))
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.Unfollow("follow-abc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/follows/follow-abc" {
+		t.Errorf("path = %q, want /v1/follows/follow-abc", gotPath)
+	}
+}
+
+func TestHTTPUnfollow_NotFound(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, 404, "NOT_FOUND", "follow not found")
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.Unfollow("no-such-follow")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.Code != "NOT_FOUND" {
+		t.Errorf("Code = %q, want NOT_FOUND", apiErr.Code)
+	}
+}
+
+func TestHTTPGetProfile_CountFields(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]interface{}{
+			"userId":         "uid-123",
+			"username":       "ragnar",
+			"followersCount": 35,
+			"followingCount": 45,
+			"postsCount":     6,
+		})
+	})))
+	c.Login("u@example.com", "pass")
+
+	user, err := c.GetProfile("ragnar")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if user.FollowersCount != 35 {
+		t.Errorf("FollowersCount = %d, want 35", user.FollowersCount)
+	}
+	if user.FollowingCount != 45 {
+		t.Errorf("FollowingCount = %d, want 45", user.FollowingCount)
+	}
+	if user.PostsCount != 6 {
+		t.Errorf("PostsCount = %d, want 6", user.PostsCount)
+	}
+}

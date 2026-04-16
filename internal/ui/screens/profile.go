@@ -12,13 +12,16 @@ import (
 const bioCharLimit = 127
 
 type ProfileModel struct {
-	user     model.User
-	compose  ComposeModel
-	width    int
-	err      error
-	saved    bool
-	readOnly  bool
-	canGoBack bool
+	user        model.User
+	compose     ComposeModel
+	width       int
+	err         error
+	saved       bool
+	readOnly    bool
+	canGoBack   bool
+	isFollowing bool
+	followID    string
+	followFeedback string // "following." or "unfollowed."
 }
 
 func (m ProfileModel) SetReadOnly(readOnly bool) ProfileModel {
@@ -31,6 +34,23 @@ func (m ProfileModel) SetCanGoBack(v bool) ProfileModel {
 	return m
 }
 
+func (m ProfileModel) SetFollowState(following bool, followID string) ProfileModel {
+	m.isFollowing = following
+	m.followID = followID
+	return m
+}
+
+// IncrementFollowersCount adjusts the displayed follower count by delta (±1).
+func (m ProfileModel) IncrementFollowersCount(delta int) ProfileModel {
+	m.user.FollowersCount += delta
+	return m
+}
+
+func (m ProfileModel) SetFollowFeedback(text string) ProfileModel {
+	m.followFeedback = text
+	return m
+}
+
 type SaveProfileMsg struct{ Bio string }
 
 func NewProfileModel() ProfileModel {
@@ -39,6 +59,7 @@ func NewProfileModel() ProfileModel {
 
 func (m ProfileModel) SetUser(u model.User) ProfileModel {
 	m.user = u
+	m.followFeedback = ""
 	return m
 }
 
@@ -90,6 +111,13 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 				m.compose, cmd = m.compose.OpenWithContent("bio", "what's your story…", m.user.Bio)
 				return m, cmd
 			}
+		case "f":
+			if m.readOnly {
+				if m.isFollowing {
+					return m, func() tea.Msg { return UnfollowUserMsg{FollowID: m.followID} }
+				}
+				return m, func() tea.Msg { return FollowUserMsg{UserID: m.user.ID} }
+			}
 		}
 
 	case ComposeSubmitMsg:
@@ -128,17 +156,26 @@ func (m ProfileModel) View() string {
 		)
 	}
 
+	counts := theme.Subtle.Render(fmt.Sprintf(
+		"%d followers · %d following · %d posts",
+		m.user.FollowersCount, m.user.FollowingCount, m.user.PostsCount,
+	))
+
 	bio := theme.Base.Render(m.user.Bio)
 
-	var saved string
+	var feedback string
 	if m.saved && !m.readOnly {
-		saved = theme.Highlight.Render("saved.")
+		feedback = theme.Highlight.Render("saved.")
+	} else if m.followFeedback != "" {
+		feedback = theme.Highlight.Render(m.followFeedback)
 	}
 
 	var hint string
 	switch {
+	case m.readOnly && m.isFollowing:
+		hint = theme.Subtle.Render("esc · back   f · unfollow")
 	case m.readOnly:
-		hint = theme.Subtle.Render("esc · back")
+		hint = theme.Subtle.Render("esc · back   f · follow")
 	case m.canGoBack:
 		hint = theme.Subtle.Render("esc · back   e · edit bio")
 	default:
@@ -148,11 +185,12 @@ func (m ProfileModel) View() string {
 	return theme.Border.Width(76).Render(
 		lipgloss.JoinVertical(lipgloss.Left,
 			username,
+			counts,
 			"",
 			bio,
 			"",
 			hint,
-			saved,
+			feedback,
 		),
 	)
 }

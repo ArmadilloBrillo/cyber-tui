@@ -477,15 +477,25 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case userProfileLoadedMsg:
 		isOwn := msg.user.Username == a.currentUser.Username
-		a.profile = a.profile.SetUser(msg.user).SetReadOnly(!isOwn).SetCanGoBack(true)
+		a.profile = a.profile.SetUser(msg.user).SetReadOnly(!isOwn).SetCanGoBack(true).SetFollowState(msg.isFollowing, msg.followID)
 		a.active = screenProfile
 		return a, nil, true
 	case screens.BackFromProfileMsg:
 		a.active = a.profileReturn
-		a.profile = a.profile.SetReadOnly(false).SetCanGoBack(false)
+		a.profile = a.profile.SetReadOnly(false).SetCanGoBack(false).SetFollowState(false, "")
 		return a, nil, true
 	case screens.SaveProfileMsg:
 		return a, a.saveProfileCmd(msg.Bio), true
+	case screens.FollowUserMsg:
+		return a, a.followUserCmd(msg.UserID), true
+	case screens.UnfollowUserMsg:
+		return a, a.unfollowUserCmd(msg.FollowID), true
+	case followResultMsg:
+		a.profile = a.profile.SetFollowState(true, msg.followID).IncrementFollowersCount(1).SetFollowFeedback("following.")
+		return a, nil, true
+	case unfollowResultMsg:
+		a.profile = a.profile.SetFollowState(false, "").IncrementFollowersCount(-1).SetFollowFeedback("unfollowed.")
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -1227,7 +1237,13 @@ type feedPageMsg struct {
 type roomsLoadedMsg struct{ rooms []model.Room }
 type convsLoadedMsg struct{ convs []model.Conversation }
 type profileLoadedMsg struct{ user model.User }
-type userProfileLoadedMsg struct{ user model.User }
+type userProfileLoadedMsg struct {
+	user        model.User
+	isFollowing bool
+	followID    string
+}
+type followResultMsg struct{ followID string }
+type unfollowResultMsg struct{}
 type repliesLoadedMsg struct{ replies []model.Reply }
 type replyCreatedMsg struct{ postID string }
 type postCreatedMsg struct{}
@@ -1353,7 +1369,40 @@ func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		return userProfileLoadedMsg{user: user}
+		// Detect whether the logged-in user follows this profile by scanning
+		// the first page of the following list (up to 50 entries).
+		var isFollowing bool
+		var followID string
+		follows, _, err := a.client.GetFollowing("")
+		if err == nil {
+			for _, f := range follows {
+				if f.FollowedID == user.ID {
+					isFollowing = true
+					followID = f.ID
+					break
+				}
+			}
+		}
+		return userProfileLoadedMsg{user: user, isFollowing: isFollowing, followID: followID}
+	}
+}
+
+func (a *App) followUserCmd(userID string) tea.Cmd {
+	return func() tea.Msg {
+		followID, err := a.client.Follow(userID)
+		if err != nil {
+			return errMsg{err}
+		}
+		return followResultMsg{followID: followID}
+	}
+}
+
+func (a *App) unfollowUserCmd(followID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.Unfollow(followID); err != nil {
+			return errMsg{err}
+		}
+		return unfollowResultMsg{}
 	}
 }
 

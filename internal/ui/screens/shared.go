@@ -110,3 +110,9 @@ type SaveSettingsMsg struct {
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark
 // so it can show transient feedback.
 type BookmarkedMsg struct{ PostID string }
+
+// FollowUserMsg is emitted by ProfileModel when the user presses 'f' to follow another user.
+type FollowUserMsg struct{ UserID string }
+
+// UnfollowUserMsg is emitted by ProfileModel when the user presses 'f' to unfollow.
+type UnfollowUserMsg struct{ FollowID string }

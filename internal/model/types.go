@@ -10,14 +10,25 @@ type Tokens struct {
 }
 
 type User struct {
-	ID           string
-	Username     string
-	DisplayName  string
-	Email        string
-	Bio          string
-	WebsiteUrl   string
-	PinnedPostID string
-	LocationName string
+	ID             string
+	Username       string
+	DisplayName    string
+	Email          string
+	Bio            string
+	WebsiteUrl     string
+	PinnedPostID   string
+	LocationName   string
+	FollowersCount int
+	FollowingCount int
+	PostsCount     int
+}
+
+// Follow maps to a record returned by GET /v1/follows.
+type Follow struct {
+	ID         string
+	FollowerID string
+	FollowedID string
+	CreatedAt  time.Time
 }
 
 // Post maps to the post shape returned by GET /v1/posts.

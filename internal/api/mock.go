@@ -366,3 +366,15 @@ func (m *MockClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 	}()
 	return ch, cancel, nil
 }
+
+func (m *MockClient) GetFollowing(cursor string) ([]model.Follow, string, error) {
+	return nil, "", nil
+}
+
+func (m *MockClient) Follow(followedID string) (string, error) {
+	return "mock-follow-id", nil
+}
+
+func (m *MockClient) Unfollow(followID string) error {
+	return nil
+}

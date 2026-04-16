@@ -72,14 +72,24 @@ type wirePost struct {
 }
 
 type wireUser struct {
-	UserID       string `json:"userId"`
-	Username     string `json:"username"`
-	DisplayName  string `json:"displayName"`
-	Email        string `json:"email"`
-	Bio          string `json:"bio"`
-	WebsiteUrl   string `json:"websiteUrl"`
-	PinnedPostID string `json:"pinnedPostId"`
-	LocationName string `json:"locationName"`
+	UserID         string `json:"userId"`
+	Username       string `json:"username"`
+	DisplayName    string `json:"displayName"`
+	Email          string `json:"email"`
+	Bio            string `json:"bio"`
+	WebsiteUrl     string `json:"websiteUrl"`
+	PinnedPostID   string `json:"pinnedPostId"`
+	LocationName   string `json:"locationName"`
+	FollowersCount int    `json:"followersCount"`
+	FollowingCount int    `json:"followingCount"`
+	PostsCount     int    `json:"postsCount"`
+}
+
+type wireFollow struct {
+	FollowID   string `json:"followId"`
+	FollowerID string `json:"followerId"`
+	FollowedID string `json:"followedId"`
+	CreatedAt  string `json:"createdAt"`
 }
 
 type wireReply struct {
@@ -417,14 +427,27 @@ func wireReplyToModel(w wireReply) model.Reply {
 
 func wireUserToModel(w wireUser) model.User {
 	return model.User{
-		ID:           w.UserID,
-		Username:     w.Username,
-		DisplayName:  w.DisplayName,
-		Email:        w.Email,
-		Bio:          w.Bio,
-		WebsiteUrl:   w.WebsiteUrl,
-		PinnedPostID: w.PinnedPostID,
-		LocationName: w.LocationName,
+		ID:             w.UserID,
+		Username:       w.Username,
+		DisplayName:    w.DisplayName,
+		Email:          w.Email,
+		Bio:            w.Bio,
+		WebsiteUrl:     w.WebsiteUrl,
+		PinnedPostID:   w.PinnedPostID,
+		LocationName:   w.LocationName,
+		FollowersCount: w.FollowersCount,
+		FollowingCount: w.FollowingCount,
+		PostsCount:     w.PostsCount,
+	}
+}
+
+func wireFollowToModel(w wireFollow) model.Follow {
+	t, _ := time.Parse(time.RFC3339, w.CreatedAt)
+	return model.Follow{
+		ID:         w.FollowID,
+		FollowerID: w.FollowerID,
+		FollowedID: w.FollowedID,
+		CreatedAt:  t,
 	}
 }
 
@@ -849,6 +872,47 @@ func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 	ch := make(chan model.Message)
 	close(ch)
 	return ch, func() {}, nil
+}
+
+// --- Follows ---
+
+func (c *HTTPClient) GetFollowing(cursor string) ([]model.Follow, string, error) {
+	path := "/v1/follows?type=following&limit=50"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []wireFollow
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	follows := make([]model.Follow, len(wire))
+	for i, w := range wire {
+		follows[i] = wireFollowToModel(w)
+	}
+	return follows, env.Cursor, nil
+}
+
+func (c *HTTPClient) Follow(followedID string) (string, error) {
+	env, err := c.doJSON("POST", "/v1/follows", map[string]string{"followedId": followedID})
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		FollowID string `json:"followId"`
+	}
+	if err := json.Unmarshal(env.Data, &result); err != nil {
+		return "", err
+	}
+	return result.FollowID, nil
+}
+
+func (c *HTTPClient) Unfollow(followID string) error {
+	_, err := c.doRequest("DELETE", "/v1/follows/"+url.PathEscape(followID), nil)
+	return err
 }
 
 // WithDebug enables or disables verbose RTDB debug output.
