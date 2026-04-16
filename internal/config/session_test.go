@@ -87,6 +87,72 @@ func TestClear(t *testing.T) {
 	}
 }
 
+// --- Wander mode ---
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestIsRandomizeLocationEnabled_NilIsTrue(t *testing.T) {
+	c := config.Config{} // RandomizeLocation == nil
+	if !c.IsRandomizeLocationEnabled() {
+		t.Error("nil pointer should mean enabled (opt-out default)")
+	}
+}
+
+func TestIsRandomizeLocationEnabled_ExplicitTrue(t *testing.T) {
+	c := config.Config{RandomizeLocation: boolPtr(true)}
+	if !c.IsRandomizeLocationEnabled() {
+		t.Error("explicit true should be enabled")
+	}
+}
+
+func TestIsRandomizeLocationEnabled_ExplicitFalse(t *testing.T) {
+	c := config.Config{RandomizeLocation: boolPtr(false)}
+	if c.IsRandomizeLocationEnabled() {
+		t.Error("explicit false should be disabled")
+	}
+}
+
+func TestShouldWanderNow_DisabledNeverFires(t *testing.T) {
+	c := config.Config{RandomizeLocation: boolPtr(false)}
+	if config.ShouldWanderNow(c) {
+		t.Error("should not wander when disabled")
+	}
+}
+
+func TestShouldWanderNow_ZeroTimestampFires(t *testing.T) {
+	c := config.Config{} // nil = enabled, zero LastLocationRandomizedAt
+	if !config.ShouldWanderNow(c) {
+		t.Error("should wander on first run (zero timestamp)")
+	}
+}
+
+func TestShouldWanderNow_RecentTimestampNoFire(t *testing.T) {
+	c := config.Config{
+		LastLocationRandomizedAt: time.Now().Add(-1 * time.Hour),
+	}
+	if config.ShouldWanderNow(c) {
+		t.Error("should not wander when last update was recent")
+	}
+}
+
+func TestShouldWanderNow_StaleTimestampFires(t *testing.T) {
+	c := config.Config{
+		LastLocationRandomizedAt: time.Now().Add(-13 * time.Hour),
+	}
+	if !config.ShouldWanderNow(c) {
+		t.Error("should wander when last update was >12h ago")
+	}
+}
+
+func TestShouldWanderNow_ExactlyAtIntervalFires(t *testing.T) {
+	c := config.Config{
+		LastLocationRandomizedAt: time.Now().Add(-config.WanderInterval),
+	}
+	if !config.ShouldWanderNow(c) {
+		t.Error("should wander when exactly at the interval boundary")
+	}
+}
+
 func TestFilePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix permission bits are not supported on Windows")
