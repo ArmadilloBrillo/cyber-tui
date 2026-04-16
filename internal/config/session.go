@@ -46,6 +46,14 @@ type Config struct {
 	SSHListenAddr string `json:"sshListenAddr,omitempty"`
 	// SSHHostKeyPath is the path to the SSH host key file (default: ./ssh_host_key).
 	SSHHostKeyPath string `json:"sshHostKeyPath,omitempty"`
+
+	// RandomizeLocation controls the wander mode easter egg, which silently updates
+	// the profile location to a random position twice per day.
+	// nil (field absent) means enabled — this is an opt-out feature.
+	RandomizeLocation *bool `json:"randomizeLocation,omitempty"`
+	// LastLocationRandomizedAt records when wander mode last fired.
+	// Zero value means it has never run, which triggers an immediate update.
+	LastLocationRandomizedAt time.Time `json:"lastLocationRandomizedAt,omitempty"`
 }
 
 // DefaultPath returns the canonical path for the config file: ~/.cyber-tui.json.
@@ -130,6 +138,26 @@ func ParseTimezoneLabel(label string) *time.Location {
 	}
 	offset := sign * (hours*3600 + mins*60)
 	return time.FixedZone(label, offset)
+}
+
+// IsRandomizeLocationEnabled reports whether wander mode is active.
+// Returns true when RandomizeLocation is nil (the default — feature is opt-out).
+func (c Config) IsRandomizeLocationEnabled() bool {
+	return c.RandomizeLocation == nil || *c.RandomizeLocation
+}
+
+// WanderInterval is the minimum time between wander mode location updates.
+const WanderInterval = 12 * time.Hour
+
+// ShouldWanderNow reports whether a wander mode update should fire right now.
+// It returns true when wander is enabled and the last update was either never
+// performed (zero timestamp) or occurred more than WanderInterval ago.
+func ShouldWanderNow(cfg Config) bool {
+	if !cfg.IsRandomizeLocationEnabled() {
+		return false
+	}
+	return cfg.LastLocationRandomizedAt.IsZero() ||
+		time.Since(cfg.LastLocationRandomizedAt) >= WanderInterval
 }
 
 // Clear removes the config file. Returns nil if the file does not exist.

@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"math"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -565,6 +567,18 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.settings = msg.settings
 		a.settingsScreen = a.settingsScreen.SetSaved()
 		a.broadcastConfig()
+		return a, nil, true
+
+	case wanderTickMsg:
+		return a, tea.Batch(a.checkAndWanderCmd(), a.scheduleWanderCmd()), true
+
+	case wanderDoneMsg:
+		if !msg.at.IsZero() {
+			if cfg, err := config.Load(); err == nil {
+				cfg.LastLocationRandomizedAt = msg.at
+				_ = config.Save(cfg)
+			}
+		}
 		return a, nil, true
 	}
 	return a, nil, false
@@ -1320,7 +1334,14 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	a.feed = a.feed.SetCurrentUsername(a.currentUser.Username)
 	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username)
 	a.broadcastConfig()
-	return tea.Batch(a.loadFeedCmd(), a.loadProfileCmd(), a.schedulePollCmd(), a.loadSettingsCmd())
+	return tea.Batch(
+		a.loadFeedCmd(),
+		a.loadProfileCmd(),
+		a.schedulePollCmd(),
+		a.loadSettingsCmd(),
+		a.scheduleWanderCmd(),
+		a.checkAndWanderCmd(),
+	)
 }
 
 type feedLoadedMsg struct {
@@ -1351,6 +1372,8 @@ type postDeletedMsg struct {
 }
 type settingsLoadedMsg struct{ settings model.Settings }
 type settingsSavedMsg struct{ settings model.Settings }
+type wanderTickMsg struct{}
+type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
 type errMsg struct{ err error }
 type bookmarksLoadedMsg struct {
 	items  []model.Bookmark
@@ -1886,6 +1909,37 @@ func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 
 func (a *App) schedulePollCmd() tea.Cmd {
 	return tea.Tick(60*time.Second, func(time.Time) tea.Msg { return pollUnreadTickMsg{} })
+}
+
+func (a *App) scheduleWanderCmd() tea.Cmd {
+	return tea.Tick(1*time.Hour, func(time.Time) tea.Msg { return wanderTickMsg{} })
+}
+
+// checkAndWanderCmd fires a profile location update if wander mode is enabled
+// and at least 12 hours have elapsed since the last update. All failures are
+// silent — the user is never notified.
+func (a *App) checkAndWanderCmd() tea.Cmd {
+	return func() tea.Msg {
+		cfg, err := config.Load()
+		if err != nil {
+			return wanderDoneMsg{}
+		}
+		if !config.ShouldWanderNow(cfg) {
+			return wanderDoneMsg{}
+		}
+		lat := math.Round((rand.Float64()*180-90)*1e4) / 1e4
+		lon := math.Round((rand.Float64()*360-180)*1e4) / 1e4
+		name := "*poof*"
+		update := model.ProfileUpdate{
+			LocationLatitude:  &lat,
+			LocationLongitude: &lon,
+			LocationName:      &name,
+		}
+		if err := a.client.UpdateProfile(update); err != nil {
+			return wanderDoneMsg{}
+		}
+		return wanderDoneMsg{at: time.Now().UTC()}
+	}
 }
 
 func (a *App) fetchUnreadCountCmd() tea.Cmd {

@@ -207,6 +207,9 @@ Reads and writes the user's persistent configuration at `~/.cyber-tui.json`.
 | `GetLocation()` | method | Parses `Config.Timezone` to `*time.Location` |
 | `ParseTimezoneLabel(label)` | func | Converts "UTC+5:30" string to `*time.Location` |
 | `AvailableTimezones` | var | Slice of 32 UTC offset labels (-12:00 to +14:00) |
+| `IsRandomizeLocationEnabled()` | method | Returns true when `RandomizeLocation` is nil or true |
+| `ShouldWanderNow(cfg)` | func | Returns true when wander is enabled and ≥12 h since last update |
+| `WanderInterval` | const | Minimum time between wander updates (12 h) |
 
 Passwords are not stored. The refresh token is used for auto-login; on 401 the app refreshes silently.
 
@@ -292,6 +295,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 - Renders tab bar, active screen, and status bar
 - Manages global shortcuts (`1`–`4` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `q`/`ctrl+c` quit)
 - Handles automatic token refresh on `ErrUnauthorized` responses
+- Runs background tick jobs: `schedulePollCmd` (60 s unread count), `scheduleWanderCmd` (1 h wander check)
 
 #### `app_test.go`
 
@@ -554,6 +558,8 @@ Permissions: `0600` (owner read/write only)
 | `autoPassword` | string | — | Pre-fill password (plain text; not recommended) |
 | `sshListenAddr` | string | — | Enable SSH server mode (e.g. `":2222"`) |
 | `sshHostKeyPath` | string | — | Path to SSH host private key |
+| `randomizeLocation` | *bool | `null` (= enabled) | Wander mode toggle; `null`/`true` = on, `false` = off |
+| `lastLocationRandomizedAt` | string | `""` (= never) | ISO timestamp of last wander mode update |
 
 ---
 
