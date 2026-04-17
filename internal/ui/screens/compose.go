@@ -208,9 +208,20 @@ func (m ComposeModel) View() string {
 	if !m.active {
 		return ""
 	}
+	hintStyle := lipgloss.NewStyle().Foreground(theme.ColorCyan)
+	var hint string
+	switch {
+	case strings.Contains(m.context, "replying"):
+		hint = "ctrl+s · send   esc · cancel"
+	case strings.Contains(m.context, "note"):
+		hint = "tab · topics   ctrl+s · save   ctrl+p · publish   esc · cancel"
+	default:
+		hint = "tab · topics   ctrl+s · send   esc · cancel"
+	}
 	inner := lipgloss.JoinVertical(lipgloss.Left,
 		theme.Subtle.Render(m.context),
 		m.textarea.View(),
+		hintStyle.Render(hint),
 	)
 	boxStyle := theme.Border
 	if m.focused {
