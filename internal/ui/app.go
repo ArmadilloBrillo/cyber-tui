@@ -1017,48 +1017,7 @@ func (a App) renderStatusBar() string {
 		metaStyle.Render("  ·  "+tzLabel),
 		metaStyle.Render("  ·  "+timeFmt),
 	)
-	var hintStr string
-	switch a.active {
-	case screenFeed:
-		if a.feed.ComposeActive() {
-			hintStr = "  Ctrl+S · send   Tab · topics   Enter · paragraph   Esc · cancel"
-		} else {
-			hintStr = "  n · new   r · reply   d · delete own   p · profile   ? · help"
-		}
-	case screenPostDetail:
-		if a.postDetail.ComposeActive() {
-			hintStr = "  Ctrl+S · send   Enter · paragraph   Esc · cancel"
-		} else {
-			hintStr = "  r · reply   d · delete own   p · profile   ? · help"
-		}
-	case screenProfile:
-		if a.profile.ComposeActive() {
-			hintStr = "  Ctrl+S · save   Tab · next field   Esc · cancel"
-		} else {
-			hintStr = "  tab · switch tab   j/k · navigate   enter · open   esc · back   ? · help"
-		}
-	case screenNotifications:
-		hintStr = "  m · mark read   M · mark all   u · unread filter   enter · open   p · profile   ? · help"
-	case screenJournal:
-		if a.journal.ComposeActive() {
-			hintStr = "  Ctrl+S · save   Ctrl+P · publish   Tab · topics   Enter · paragraph   Esc · cancel"
-		} else {
-			hintStr = "  d · delete   ? · help"
-		}
-	case screenBookmarks:
-		hintStr = "  enter · open post   d · delete   ? · help"
-	case screenTopics:
-		hintStr = "  enter · browse/open   esc · back   ? · help"
-	case screenSettings:
-		if a.settingsScreen.IsDirty() {
-			hintStr = "  ctrl+s · save   esc · revert   ? · help"
-		} else {
-			hintStr = "  space/enter · toggle   tab/shift+tab · cycle   ? · help"
-		}
-	default:
-		hintStr = "  ? · help"
-	}
-	hint := theme.StatusBar.Render(hintStr)
+	hint := theme.StatusBar.Render("  ? · help")
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
 	return lipgloss.JoinHorizontal(lipgloss.Top, user, spacer, hint)
 }
@@ -1237,74 +1196,169 @@ func (a App) handleHelpModalKey(_ tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// renderHelpModal returns the centered overlay box listing all keyboard shortcuts.
+// renderHelpModal returns the centered overlay box listing keyboard shortcuts
+// for the global scope and the currently active screen.
 func (a App) renderHelpModal() string {
 	title := theme.Title.Render("shortcuts")
 	sectionStyle := theme.Subtle.Copy().Bold(true)
 	row := func(key, desc string) string {
-		k := theme.Highlight.Render(fmt.Sprintf("%-10s", key))
+		k := theme.Highlight.Render(fmt.Sprintf("%-14s", key))
 		return lipgloss.JoinHorizontal(lipgloss.Top, k, theme.Subtle.Render(desc))
 	}
-	col1 := lipgloss.JoinVertical(lipgloss.Left,
+
+	globalSection := lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render("global"),
-		row("1-7", "feed/notifs/journal/bookmarks/topics/profile/settings"),
-		row("←→", "cycle tabs"),
+		row("1-7", "feed · notifs · journal · bookmarks · topics · profile · settings"),
+		row("← →", "cycle tabs"),
 		row("t", "theme"),
 		row("z", "timezone"),
 		row("v", "density"),
 		row("q", "quit"),
-		"",
-		sectionStyle.Render("compose"),
-		row("Ctrl+S", "send"),
-		row("Enter", "paragraph"),
-		row("Esc", "cancel"),
-		"",
-		sectionStyle.Render("notifications"),
-		row("↑↓ / jk", "navigate"),
-		row("enter", "open post / profile"),
-		row("m", "mark read"),
-		row("M", "mark all read"),
-		row("u", "toggle unread filter"),
-		row("p", "view profile"),
 	)
-	col2 := lipgloss.JoinVertical(lipgloss.Left,
-		sectionStyle.Render("feed"),
-		row("↑↓ / jk", "navigate"),
-		row("enter", "open post"),
-		row("p", "view profile"),
-		row("b", "bookmark post"),
-		row("n", "new post"),
-		row("r", "reply"),
-		row("d", "delete own post"),
-		"",
-		sectionStyle.Render("post detail"),
-		row("↑↓ / jk", "scroll / navigate"),
-		row("p", "view profile"),
-		row("b", "bookmark post"),
-		row("r", "reply"),
-		row("d", "delete own post/reply"),
-		row("esc", "back"),
-		"",
-		sectionStyle.Render("profile"),
-		row("e", "edit profile"),
-		row("f", "follow / unfollow"),
-		row("tab/shift+tab", "switch sub-tab"),
-		row("j/k", "navigate list"),
-		row("enter", "open item"),
-		row("esc", "back"),
-		"",
-		sectionStyle.Render("journal"),
-		row("n", "new note"),
-		row("enter", "edit note"),
-		row("h", "revision history"),
-		row("d", "delete note"),
-		row("Ctrl+P", "publish as post"),
-	)
-	columns := lipgloss.JoinHorizontal(lipgloss.Top, col1, "    ", col2)
+
+	var localSection string
+	switch a.active {
+	case screenFeed:
+		if a.feed.ComposeActive() {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("feed (compose)"),
+				row("Ctrl+S", "send"),
+				row("Tab", "topics"),
+				row("Enter", "paragraph"),
+				row("Esc", "cancel"),
+			)
+		} else {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("feed"),
+				row("↑↓ / jk", "navigate"),
+				row("enter", "open post"),
+				row("p", "view profile"),
+				row("b", "bookmark"),
+				row("n", "new post"),
+				row("r", "reply"),
+				row("d", "delete own"),
+			)
+		}
+	case screenPostDetail:
+		if a.postDetail.ComposeActive() {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("post detail (compose)"),
+				row("Ctrl+S", "send"),
+				row("Enter", "paragraph"),
+				row("Esc", "cancel"),
+			)
+		} else {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("post detail"),
+				row("↑↓ / jk", "scroll / navigate"),
+				row("r", "reply"),
+				row("d", "delete own"),
+				row("p", "view profile"),
+				row("b", "bookmark"),
+				row("esc", "back"),
+			)
+		}
+	case screenProfile:
+		if a.profile.ComposeActive() {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("profile (editing)"),
+				row("tab/shift+tab", "cycle fields"),
+				row("Ctrl+S", "save"),
+				row("Esc", "cancel"),
+			)
+		} else if a.profile.IsReadOnly() {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("profile"),
+				row("tab/shift+tab", "switch tab"),
+				row("j/k", "navigate"),
+				row("enter", "open"),
+				row("f", "follow / unfollow"),
+				row("esc", "back"),
+			)
+		} else {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("profile (own)"),
+				row("tab/shift+tab", "switch tab"),
+				row("j/k", "navigate"),
+				row("enter", "open"),
+				row("e", "edit profile"),
+				row("esc", "back"),
+			)
+		}
+	case screenNotifications:
+		localSection = lipgloss.JoinVertical(lipgloss.Left,
+			sectionStyle.Render("notifications"),
+			row("↑↓ / jk", "navigate"),
+			row("enter", "open"),
+			row("m", "mark read"),
+			row("M", "mark all read"),
+			row("u", "toggle unread filter"),
+			row("p", "view profile"),
+		)
+	case screenJournal:
+		if a.journal.ComposeActive() {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("journal (editing)"),
+				row("Ctrl+S", "save"),
+				row("Ctrl+P", "publish as post"),
+				row("Tab", "topics"),
+				row("Enter", "paragraph"),
+				row("Esc", "cancel"),
+			)
+		} else {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("journal"),
+				row("↑↓ / jk", "navigate"),
+				row("enter", "edit note"),
+				row("n", "new note"),
+				row("d", "delete"),
+				row("h", "revision history"),
+			)
+		}
+	case screenBookmarks:
+		localSection = lipgloss.JoinVertical(lipgloss.Left,
+			sectionStyle.Render("bookmarks"),
+			row("↑↓ / jk", "navigate"),
+			row("enter", "open post"),
+			row("d", "delete"),
+		)
+	case screenTopics:
+		localSection = lipgloss.JoinVertical(lipgloss.Left,
+			sectionStyle.Render("topics"),
+			row("↑↓ / jk", "navigate"),
+			row("enter", "browse / open"),
+			row("esc", "back"),
+		)
+	case screenSettings:
+		if a.settingsScreen.IsDirty() {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("settings (unsaved changes)"),
+				row("Ctrl+S", "save"),
+				row("Esc", "revert"),
+			)
+		} else {
+			localSection = lipgloss.JoinVertical(lipgloss.Left,
+				sectionStyle.Render("settings"),
+				row("↑↓ / jk", "navigate"),
+				row("space/enter", "toggle"),
+				row("tab/shift+tab", "cycle"),
+			)
+		}
+	case screenCMail:
+		localSection = lipgloss.JoinVertical(lipgloss.Left,
+			sectionStyle.Render("c-mail"),
+			row("← →", "switch pane"),
+			row("j/k", "navigate"),
+			row("enter", "send"),
+		)
+	}
+
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
-		columns,
+		globalSection,
+		"",
+		localSection,
 		"",
 		theme.Subtle.Render("? or any key · close"),
 	)

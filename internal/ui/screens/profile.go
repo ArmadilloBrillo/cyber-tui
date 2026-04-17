@@ -296,6 +296,8 @@ func (m ProfileModel) AppendUserFollowers(follows []model.Follow, cursor string)
 // route key events past global shortcuts.
 func (m ProfileModel) ComposeActive() bool { return m.editMode }
 
+func (m ProfileModel) IsReadOnly() bool { return m.readOnly }
+
 // location returns the configured timezone, defaulting to UTC.
 func (m ProfileModel) location() *time.Location {
 	if m.loc != nil {
