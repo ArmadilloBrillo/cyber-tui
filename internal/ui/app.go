@@ -934,7 +934,7 @@ func (a App) View() string {
 	// Fix the content area to the available height so the status bar
 	// is always anchored to the bottom regardless of content length.
 	contentHeight := a.height - theme.ChromeHeight
-	content := lipgloss.NewStyle().Height(contentHeight).Render(a.renderActiveScreen())
+	content := lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(a.renderActiveScreen())
 	base := lipgloss.JoinVertical(lipgloss.Left,
 		a.renderTabBar(),
 		"", // separator row
@@ -1017,7 +1017,7 @@ func (a App) renderStatusBar() string {
 		metaStyle.Render("  ·  "+tzLabel),
 		metaStyle.Render("  ·  "+timeFmt),
 	)
-	hint := theme.StatusBar.Render("  ? · help")
+	hint := theme.StatusBar.Render("  ? · show shortcuts")
 	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
 	return lipgloss.JoinHorizontal(lipgloss.Top, user, spacer, hint)
 }
@@ -1140,7 +1140,7 @@ func (a App) renderTimezonePicker() string {
 			items = append(items, theme.Subtle.Render("  "+zones[i]))
 		}
 	}
-	hint := theme.Subtle.Render("↑↓ select   ⏎ save   esc cancel")
+	hint := theme.Subtle.Render("↑↓ select   enter save   esc cancel")
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
@@ -1160,6 +1160,7 @@ func (a *App) refreshViewports() {
 	a.chatrooms, _ = a.chatrooms.Update(msg)
 	a.cmail, _ = a.cmail.Update(msg)
 	a.postDetail, _ = a.postDetail.Update(msg)
+	a.profile, _ = a.profile.Update(msg)
 	a.notifications, _ = a.notifications.Update(msg)
 	a.bookmarks, _ = a.bookmarks.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
@@ -1177,7 +1178,7 @@ func (a App) renderThemePicker() string {
 			items = append(items, theme.Subtle.Render("  "+name))
 		}
 	}
-	hint := theme.Subtle.Render("↑↓ preview   ⏎ save   esc cancel")
+	hint := theme.Subtle.Render("↑↓ preview   enter save   esc cancel")
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
