@@ -956,13 +956,15 @@ func journalReady() screens.JournalModel {
 	return m
 }
 
-func TestJournal_H_NoOp_WhileDisabled(t *testing.T) {
-	// Revisions are disabled while PATCH /v1/notes/:id returns 500 server-side.
-	// h must be a no-op; once the API is fixed, flip noteWriteDisabled and restore this test.
+func TestJournal_H_EmitsLoadRevisionsMsg(t *testing.T) {
 	m := journalReady()
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
-	if cmd != nil {
-		t.Errorf("h should be a no-op while revisions are disabled, got non-nil cmd")
+	if cmd == nil {
+		t.Fatal("h on a note should emit a command")
+	}
+	msg := cmd()
+	if _, ok := msg.(screens.LoadNoteRevisionsMsg); !ok {
+		t.Errorf("expected LoadNoteRevisionsMsg, got %T", msg)
 	}
 }
 

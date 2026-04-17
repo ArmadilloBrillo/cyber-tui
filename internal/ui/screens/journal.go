@@ -45,11 +45,6 @@ type JournalModel struct {
 
 	confirming confirmKind
 
-	// noteWriteDisabled gates note creation and editing.
-	// Set to true while PATCH /v1/notes/:id returns 500 (server-side bug).
-	// Flip to false in NewJournalModel once the API is fixed.
-	noteWriteDisabled bool
-
 	// Revision history state.
 	revisionsMode   bool                // true when viewing revision history
 	revisions       []model.NoteRevision
@@ -73,10 +68,9 @@ func NewJournalModel(width int) JournalModel {
 	ti := textinput.New()
 	ti.Placeholder = "add topics  (journal, idea, …  max 3)"
 	return JournalModel{
-		compose:           NewComposeModel(width),
-		topicsInput:       ti,
-		loc:               time.UTC,
-		noteWriteDisabled: true, // PATCH /v1/notes/:id returns 500 server-side; revisions disabled too — flip to false once fixed
+		compose:     NewComposeModel(width),
+		topicsInput: ti,
+		loc:         time.UTC,
 	}
 }
 
@@ -398,19 +392,13 @@ func (m JournalModel) handleListKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		// Disabled: PATCH /v1/notes/:id returns 500 (server-side bug).
-		// Remove the editDisabled() guard to re-enable once the API is fixed.
-		if !m.noteWriteDisabled && len(m.notes) > 0 && m.selectedIdx < len(m.notes) {
+		if len(m.notes) > 0 && m.selectedIdx < len(m.notes) {
 			return m.openNote(m.notes[m.selectedIdx])
 		}
 		return m, nil
 
 	case "n":
-		// Disabled alongside edit until the API is fixed.
-		if !m.noteWriteDisabled {
-			return m.openNewNote()
-		}
-		return m, nil
+		return m.openNewNote()
 
 	case "d":
 		if len(m.notes) > 0 && m.selectedIdx < len(m.notes) {
@@ -420,8 +408,7 @@ func (m JournalModel) handleListKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
 		return m, nil
 
 	case "h":
-		// Disabled alongside write operations until the API is fixed.
-		if !m.noteWriteDisabled && len(m.notes) > 0 && m.selectedIdx < len(m.notes) {
+		if len(m.notes) > 0 && m.selectedIdx < len(m.notes) {
 			noteID := m.notes[m.selectedIdx].ID
 			return m, func() tea.Msg { return LoadNoteRevisionsMsg{NoteID: noteID} }
 		}

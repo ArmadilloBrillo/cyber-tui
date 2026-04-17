@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.3.2
+# ᑕ¥βєяรקค¢є API v0.3.3
 
 ## Authentication
 
