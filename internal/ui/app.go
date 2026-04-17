@@ -575,7 +575,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 	case wanderDoneMsg:
 		if !msg.at.IsZero() {
 			if cfg, err := config.Load(); err == nil {
-				cfg.LastLocationRandomizedAt = msg.at
+				cfg.LastWandered = msg.at
 				_ = config.Save(cfg)
 			}
 		}
@@ -1929,7 +1929,7 @@ func (a *App) checkAndWanderCmd() tea.Cmd {
 		}
 		lat := math.Round((rand.Float64()*180-90)*1e4) / 1e4
 		lon := math.Round((rand.Float64()*360-180)*1e4) / 1e4
-		name := "*poof*"
+		name := "Wandering the world..."
 		update := model.ProfileUpdate{
 			LocationLatitude:  &lat,
 			LocationLongitude: &lon,

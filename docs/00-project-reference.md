@@ -115,7 +115,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `Room` | Public chatroom (ID, name, description, member count) |
 | `NotificationPrefs` | Notification subscription toggles (bookmark, reply, poke) |
 | `Settings` | All user preferences (notifications, content filters, display options) |
-| `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername) |
+| `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName) |
 | `Bookmark` | Saved post or reply (ID, type, postID/replyID, content snapshot, author, createdAt) |
 | `Topic` | Tag with post count (slug, postCount) |
 | `Follow` | Follow relationship (ID, followerID, followedID, createdAt) |
@@ -558,8 +558,8 @@ Permissions: `0600` (owner read/write only)
 | `autoPassword` | string | — | Pre-fill password (plain text; not recommended) |
 | `sshListenAddr` | string | — | Enable SSH server mode (e.g. `":2222"`) |
 | `sshHostKeyPath` | string | — | Path to SSH host private key |
-| `randomizeLocation` | *bool | `null` (= enabled) | Wander mode toggle; `null`/`true` = on, `false` = off |
-| `lastLocationRandomizedAt` | string | `""` (= never) | ISO timestamp of last wander mode update |
+| `wanderLust` | bool | `true` | Wander mode toggle; `true` = on, `false` = off |
+| `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
 
 ---
 

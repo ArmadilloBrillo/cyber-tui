@@ -15,15 +15,15 @@ The feature is **opt-out** — it is enabled by default for all users and can be
 - On each qualifying update:
   - Latitude is chosen uniformly from `[-90, 90]`, rounded to 4 decimal places.
   - Longitude is chosen uniformly from `[-180, 180]`, rounded to 4 decimal places.
-  - Location name is set to `*poof*`.
+  - Location name is set to `Wandering the world...`.
 - Any API error, network failure, or config load error causes the attempt to be silently skipped. The user is never notified.
-- On a successful update, `lastLocationRandomizedAt` is written back to `~/.cyber-tui.json`.
+- On a successful update, `lastWandered` is written back to `~/.cyber-tui.json`.
 
 ---
 
 ## Disabling Wander Mode
 
-Wander mode does not appear in the Settings screen — it is intentionally hidden as an easter egg. To disable it, set `"randomizeLocation": false` in `~/.cyber-tui.json` manually:
+Wander mode does not appear in the Settings screen — it is intentionally hidden as an easter egg. To disable it, set `"wanderLust": false` in `~/.cyber-tui.json` manually:
 
 ---
 
@@ -33,10 +33,10 @@ Two fields are added to `~/.cyber-tui.json`:
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
-| `randomizeLocation` | `*bool` | absent (= enabled) | `null`/absent or `true` = on; `false` = off |
-| `lastLocationRandomizedAt` | string | absent (= never) | ISO timestamp of last successful update |
+| `wanderLust` | bool | `true` | `true` = on; `false` = off |
+| `lastWandered` | string | absent (= never) | ISO timestamp of last successful update |
 
-Because `randomizeLocation` is a pointer, its absence from the JSON file is treated as `true`. This ensures the feature is on by default for all users including those with existing config files.
+When `wanderLust` is absent from the JSON file, `Load()` inserts a default of `true`. This ensures the feature is on by default for all users including those with existing config files.
 
 ---
 
@@ -44,9 +44,9 @@ Because `randomizeLocation` is a pointer, its absence from the JSON file is trea
 
 ### `internal/config/session.go`
 
-- `Config.RandomizeLocation *bool` — opt-out flag.
-- `Config.LastLocationRandomizedAt time.Time` — rolling timestamp.
-- `IsRandomizeLocationEnabled() bool` — true when field is nil or true.
+- `Config.WanderLust bool` — opt-out flag; defaults to `true` when absent from JSON.
+- `Config.LastWandered time.Time` — rolling timestamp.
+- `IsWanderEnabled() bool` — returns `WanderLust`.
 - `ShouldWanderNow(cfg Config) bool` — combines enabled check with 12-hour interval check.
 - `WanderInterval` — constant: `12 * time.Hour`.
 
@@ -74,5 +74,5 @@ The profile PATCH endpoint allows **10 updates per day**. Wander mode uses at mo
 ## Notes
 
 - Wander mode **overwrites** whatever location the user manually set. This is intentional.
-- The location name `*poof*` is set on every update regardless of the previous value.
+- The location name `Wandering the world...` is set on every update regardless of the previous value.
 - The hourly ticker is started on login and not cancelled on logout; however, `checkAndWanderCmd` loads the config fresh each time, so disabling the feature takes effect on the next tick without requiring a restart.

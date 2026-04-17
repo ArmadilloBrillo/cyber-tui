@@ -47,13 +47,13 @@ type Config struct {
 	// SSHHostKeyPath is the path to the SSH host key file (default: ./ssh_host_key).
 	SSHHostKeyPath string `json:"sshHostKeyPath,omitempty"`
 
-	// RandomizeLocation controls the wander mode easter egg, which silently updates
+	// WanderLust controls the wander mode easter egg, which silently updates
 	// the profile location to a random position twice per day.
-	// nil (field absent) means enabled — this is an opt-out feature.
-	RandomizeLocation *bool `json:"randomizeLocation,omitempty"`
-	// LastLocationRandomizedAt records when wander mode last fired.
+	// Defaults to true when absent from the JSON file.
+	WanderLust bool `json:"wanderLust"`
+	// LastWandered records when wander mode last fired.
 	// Zero value means it has never run, which triggers an immediate update.
-	LastLocationRandomizedAt time.Time `json:"lastLocationRandomizedAt,omitempty"`
+	LastWandered time.Time `json:"lastWandered,omitempty"`
 }
 
 // DefaultPath returns the canonical path for the config file: ~/.cyber-tui.json.
@@ -79,9 +79,17 @@ func Load() (Config, error) {
 		}
 		return Config{}, err
 	}
+	// Detect absent keys before unmarshaling so we can apply defaults.
+	var raw map[string]json.RawMessage
+	_ = json.Unmarshal(data, &raw)
+	_, hasWanderLust := raw["wanderLust"]
+
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Config{}, err
+	}
+	if !hasWanderLust {
+		c.WanderLust = true
 	}
 	return c, nil
 }
@@ -140,10 +148,9 @@ func ParseTimezoneLabel(label string) *time.Location {
 	return time.FixedZone(label, offset)
 }
 
-// IsRandomizeLocationEnabled reports whether wander mode is active.
-// Returns true when RandomizeLocation is nil (the default — feature is opt-out).
-func (c Config) IsRandomizeLocationEnabled() bool {
-	return c.RandomizeLocation == nil || *c.RandomizeLocation
+// IsWanderEnabled reports whether wander mode is active.
+func (c Config) IsWanderEnabled() bool {
+	return c.WanderLust
 }
 
 // WanderInterval is the minimum time between wander mode location updates.
@@ -153,11 +160,11 @@ const WanderInterval = 12 * time.Hour
 // It returns true when wander is enabled and the last update was either never
 // performed (zero timestamp) or occurred more than WanderInterval ago.
 func ShouldWanderNow(cfg Config) bool {
-	if !cfg.IsRandomizeLocationEnabled() {
+	if !cfg.IsWanderEnabled() {
 		return false
 	}
-	return cfg.LastLocationRandomizedAt.IsZero() ||
-		time.Since(cfg.LastLocationRandomizedAt) >= WanderInterval
+	return cfg.LastWandered.IsZero() ||
+		time.Since(cfg.LastWandered) >= WanderInterval
 }
 
 // Clear removes the config file. Returns nil if the file does not exist.

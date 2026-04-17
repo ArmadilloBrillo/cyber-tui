@@ -89,38 +89,60 @@ func TestClear(t *testing.T) {
 
 // --- Wander mode ---
 
-func boolPtr(b bool) *bool { return &b }
-
-func TestIsRandomizeLocationEnabled_NilIsTrue(t *testing.T) {
-	c := config.Config{} // RandomizeLocation == nil
-	if !c.IsRandomizeLocationEnabled() {
-		t.Error("nil pointer should mean enabled (opt-out default)")
+func TestIsWanderEnabled_True(t *testing.T) {
+	c := config.Config{WanderLust: true}
+	if !c.IsWanderEnabled() {
+		t.Error("WanderLust true should be enabled")
 	}
 }
 
-func TestIsRandomizeLocationEnabled_ExplicitTrue(t *testing.T) {
-	c := config.Config{RandomizeLocation: boolPtr(true)}
-	if !c.IsRandomizeLocationEnabled() {
-		t.Error("explicit true should be enabled")
+func TestIsWanderEnabled_False(t *testing.T) {
+	c := config.Config{WanderLust: false}
+	if c.IsWanderEnabled() {
+		t.Error("WanderLust false should be disabled")
 	}
 }
 
-func TestIsRandomizeLocationEnabled_ExplicitFalse(t *testing.T) {
-	c := config.Config{RandomizeLocation: boolPtr(false)}
-	if c.IsRandomizeLocationEnabled() {
-		t.Error("explicit false should be disabled")
+func TestLoad_WanderLustDefaultsTrue(t *testing.T) {
+	home := withTempHome(t)
+	// Write a config that has no wanderLust key.
+	path := filepath.Join(home, ".cyber-tui.json")
+	if err := os.WriteFile(path, []byte(`{"refreshToken":"tok"}`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.WanderLust {
+		t.Error("expected WanderLust to default to true when absent from JSON")
+	}
+}
+
+func TestLoad_WanderLustExplicitFalsePreserved(t *testing.T) {
+	home := withTempHome(t)
+	path := filepath.Join(home, ".cyber-tui.json")
+	if err := os.WriteFile(path, []byte(`{"wanderLust":false}`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.WanderLust {
+		t.Error("expected WanderLust to stay false when explicitly set to false in JSON")
 	}
 }
 
 func TestShouldWanderNow_DisabledNeverFires(t *testing.T) {
-	c := config.Config{RandomizeLocation: boolPtr(false)}
+	c := config.Config{WanderLust: false}
 	if config.ShouldWanderNow(c) {
 		t.Error("should not wander when disabled")
 	}
 }
 
 func TestShouldWanderNow_ZeroTimestampFires(t *testing.T) {
-	c := config.Config{} // nil = enabled, zero LastLocationRandomizedAt
+	c := config.Config{WanderLust: true} // zero LastWandered = never run
 	if !config.ShouldWanderNow(c) {
 		t.Error("should wander on first run (zero timestamp)")
 	}
@@ -128,7 +150,8 @@ func TestShouldWanderNow_ZeroTimestampFires(t *testing.T) {
 
 func TestShouldWanderNow_RecentTimestampNoFire(t *testing.T) {
 	c := config.Config{
-		LastLocationRandomizedAt: time.Now().Add(-1 * time.Hour),
+		WanderLust:   true,
+		LastWandered: time.Now().Add(-1 * time.Hour),
 	}
 	if config.ShouldWanderNow(c) {
 		t.Error("should not wander when last update was recent")
@@ -137,7 +160,8 @@ func TestShouldWanderNow_RecentTimestampNoFire(t *testing.T) {
 
 func TestShouldWanderNow_StaleTimestampFires(t *testing.T) {
 	c := config.Config{
-		LastLocationRandomizedAt: time.Now().Add(-13 * time.Hour),
+		WanderLust:   true,
+		LastWandered: time.Now().Add(-13 * time.Hour),
 	}
 	if !config.ShouldWanderNow(c) {
 		t.Error("should wander when last update was >12h ago")
@@ -146,7 +170,8 @@ func TestShouldWanderNow_StaleTimestampFires(t *testing.T) {
 
 func TestShouldWanderNow_ExactlyAtIntervalFires(t *testing.T) {
 	c := config.Config{
-		LastLocationRandomizedAt: time.Now().Add(-config.WanderInterval),
+		WanderLust:   true,
+		LastWandered: time.Now().Add(-config.WanderInterval),
 	}
 	if !config.ShouldWanderNow(c) {
 		t.Error("should wander when exactly at the interval boundary")
