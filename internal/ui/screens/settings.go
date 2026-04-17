@@ -60,17 +60,25 @@ var settingsGroups = []settingsGroup{
 			{label: "legacy menu order", kind: "bool"},
 		},
 	},
+	{
+		title: "wander",
+		items: []settingsItem{
+			{label: "wander mode", kind: "bool"},
+		},
+	},
 }
 
 // SettingsModel is the Settings screen.
 type SettingsModel struct {
-	settings model.Settings // live/edited values
-	original model.Settings // last saved baseline
-	cursor   int
-	width    int
-	height   int
-	saved    bool
-	err      error
+	settings             model.Settings // live/edited values
+	original             model.Settings // last saved baseline
+	wanderLust           bool           // live local config value
+	originalWanderLust   bool           // last saved baseline for wanderLust
+	cursor               int
+	width                int
+	height               int
+	saved                bool
+	err                  error
 }
 
 // NewSettingsModel creates a new SettingsModel.
@@ -88,10 +96,11 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved() SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool) SettingsModel {
 	m.saved = true
 	m.err = nil
 	m.original = m.settings
+	m.originalWanderLust = wanderLust
 	return m
 }
 
@@ -103,7 +112,7 @@ func (m SettingsModel) SetError(err error) SettingsModel {
 
 // IsDirty returns true if the current settings differ from the last saved baseline.
 func (m SettingsModel) IsDirty() bool {
-	return !settingsEqual(m.settings, m.original)
+	return !settingsEqual(m.settings, m.original) || m.wanderLust != m.originalWanderLust
 }
 
 // settingsEqual compares only the editable scalar fields.
@@ -228,6 +237,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		// Subsequent broadcasts preserve any unsaved edits.
 		if m.original.TimeDisplayFormat == "" && (m.original.Notifications == model.NotificationPrefs{}) {
 			m = m.SetSettings(msg.Settings)
+			m.wanderLust = msg.WanderLust
+			m.originalWanderLust = msg.WanderLust
 		}
 		return m, nil
 
@@ -253,9 +264,13 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			}
 			return m, nil
 
-		case "space", "enter":
+		case " ", "enter": // space (bubbletea KeySpace.String() == " ") or enter
 			if m.cursor < total && items[m.cursor].kind == "bool" {
-				m.settings = setBool(m.settings, m.cursor, !getBool(m.settings, m.cursor))
+				if m.cursor == 11 {
+					m.wanderLust = !m.wanderLust
+				} else {
+					m.settings = setBool(m.settings, m.cursor, !getBool(m.settings, m.cursor))
+				}
 				m.saved = false
 			}
 			return m, nil
@@ -277,13 +292,15 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		case "ctrl+s":
 			if m.IsDirty() {
 				s := m.settings
-				return m, func() tea.Msg { return SaveSettingsMsg{Settings: s} }
+				wl := m.wanderLust
+				return m, func() tea.Msg { return SaveSettingsMsg{Settings: s, WanderLust: wl} }
 			}
 			return m, nil
 
 		case "esc":
 			// Revert to original.
 			m.settings = m.original
+			m.wanderLust = m.originalWanderLust
 			m.saved = false
 			m.err = nil
 			return m, nil
@@ -322,7 +339,13 @@ func (m SettingsModel) View() string {
 
 			// Value rendering
 			if item.kind == "bool" {
-				if getBool(m.settings, flatIdx) {
+				var boolVal bool
+				if flatIdx == 11 {
+					boolVal = m.wanderLust
+				} else {
+					boolVal = getBool(m.settings, flatIdx)
+				}
+				if boolVal {
 					value = theme.Highlight.Render("[x]")
 				} else {
 					value = theme.Subtle.Render("[ ]")

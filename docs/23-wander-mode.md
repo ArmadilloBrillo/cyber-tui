@@ -4,7 +4,7 @@
 
 Wander mode is a local easter egg that silently randomizes the user's profile location (latitude, longitude, and location name) twice per day. It runs entirely in the background with no visible feedback to the logged-in user; failures are discarded silently.
 
-The feature is **opt-out** — it is enabled by default for all users and can be disabled from the Settings screen under the **Local** group.
+The feature is **opt-out** — it is enabled by default for all users and can be toggled from the Settings screen under the **wander** group.
 
 ---
 
@@ -21,9 +21,11 @@ The feature is **opt-out** — it is enabled by default for all users and can be
 
 ---
 
-## Disabling Wander Mode
+## Toggling Wander Mode
 
-Wander mode does not appear in the Settings screen — it is intentionally hidden as an easter egg. To disable it, set `"wanderLust": false` in `~/.cyber-tui.json` manually:
+Wander mode is accessible in the Settings screen under the **wander** group. Toggle it with Enter/Space, then press `ctrl+s` to save.
+
+It can also be set directly in `~/.cyber-tui.json`:
 
 ---
 
@@ -52,7 +54,11 @@ When `wanderLust` is absent from the JSON file, `Load()` inserts a default of `t
 
 ### `internal/ui/screens/settings.go` / `shared.go`
 
-No changes — wander mode is not exposed in the Settings UI.
+- `settingsGroups` — new `"wander"` group with a single `"wander mode"` bool item (flat index 11).
+- `SettingsModel.wanderLust` / `.originalWanderLust` — track the local config value separately from API settings.
+- `SharedConfigMsg.WanderLust` — carries the current value in the broadcast from App.
+- `SaveSettingsMsg.WanderLust` — piggy-backs the local config change onto the API save message.
+- `SetSaved(wanderLust bool)` — resets `originalWanderLust` alongside the API settings baseline.
 
 ### `internal/ui/app.go`
 
@@ -62,6 +68,9 @@ No changes — wander mode is not exposed in the Settings UI.
 - `checkAndWanderCmd()` — loads config, calls `config.ShouldWanderNow`, picks random coords, calls `client.UpdateProfile`, returns `wanderDoneMsg`.
 - `afterLoginCmd()` — batches `scheduleWanderCmd()` and `checkAndWanderCmd()` alongside existing init commands.
 - Handlers for `wanderTickMsg` and `wanderDoneMsg`.
+- `App.wanderLust bool` — cached local config value; defaults to `true`; set in `WithSavedSession` and updated when settings are saved.
+- `broadcastConfig()` — includes `WanderLust` in the `SharedConfigMsg`.
+- `handleSettings` — on save, loads config, writes `WanderLust`, and passes the value through `settingsSavedMsg`.
 
 ---
 

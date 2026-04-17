@@ -126,6 +126,9 @@ type App struct {
 
 	// settings holds the user's preferences fetched from GET /v1/settings on login.
 	settings model.Settings
+
+	// wanderLust is the local config value for wander mode. Defaults to true.
+	wanderLust bool
 }
 
 func NewApp(client api.Client) App {
@@ -134,6 +137,7 @@ func NewApp(client api.Client) App {
 		active:     screenLogin,
 		focus:      focusMenu,
 		loc:        time.UTC,
+		wanderLust: true,
 		login:          screens.NewLoginModel(""),
 		feed:           screens.NewFeedModel(),
 		chatrooms:      screens.NewChatroomsModel(),
@@ -173,6 +177,7 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.relaxed = s.Density == "relaxed"
 	a.timezone = s.Timezone
 	a.loc = s.GetLocation()
+	a.wanderLust = s.WanderLust
 	return a
 }
 
@@ -221,7 +226,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // Adding a new screen only requires handling SharedConfigMsg in that
 // screen's Update — no changes here are needed.
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings}
+	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust}
 	a.feed, _ = a.feed.Update(msg)
 	a.chatrooms, _ = a.chatrooms.Update(msg)
 	a.cmail, _ = a.cmail.Update(msg)
@@ -628,16 +633,22 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case screens.SaveSettingsMsg:
 		s := msg.Settings
+		wl := msg.WanderLust
 		return a, func() tea.Msg {
 			if err := a.client.UpdateSettings(s); err != nil {
 				return errMsg{err}
 			}
-			return settingsSavedMsg{settings: s}
+			if cfg, err := config.Load(); err == nil {
+				cfg.WanderLust = wl
+				_ = config.Save(cfg)
+			}
+			return settingsSavedMsg{settings: s, wanderLust: wl}
 		}, true
 
 	case settingsSavedMsg:
 		a.settings = msg.settings
-		a.settingsScreen = a.settingsScreen.SetSaved()
+		a.wanderLust = msg.wanderLust
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust)
 		a.broadcastConfig()
 		return a, nil, true
 
@@ -1463,7 +1474,10 @@ type postDeletedMsg struct {
 	fromFeed bool // true = delete was triggered from the feed; false = from post detail
 }
 type settingsLoadedMsg struct{ settings model.Settings }
-type settingsSavedMsg struct{ settings model.Settings }
+type settingsSavedMsg struct {
+	settings   model.Settings
+	wanderLust bool
+}
 type wanderTickMsg struct{}
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
 type errMsg struct{ err error }
