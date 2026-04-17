@@ -167,7 +167,7 @@ type NotificationActor struct {
 // the specific reply to scroll to in PostDetail.
 type Notification struct {
 	ID         string
-	Type       string // "reply", "reply_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "bookmark", "poke"
+	Type       string // "reply", "reply_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "bookmark", "poke", "guild_new_thread"
 	Read       bool
 	CreatedAt  time.Time
 	Actor      NotificationActor
@@ -175,4 +175,5 @@ type Notification struct {
 	TargetType string // "post", "reply", or ""
 	ReplyID              string // populated for reply/thread_reply; the specific reply to highlight
 	ThreadAuthorUsername string // set for thread_reply; the original thread's author
+	GuildName            string // set for guild_new_thread; the guild display name
 }

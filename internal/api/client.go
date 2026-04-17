@@ -180,6 +180,7 @@ type createReplyResponseData struct {
 type wireNotificationMetadata struct {
 	ReplyID        string `json:"replyId"`
 	AuthorUsername string `json:"authorUsername"`
+	GuildName      string `json:"guildName"`
 }
 
 type wireNotification struct {
@@ -541,6 +542,7 @@ func wireNotificationToModel(w wireNotification) model.Notification {
 		TargetType: w.TargetType,
 		ReplyID:              w.Metadata.ReplyID,
 		ThreadAuthorUsername: w.Metadata.AuthorUsername,
+		GuildName:            w.Metadata.GuildName,
 	}
 }
 
