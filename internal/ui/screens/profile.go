@@ -65,8 +65,8 @@ var visibleProfileTabs = []profileTab{tabInfo, tabPosts, tabReplies}
 const tabItemLines = 3
 
 // profileChrome is the number of lines consumed by the profile header
-// (username + counts + blank), tab bar, blank separator, and hint line.
-const profileChrome = 6
+// (username + counts + blank), tab bar, and blank separator.
+const profileChrome = 5
 
 type ProfileModel struct {
 	user           model.User
@@ -724,7 +724,9 @@ func (m ProfileModel) View() string {
 		m.user.FollowersCount, m.user.FollowingCount, m.user.PostsCount,
 	))
 
-	// Tab bar.
+	// Tab bar — pinned to terminal width to prevent terminal-side line wrapping,
+	// which would cause Bubble Tea's line-diff renderer to miscalculate cursor
+	// positions and leave ghost lines on re-render (observed on WSL/Windows Terminal).
 	var tabParts []string
 	for _, i := range visibleProfileTabs {
 		label := profileTabLabels[i]
@@ -735,6 +737,9 @@ func (m ProfileModel) View() string {
 		}
 	}
 	tabBar := strings.Join(tabParts, " ")
+	if m.width > 0 {
+		tabBar = lipgloss.NewStyle().Width(m.width).Render(tabBar)
+	}
 
 	var content string
 	switch m.activeTab {
@@ -750,7 +755,7 @@ func (m ProfileModel) View() string {
 		content = m.followListTabView(m.followers, m.followersLoaded, "followers", m.tabFollowersTop)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	out := lipgloss.JoinVertical(lipgloss.Left,
 		username,
 		counts,
 		"",
@@ -758,6 +763,10 @@ func (m ProfileModel) View() string {
 		"",
 		content,
 	)
+	if availH := m.height - theme.ChromeHeight; availH > 0 {
+		out = lipgloss.NewStyle().MaxHeight(availH).Render(out)
+	}
+	return out
 }
 
 // infoTabView renders the Info tab content (bio, website, location, hint).
