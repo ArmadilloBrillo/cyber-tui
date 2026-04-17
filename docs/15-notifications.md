@@ -42,6 +42,7 @@ Each notification renders as a single line inside a bordered box:
 | `new_post_friend` / `new_post_following` | `★` |
 | `bookmark` | `♥` |
 | `new_follower` | `+` |
+| `guild_new_thread` | `#` |
 | `poke` | `~` |
 
 ### Day separators
@@ -96,6 +97,7 @@ Pressing `enter` on `poke` or `new_follower` notifications (or any with an empty
 | `reply` | replied to your post. |
 | `reply_mention` | mentioned you in a reply. |
 | `thread_reply` | replied in @username's thread. (falls back to "a thread you're following" if author unknown) |
+| `guild_new_thread` | posted a new thread in \<guildName\>. (falls back to "posted a new thread." if guild name absent) |
 | `poke` | poked you. ¯\_(ツ)_/¯ |
 
 ---
@@ -121,7 +123,7 @@ Both actions use optimistic updates: the in-memory state is updated immediately,
 
 ## Unread Filter
 
-Press `u` to toggle between showing all notifications and showing only unread ones. When the filter is active and all notifications are read, the screen shows `all caught up`.
+The notifications screen opens in unread-only mode by default. Press `u` to toggle between unread-only and all notifications. When the filter is active and all notifications are read, the screen shows `all caught up`.
 
 ---
 

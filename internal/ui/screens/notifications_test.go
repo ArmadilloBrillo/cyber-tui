@@ -391,21 +391,58 @@ func TestNotifs_Enter_ReplyMention_EmitsShowPost(t *testing.T) {
 	}
 }
 
+func TestNotifs_Enter_GuildNewThread_EmitsShowPost(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "guild_new_thread", "p1", false)}
+	m := initNotifs(notifs)
+	_, msg := runKey(m, "enter")
+	sp, ok := msg.(ShowNotificationPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowNotificationPostMsg, got %T", msg)
+	}
+	if sp.PostID != "p1" {
+		t.Errorf("expected PostID p1, got %s", sp.PostID)
+	}
+}
+
+func TestNotifSummary_GuildNewThread_WithName(t *testing.T) {
+	n := model.Notification{Type: "guild_new_thread", GuildName: "technica"}
+	result := notifSummary(n)
+	if result != "posted a new thread in technica." {
+		t.Errorf("unexpected summary: %q", result)
+	}
+}
+
+func TestNotifSummary_GuildNewThread_NoName(t *testing.T) {
+	n := model.Notification{Type: "guild_new_thread"}
+	result := notifSummary(n)
+	if result != "posted a new thread." {
+		t.Errorf("unexpected summary: %q", result)
+	}
+}
+
+func TestNotifIcon_GuildNewThread(t *testing.T) {
+	n := model.Notification{Type: "guild_new_thread", Read: false}
+	icon := notifIcon(n)
+	if !strings.Contains(icon, "#") {
+		t.Errorf("expected # in icon, got %q", icon)
+	}
+}
+
 // --- unread filter ---
 
 func TestNotifs_UnreadFilter_Toggle(t *testing.T) {
 	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
 	m := initNotifs(notifs)
-	if m.showUnreadOnly {
-		t.Fatal("expected showUnreadOnly to start false")
+	if !m.showUnreadOnly {
+		t.Fatal("expected showUnreadOnly to start true")
 	}
 	m2, _ := runKey(m, "u")
-	if !m2.showUnreadOnly {
-		t.Error("expected showUnreadOnly to be true after u")
+	if m2.showUnreadOnly {
+		t.Error("expected showUnreadOnly to be false after u")
 	}
 	m3, _ := runKey(m2, "u")
-	if m3.showUnreadOnly {
-		t.Error("expected showUnreadOnly to be false after second u")
+	if !m3.showUnreadOnly {
+		t.Error("expected showUnreadOnly to be true after second u")
 	}
 }
 

@@ -53,7 +53,7 @@ type NotificationsModel struct {
 }
 
 func NewNotificationsModel() NotificationsModel {
-	return NotificationsModel{}
+	return NotificationsModel{showUnreadOnly: true}
 }
 
 // IsReady reports whether the viewport has been initialised.
@@ -387,6 +387,11 @@ func notifSummary(n model.Notification) string {
 			return "replied in @" + n.ThreadAuthorUsername + "'s thread."
 		}
 		return "replied in a thread you're following."
+	case "guild_new_thread":
+		if n.GuildName != "" {
+			return "posted a new thread in " + n.GuildName + "."
+		}
+		return "posted a new thread."
 	case "poke":
 		return `poked you ¯\_(ツ)_/¯`
 	default:
@@ -409,6 +414,8 @@ func notifIcon(n model.Notification) string {
 		sym = "♥"
 	case "new_follower":
 		sym = "+"
+	case "guild_new_thread":
+		sym = "#"
 	case "poke":
 		sym = "~"
 	default:
