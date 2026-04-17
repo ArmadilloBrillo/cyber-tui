@@ -521,7 +521,7 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case profileLoadedMsg:
 		a.currentUser = msg.user
-		a.profile = a.profile.SetUser(msg.user).SetCanGoBack(false)
+		a.profile = a.profile.ClearTabs().SetUser(msg.user).SetCanGoBack(false)
 		// Propagate the confirmed username to screens that guard own-content actions.
 		a.feed = a.feed.SetCurrentUsername(msg.user.Username)
 		a.postDetail = a.postDetail.SetCurrentUsername(msg.user.Username)
