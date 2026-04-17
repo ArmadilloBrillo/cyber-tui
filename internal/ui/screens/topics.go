@@ -267,17 +267,9 @@ func (m TopicsModel) buildContent() (string, []int) {
 		lineInc = 2
 	}
 
-	// Header line: "  topics" or "  ← slug"
-	var header string
-	if m.view == viewTopicList {
-		header = theme.Subtle.Render("  topics")
-	} else {
-		header = theme.Subtle.Render(fmt.Sprintf("  ← %s", m.activeTopic))
-	}
-
-	// State indicators below header
+	// State indicators
 	var prefix string
-	startLine := 1
+	startLine := 0
 	if m.refreshing {
 		prefix = theme.Subtle.Render("  refreshing…") + "\n"
 		startLine++
@@ -285,8 +277,7 @@ func (m TopicsModel) buildContent() (string, []int) {
 
 	if m.view == viewTopicList {
 		if len(m.topics) == 0 {
-			content := header + "\n" + prefix + theme.Subtle.Render("  no topics yet")
-			return content, nil
+			return prefix + theme.Subtle.Render("  no topics yet"), nil
 		}
 		offsets := make([]int, len(m.topics))
 		currentLine := startLine
@@ -303,13 +294,12 @@ func (m TopicsModel) buildContent() (string, []int) {
 		} else if m.topicsExhausted && len(m.topics) > 0 {
 			out += theme.Subtle.Render("  — end —")
 		}
-		return header + "\n" + prefix + strings.TrimRight(out, "\n"), offsets
+		return prefix + strings.TrimRight(out, "\n"), offsets
 	}
 
 	// viewTopicPosts
 	if len(m.posts) == 0 {
-		content := header + "\n" + prefix + theme.Subtle.Render("  no posts")
-		return content, nil
+		return prefix + theme.Subtle.Render("  no posts"), nil
 	}
 	offsets := make([]int, len(m.posts))
 	currentLine := startLine
@@ -326,7 +316,7 @@ func (m TopicsModel) buildContent() (string, []int) {
 	} else if m.exhausted {
 		out += theme.Subtle.Render("  — end —")
 	}
-	return header + "\n" + prefix + strings.TrimRight(out, "\n"), offsets
+	return prefix + strings.TrimRight(out, "\n"), offsets
 }
 
 func (m TopicsModel) renderTopicItem(index int) string {
@@ -337,18 +327,36 @@ func (m TopicsModel) renderTopicItem(index int) string {
 	topic := m.topics[index]
 	isSelected := (m.view == viewTopicList && index == m.topicIndex)
 
-	slug := topic.Slug
-	maxWidth := m.width - 20
-	if len(slug) > maxWidth {
-		slug = slug[:maxWidth]
-	}
+	innerWidth := m.width - 4
 
-	content := fmt.Sprintf("%-*s %6d posts", maxWidth, slug, topic.PostCount)
-
+	icon := theme.Subtle.Render("#") + " "
+	slugStyle := theme.Base
 	if isSelected {
-		return theme.Highlight.Render("▸ " + content)
+		slugStyle = theme.Highlight
 	}
-	return "  " + content
+	slugStr := slugStyle.Render(topic.Slug)
+	countStr := theme.Subtle.Render(fmt.Sprintf("%d posts", topic.PostCount))
+
+	var line string
+	if innerWidth > 0 {
+		gap := innerWidth - lipgloss.Width(icon) - lipgloss.Width(slugStr) - lipgloss.Width(countStr)
+		if gap > 0 {
+			line = icon + slugStr + strings.Repeat(" ", gap) + countStr
+		} else {
+			line = icon + slugStr
+		}
+	} else {
+		line = icon + slugStr
+	}
+
+	boxStyle := theme.Border
+	if isSelected {
+		boxStyle = theme.ActiveBorder
+	}
+	if innerWidth > 0 {
+		boxStyle = boxStyle.Width(m.width - 2)
+	}
+	return boxStyle.Render(line)
 }
 
 func (m TopicsModel) renderPostItem(p model.Post, selected bool) string {
@@ -374,7 +382,7 @@ func (m TopicsModel) ensureSelectedVisible() TopicsModel {
 		if selectedIndex >= len(m.topics) {
 			return m
 		}
-		itemHeight = 1
+		itemHeight = lipgloss.Height(m.renderTopicItem(selectedIndex))
 	} else {
 		selectedIndex = m.postIndex
 		if selectedIndex >= len(m.posts) {
