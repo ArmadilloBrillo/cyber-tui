@@ -789,15 +789,15 @@ func TestProfile_Tab_NoLazyLoadIfAlreadyLoaded(t *testing.T) {
 func TestProfile_ShiftTab_SwitchesBackward(t *testing.T) {
 	m := screens.NewProfileModel()
 	m = m.SetUser(model.User{ID: "1", Username: "neuromancer"})
-	// Shift+tab from Info tab wraps to Followers tab.
+	// Shift+tab from Info tab wraps to Replies (last visible tab).
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	if cmd == nil {
 		t.Fatal("expected a command after shift+tab press")
 	}
 	msg := cmd()
-	_, ok := msg.(screens.ShowUserFollowersMsg)
+	_, ok := msg.(screens.ShowUserRepliesMsg)
 	if !ok {
-		t.Fatalf("expected ShowUserFollowersMsg, got %T", msg)
+		t.Fatalf("expected ShowUserRepliesMsg, got %T", msg)
 	}
 }
 
@@ -856,26 +856,26 @@ func TestProfile_ClearTabs_ResetsAllState(t *testing.T) {
 	}
 }
 
-func TestProfile_FollowersTab_EnterEmitsShowUserProfileMsg(t *testing.T) {
+func TestProfile_RepliesTab_EnterEmitsShowProfileReplyMsg(t *testing.T) {
 	m := screens.NewProfileModel()
 	m = m.SetUser(model.User{ID: "1", Username: "neuromancer"})
-	m = m.SetUserFollowers([]model.Follow{
-		{ID: "fw1", FollowerID: "2", FollowerUsername: "molly_millions"},
+	m = m.SetUserReplies([]model.Reply{
+		{ID: "r1", PostID: "post1", AuthorUsername: "neuromancer"},
 	}, "")
-	// Tab to Followers (shift+tab once from Info).
+	// Shift+tab from Info wraps to Replies (last visible tab; already loaded so no lazy-load cmd).
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
-	// Press enter on the first follower.
+	// Press enter on the first reply.
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("expected a command on enter in Followers tab")
+		t.Fatal("expected a command on enter in Replies tab")
 	}
 	msg := cmd()
-	su, ok := msg.(screens.ShowUserProfileMsg)
+	sr, ok := msg.(screens.ShowProfileReplyMsg)
 	if !ok {
-		t.Fatalf("expected ShowUserProfileMsg, got %T", msg)
+		t.Fatalf("expected ShowProfileReplyMsg, got %T", msg)
 	}
-	if su.Username != "molly_millions" {
-		t.Errorf("Username = %q, want molly_millions", su.Username)
+	if sr.PostID != "post1" {
+		t.Errorf("PostID = %q, want post1", sr.PostID)
 	}
 }
 

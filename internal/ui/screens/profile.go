@@ -56,6 +56,10 @@ const (
 
 var profileTabLabels = [numProfileTabs]string{"Info", "Posts", "Replies", "Following", "Followers"}
 
+// visibleProfileTabs controls which tabs appear in the UI and are reachable
+// via Tab/Shift+Tab. Remove an entry to hide a tab without unwiring its data layer.
+var visibleProfileTabs = []profileTab{tabInfo, tabPosts, tabReplies}
+
 // tabItemLines is the number of terminal lines each list item occupies.
 // Bordered box items are 3 lines: top border + 1 content line + bottom border.
 const tabItemLines = 3
@@ -397,7 +401,14 @@ func (m ProfileModel) contentHeight() int {
 // switchTab moves to a different sub-tab (delta = ±1) and emits a lazy-load
 // message if the destination tab has not been loaded yet.
 func (m ProfileModel) switchTab(delta int) (ProfileModel, tea.Cmd) {
-	m.activeTab = profileTab((int(m.activeTab) + int(delta) + int(numProfileTabs)) % int(numProfileTabs))
+	curr := 0
+	for i, t := range visibleProfileTabs {
+		if t == m.activeTab {
+			curr = i
+			break
+		}
+	}
+	m.activeTab = visibleProfileTabs[(curr+delta+len(visibleProfileTabs))%len(visibleProfileTabs)]
 	m.tabSelected = 0
 
 	var lazyLoad tea.Cmd
@@ -715,7 +726,7 @@ func (m ProfileModel) View() string {
 
 	// Tab bar.
 	var tabParts []string
-	for i := profileTab(0); i < numProfileTabs; i++ {
+	for _, i := range visibleProfileTabs {
 		label := profileTabLabels[i]
 		if i == m.activeTab {
 			tabParts = append(tabParts, theme.ActiveTab.Render(label))
