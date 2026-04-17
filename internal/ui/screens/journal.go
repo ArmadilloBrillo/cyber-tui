@@ -26,6 +26,7 @@ const (
 // In list mode the user browses notes. Pressing n or enter opens edit mode,
 // where the compose box and topics input are used to write or update a note.
 // ctrl+s saves, ctrl+p publishes (with confirmation), d deletes (with confirmation).
+// Pressing h in list mode loads the revision history for the selected note.
 type JournalModel struct {
 	notes      []model.Note
 	nextCursor string
@@ -44,6 +45,19 @@ type JournalModel struct {
 
 	confirming confirmKind
 
+	// noteWriteDisabled gates note creation and editing.
+	// Set to true while PATCH /v1/notes/:id returns 500 (server-side bug).
+	// Flip to false in NewJournalModel once the API is fixed.
+	noteWriteDisabled bool
+
+	// Revision history state.
+	revisionsMode   bool                // true when viewing revision history
+	revisions       []model.NoteRevision
+	revisionsCursor string
+	revisionsNoteID string
+	revSelectedIdx  int
+	revPreview      *model.Note // non-nil while previewing a specific revision
+
 	viewport viewport.Model
 	ready    bool
 	width    int
@@ -59,9 +73,10 @@ func NewJournalModel(width int) JournalModel {
 	ti := textinput.New()
 	ti.Placeholder = "add topics  (journal, idea, …  max 3)"
 	return JournalModel{
-		compose:     NewComposeModel(width),
-		topicsInput: ti,
-		loc:         time.UTC,
+		compose:           NewComposeModel(width),
+		topicsInput:       ti,
+		loc:               time.UTC,
+		noteWriteDisabled: true, // PATCH /v1/notes/:id returns 500 server-side; revisions disabled too — flip to false once fixed
 	}
 }
 
@@ -136,6 +151,30 @@ func (m JournalModel) DeleteNote(noteID string) JournalModel {
 	return m
 }
 
+// SetRevisions stores revision history for a note and switches to revisions mode.
+func (m JournalModel) SetRevisions(noteID string, revs []model.NoteRevision, cursor string) JournalModel {
+	m.revisionsMode = true
+	m.revisionsNoteID = noteID
+	m.revisions = revs
+	m.revisionsCursor = cursor
+	m.revSelectedIdx = 0
+	m.revPreview = nil
+	if m.ready {
+		m = m.refreshRevisionsContent()
+	}
+	return m
+}
+
+// SetRevisionPreview stores a specific revision's content for preview display.
+func (m JournalModel) SetRevisionPreview(note model.Note) JournalModel {
+	n := note
+	m.revPreview = &n
+	if m.ready {
+		m = m.refreshRevisionsContent()
+	}
+	return m
+}
+
 // SetError stores an error to display in the view.
 func (m JournalModel) SetError(err error) JournalModel {
 	m.err = err
@@ -203,6 +242,10 @@ func (m JournalModel) Update(msg tea.Msg) (JournalModel, tea.Cmd) {
 		// Confirmation overlay intercepts all keys while active.
 		if m.confirming != confirmNone {
 			return m.handleConfirmKey(msg)
+		}
+
+		if m.revisionsMode {
+			return m.handleRevisionsKey(msg)
 		}
 
 		if m.editMode {
@@ -355,14 +398,19 @@ func (m JournalModel) handleListKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		if len(m.notes) > 0 && m.selectedIdx < len(m.notes) {
-			note := m.notes[m.selectedIdx]
-			return m.openNote(note)
+		// Disabled: PATCH /v1/notes/:id returns 500 (server-side bug).
+		// Remove the editDisabled() guard to re-enable once the API is fixed.
+		if !m.noteWriteDisabled && len(m.notes) > 0 && m.selectedIdx < len(m.notes) {
+			return m.openNote(m.notes[m.selectedIdx])
 		}
 		return m, nil
 
 	case "n":
-		return m.openNewNote()
+		// Disabled alongside edit until the API is fixed.
+		if !m.noteWriteDisabled {
+			return m.openNewNote()
+		}
+		return m, nil
 
 	case "d":
 		if len(m.notes) > 0 && m.selectedIdx < len(m.notes) {
@@ -370,8 +418,171 @@ func (m JournalModel) handleListKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
 			m.viewport.Height = m.viewportHeight()
 		}
 		return m, nil
+
+	case "h":
+		// Disabled alongside write operations until the API is fixed.
+		if !m.noteWriteDisabled && len(m.notes) > 0 && m.selectedIdx < len(m.notes) {
+			noteID := m.notes[m.selectedIdx].ID
+			return m, func() tea.Msg { return LoadNoteRevisionsMsg{NoteID: noteID} }
+		}
+		return m, nil
 	}
 	return m, nil
+}
+
+// handleRevisionsKey processes keys while the revision history view is active.
+func (m JournalModel) handleRevisionsKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		if m.revPreview != nil {
+			// Exit preview → back to revision list.
+			m.revPreview = nil
+			if m.ready {
+				m = m.refreshRevisionsContent()
+			}
+			return m, nil
+		}
+		// Exit revision mode → back to note list.
+		m.revisionsMode = false
+		m.revisions = nil
+		m.revisionsCursor = ""
+		m.revisionsNoteID = ""
+		m.revPreview = nil
+		if m.ready {
+			m = m.refreshContent()
+		}
+		return m, nil
+
+	case "j", "down":
+		if m.revPreview != nil {
+			// Scroll preview viewport.
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+		if m.revSelectedIdx < len(m.revisions)-1 {
+			m.revSelectedIdx++
+			if m.ready {
+				m = m.refreshRevisionsContent()
+			}
+		}
+		return m, nil
+
+	case "k", "up":
+		if m.revPreview != nil {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+		if m.revSelectedIdx > 0 {
+			m.revSelectedIdx--
+			if m.ready {
+				m = m.refreshRevisionsContent()
+			}
+		}
+		return m, nil
+
+	case "enter":
+		if m.revPreview != nil {
+			return m, nil
+		}
+		if len(m.revisions) > 0 && m.revSelectedIdx < len(m.revisions) {
+			rev := m.revisions[m.revSelectedIdx]
+			noteID := m.revisionsNoteID
+			revNum := rev.RevisionNumber
+			return m, func() tea.Msg {
+				return LoadNoteRevisionMsg{NoteID: noteID, RevisionNumber: revNum}
+			}
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+// refreshRevisionsContent rebuilds the viewport content for the revisions view.
+func (m JournalModel) refreshRevisionsContent() JournalModel {
+	if m.revPreview != nil {
+		m.viewport.SetContent(m.buildRevisionPreviewContent())
+	} else {
+		m.viewport.SetContent(m.buildRevisionListContent())
+	}
+	m.viewport.GotoTop()
+	return m
+}
+
+// buildRevisionListContent renders the list of revisions.
+func (m JournalModel) buildRevisionListContent() string {
+	if len(m.revisions) == 0 {
+		return theme.Subtle.Render("  no revisions found.")
+	}
+
+	// Find the note title for the header.
+	noteTitle := ""
+	for _, n := range m.notes {
+		if n.ID == m.revisionsNoteID {
+			noteTitle = firstLine(n.Content)
+			break
+		}
+	}
+	if len([]rune(noteTitle)) > 40 {
+		noteTitle = string([]rune(noteTitle)[:39]) + "…"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(theme.Title.Render("Revisions") + " — " + theme.Subtle.Render(noteTitle) + "\n\n")
+
+	for i, rev := range m.revisions {
+		selected := i == m.revSelectedIdx
+		ts := rev.CreatedAt.Format("02-Jan-2006 15:04")
+		label := fmt.Sprintf("Rev %d", rev.RevisionNumber)
+		if i == 0 {
+			label += " (latest)"
+		}
+		preview := firstLine(rev.Content)
+		if len([]rune(preview)) > 50 {
+			preview = string([]rune(preview)[:49]) + "…"
+		}
+
+		boxStyle := theme.Border
+		if selected {
+			boxStyle = theme.ActiveBorder
+		}
+		if m.width > 2 {
+			boxStyle = boxStyle.Width(m.width - 2)
+		}
+		row := theme.Highlight.Render(label) + "  " + theme.Subtle.Render(ts) + "\n" +
+			theme.Base.Render(preview)
+		sb.WriteString(boxStyle.Render(row))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("\n" + theme.Subtle.Render("j/k · navigate   enter · preview   esc · back"))
+	return sb.String()
+}
+
+// buildRevisionPreviewContent renders the full content of the previewed revision.
+func (m JournalModel) buildRevisionPreviewContent() string {
+	if m.revPreview == nil {
+		return ""
+	}
+	n := m.revPreview
+	ts := n.CreatedAt.Format("02-Jan-2006 15:04")
+	header := theme.Title.Render(fmt.Sprintf("Rev %d", n.RevisionNumber)) +
+		"  " + theme.Subtle.Render(ts)
+	if len(n.Topics) > 0 {
+		topics := ""
+		for _, t := range n.Topics {
+			topics += theme.Subtle.Render("#"+t) + " "
+		}
+		header += "\n" + topics
+	}
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		"",
+		theme.Base.Render(n.Content),
+		"",
+		theme.Subtle.Render("j/k · scroll   esc · back"),
+	)
 }
 
 // openNote puts a selected note into edit mode.
@@ -476,7 +687,7 @@ func (m JournalModel) buildContent() (string, []int) {
 		if m.loading {
 			return theme.Subtle.Render("  loading notes…"), nil
 		}
-		return theme.Subtle.Render("  no notes yet — press n to create one"), nil
+		return theme.Subtle.Render("  no notes yet"), nil
 	}
 
 	sepLines := 1 // dense: single blank line between cards
@@ -576,6 +787,11 @@ func (m JournalModel) View() string {
 	}
 	if !m.ready {
 		return theme.Subtle.Render("loading journal…")
+	}
+
+	// Revision history view takes over the entire screen.
+	if m.revisionsMode {
+		return m.viewport.View()
 	}
 
 	// Confirmation overlay replaces bottom area.

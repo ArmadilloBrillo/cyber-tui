@@ -90,10 +90,19 @@ type wireUser struct {
 }
 
 type wireFollow struct {
-	FollowID   string `json:"followId"`
-	FollowerID string `json:"followerId"`
-	FollowedID string `json:"followedId"`
-	CreatedAt  string `json:"createdAt"`
+	FollowID         string `json:"followId"`
+	FollowerID       string `json:"followerId"`
+	FollowedID       string `json:"followedId"`
+	FollowerUsername string `json:"followerUsername"`
+	FollowedUsername string `json:"followedUsername"`
+	CreatedAt        string `json:"createdAt"`
+}
+
+type wireNoteRevision struct {
+	RevisionNumber int      `json:"revisionNumber"`
+	Content        string   `json:"content"`
+	Topics         []string `json:"topics"`
+	CreatedAt      string   `json:"createdAt"`
 }
 
 type wireReply struct {
@@ -481,10 +490,26 @@ func wireUserToModel(w wireUser) model.User {
 func wireFollowToModel(w wireFollow) model.Follow {
 	t, _ := time.Parse(time.RFC3339, w.CreatedAt)
 	return model.Follow{
-		ID:         w.FollowID,
-		FollowerID: w.FollowerID,
-		FollowedID: w.FollowedID,
-		CreatedAt:  t,
+		ID:               w.FollowID,
+		FollowerID:       w.FollowerID,
+		FollowedID:       w.FollowedID,
+		FollowerUsername: w.FollowerUsername,
+		FollowedUsername: w.FollowedUsername,
+		CreatedAt:        t,
+	}
+}
+
+func wireNoteRevisionToModel(w wireNoteRevision) model.NoteRevision {
+	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	topics := w.Topics
+	if topics == nil {
+		topics = []string{}
+	}
+	return model.NoteRevision{
+		RevisionNumber: w.RevisionNumber,
+		Content:        w.Content,
+		Topics:         topics,
+		CreatedAt:      t,
 	}
 }
 
@@ -965,6 +990,46 @@ func (c *HTTPClient) GetFollowing(cursor string) ([]model.Follow, string, error)
 	return follows, env.Cursor, nil
 }
 
+func (c *HTTPClient) GetFollowers(cursor string) ([]model.Follow, string, error) {
+	path := "/v1/follows?type=followers&limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []wireFollow
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	follows := make([]model.Follow, len(wire))
+	for i, w := range wire {
+		follows[i] = wireFollowToModel(w)
+	}
+	return follows, env.Cursor, nil
+}
+
+func (c *HTTPClient) GetUserFollows(userID, followType, cursor string) ([]model.Follow, string, error) {
+	path := "/v1/follows?userId=" + url.QueryEscape(userID) + "&type=" + url.QueryEscape(followType) + "&limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []wireFollow
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	follows := make([]model.Follow, len(wire))
+	for i, w := range wire {
+		follows[i] = wireFollowToModel(w)
+	}
+	return follows, env.Cursor, nil
+}
+
 func (c *HTTPClient) Follow(followedID string) (string, error) {
 	env, err := c.doJSON("POST", "/v1/follows", map[string]string{"followedId": followedID})
 	if err != nil {
@@ -1026,6 +1091,93 @@ func (c *HTTPClient) UpdateNote(noteID, content string, topics []string) error {
 func (c *HTTPClient) DeleteNote(noteID string) error {
 	_, err := c.doRequest("DELETE", "/v1/notes/"+url.PathEscape(noteID), nil)
 	return err
+}
+
+func (c *HTTPClient) GetNote(noteID string) (model.Note, error) {
+	env, err := c.doRequest("GET", "/v1/notes/"+url.PathEscape(noteID), nil)
+	if err != nil {
+		return model.Note{}, err
+	}
+	var wire wireNote
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return model.Note{}, err
+	}
+	return wireNoteToModel(wire), nil
+}
+
+func (c *HTTPClient) GetNoteRevision(noteID string, revision int) (model.Note, error) {
+	path := fmt.Sprintf("/v1/notes/%s?revision=%d", url.PathEscape(noteID), revision)
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return model.Note{}, err
+	}
+	var wire wireNote
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return model.Note{}, err
+	}
+	return wireNoteToModel(wire), nil
+}
+
+func (c *HTTPClient) GetNoteRevisions(noteID, cursor string) ([]model.NoteRevision, string, error) {
+	path := "/v1/notes/" + url.PathEscape(noteID) + "/revisions?limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []wireNoteRevision
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	revisions := make([]model.NoteRevision, len(wire))
+	for i, w := range wire {
+		revisions[i] = wireNoteRevisionToModel(w)
+	}
+	return revisions, env.Cursor, nil
+}
+
+// --- User posts and replies ---
+
+func (c *HTTPClient) GetUserPosts(username, cursor string) ([]model.Post, string, error) {
+	path := "/v1/users/" + url.PathEscape(username) + "/posts?limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []wirePost
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	posts := make([]model.Post, len(wire))
+	for i, w := range wire {
+		posts[i] = wirePostToModel(w)
+	}
+	return posts, env.Cursor, nil
+}
+
+func (c *HTTPClient) GetUserReplies(username, cursor string) ([]model.Reply, string, error) {
+	path := "/v1/users/" + url.PathEscape(username) + "/replies?limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []wireReply
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	replies := make([]model.Reply, len(wire))
+	for i, w := range wire {
+		replies[i] = wireReplyToModel(w)
+	}
+	return replies, env.Cursor, nil
 }
 
 // WithDebug enables or disables verbose RTDB debug output.

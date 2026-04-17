@@ -149,3 +149,53 @@ type DeleteReplyMsg struct {
 	ReplyID string
 	PostID  string
 }
+
+// ShowProfilePostMsg is emitted by ProfileModel when the user opens a post from
+// the Posts sub-tab. Handled by App in handleProfile (sets return to screenProfile).
+type ShowProfilePostMsg struct{ Post model.Post }
+
+// ShowProfileReplyMsg is emitted by ProfileModel when the user opens an entry from
+// the Replies sub-tab. App must fetch the full post by PostID and then scroll to ReplyID.
+type ShowProfileReplyMsg struct {
+	PostID  string
+	ReplyID string
+}
+
+// Profile sub-tab lazy-load messages. Emitted by ProfileModel the first time a
+// tab becomes active; App intercepts and fires the corresponding API call.
+
+type ShowUserPostsMsg struct{ Username string }
+type ShowUserRepliesMsg struct{ Username string }
+type ShowUserFollowingMsg struct{ UserID string }
+type ShowUserFollowersMsg struct{ UserID string }
+
+// Profile sub-tab pagination messages. Emitted when the viewport reaches the
+// bottom of a loaded list and more pages are available.
+
+type LoadMoreUserPostsMsg struct {
+	Username string
+	Cursor   string
+}
+type LoadMoreUserRepliesMsg struct {
+	Username string
+	Cursor   string
+}
+type LoadMoreUserFollowingMsg struct {
+	UserID string
+	Cursor string
+}
+type LoadMoreUserFollowersMsg struct {
+	UserID string
+	Cursor string
+}
+
+// LoadNoteRevisionsMsg is emitted by JournalModel when the user presses 'h' on
+// a selected note to view its revision history.
+type LoadNoteRevisionsMsg struct{ NoteID string }
+
+// LoadNoteRevisionMsg is emitted by JournalModel when the user presses Enter on
+// a selected revision to preview it.
+type LoadNoteRevisionMsg struct {
+	NoteID         string
+	RevisionNumber int
+}

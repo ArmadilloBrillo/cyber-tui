@@ -375,8 +375,29 @@ func (m *MockClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 	return ch, cancel, nil
 }
 
+var mockFollowing = []model.Follow{
+	{ID: "fw1", FollowerID: "1", FollowedID: "2", FollowerUsername: "neuromancer", FollowedUsername: "molly_millions", CreatedAt: time.Now().Add(-48 * time.Hour)},
+	{ID: "fw2", FollowerID: "1", FollowedID: "3", FollowerUsername: "neuromancer", FollowedUsername: "wintermute", CreatedAt: time.Now().Add(-72 * time.Hour)},
+}
+
+var mockFollowers = []model.Follow{
+	{ID: "fw3", FollowerID: "2", FollowedID: "1", FollowerUsername: "molly_millions", FollowedUsername: "neuromancer", CreatedAt: time.Now().Add(-36 * time.Hour)},
+	{ID: "fw4", FollowerID: "3", FollowedID: "1", FollowerUsername: "wintermute", FollowedUsername: "neuromancer", CreatedAt: time.Now().Add(-60 * time.Hour)},
+}
+
 func (m *MockClient) GetFollowing(cursor string) ([]model.Follow, string, error) {
-	return nil, "", nil
+	return mockFollowing, "", nil
+}
+
+func (m *MockClient) GetFollowers(cursor string) ([]model.Follow, string, error) {
+	return mockFollowers, "", nil
+}
+
+func (m *MockClient) GetUserFollows(userID, followType, cursor string) ([]model.Follow, string, error) {
+	if followType == "followers" {
+		return mockFollowers, "", nil
+	}
+	return mockFollowing, "", nil
 }
 
 func (m *MockClient) Follow(followedID string) (string, error) {
@@ -455,4 +476,72 @@ func (m *MockClient) DeleteNote(noteID string) error {
 		}
 	}
 	return fmt.Errorf("note not found: %s", noteID)
+}
+
+func (m *MockClient) GetNote(noteID string) (model.Note, error) {
+	for _, n := range mockNotes {
+		if n.ID == noteID {
+			return n, nil
+		}
+	}
+	return model.Note{}, fmt.Errorf("note not found: %s", noteID)
+}
+
+func (m *MockClient) GetNoteRevision(noteID string, revision int) (model.Note, error) {
+	for _, n := range mockNotes {
+		if n.ID == noteID {
+			// Return a copy with the requested revision number and modified content.
+			copy := n
+			copy.RevisionNumber = revision
+			if revision < n.RevisionNumber {
+				copy.Content = fmt.Sprintf("[revision %d of note %s]\n\n%s", revision, noteID, n.Content)
+			}
+			return copy, nil
+		}
+	}
+	return model.Note{}, fmt.Errorf("note not found: %s", noteID)
+}
+
+var mockNoteRevisions = map[string][]model.NoteRevision{
+	"note2": {
+		{RevisionNumber: 2, Content: "the matrix has its roots in primitive arcade games\n\nbut what are its roots in the human condition?", Topics: []string{"history", "cyberspace"}, CreatedAt: time.Now().Add(-24 * time.Hour)},
+		{RevisionNumber: 1, Content: "the matrix has its roots in primitive arcade games", Topics: []string{"history"}, CreatedAt: time.Now().Add(-48 * time.Hour)},
+	},
+}
+
+func (m *MockClient) GetNoteRevisions(noteID, cursor string) ([]model.NoteRevision, string, error) {
+	if revs, ok := mockNoteRevisions[noteID]; ok {
+		return revs, "", nil
+	}
+	// For notes without explicit revision history, synthesize one revision.
+	for _, n := range mockNotes {
+		if n.ID == noteID {
+			return []model.NoteRevision{
+				{RevisionNumber: n.RevisionNumber, Content: n.Content, Topics: n.Topics, CreatedAt: n.CreatedAt},
+			}, "", nil
+		}
+	}
+	return nil, "", fmt.Errorf("note not found: %s", noteID)
+}
+
+func (m *MockClient) GetUserPosts(username, cursor string) ([]model.Post, string, error) {
+	feed, _, _ := m.GetFeed("")
+	var posts []model.Post
+	for _, p := range feed {
+		if p.AuthorUsername == username {
+			posts = append(posts, p)
+		}
+	}
+	return posts, "", nil
+}
+
+func (m *MockClient) GetUserReplies(username, cursor string) ([]model.Reply, string, error) {
+	replies, _ := m.GetPostReplies("")
+	var userReplies []model.Reply
+	for _, r := range replies {
+		if r.AuthorUsername == username {
+			userReplies = append(userReplies, r)
+		}
+	}
+	return userReplies, "", nil
 }

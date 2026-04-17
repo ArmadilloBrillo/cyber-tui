@@ -1176,3 +1176,221 @@ func TestHTTPDeleteNote(t *testing.T) {
 		t.Errorf("path = %q, want /v1/notes/note-xyz", gotPath)
 	}
 }
+
+// --- GetNote ---
+
+func TestHTTPGetNote_ParsesSingleNote(t *testing.T) {
+	var gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		writeOK(t, w, map[string]any{
+			"noteId":         "n1",
+			"authorId":       "u1",
+			"content":        "private thoughts",
+			"topics":         []string{"idea"},
+			"revisionNumber": 2,
+			"deleted":        false,
+			"createdAt":      "2025-06-01T10:00:00.000Z",
+		})
+	})))
+	c.Login("u@example.com", "pass")
+
+	note, err := c.GetNote("n1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/notes/n1" {
+		t.Errorf("GET path = %q, want /v1/notes/n1", gotPath)
+	}
+	if note.ID != "n1" {
+		t.Errorf("ID = %q, want n1", note.ID)
+	}
+	if note.RevisionNumber != 2 {
+		t.Errorf("RevisionNumber = %d, want 2", note.RevisionNumber)
+	}
+}
+
+// --- GetNoteRevision ---
+
+func TestHTTPGetNoteRevision_UsesQueryParam(t *testing.T) {
+	var gotURL string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.RequestURI()
+		writeOK(t, w, map[string]any{
+			"noteId":         "n1",
+			"authorId":       "u1",
+			"content":        "first draft",
+			"revisionNumber": 1,
+			"createdAt":      "2025-06-01T09:00:00.000Z",
+		})
+	})))
+	c.Login("u@example.com", "pass")
+
+	note, err := c.GetNoteRevision("n1", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotURL != "/v1/notes/n1?revision=1" {
+		t.Errorf("URL = %q, want /v1/notes/n1?revision=1", gotURL)
+	}
+	if note.RevisionNumber != 1 {
+		t.Errorf("RevisionNumber = %d, want 1", note.RevisionNumber)
+	}
+}
+
+// --- GetNoteRevisions ---
+
+func TestHTTPGetNoteRevisions_ParsesList(t *testing.T) {
+	var gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		writeOKWithCursor(t, w, []map[string]any{
+			{"revisionNumber": 2, "content": "v2 content", "topics": []string{"idea"}, "createdAt": "2025-06-02T10:00:00.000Z"},
+			{"revisionNumber": 1, "content": "v1 content", "topics": []string{}, "createdAt": "2025-06-01T09:00:00.000Z"},
+		}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	revs, cursor, err := c.GetNoteRevisions("n1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/notes/n1/revisions" {
+		t.Errorf("GET path = %q, want /v1/notes/n1/revisions", gotPath)
+	}
+	if len(revs) != 2 {
+		t.Fatalf("len(revs) = %d, want 2", len(revs))
+	}
+	if revs[0].RevisionNumber != 2 {
+		t.Errorf("revs[0].RevisionNumber = %d, want 2", revs[0].RevisionNumber)
+	}
+	if cursor != "" {
+		t.Errorf("cursor = %q, want empty", cursor)
+	}
+}
+
+func TestHTTPGetNoteRevisions_PassesCursor(t *testing.T) {
+	var gotQuery string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	_, _, err := c.GetNoteRevisions("n1", "cursor-abc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotQuery, "cursor=cursor-abc") {
+		t.Errorf("query = %q, want cursor=cursor-abc", gotQuery)
+	}
+}
+
+// --- GetFollowers ---
+
+func TestHTTPGetFollowers_UsesFollowersType(t *testing.T) {
+	var gotQuery string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		writeOKWithCursor(t, w, []map[string]any{
+			{"followId": "fw1", "followerId": "u2", "followedId": "u1", "followerUsername": "molly", "followedUsername": "case", "createdAt": "2025-01-01T00:00:00Z"},
+		}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	follows, _, err := c.GetFollowers("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotQuery, "type=followers") {
+		t.Errorf("query = %q, want type=followers", gotQuery)
+	}
+	if len(follows) != 1 {
+		t.Fatalf("len(follows) = %d, want 1", len(follows))
+	}
+	if follows[0].FollowerUsername != "molly" {
+		t.Errorf("FollowerUsername = %q, want molly", follows[0].FollowerUsername)
+	}
+}
+
+// --- GetUserFollows ---
+
+func TestHTTPGetUserFollows_PassesUserIDAndType(t *testing.T) {
+	var gotQuery string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	_, _, err := c.GetUserFollows("user-99", "following", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotQuery, "userId=user-99") {
+		t.Errorf("query = %q, want userId=user-99", gotQuery)
+	}
+	if !strings.Contains(gotQuery, "type=following") {
+		t.Errorf("query = %q, want type=following", gotQuery)
+	}
+}
+
+// --- GetUserPosts ---
+
+func TestHTTPGetUserPosts_BuildsCorrectPath(t *testing.T) {
+	var gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		writeOKWithCursor(t, w, []map[string]any{
+			{
+				"postId": "p1", "authorId": "u1", "authorUsername": "neuromancer",
+				"content": "hello", "topics": []string{}, "repliesCount": 0,
+				"bookmarksCount": 0, "isPublic": true, "isNSFW": false,
+				"deleted": false, "createdAt": "2025-01-01T12:00:00.000Z",
+			},
+		}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	posts, _, err := c.GetUserPosts("neuromancer", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/users/neuromancer/posts" {
+		t.Errorf("path = %q, want /v1/users/neuromancer/posts", gotPath)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("len(posts) = %d, want 1", len(posts))
+	}
+}
+
+// --- GetUserReplies ---
+
+func TestHTTPGetUserReplies_BuildsCorrectPath(t *testing.T) {
+	var gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		writeOKWithCursor(t, w, []map[string]any{
+			{
+				"replyId": "r1", "postId": "p1", "authorId": "u1",
+				"authorUsername": "neuromancer", "content": "a reply",
+				"parentReplyId": "", "createdAt": "2025-01-01T12:00:00.000Z",
+			},
+		}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	replies, _, err := c.GetUserReplies("neuromancer", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/users/neuromancer/replies" {
+		t.Errorf("path = %q, want /v1/users/neuromancer/replies", gotPath)
+	}
+	if len(replies) != 1 {
+		t.Fatalf("len(replies) = %d, want 1", len(replies))
+	}
+	if replies[0].AuthorUsername != "neuromancer" {
+		t.Errorf("AuthorUsername = %q, want neuromancer", replies[0].AuthorUsername)
+	}
+}

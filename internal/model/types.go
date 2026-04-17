@@ -29,10 +29,12 @@ type User struct {
 
 // Follow maps to a record returned by GET /v1/follows.
 type Follow struct {
-	ID         string
-	FollowerID string
-	FollowedID string
-	CreatedAt  time.Time
+	ID               string
+	FollowerID       string
+	FollowedID       string
+	FollowerUsername string
+	FollowedUsername string
+	CreatedAt        time.Time
 }
 
 // Post maps to the post shape returned by GET /v1/posts.
@@ -151,6 +153,15 @@ type Note struct {
 	Topics         []string  // max 3; sent on create/update but not returned by the list API
 	RevisionNumber int
 	Deleted        bool
+	CreatedAt      time.Time
+}
+
+// NoteRevision represents a single historical revision of a note,
+// returned by GET /v1/notes/:id/revisions.
+type NoteRevision struct {
+	RevisionNumber int
+	Content        string
+	Topics         []string
 	CreatedAt      time.Time
 }
 

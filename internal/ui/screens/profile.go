@@ -2,6 +2,8 @@ package screens
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -40,13 +42,36 @@ var profileFieldLabels = [numProfileFields]string{
 	"Longitude",
 }
 
+// profileTab is the active sub-tab within the profile view.
+type profileTab int
+
+const (
+	tabInfo      profileTab = iota
+	tabPosts
+	tabReplies
+	tabFollowing
+	tabFollowers
+	numProfileTabs
+)
+
+var profileTabLabels = [numProfileTabs]string{"Info", "Posts", "Replies", "Following", "Followers"}
+
+// tabItemLines is the number of terminal lines each list item occupies.
+// Bordered box items are 3 lines: top border + 1 content line + bottom border.
+const tabItemLines = 3
+
+// profileChrome is the number of lines consumed by the profile header
+// (username + counts + blank), tab bar, blank separator, and hint line.
+const profileChrome = 6
+
 type ProfileModel struct {
 	user           model.User
 	compose        ComposeModel
-	inputs         []textinput.Model // 7 inputs (all fields except bio)
+	inputs         []textinput.Model // 6 inputs (all fields except bio)
 	editMode       bool
 	focusedField   int
 	width          int
+	height         int
 	err            error
 	saved          bool
 	readOnly       bool
@@ -54,6 +79,39 @@ type ProfileModel struct {
 	isFollowing    bool
 	followID       string
 	followFeedback string
+
+	// Display settings (from SharedConfigMsg).
+	timeDisplayFormat string
+	loc               *time.Location
+
+	// Sub-tab state (view mode only).
+	activeTab profileTab
+
+	posts            []model.Post
+	postsCursor      string
+	postsLoaded      bool
+	postsExhausted   bool
+	tabPostsTop      int // first visible post index
+
+	replies          []model.Reply
+	repliesCursor    string
+	repliesLoaded    bool
+	repliesExhausted bool
+	tabRepliesTop    int
+
+	following          []model.Follow
+	followingCursor    string
+	followingLoaded    bool
+	followingExhausted bool
+	tabFollowingTop    int
+
+	followers          []model.Follow
+	followersCursor    string
+	followersLoaded    bool
+	followersExhausted bool
+	tabFollowersTop    int
+
+	tabSelected int // selected item index within the active list tab
 }
 
 // SaveProfileMsg carries all editable profile fields.
@@ -130,9 +188,121 @@ func (m ProfileModel) SetError(err error) ProfileModel {
 	return m
 }
 
+// ClearTabs resets all sub-tab data and returns to the Info tab.
+// Call this when loading a new user's profile to force fresh data.
+func (m ProfileModel) ClearTabs() ProfileModel {
+	m.activeTab = tabInfo
+	m.tabSelected = 0
+	m.posts = nil
+	m.postsCursor = ""
+	m.postsLoaded = false
+	m.postsExhausted = false
+	m.tabPostsTop = 0
+	m.replies = nil
+	m.repliesCursor = ""
+	m.repliesLoaded = false
+	m.repliesExhausted = false
+	m.tabRepliesTop = 0
+	m.following = nil
+	m.followingCursor = ""
+	m.followingLoaded = false
+	m.followingExhausted = false
+	m.tabFollowingTop = 0
+	m.followers = nil
+	m.followersCursor = ""
+	m.followersLoaded = false
+	m.followersExhausted = false
+	m.tabFollowersTop = 0
+	return m
+}
+
+// SetUserPosts stores the first page of posts for the Posts tab.
+func (m ProfileModel) SetUserPosts(posts []model.Post, cursor string) ProfileModel {
+	m.posts = posts
+	m.postsCursor = cursor
+	m.postsLoaded = true
+	m.postsExhausted = cursor == ""
+	m.tabSelected = 0
+	m.tabPostsTop = 0
+	return m
+}
+
+// AppendUserPosts adds a next page to the Posts tab.
+func (m ProfileModel) AppendUserPosts(posts []model.Post, cursor string) ProfileModel {
+	m.posts = append(m.posts, posts...)
+	m.postsCursor = cursor
+	m.postsExhausted = cursor == ""
+	return m
+}
+
+// SetUserReplies stores the first page of replies for the Replies tab.
+func (m ProfileModel) SetUserReplies(replies []model.Reply, cursor string) ProfileModel {
+	m.replies = replies
+	m.repliesCursor = cursor
+	m.repliesLoaded = true
+	m.repliesExhausted = cursor == ""
+	m.tabSelected = 0
+	m.tabRepliesTop = 0
+	return m
+}
+
+// AppendUserReplies adds a next page to the Replies tab.
+func (m ProfileModel) AppendUserReplies(replies []model.Reply, cursor string) ProfileModel {
+	m.replies = append(m.replies, replies...)
+	m.repliesCursor = cursor
+	m.repliesExhausted = cursor == ""
+	return m
+}
+
+// SetUserFollowing stores the first page of following for the Following tab.
+func (m ProfileModel) SetUserFollowing(follows []model.Follow, cursor string) ProfileModel {
+	m.following = follows
+	m.followingCursor = cursor
+	m.followingLoaded = true
+	m.followingExhausted = cursor == ""
+	m.tabSelected = 0
+	m.tabFollowingTop = 0
+	return m
+}
+
+// AppendUserFollowing adds a next page to the Following tab.
+func (m ProfileModel) AppendUserFollowing(follows []model.Follow, cursor string) ProfileModel {
+	m.following = append(m.following, follows...)
+	m.followingCursor = cursor
+	m.followingExhausted = cursor == ""
+	return m
+}
+
+// SetUserFollowers stores the first page of followers for the Followers tab.
+func (m ProfileModel) SetUserFollowers(follows []model.Follow, cursor string) ProfileModel {
+	m.followers = follows
+	m.followersCursor = cursor
+	m.followersLoaded = true
+	m.followersExhausted = cursor == ""
+	m.tabSelected = 0
+	m.tabFollowersTop = 0
+	return m
+}
+
+// AppendUserFollowers adds a next page to the Followers tab.
+func (m ProfileModel) AppendUserFollowers(follows []model.Follow, cursor string) ProfileModel {
+	m.followers = append(m.followers, follows...)
+	m.followersCursor = cursor
+	m.followersExhausted = cursor == ""
+	return m
+}
+
 // ComposeActive reports whether the edit form is open, used by app.go to
 // route key events past global shortcuts.
 func (m ProfileModel) ComposeActive() bool { return m.editMode }
+
+// location returns the configured timezone, defaulting to UTC.
+func (m ProfileModel) location() *time.Location {
+	if m.loc != nil {
+		return m.loc
+	}
+	return time.UTC
+}
 
 func (m ProfileModel) Init() tea.Cmd { return nil }
 
@@ -213,9 +383,204 @@ func (m ProfileModel) buildSaveMsg() SaveProfileMsg {
 	}
 }
 
+// contentHeight returns the number of lines available for list tab content.
+func (m ProfileModel) contentHeight() int {
+	h := m.height - theme.ChromeHeight - profileChrome
+	if h < 2 {
+		h = 2
+	}
+	return h
+}
+
+// switchTab moves to a different sub-tab (delta = ±1) and emits a lazy-load
+// message if the destination tab has not been loaded yet.
+func (m ProfileModel) switchTab(delta int) (ProfileModel, tea.Cmd) {
+	m.activeTab = profileTab((int(m.activeTab) + int(delta) + int(numProfileTabs)) % int(numProfileTabs))
+	m.tabSelected = 0
+
+	var lazyLoad tea.Cmd
+	switch m.activeTab {
+	case tabPosts:
+		if !m.postsLoaded {
+			username := m.user.Username
+			lazyLoad = func() tea.Msg { return ShowUserPostsMsg{Username: username} }
+		}
+	case tabReplies:
+		if !m.repliesLoaded {
+			username := m.user.Username
+			lazyLoad = func() tea.Msg { return ShowUserRepliesMsg{Username: username} }
+		}
+	case tabFollowing:
+		if !m.followingLoaded {
+			userID := m.user.ID
+			lazyLoad = func() tea.Msg { return ShowUserFollowingMsg{UserID: userID} }
+		}
+	case tabFollowers:
+		if !m.followersLoaded {
+			userID := m.user.ID
+			lazyLoad = func() tea.Msg { return ShowUserFollowersMsg{UserID: userID} }
+		}
+	}
+	return m, lazyLoad
+}
+
+// activeTabLen returns the number of items in the current tab.
+func (m ProfileModel) activeTabLen() int {
+	switch m.activeTab {
+	case tabPosts:
+		return len(m.posts)
+	case tabReplies:
+		return len(m.replies)
+	case tabFollowing:
+		return len(m.following)
+	case tabFollowers:
+		return len(m.followers)
+	}
+	return 0
+}
+
+// moveTabSelection moves the selected item by delta and scrolls if needed.
+// Returns a pagination command if the user reaches near the end of a loaded list.
+func (m ProfileModel) moveTabSelection(delta int) (ProfileModel, tea.Cmd) {
+	n := m.activeTabLen()
+	if n == 0 {
+		return m, nil
+	}
+
+	m.tabSelected += delta
+	if m.tabSelected < 0 {
+		m.tabSelected = 0
+	}
+	if m.tabSelected >= n {
+		m.tabSelected = n - 1
+	}
+
+	numVisible := m.contentHeight() / tabItemLines
+	if numVisible < 1 {
+		numVisible = 1
+	}
+
+	// Update scroll offset so selected item is always in view.
+	top := m.scrollTopForActiveTab()
+	if m.tabSelected < top {
+		top = m.tabSelected
+	}
+	if m.tabSelected >= top+numVisible {
+		top = m.tabSelected - numVisible + 1
+	}
+	m.setScrollTopForActiveTab(top)
+
+	// Check for pagination near the bottom of the list.
+	var pageCmd tea.Cmd
+	if m.tabSelected >= n-3 {
+		pageCmd = m.loadMoreCmd()
+	}
+	return m, pageCmd
+}
+
+// scrollTopForActiveTab returns the current scroll offset for the active tab.
+func (m ProfileModel) scrollTopForActiveTab() int {
+	switch m.activeTab {
+	case tabPosts:
+		return m.tabPostsTop
+	case tabReplies:
+		return m.tabRepliesTop
+	case tabFollowing:
+		return m.tabFollowingTop
+	case tabFollowers:
+		return m.tabFollowersTop
+	}
+	return 0
+}
+
+// setScrollTopForActiveTab updates the scroll offset for the active tab.
+func (m *ProfileModel) setScrollTopForActiveTab(top int) {
+	switch m.activeTab {
+	case tabPosts:
+		m.tabPostsTop = top
+	case tabReplies:
+		m.tabRepliesTop = top
+	case tabFollowing:
+		m.tabFollowingTop = top
+	case tabFollowers:
+		m.tabFollowersTop = top
+	}
+}
+
+// loadMoreCmd returns a pagination command if the active tab has more pages.
+func (m ProfileModel) loadMoreCmd() tea.Cmd {
+	switch m.activeTab {
+	case tabPosts:
+		if !m.postsExhausted && m.postsCursor != "" {
+			cursor := m.postsCursor
+			username := m.user.Username
+			return func() tea.Msg { return LoadMoreUserPostsMsg{Username: username, Cursor: cursor} }
+		}
+	case tabReplies:
+		if !m.repliesExhausted && m.repliesCursor != "" {
+			cursor := m.repliesCursor
+			username := m.user.Username
+			return func() tea.Msg { return LoadMoreUserRepliesMsg{Username: username, Cursor: cursor} }
+		}
+	case tabFollowing:
+		if !m.followingExhausted && m.followingCursor != "" {
+			cursor := m.followingCursor
+			userID := m.user.ID
+			return func() tea.Msg { return LoadMoreUserFollowingMsg{UserID: userID, Cursor: cursor} }
+		}
+	case tabFollowers:
+		if !m.followersExhausted && m.followersCursor != "" {
+			cursor := m.followersCursor
+			userID := m.user.ID
+			return func() tea.Msg { return LoadMoreUserFollowersMsg{UserID: userID, Cursor: cursor} }
+		}
+	}
+	return nil
+}
+
+// handleTabEnter activates the selected item in a list tab.
+func (m ProfileModel) handleTabEnter() (ProfileModel, tea.Cmd) {
+	n := m.activeTabLen()
+	if n == 0 || m.tabSelected >= n {
+		return m, nil
+	}
+	switch m.activeTab {
+	case tabPosts:
+		post := m.posts[m.tabSelected]
+		return m, func() tea.Msg { return ShowProfilePostMsg{Post: post} }
+	case tabReplies:
+		reply := m.replies[m.tabSelected]
+		// Navigate to the post that contains this reply; App fetches the full post and highlights the reply.
+		postID := reply.PostID
+		replyID := reply.ID
+		return m, func() tea.Msg { return ShowProfileReplyMsg{PostID: postID, ReplyID: replyID} }
+	case tabFollowing:
+		follow := m.following[m.tabSelected]
+		username := follow.FollowedUsername
+		if username == "" {
+			return m, nil // API doesn't return usernames — profile navigation unavailable
+		}
+		return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+	case tabFollowers:
+		follow := m.followers[m.tabSelected]
+		username := follow.FollowerUsername
+		if username == "" {
+			return m, nil // API doesn't return usernames — profile navigation unavailable
+		}
+		return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+	}
+	return m, nil
+}
+
 func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case SharedConfigMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		if msg.Loc != nil {
+			m.loc = msg.Loc
+		}
 		w := msg.Width
 		if w > 80 {
 			w = 80
@@ -232,6 +597,7 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
 		w := msg.Width
 		if w > 80 {
 			w = 80
@@ -278,8 +644,24 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 			return m, cmd
 		}
 
-		// Not in edit mode.
+		// Not in edit mode — handle sub-tab and list navigation.
 		switch msg.String() {
+		case "tab":
+			return m.switchTab(+1)
+		case "shift+tab":
+			return m.switchTab(-1)
+		case "j", "down":
+			if m.activeTab != tabInfo {
+				return m.moveTabSelection(+1)
+			}
+		case "k", "up":
+			if m.activeTab != tabInfo {
+				return m.moveTabSelection(-1)
+			}
+		case "enter":
+			if m.activeTab != tabInfo {
+				return m.handleTabEnter()
+			}
 		case "esc":
 			if m.readOnly || m.canGoBack {
 				return m, func() tea.Msg { return BackFromProfileMsg{} }
@@ -310,8 +692,7 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 	return m, nil
 }
 
-// View renders the profile screen. In edit mode it shows the multi-field form;
-// otherwise it renders the profile card.
+// View renders the profile screen.
 func (m ProfileModel) View() string {
 	if m.err != nil {
 		return theme.Error.Render(fmt.Sprintf("profile error: %s", m.err))
@@ -323,13 +704,52 @@ func (m ProfileModel) View() string {
 		return m.editFormView(username)
 	}
 
+	// --- View mode: compact header + tab bar + content ---
+
 	counts := theme.Subtle.Render(fmt.Sprintf(
 		"%d followers · %d following · %d posts",
 		m.user.FollowersCount, m.user.FollowingCount, m.user.PostsCount,
 	))
 
+	// Tab bar.
+	var tabParts []string
+	for i := profileTab(0); i < numProfileTabs; i++ {
+		label := profileTabLabels[i]
+		if i == m.activeTab {
+			tabParts = append(tabParts, theme.ActiveTab.Render(label))
+		} else {
+			tabParts = append(tabParts, theme.Tab.Render(label))
+		}
+	}
+	tabBar := strings.Join(tabParts, " ")
+
+	var content string
+	switch m.activeTab {
+	case tabInfo:
+		content = m.infoTabView()
+	case tabPosts:
+		content = m.postsTabView()
+	case tabReplies:
+		content = m.repliesTabView()
+	case tabFollowing:
+		content = m.followListTabView(m.following, m.followingLoaded, "following", m.tabFollowingTop)
+	case tabFollowers:
+		content = m.followListTabView(m.followers, m.followersLoaded, "followers", m.tabFollowersTop)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		username,
+		counts,
+		"",
+		tabBar,
+		"",
+		content,
+	)
+}
+
+// infoTabView renders the Info tab content (bio, website, location, hint).
+func (m ProfileModel) infoTabView() string {
 	var rows []string
-	rows = append(rows, username, counts, "")
 
 	rows = append(rows, theme.Base.Render(m.user.Bio))
 
@@ -360,30 +780,200 @@ func (m ProfileModel) View() string {
 
 	rows = append(rows, "")
 
-	var feedback string
-	if m.saved && !m.readOnly {
-		feedback = theme.Highlight.Render("saved.")
-	} else if m.followFeedback != "" {
-		feedback = theme.Highlight.Render(m.followFeedback)
+	if m.followFeedback != "" {
+		rows = append(rows, theme.Highlight.Render(m.followFeedback))
+	} else if m.saved && !m.readOnly {
+		rows = append(rows, theme.Highlight.Render("saved."))
 	}
 
-	var hint string
-	switch {
-	case m.readOnly && m.isFollowing:
-		hint = theme.Subtle.Render("esc · back   f · unfollow")
-	case m.readOnly:
-		hint = theme.Subtle.Render("esc · back   f · follow")
-	case m.canGoBack:
-		hint = theme.Subtle.Render("esc · back   e · edit profile")
-	default:
-		hint = theme.Subtle.Render("e · edit profile")
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+// postsTabView renders the Posts tab content.
+func (m ProfileModel) postsTabView() string {
+	if !m.postsLoaded {
+		return theme.Subtle.Render("loading…")
+	}
+	if len(m.posts) == 0 {
+		return theme.Subtle.Render("no posts.")
 	}
 
-	rows = append(rows, hint, feedback)
+	numVisible := m.contentHeight() / tabItemLines
+	if numVisible < 1 {
+		numVisible = 1
+	}
+	top := m.tabPostsTop
+	end := top + numVisible
+	if end > len(m.posts) {
+		end = len(m.posts)
+	}
 
-	return theme.Border.Width(76).Render(
-		lipgloss.JoinVertical(lipgloss.Left, rows...),
-	)
+	var lines []string
+	for i := top; i < end; i++ {
+		lines = append(lines, m.renderPostItem(m.posts[i], i == m.tabSelected))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// repliesTabView renders the Replies tab content.
+func (m ProfileModel) repliesTabView() string {
+	if !m.repliesLoaded {
+		return theme.Subtle.Render("loading…")
+	}
+	if len(m.replies) == 0 {
+		return theme.Subtle.Render("no replies.")
+	}
+
+	numVisible := m.contentHeight() / tabItemLines
+	if numVisible < 1 {
+		numVisible = 1
+	}
+	top := m.tabRepliesTop
+	end := top + numVisible
+	if end > len(m.replies) {
+		end = len(m.replies)
+	}
+
+	var lines []string
+	for i := top; i < end; i++ {
+		lines = append(lines, m.renderReplyItem(m.replies[i], i == m.tabSelected))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// followListTabView renders a Following or Followers tab.
+func (m ProfileModel) followListTabView(follows []model.Follow, loaded bool, kind string, top int) string {
+	if !loaded {
+		return theme.Subtle.Render("loading…")
+	}
+	if len(follows) == 0 {
+		return theme.Subtle.Render("no " + kind + ".")
+	}
+
+	numVisible := m.contentHeight() / tabItemLines
+	if numVisible < 1 {
+		numVisible = 1
+	}
+	end := top + numVisible
+	if end > len(follows) {
+		end = len(follows)
+	}
+
+	var lines []string
+	for i := top; i < end; i++ {
+		lines = append(lines, m.renderFollowItem(follows[i], i == m.tabSelected))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderPostItem renders a single post as a bordered single-line card.
+func (m ProfileModel) renderPostItem(p model.Post, selected bool) string {
+	innerWidth := m.width - 4
+	if innerWidth < 1 {
+		innerWidth = 40
+	}
+	ts := theme.Subtle.Render(displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, true))
+	left := theme.Highlight.Render("@"+p.AuthorUsername) + "  " + theme.Base.Render(truncateStr(p.Content, innerWidth-lipgloss.Width(ts)-lipgloss.Width(theme.Highlight.Render("@"+p.AuthorUsername))-4))
+	gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ts)
+	var line string
+	if gap > 0 {
+		line = left + strings.Repeat(" ", gap) + ts
+	} else {
+		line = left
+	}
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if innerWidth > 0 {
+		boxStyle = boxStyle.Width(m.width - 2)
+	}
+	return boxStyle.Render(line)
+}
+
+// renderReplyItem renders a single reply as a bordered single-line card.
+func (m ProfileModel) renderReplyItem(r model.Reply, selected bool) string {
+	innerWidth := m.width - 4
+	if innerWidth < 1 {
+		innerWidth = 40
+	}
+	ts := theme.Subtle.Render(displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, true))
+	tag := theme.Subtle.Render("↩ ")
+	previewMaxW := innerWidth - lipgloss.Width(ts) - lipgloss.Width(tag) - 2
+	if previewMaxW < 10 {
+		previewMaxW = 10
+	}
+	left := tag + theme.Base.Render(truncateStr(r.Content, previewMaxW))
+	gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ts)
+	var line string
+	if gap > 0 {
+		line = left + strings.Repeat(" ", gap) + ts
+	} else {
+		line = left
+	}
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if innerWidth > 0 {
+		boxStyle = boxStyle.Width(m.width - 2)
+	}
+	return boxStyle.Render(line)
+}
+
+// renderFollowItem renders a single follow relationship as a bordered single-line card.
+// If the API did not return a username (only IDs), the truncated user ID is shown.
+func (m ProfileModel) renderFollowItem(f model.Follow, selected bool) string {
+	innerWidth := m.width - 4
+	if innerWidth < 1 {
+		innerWidth = 40
+	}
+
+	var username string
+	var userID string
+	if m.activeTab == tabFollowing {
+		username = f.FollowedUsername
+		userID = f.FollowedID
+	} else {
+		username = f.FollowerUsername
+		userID = f.FollowerID
+	}
+
+	var display string
+	if username != "" {
+		display = theme.Highlight.Render("@" + username)
+	} else {
+		// API doesn't return usernames — show truncated user ID as a fallback.
+		display = theme.Subtle.Render(truncateStr(userID, 16))
+	}
+
+	ts := theme.Subtle.Render(displayTime(f.CreatedAt, m.location(), m.timeDisplayFormat, true))
+	gap := innerWidth - lipgloss.Width(display) - lipgloss.Width(ts)
+	var line string
+	if gap > 0 {
+		line = display + strings.Repeat(" ", gap) + ts
+	} else {
+		line = display
+	}
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if innerWidth > 0 {
+		boxStyle = boxStyle.Width(m.width - 2)
+	}
+	return boxStyle.Render(line)
+}
+
+// truncateStr truncates s to maxW characters, appending "…" if truncated.
+func truncateStr(s string, maxW int) string {
+	// Collapse newlines for preview.
+	s = strings.ReplaceAll(s, "\n", " ")
+	r := []rune(s)
+	if len(r) <= maxW {
+		return s
+	}
+	return string(r[:maxW-1]) + "…"
 }
 
 func (m ProfileModel) editFormView(username string) string {

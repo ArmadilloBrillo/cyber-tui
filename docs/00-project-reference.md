@@ -63,9 +63,13 @@ cyber-tui/
 │           └── theme_test.go    # Theme tests
 ├── docs/                        # Feature documentation (numbered)
 │   ├── 00-project-reference.md  # This file
+│   ├── 00-api-backlog.md        # Unimplemented features and known server bugs
+│   ├── 00-latest-api-reference.md # Live API spec snapshot
 │   ├── 01-scaffold.md
 │   ├── 02-menu-bar-navigation.md
 │   ├── 03-api-reference.md
+│   ├── 24-profile-sub-tabs.md   # Feature 24: profile Posts/Replies/Following/Followers tabs
+│   ├── 25-note-revisions.md     # Feature 25: journal revision history
 │   └── ... (see docs/ listing)
 ├── go.mod                       # Go module definition
 ├── go.sum                       # Dependency checksums
@@ -118,8 +122,9 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName) |
 | `Bookmark` | Saved post or reply (ID, type, postID/replyID, content snapshot, author, createdAt) |
 | `Topic` | Tag with post count (slug, postCount) |
-| `Follow` | Follow relationship (ID, followerID, followedID, createdAt) |
+| `Follow` | Follow relationship (ID, followerID, followedID, followerUsername, followedUsername, createdAt) |
 | `Note` | Private journal note (ID, authorID, content, topics, revisionNumber, deleted, createdAt) |
+| `NoteRevision` | Single historical revision of a note (revisionNumber, content, topics, createdAt) |
 
 ---
 
@@ -139,13 +144,14 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Feed | `GetFeed(cursor)`, `CreatePost(content, topics)`, `GetPost(postID)`, `DeletePost(postID)` |
 | Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)` |
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
-| Follows | `GetFollowing(cursor)`, `Follow(followedID)`, `Unfollow(followID)` |
+| User History | `GetUserPosts(username, cursor)`, `GetUserReplies(username, cursor)` |
+| Follows | `GetFollowing(cursor)`, `GetFollowers(cursor)`, `GetUserFollows(userID, followType, cursor)`, `Follow(followedID)`, `Unfollow(followID)` |
 | Settings | `GetSettings()`, `UpdateSettings(update)` |
 | Rooms | `GetRooms()`, `GetRoomMessages(roomID, limit)`, `SendRoomMessage(roomID, body)` |
 | Notifications | `GetNotifications(cursor)`, `MarkNotificationRead(id)`, `MarkAllNotificationsRead()` |
 | Bookmarks | `GetBookmarks(cursor)`, `CreateBookmark(postID, replyID)`, `DeleteBookmark(id)` |
 | Topics | `GetTopics(cursor)`, `GetTopicPosts(slug, cursor)` |
-| Notes | `GetNotes(cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
+| Notes | `GetNotes(cursor)`, `GetNote(noteID)`, `GetNoteRevision(noteID, revision)`, `GetNoteRevisions(noteID, cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
 | Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
 
 #### `client.go`
@@ -363,16 +369,23 @@ Key methods: `SetCurrentUsername(username)`, `RemoveReply(replyID)`
 
 #### `profile.go`
 
-View and edit user profiles (own or others').
+View and edit user profiles (own or others'). Includes five sub-tabs accessible in view mode.
 
-- Displays username, displayName, bio, website (name + url + image url), location (name + coords)
-- `e` opens a multi-field inline editor with all profile fields (8 fields total)
-- Tab/Shift+Tab navigates between fields; bio uses ComposeModel (multi-line), others use textinput
+- **Info tab** (default): username, displayName, bio, website, location, follow/edit hint
+- **Posts tab**: paginated post history for the viewed user
+- **Replies tab**: paginated reply history
+- **Following tab**: users this person follows
+- **Followers tab**: users who follow this person
+- `tab` / `shift+tab` cycle sub-tabs in view mode
+- `j` / `k` navigate items in list tabs; `enter` opens a post or navigates to a user profile
+- `e` opens the multi-field inline editor (Info tab, own profile only)
+- Tab/Shift+Tab in **edit mode** navigate between the 7 edit form fields
 - Ctrl+S or ComposeSubmitMsg saves all fields via `SaveProfileMsg`; ESC cancels
 - `SetReadOnly(true)` hides edit controls when viewing another user's profile
-- `SetCanGoBack(true)` allows ESC to emit `BackFromProfileMsg` (used when navigating from Feed)
+- `SetCanGoBack(true)` allows ESC to emit `BackFromProfileMsg`
+- `ClearTabs()` resets sub-tab state (called when switching to a new user's profile)
 
-Key types: `ProfileModel`, `SaveProfileMsg`
+Key types: `ProfileModel`, `SaveProfileMsg`, `ShowProfilePostMsg`, `ShowUserPostsMsg`, `ShowUserRepliesMsg`, `ShowUserFollowingMsg`, `ShowUserFollowersMsg`, `LoadMoreUserPostsMsg`, `LoadMoreUserRepliesMsg`, `LoadMoreUserFollowingMsg`, `LoadMoreUserFollowersMsg`
 
 #### `notifications.go`
 
@@ -459,16 +472,15 @@ Key methods: `SetTopics(topics, cursor)`, `AppendTopics(topics, cursor)`, `SetTo
 
 Private notes (Journal), cursor-paginated. Notes are visible only to the author.
 
-- List mode: `j`/`k` navigate notes; `enter` opens a note for editing; `n` creates a new note; `d` prompts to delete
-- Edit mode: embeds `ComposeModel` (Ctrl+S saves, Ctrl+P publishes note as a post with confirmation, Esc cancels)
-- `tab` in edit mode toggles focus between the compose area and the topics input
+- List mode: `j`/`k` navigate notes; `d` prompts to delete
+- Edit mode (currently disabled): embeds `ComposeModel` (Ctrl+S saves, Ctrl+P publishes note as a post with confirmation, Esc cancels); `tab` toggles between compose and topics input
 - Confirmation overlay (y/n) for publish and delete actions
 - Viewport height dynamically adjusts when compose box grows or confirmation overlay appears
 
-Key types: `JournalModel`, `SubmitSaveNoteMsg`, `SubmitPublishNoteMsg`, `SubmitDeleteNoteMsg`, `LoadMoreJournalMsg`  
-Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNote(noteID, content)`, `DeleteNote(noteID)`
+**Note creation (`n`), editing (`enter`), and revision history (`h`) are currently disabled** via `noteWriteDisabled: true` in `NewJournalModel`. Flip to `false` once `PATCH /v1/notes/:id` is fixed server-side. All code paths remain in place.
 
-**Known limitation:** `UpdateNote` (PATCH /v1/notes/:id) returns a server-side 500 for all callers. Save is wired in the client but will always error until the server bug is fixed. See `docs/00-api-backlog.md`.
+Key types: `JournalModel`, `SubmitSaveNoteMsg`, `SubmitPublishNoteMsg`, `SubmitDeleteNoteMsg`, `LoadMoreJournalMsg`, `LoadNoteRevisionsMsg`, `LoadNoteRevisionMsg`  
+Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNoteContent(noteID, content, topics)`, `DeleteNote(noteID)`, `SetRevisions(noteID, revisions, cursor)`, `SetRevisionPreview(note)`
 
 #### `compose.go`
 
@@ -623,6 +635,19 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `↑` | Previous field |
 | `enter` | Submit (on password field) |
 
+### Profile (view mode)
+
+| Key | Action |
+|---|---|
+| `tab` | Next sub-tab (Info → Posts → Replies → Following → Followers) |
+| `shift+tab` | Previous sub-tab |
+| `j` / `↓` | Next item in list tab |
+| `k` / `↑` | Previous item in list tab |
+| `enter` | Open post (Posts/Replies tabs) or view user profile (Following/Followers tabs) |
+| `e` | Edit profile (own profile, Info tab) |
+| `f` | Follow / unfollow (read-only profiles) |
+| `esc` | Back to previous screen |
+
 ### Feed
 
 | Key | Action |
@@ -725,8 +750,8 @@ go vet ./...
 | **C-Mail REST** | Conversation list + history loaded from mock; RTDB subscribe wired; full path confirmed post-beta |
 | **HTTPClient thread safety** | Tokens field mutated by Login/refresh with no mutex; acceptable under Bubble Tea's single-update loop, but may need `sync.Mutex` if command goroutines become truly concurrent |
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized |
-| **Note updates (PATCH)** | Server returns 500 for all `PATCH /v1/notes/:id` requests — confirmed server-side bug; client code is correct. See `docs/00-api-backlog.md` |
-| **Followers list** | Only "following" is fetched; "followers" list screen is not implemented |
+| **Journal write operations** | `PATCH /v1/notes/:id` returns 500 server-side. Note creation, editing, and revision history are disabled client-side (`noteWriteDisabled: true` in `NewJournalModel`). Only list and delete remain active. Flip the flag once the API is fixed. See `docs/00-api-backlog.md`. |
 | **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |
 | **Attachments** | Image and YouTube audio attachments on posts/replies are not supported in the TUI |
-| **User post/reply history** | `GET /v1/users/:username/posts` and `/replies` are not called; profile screen shows bio only |
+| **Note revision pagination** | `GetNoteRevisions` cursor is implemented in the API client but the UI loads only the first page |
+| **Profile navigation depth** | Navigating from a Following/Followers tab to another user's profile is single-level; ESC returns to the original `profileReturn` destination, not the intermediate profile |

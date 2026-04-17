@@ -511,7 +511,7 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	return a, nil, false
 }
 
-// handleProfile processes profile load and save messages.
+// handleProfile processes profile load, save, and sub-tab messages.
 func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case profileLoadedMsg:
@@ -523,7 +523,8 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case userProfileLoadedMsg:
 		isOwn := msg.user.Username == a.currentUser.Username
-		a.profile = a.profile.SetUser(msg.user).SetReadOnly(!isOwn).SetCanGoBack(true).SetFollowState(msg.isFollowing, msg.followID)
+		// Clear stale sub-tab data whenever a different profile is loaded.
+		a.profile = a.profile.ClearTabs().SetUser(msg.user).SetReadOnly(!isOwn).SetCanGoBack(true).SetFollowState(msg.isFollowing, msg.followID)
 		a.active = screenProfile
 		return a, nil, true
 	case screens.BackFromProfileMsg:
@@ -542,6 +543,77 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 	case unfollowResultMsg:
 		a.profile = a.profile.SetFollowState(false, "").IncrementFollowersCount(-1).SetFollowFeedback("unfollowed.")
 		return a, nil, true
+
+	// --- sub-tab lazy-load triggers ---
+	case screens.ShowUserPostsMsg:
+		return a, a.loadUserPostsCmd(msg.Username, ""), true
+	case screens.ShowUserRepliesMsg:
+		return a, a.loadUserRepliesCmd(msg.Username, ""), true
+	case screens.ShowUserFollowingMsg:
+		return a, a.loadUserFollowingCmd(msg.UserID, ""), true
+	case screens.ShowUserFollowersMsg:
+		return a, a.loadUserFollowersCmd(msg.UserID, ""), true
+
+	// --- sub-tab pagination ---
+	case screens.LoadMoreUserPostsMsg:
+		return a, a.loadUserPostsCmd(msg.Username, msg.Cursor), true
+	case screens.LoadMoreUserRepliesMsg:
+		return a, a.loadUserRepliesCmd(msg.Username, msg.Cursor), true
+	case screens.LoadMoreUserFollowingMsg:
+		return a, a.loadUserFollowingCmd(msg.UserID, msg.Cursor), true
+	case screens.LoadMoreUserFollowersMsg:
+		return a, a.loadUserFollowersCmd(msg.UserID, msg.Cursor), true
+
+	// --- sub-tab data results ---
+	case userPostsLoadedMsg:
+		a.profile = a.profile.SetUserPosts(msg.posts, msg.cursor)
+		return a, nil, true
+	case userPostsPageMsg:
+		a.profile = a.profile.AppendUserPosts(msg.posts, msg.cursor)
+		return a, nil, true
+	case userRepliesLoadedMsg:
+		a.profile = a.profile.SetUserReplies(msg.replies, msg.cursor)
+		return a, nil, true
+	case userRepliesPageMsg:
+		a.profile = a.profile.AppendUserReplies(msg.replies, msg.cursor)
+		return a, nil, true
+	case userFollowingLoadedMsg:
+		a.profile = a.profile.SetUserFollowing(msg.follows, msg.cursor)
+		return a, nil, true
+	case userFollowingPageMsg:
+		a.profile = a.profile.AppendUserFollowing(msg.follows, msg.cursor)
+		return a, nil, true
+	case userFollowersLoadedMsg:
+		a.profile = a.profile.SetUserFollowers(msg.follows, msg.cursor)
+		return a, nil, true
+	case userFollowersPageMsg:
+		a.profile = a.profile.AppendUserFollowers(msg.follows, msg.cursor)
+		return a, nil, true
+
+	// --- navigation from sub-tabs ---
+	case screens.ShowProfilePostMsg:
+		// Navigate to post detail; return to profile when ESC is pressed.
+		a.postDetailReturn = screenProfile
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.Post)
+		return a, a.loadRepliesCmd(msg.Post.ID), true
+	case screens.ShowProfileReplyMsg:
+		// Navigate to a post thread from the Replies tab; fetch the full post and scroll to the reply.
+		a.postDetailReturn = screenProfile
+		a.active = screenPostDetail
+		a.pendingReplyID = msg.ReplyID
+		a.postDetail = a.postDetail.SetPost(model.Post{ID: msg.PostID})
+		return a, tea.Batch(a.loadProfilePostCmd(msg.PostID), a.loadRepliesCmd(msg.PostID)), true
+	case profilePostLoadedMsg:
+		a.postDetail = a.postDetail.SetPost(msg.post)
+		return a, nil, true
+	case screens.ShowUserProfileMsg:
+		// Only intercept when the profile screen is active (e.g. from Following/Followers tab).
+		if a.active != screenProfile {
+			return a, nil, false
+		}
+		// Navigate to the new user's profile; returning will go to the current profileReturn.
+		return a, a.loadUserProfileCmd(msg.Username), true
 	}
 	return a, nil, false
 }
@@ -708,6 +780,16 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SubmitPublishNoteMsg:
 		return a, a.publishNoteCmd(msg.Content, msg.Topics), true
 	case notePublishedMsg:
+		return a, nil, true
+	case screens.LoadNoteRevisionsMsg:
+		return a, a.loadNoteRevisionsCmd(msg.NoteID, ""), true
+	case screens.LoadNoteRevisionMsg:
+		return a, a.loadNoteRevisionCmd(msg.NoteID, msg.RevisionNumber), true
+	case noteRevisionsLoadedMsg:
+		a.journal = a.journal.SetRevisions(msg.noteID, msg.revisions, msg.cursor)
+		return a, nil, true
+	case noteRevisionPreviewMsg:
+		a.journal = a.journal.SetRevisionPreview(msg.note)
 		return a, nil, true
 	}
 	return a, nil, false
@@ -942,7 +1024,7 @@ func (a App) renderStatusBar() string {
 		if a.profile.ComposeActive() {
 			hintStr = "  Ctrl+S · save   Tab · next field   Esc · cancel"
 		} else {
-			hintStr = "  ? · help"
+			hintStr = "  tab · switch tab   j/k · navigate   enter · open   esc · back   ? · help"
 		}
 	case screenNotifications:
 		hintStr = "  m · mark read   M · mark all   u · unread filter   enter · open   p · profile   ? · help"
@@ -950,7 +1032,7 @@ func (a App) renderStatusBar() string {
 		if a.journal.ComposeActive() {
 			hintStr = "  Ctrl+S · save   Ctrl+P · publish   Tab · topics   Enter · paragraph   Esc · cancel"
 		} else {
-			hintStr = "  n · new note   enter · edit   d · delete   ? · help"
+			hintStr = "  d · delete   ? · help"
 		}
 	case screenBookmarks:
 		hintStr = "  enter · open post   d · delete   ? · help"
@@ -1193,9 +1275,19 @@ func (a App) renderHelpModal() string {
 		row("esc", "back"),
 		"",
 		sectionStyle.Render("profile"),
-		row("e", "edit bio"),
-		row("esc", "back (other profiles)"),
-		row("←→", "tabs"),
+		row("e", "edit profile"),
+		row("f", "follow / unfollow"),
+		row("tab/shift+tab", "switch sub-tab"),
+		row("j/k", "navigate list"),
+		row("enter", "open item"),
+		row("esc", "back"),
+		"",
+		sectionStyle.Render("journal"),
+		row("n", "new note"),
+		row("enter", "edit note"),
+		row("h", "revision history"),
+		row("d", "delete note"),
+		row("Ctrl+P", "publish as post"),
 	)
 	columns := lipgloss.JoinHorizontal(lipgloss.Top, col1, "    ", col2)
 	body := lipgloss.JoinVertical(lipgloss.Left,
@@ -1412,6 +1504,50 @@ type noteUpdatedMsg struct {
 type noteDeletedMsg struct{ noteID string }
 type notePublishedMsg struct{}
 
+// --- profile sub-tab result messages ---
+
+type userPostsLoadedMsg struct {
+	posts  []model.Post
+	cursor string
+}
+type userPostsPageMsg struct {
+	posts  []model.Post
+	cursor string
+}
+type userRepliesLoadedMsg struct {
+	replies []model.Reply
+	cursor  string
+}
+type userRepliesPageMsg struct {
+	replies []model.Reply
+	cursor  string
+}
+type userFollowingLoadedMsg struct {
+	follows []model.Follow
+	cursor  string
+}
+type userFollowingPageMsg struct {
+	follows []model.Follow
+	cursor  string
+}
+type userFollowersLoadedMsg struct {
+	follows []model.Follow
+	cursor  string
+}
+type userFollowersPageMsg struct {
+	follows []model.Follow
+	cursor  string
+}
+
+// --- note revision result messages ---
+
+type noteRevisionsLoadedMsg struct {
+	noteID    string
+	revisions []model.NoteRevision
+	cursor    string
+}
+type noteRevisionPreviewMsg struct{ note model.Note }
+
 type topicsLoadedMsg struct {
 	topics []model.Topic
 	cursor string
@@ -1438,6 +1574,7 @@ type notifsPageMsg struct {
 	cursor string
 }
 type notifPostLoadedMsg struct{ post model.Post }
+type profilePostLoadedMsg struct{ post model.Post }
 type pollUnreadTickMsg struct{}
 type unreadCountMsg struct{ count int }
 
@@ -1545,6 +1682,58 @@ func (a *App) unfollowUserCmd(followID string) tea.Cmd {
 			return errMsg{err}
 		}
 		return unfollowResultMsg{}
+	}
+}
+
+func (a *App) loadUserPostsCmd(username, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		posts, next, err := a.client.GetUserPosts(username, cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		if cursor == "" {
+			return userPostsLoadedMsg{posts: posts, cursor: next}
+		}
+		return userPostsPageMsg{posts: posts, cursor: next}
+	}
+}
+
+func (a *App) loadUserRepliesCmd(username, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		replies, next, err := a.client.GetUserReplies(username, cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		if cursor == "" {
+			return userRepliesLoadedMsg{replies: replies, cursor: next}
+		}
+		return userRepliesPageMsg{replies: replies, cursor: next}
+	}
+}
+
+func (a *App) loadUserFollowingCmd(userID, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		follows, next, err := a.client.GetUserFollows(userID, "following", cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		if cursor == "" {
+			return userFollowingLoadedMsg{follows: follows, cursor: next}
+		}
+		return userFollowingPageMsg{follows: follows, cursor: next}
+	}
+}
+
+func (a *App) loadUserFollowersCmd(userID, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		follows, next, err := a.client.GetUserFollows(userID, "followers", cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		if cursor == "" {
+			return userFollowersLoadedMsg{follows: follows, cursor: next}
+		}
+		return userFollowersPageMsg{follows: follows, cursor: next}
 	}
 }
 
@@ -1907,6 +2096,26 @@ func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	}
 }
 
+func (a *App) loadNoteRevisionsCmd(noteID, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		revisions, next, err := a.client.GetNoteRevisions(noteID, cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return noteRevisionsLoadedMsg{noteID: noteID, revisions: revisions, cursor: next}
+	}
+}
+
+func (a *App) loadNoteRevisionCmd(noteID string, revision int) tea.Cmd {
+	return func() tea.Msg {
+		note, err := a.client.GetNoteRevision(noteID, revision)
+		if err != nil {
+			return errMsg{err}
+		}
+		return noteRevisionPreviewMsg{note: note}
+	}
+}
+
 func (a *App) schedulePollCmd() tea.Cmd {
 	return tea.Tick(60*time.Second, func(time.Time) tea.Msg { return pollUnreadTickMsg{} })
 }
@@ -1965,5 +2174,16 @@ func (a *App) loadPostAndShowCmd(postID string) tea.Cmd {
 			return errMsg{err}
 		}
 		return notifPostLoadedMsg{post: post}
+	}
+}
+
+// loadProfilePostCmd fetches a post for display when navigating from a profile Replies tab.
+func (a *App) loadProfilePostCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		post, err := a.client.GetPost(postID)
+		if err != nil {
+			return errMsg{err}
+		}
+		return profilePostLoadedMsg{post: post}
 	}
 }

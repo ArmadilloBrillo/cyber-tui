@@ -39,6 +39,11 @@ type Client interface {
 	// Pass empty cursor for first page; use returned cursor for subsequent pages.
 	// GetFollowing returns accounts the current user follows.
 	GetFollowing(cursor string) ([]model.Follow, string, error)
+	// GetFollowers returns accounts that follow the current user.
+	GetFollowers(cursor string) ([]model.Follow, string, error)
+	// GetUserFollows returns followers or following for any user by their ID.
+	// followType must be "followers" or "following".
+	GetUserFollows(userID, followType, cursor string) ([]model.Follow, string, error)
 	// Follow follows a user by their user ID. Returns the follow document ID (needed for Unfollow).
 	Follow(followedID string) (string, error)
 	// Unfollow removes a follow relationship by its document ID.
@@ -82,10 +87,22 @@ type Client interface {
 	// DeleteReply soft-deletes a reply owned by the authenticated user.
 	DeleteReply(replyID string) error
 
+	// User posts/replies — cursor-paginated history for any user.
+	GetUserPosts(username, cursor string) ([]model.Post, string, error)
+	GetUserReplies(username, cursor string) ([]model.Reply, string, error)
+
 	// Notes — private notes visible only to the author.
 	// GetNotes returns the latest revision of each note, newest first.
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetNotes(cursor string) ([]model.Note, string, error)
+	// GetNote fetches the latest revision of a single note.
+	// Use GetNoteRevision to fetch a specific revision number.
+	GetNote(noteID string) (model.Note, error)
+	// GetNoteRevision fetches a specific revision of a note by revision number.
+	GetNoteRevision(noteID string, revision int) (model.Note, error)
+	// GetNoteRevisions returns all revisions for a note, newest first.
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetNoteRevisions(noteID, cursor string) ([]model.NoteRevision, string, error)
 	// CreateNote creates a new note. topics is optional (max 3, lowercase).
 	CreateNote(content string, topics []string) (model.Note, error)
 	// UpdateNote creates a new revision on an existing note.

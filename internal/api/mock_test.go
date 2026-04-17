@@ -565,6 +565,177 @@ func TestMockDeleteReply_UnknownIDReturnsNil(t *testing.T) {
 	}
 }
 
+// --- GetFollowers ---
+
+func TestMockGetFollowers_ReturnsNonEmpty(t *testing.T) {
+	m := newMock()
+	follows, cursor, err := m.GetFollowers("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(follows) == 0 {
+		t.Fatal("expected at least one follower")
+	}
+	_ = cursor
+	for _, f := range follows {
+		if f.FollowerUsername == "" {
+			t.Error("FollowerUsername should be set")
+		}
+	}
+}
+
+// --- GetUserFollows ---
+
+func TestMockGetUserFollows_Following(t *testing.T) {
+	m := newMock()
+	follows, _, err := m.GetUserFollows("user-1", "following", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = follows
+}
+
+func TestMockGetUserFollows_Followers(t *testing.T) {
+	m := newMock()
+	follows, _, err := m.GetUserFollows("user-1", "followers", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = follows
+}
+
+// --- GetUserPosts ---
+
+func TestMockGetUserPosts_ReturnsPostsForKnownUser(t *testing.T) {
+	m := newMock()
+	posts, cursor, err := m.GetUserPosts("neuromancer", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = cursor
+	for _, p := range posts {
+		if p.AuthorUsername != "neuromancer" {
+			t.Errorf("got post by %q, expected only neuromancer", p.AuthorUsername)
+		}
+	}
+}
+
+func TestMockGetUserPosts_EmptyForUnknownUser(t *testing.T) {
+	m := newMock()
+	posts, _, err := m.GetUserPosts("nobody", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(posts) != 0 {
+		t.Errorf("expected 0 posts for unknown user, got %d", len(posts))
+	}
+}
+
+// --- GetUserReplies ---
+
+func TestMockGetUserReplies_ReturnsMatchingReplies(t *testing.T) {
+	m := newMock()
+	replies, _, err := m.GetUserReplies("molly_millions", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, r := range replies {
+		if r.AuthorUsername != "molly_millions" {
+			t.Errorf("got reply by %q, expected only molly_millions", r.AuthorUsername)
+		}
+	}
+}
+
+// --- GetNote ---
+
+func TestMockGetNote_KnownID(t *testing.T) {
+	m := newMock()
+	notes, _, _ := m.GetNotes("")
+	if len(notes) == 0 {
+		t.Skip("no seed notes available")
+	}
+	note, err := m.GetNote(notes[0].ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if note.ID != notes[0].ID {
+		t.Errorf("ID = %q, want %q", note.ID, notes[0].ID)
+	}
+}
+
+func TestMockGetNote_NotFound(t *testing.T) {
+	m := newMock()
+	_, err := m.GetNote("no-such-note")
+	if err == nil {
+		t.Fatal("expected error for missing note, got nil")
+	}
+}
+
+// --- GetNoteRevision ---
+
+func TestMockGetNoteRevision_KnownID(t *testing.T) {
+	m := newMock()
+	notes, _, _ := m.GetNotes("")
+	if len(notes) == 0 {
+		t.Skip("no seed notes available")
+	}
+	note, err := m.GetNoteRevision(notes[0].ID, notes[0].RevisionNumber)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if note.ID != notes[0].ID {
+		t.Errorf("ID = %q, want %q", note.ID, notes[0].ID)
+	}
+}
+
+func TestMockGetNoteRevision_NotFound(t *testing.T) {
+	m := newMock()
+	_, err := m.GetNoteRevision("no-such-note", 1)
+	if err == nil {
+		t.Fatal("expected error for missing note, got nil")
+	}
+}
+
+// --- GetNoteRevisions ---
+
+func TestMockGetNoteRevisions_KnownNote(t *testing.T) {
+	m := newMock()
+	// "note2" has explicit revision history
+	revs, cursor, err := m.GetNoteRevisions("note2", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(revs) == 0 {
+		t.Fatal("expected at least one revision")
+	}
+	_ = cursor
+	for _, r := range revs {
+		if r.RevisionNumber == 0 {
+			t.Error("RevisionNumber should be > 0")
+		}
+	}
+}
+
+func TestMockGetNoteRevisions_FallbackForOtherNotes(t *testing.T) {
+	m := newMock()
+	// "note1" has no explicit revision history — should synthesize one
+	revs, _, err := m.GetNoteRevisions("note1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(revs) == 0 {
+		t.Fatal("expected synthesized revision for note1")
+	}
+}
+
+func TestMockGetNoteRevisions_NotFound(t *testing.T) {
+	m := newMock()
+	_, _, err := m.GetNoteRevisions("no-such-note", "")
+	if err == nil {
+		t.Fatal("expected error for missing note, got nil")
+	}
+}
+
 // --- Interface compliance ---
 
 func TestMockClient_ImplementsClientInterface(t *testing.T) {

@@ -23,22 +23,30 @@ func testUser() model.User {
 // --- SetFollowState ---
 
 func TestProfileSetFollowState_True(t *testing.T) {
+	// SetFollowState(true) → pressing 'f' should emit UnfollowUserMsg (not FollowUserMsg).
 	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true)
 	m = m.SetFollowState(true, "follow-id-abc")
 
-	view := m.View()
-	if !strings.Contains(view, "unfollow") {
-		t.Errorf("View should contain 'unfollow' when following, got:\n%s", view)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	if cmd == nil {
+		t.Fatal("expected a cmd when pressing f while following")
+	}
+	if _, ok := cmd().(screens.UnfollowUserMsg); !ok {
+		t.Errorf("expected UnfollowUserMsg when isFollowing=true, got %T", cmd())
 	}
 }
 
 func TestProfileSetFollowState_False(t *testing.T) {
+	// SetFollowState(false) → pressing 'f' should emit FollowUserMsg (not UnfollowUserMsg).
 	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true)
 	m = m.SetFollowState(false, "")
 
-	view := m.View()
-	if !strings.Contains(view, "f · follow") {
-		t.Errorf("View should contain 'f · follow' when not following, got:\n%s", view)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	if cmd == nil {
+		t.Fatal("expected a cmd when pressing f while not following")
+	}
+	if _, ok := cmd().(screens.FollowUserMsg); !ok {
+		t.Errorf("expected FollowUserMsg when isFollowing=false, got %T", cmd())
 	}
 }
 
@@ -99,17 +107,6 @@ func TestProfileUpdate_FKey_EmitsUnfollowMsg_WhenFollowing(t *testing.T) {
 	}
 }
 
-// --- 'f' key ignored on own profile ---
-
-func TestProfileUpdate_FKey_NoEffect_OnOwnProfile(t *testing.T) {
-	// readOnly=false means it's the user's own profile — f should do nothing
-	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(false)
-
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
-	if cmd != nil {
-		t.Errorf("expected nil cmd on own profile, got non-nil")
-	}
-}
 
 // --- IncrementFollowersCount ---
 
@@ -140,14 +137,15 @@ func TestProfileSetFollowFeedback(t *testing.T) {
 	}
 }
 
-// --- hint bar shows no follow button on own profile ---
+// --- own profile: 'f' key should do nothing ---
 
-func TestProfileView_NoFollowHint_OwnProfile(t *testing.T) {
+func TestProfileUpdate_FKey_NoEffect_OwnProfile(t *testing.T) {
+	// readOnly=false means it's the user's own profile — 'f' should emit nothing.
 	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(false)
-	view := m.View()
 
-	if strings.Contains(view, "f · follow") {
-		t.Errorf("View should not contain 'f · follow' on own profile, got:\n%s", view)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+	if cmd != nil {
+		t.Errorf("own profile should not emit a cmd for 'f', got non-nil cmd")
 	}
 }
 
