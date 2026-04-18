@@ -129,6 +129,8 @@ type App struct {
 
 	// wanderLust is the local config value for wander mode. Defaults to true.
 	wanderLust bool
+	// maxThreadDepth is the local config value for reply nesting depth. Defaults to 3.
+	maxThreadDepth int
 }
 
 func NewApp(client api.Client) App {
@@ -178,6 +180,7 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.timezone = s.Timezone
 	a.loc = s.GetLocation()
 	a.wanderLust = s.WanderLust
+	a.maxThreadDepth = s.GetMaxThreadDepth()
 	return a
 }
 
@@ -226,7 +229,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // Adding a new screen only requires handling SharedConfigMsg in that
 // screen's Update — no changes here are needed.
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust}
+	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth}
 	a.feed, _ = a.feed.Update(msg)
 	a.chatrooms, _ = a.chatrooms.Update(msg)
 	a.cmail, _ = a.cmail.Update(msg)
@@ -634,21 +637,24 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SaveSettingsMsg:
 		s := msg.Settings
 		wl := msg.WanderLust
+		td := msg.MaxThreadDepth
 		return a, func() tea.Msg {
 			if err := a.client.UpdateSettings(s); err != nil {
 				return errMsg{err}
 			}
 			if cfg, err := config.Load(); err == nil {
 				cfg.WanderLust = wl
+				cfg.MaxThreadDepth = td
 				_ = config.Save(cfg)
 			}
-			return settingsSavedMsg{settings: s, wanderLust: wl}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td}
 		}, true
 
 	case settingsSavedMsg:
 		a.settings = msg.settings
 		a.wanderLust = msg.wanderLust
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust)
+		a.maxThreadDepth = msg.maxThreadDepth
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth)
 		a.broadcastConfig()
 		return a, nil, true
 
@@ -1530,8 +1536,9 @@ type postDeletedMsg struct {
 }
 type settingsLoadedMsg struct{ settings model.Settings }
 type settingsSavedMsg struct {
-	settings   model.Settings
-	wanderLust bool
+	settings       model.Settings
+	wanderLust     bool
+	maxThreadDepth int
 }
 type wanderTickMsg struct{}
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made

@@ -86,12 +86,13 @@ func RenderPost(p model.Post, selected bool, width int, loc *time.Location, time
 // Adding a new screen only requires handling this message in that screen's Update —
 // no App call sites need changing.
 type SharedConfigMsg struct {
-	Width      int
-	Height     int
-	Loc        *time.Location
-	Relaxed    bool
-	Settings   model.Settings
-	WanderLust bool
+	Width          int
+	Height         int
+	Loc            *time.Location
+	Relaxed        bool
+	Settings       model.Settings
+	WanderLust     bool
+	MaxThreadDepth int
 }
 
 // ShowUserProfileMsg is emitted by Feed, PostDetail, and Notifications when
@@ -105,8 +106,9 @@ type BackFromProfileMsg struct{}
 // with unsaved changes. App.handleSettings calls UpdateSettings and returns
 // settingsSavedMsg or errMsg.
 type SaveSettingsMsg struct {
-	Settings   model.Settings
-	WanderLust bool
+	Settings       model.Settings
+	WanderLust     bool
+	MaxThreadDepth int
 }
 
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark

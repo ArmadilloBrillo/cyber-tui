@@ -254,7 +254,7 @@ func TestSettings_Esc_ClearsError(t *testing.T) {
 func TestSettings_SetSaved_ClearsError(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetError(testErr)
-	m = m.SetSaved(false)
+	m = m.SetSaved(false, 3)
 	if m.err != nil {
 		t.Error("SetSaved should clear error")
 	}
@@ -266,7 +266,7 @@ func TestSettings_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty after change")
 	}
-	m = m.SetSaved(false)
+	m = m.SetSaved(false, 3)
 	if m.IsDirty() {
 		t.Error("after SetSaved, should not be dirty")
 	}
@@ -391,7 +391,7 @@ func TestSettings_View_DirtyFooterHint(t *testing.T) {
 
 func TestSettings_View_SavedMessage(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m = m.SetSaved(false)
+	m = m.SetSaved(false, 3)
 	view := m.View()
 	if !containsSubstring(view, "saved!") {
 		t.Error("View should show 'saved!' when saved=true")
@@ -420,7 +420,7 @@ func TestSettings_WanderGroup_Visible(t *testing.T) {
 func TestSettings_WanderToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
-	m.cursor = 11 // wander mode item
+	m.cursor = 12 // wander mode item (shifted by thread depth addition)
 	m, _ = m.Update(keyMsg("enter"))
 	if m.wanderLust {
 		t.Error("toggling wander mode should flip wanderLust to false")
@@ -462,7 +462,7 @@ func TestSettings_WanderSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
 	m.originalWanderLust = false // dirty
-	m = m.SetSaved(true)
+	m = m.SetSaved(true, 3)
 	if m.originalWanderLust != true {
 		t.Error("SetSaved should update originalWanderLust to the saved value")
 	}

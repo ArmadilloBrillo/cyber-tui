@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +12,73 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
+
+// replyNode holds a reply together with its computed tree position.
+type replyNode struct {
+	Reply          model.Reply
+	Depth          int    // display depth 0–3 (capped)
+	ParentUsername string // AuthorUsername of the parent reply; "" for top-level or orphans
+}
+
+// buildReplyTree converts a flat reply list into a depth-first ordered slice of
+// replyNodes. Children at each level are sorted chronologically. Orphaned
+// replies (whose parent is not in the list) are treated as top-level.
+// maxDepth caps the display depth; replies deeper than maxDepth are shown at maxDepth.
+func buildReplyTree(replies []model.Reply, maxDepth int) []replyNode {
+	if len(replies) == 0 {
+		return nil
+	}
+
+	idToIdx := make(map[string]int, len(replies))
+	for i, r := range replies {
+		idToIdx[r.ID] = i
+	}
+
+	children := make(map[string][]int)
+	for i, r := range replies {
+		if r.ParentReplyID != "" {
+			if _, ok := idToIdx[r.ParentReplyID]; ok {
+				children[r.ParentReplyID] = append(children[r.ParentReplyID], i)
+				continue
+			}
+		}
+		children[""] = append(children[""], i)
+	}
+
+	for key := range children {
+		sl := children[key]
+		sort.Slice(sl, func(a, b int) bool {
+			return replies[sl[a]].CreatedAt.Before(replies[sl[b]].CreatedAt)
+		})
+	}
+
+	result := make([]replyNode, 0, len(replies))
+
+	var walk func(idx, depth int)
+	walk = func(idx, depth int) {
+		r := replies[idx]
+		d := depth
+		if d > maxDepth {
+			d = maxDepth
+		}
+		var parentUsername string
+		if r.ParentReplyID != "" {
+			if pidx, ok := idToIdx[r.ParentReplyID]; ok {
+				parentUsername = replies[pidx].AuthorUsername
+			}
+		}
+		result = append(result, replyNode{Reply: r, Depth: d, ParentUsername: parentUsername})
+		for _, childIdx := range children[r.ID] {
+			walk(childIdx, depth+1)
+		}
+	}
+
+	for _, idx := range children[""] {
+		walk(idx, 0)
+	}
+
+	return result
+}
 
 // BackToFeedMsg is emitted when the user presses Esc to return to the feed.
 type BackToFeedMsg struct{}
@@ -35,8 +103,9 @@ type SubmitReplyMsg struct {
 type PostDetailModel struct {
 	post          model.Post
 	replies       []model.Reply
-	replyOffsets  []int // start line of each reply within the viewport content
-	replyHeights  []int // rendered height of each reply (matches offsets; set by buildContent)
+	flatTree      []replyNode   // DFS-ordered tree walk; len always == len(replies)
+	replyOffsets  []int         // start line of each reply within the viewport content
+	replyHeights  []int         // rendered height of each reply (matches offsets; set by buildContent)
 	selectedReply int
 	viewport      viewport.Model
 	width         int
@@ -54,6 +123,7 @@ type PostDetailModel struct {
 
 	currentUsername string        // set after login; guards the delete key to own content
 	confirming      pdConfirmKind // pending delete confirmation
+	maxThreadDepth  int           // max visual nesting depth; 0 treated as 3
 }
 
 func NewPostDetailModel() PostDetailModel {
@@ -65,6 +135,7 @@ func NewPostDetailModel() PostDetailModel {
 func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 	m.post = post
 	m.replies = nil
+	m.flatTree = nil
 	m.replyOffsets = nil
 	m.replyHeights = nil
 	m.selectedReply = -1 // post itself is selected by default
@@ -78,13 +149,25 @@ func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 }
 
 func (m PostDetailModel) SetReplies(replies []model.Reply) PostDetailModel {
-	m.replies = replies
 	m.selectedReply = -1 // keep post selected after replies load
 	m.loading = false
+	return m.applyReplies(replies)
+}
+
+func (m PostDetailModel) applyReplies(replies []model.Reply) PostDetailModel {
+	m.replies = replies
+	m.flatTree = buildReplyTree(replies, m.effectiveMaxDepth())
 	if m.ready {
 		m = m.refreshContent()
 	}
 	return m
+}
+
+func (m PostDetailModel) effectiveMaxDepth() int {
+	if m.maxThreadDepth <= 0 {
+		return 3
+	}
+	return m.maxThreadDepth
 }
 
 // ScrollToReply selects and scrolls to the reply with the given ID.
@@ -93,8 +176,8 @@ func (m PostDetailModel) ScrollToReply(replyID string) PostDetailModel {
 	if replyID == "" {
 		return m
 	}
-	for i, r := range m.replies {
-		if r.ID == replyID {
+	for i, node := range m.flatTree {
+		if node.Reply.ID == replyID {
 			m.selectedReply = i
 			if m.ready {
 				m = m.refreshContent()
@@ -111,8 +194,8 @@ func (m PostDetailModel) Loading() bool { return m.loading }
 
 // SelectedReplyID returns the ID of the currently selected reply, or "" if the post itself is selected.
 func (m PostDetailModel) SelectedReplyID() string {
-	if m.selectedReply >= 0 && m.selectedReply < len(m.replies) {
-		return m.replies[m.selectedReply].ID
+	if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
+		return m.flatTree[m.selectedReply].Reply.ID
 	}
 	return ""
 }
@@ -142,11 +225,12 @@ func (m PostDetailModel) RemoveReply(replyID string) PostDetailModel {
 	for i, r := range m.replies {
 		if r.ID == replyID {
 			m.replies = append(m.replies[:i], m.replies[i+1:]...)
+			m.flatTree = buildReplyTree(m.replies, m.effectiveMaxDepth())
 			switch {
-			case len(m.replies) == 0:
+			case len(m.flatTree) == 0:
 				m.selectedReply = -1
-			case m.selectedReply >= len(m.replies):
-				m.selectedReply = len(m.replies) - 1
+			case m.selectedReply >= len(m.flatTree):
+				m.selectedReply = len(m.flatTree) - 1
 			}
 			break
 		}
@@ -189,9 +273,9 @@ func (m PostDetailModel) SetLocation(loc *time.Location) PostDetailModel {
 func (m PostDetailModel) OpenCompose() (PostDetailModel, tea.Cmd) {
 	m.replyPostID = m.post.ID
 	var ctx string
-	if m.selectedReply >= 0 && m.selectedReply < len(m.replies) {
-		m.replyParentID = m.replies[m.selectedReply].ID
-		ctx = "replying to @" + m.replies[m.selectedReply].AuthorUsername
+	if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
+		m.replyParentID = m.flatTree[m.selectedReply].Reply.ID
+		ctx = "replying to @" + m.flatTree[m.selectedReply].Reply.AuthorUsername
 	} else {
 		m.replyParentID = ""
 		ctx = "replying to @" + m.post.AuthorUsername
@@ -240,7 +324,7 @@ func (m PostDetailModel) ensureSelectedVisible() PostDetailModel {
 		itemStart = 0
 		itemHeight = lipgloss.Height(m.renderFullPost(true))
 	} else {
-		if len(m.replyOffsets) == 0 || m.selectedReply >= len(m.replies) {
+		if len(m.replyOffsets) == 0 || m.selectedReply >= len(m.flatTree) {
 			return m
 		}
 		itemStart = m.replyOffsets[m.selectedReply]
@@ -271,6 +355,10 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
+		if msg.MaxThreadDepth != m.maxThreadDepth {
+			m.maxThreadDepth = msg.MaxThreadDepth
+			m = m.applyReplies(m.replies)
+		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -324,8 +412,8 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 					postID := m.post.ID
 					return m, func() tea.Msg { return DeletePostMsg{PostID: postID} }
 				case pdConfirmDeleteReply:
-					if m.selectedReply >= 0 && m.selectedReply < len(m.replies) {
-						replyID := m.replies[m.selectedReply].ID
+					if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
+						replyID := m.flatTree[m.selectedReply].Reply.ID
 						postID := m.post.ID
 						return m, func() tea.Msg {
 							return DeleteReplyMsg{ReplyID: replyID, PostID: postID}
@@ -360,9 +448,9 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 					m.confirming = pdConfirmDeletePost
 					m.viewport.Height = m.viewportHeight()
 				}
-			} else if m.selectedReply >= 0 && m.selectedReply < len(m.replies) {
+			} else if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
 				// Reply selected — only allow delete if it's the user's own reply.
-				if m.replies[m.selectedReply].AuthorUsername == m.currentUsername {
+				if m.flatTree[m.selectedReply].Reply.AuthorUsername == m.currentUsername {
 					m.confirming = pdConfirmDeleteReply
 					m.viewport.Height = m.viewportHeight()
 				}
@@ -377,8 +465,8 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				return m, nil
 			}
 			var username string
-			if m.selectedReply >= 0 && m.selectedReply < len(m.replies) {
-				username = m.replies[m.selectedReply].AuthorUsername
+			if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
+				username = m.flatTree[m.selectedReply].Reply.AuthorUsername
 			} else {
 				username = m.post.AuthorUsername
 			}
@@ -428,7 +516,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				if replyBottom > viewBottom {
 					// Reply bottom is below the visible area — scroll down.
 					m.viewport.LineDown(1)
-				} else if m.selectedReply < len(m.replies)-1 {
+				} else if m.selectedReply < len(m.flatTree)-1 {
 					// Reply bottom is visible — advance to next reply.
 					m.selectedReply++
 					m = m.refreshContent()
@@ -495,13 +583,13 @@ func (m PostDetailModel) buildContent() (string, []int, []int) {
 	} else {
 		baseLines = lipgloss.Height(postContent) + lipgloss.Height(repliesHeader)
 	}
-	offsets := make([]int, len(m.replies))
-	heights := make([]int, len(m.replies))
+	offsets := make([]int, len(m.flatTree))
+	heights := make([]int, len(m.flatTree))
 	currentLine := baseLines
 
-	for i, r := range m.replies {
+	for i, node := range m.flatTree {
 		offsets[i] = currentLine
-		rendered := m.renderReply(r, i == m.selectedReply)
+		rendered := m.renderReply(node, i == m.selectedReply)
 		h := lipgloss.Height(rendered)
 		heights[i] = h
 		sb.WriteString(rendered)
@@ -552,34 +640,40 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 	)
 }
 
-func (m PostDetailModel) renderReply(r model.Reply, selected bool) string {
-	innerWidth := m.width - 4
+func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
+	indentW := node.Depth * 3
+	cardWidth := m.width - 2 - indentW
+	innerWidth := cardWidth - 2
 
-	header := lipgloss.JoinHorizontal(lipgloss.Top,
-		theme.Highlight.Render("@"+r.AuthorUsername),
-		theme.Subtle.Render("  "+displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, false)),
+	var headerParts []string
+	if node.ParentUsername != "" {
+		headerParts = append(headerParts, theme.Subtle.Render("↩ @"+node.ParentUsername+"  "))
+	}
+	headerParts = append(headerParts,
+		theme.Highlight.Render("@"+node.Reply.AuthorUsername),
+		theme.Subtle.Render("  "+displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
+	header := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...)
 
 	var body string
 	if innerWidth > 0 {
-		body = theme.Base.Width(innerWidth).Render(r.Content)
+		body = theme.Base.Width(innerWidth).Render(node.Reply.Content)
 	} else {
-		body = theme.Base.Render(r.Content)
+		body = theme.Base.Render(node.Reply.Content)
 	}
 
 	boxStyle := theme.Border
 	if selected {
 		boxStyle = theme.ActiveBorder
 	}
-	if innerWidth > 0 {
-		boxStyle = boxStyle.Width(m.width - 2)
+	if cardWidth > 0 {
+		boxStyle = boxStyle.Width(cardWidth)
 	}
-	return boxStyle.Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			body,
-		),
-	)
+	card := boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
+	if indentW > 0 {
+		return lipgloss.NewStyle().MarginLeft(indentW).Render(card)
+	}
+	return card
 }
 
 func (m PostDetailModel) View() string {

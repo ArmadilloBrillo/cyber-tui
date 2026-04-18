@@ -54,6 +54,19 @@ type Config struct {
 	// LastWandered records when wander mode last fired.
 	// Zero value means it has never run, which triggers an immediate update.
 	LastWandered time.Time `json:"lastWandered,omitempty"`
+
+	// MaxThreadDepth controls how many levels of reply nesting are visually
+	// indented in the post detail view. 0 is treated as the default (3).
+	MaxThreadDepth int `json:"maxThreadDepth,omitempty"`
+}
+
+// GetMaxThreadDepth returns MaxThreadDepth, substituting the default (3) when
+// the field is zero (i.e. absent from the config file).
+func (c Config) GetMaxThreadDepth() int {
+	if c.MaxThreadDepth <= 0 {
+		return 3
+	}
+	return c.MaxThreadDepth
 }
 
 // DefaultPath returns the canonical path for the config file: ~/.cyber-tui.json.

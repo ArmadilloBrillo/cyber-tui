@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -58,6 +59,11 @@ var settingsGroups = []settingsGroup{
 				options: []string{"datetime", "relative", "unix", "swatch"},
 			},
 			{label: "legacy menu order", kind: "bool"},
+			{
+				label:   "thread depth",
+				kind:    "enum",
+				options: []string{"1", "2", "3", "4", "5"},
+			},
 		},
 	},
 	{
@@ -70,15 +76,17 @@ var settingsGroups = []settingsGroup{
 
 // SettingsModel is the Settings screen.
 type SettingsModel struct {
-	settings             model.Settings // live/edited values
-	original             model.Settings // last saved baseline
-	wanderLust           bool           // live local config value
-	originalWanderLust   bool           // last saved baseline for wanderLust
-	cursor               int
-	width                int
-	height               int
-	saved                bool
-	err                  error
+	settings               model.Settings // live/edited values
+	original               model.Settings // last saved baseline
+	wanderLust             bool           // live local config value
+	originalWanderLust     bool           // last saved baseline for wanderLust
+	maxThreadDepth         int            // live local config value (1–5)
+	originalMaxThreadDepth int            // last saved baseline
+	cursor                 int
+	width                  int
+	height                 int
+	saved                  bool
+	err                    error
 }
 
 // NewSettingsModel creates a new SettingsModel.
@@ -96,11 +104,14 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool) SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int) SettingsModel {
 	m.saved = true
 	m.err = nil
 	m.original = m.settings
+	m.wanderLust = wanderLust
 	m.originalWanderLust = wanderLust
+	m.maxThreadDepth = maxThreadDepth
+	m.originalMaxThreadDepth = maxThreadDepth
 	return m
 }
 
@@ -112,7 +123,9 @@ func (m SettingsModel) SetError(err error) SettingsModel {
 
 // IsDirty returns true if the current settings differ from the last saved baseline.
 func (m SettingsModel) IsDirty() bool {
-	return !settingsEqual(m.settings, m.original) || m.wanderLust != m.originalWanderLust
+	return !settingsEqual(m.settings, m.original) ||
+		m.wanderLust != m.originalWanderLust ||
+		m.maxThreadDepth != m.originalMaxThreadDepth
 }
 
 // settingsEqual compares only the editable scalar fields.
@@ -207,6 +220,23 @@ func setEnum(s model.Settings, idx int, v string) model.Settings {
 	return s
 }
 
+// cycleIntEnum cycles a plain int value through a set of string options.
+// The current value is matched by its string representation; 0 defaults to options[0].
+func cycleIntEnum(cur int, options []string, delta int) int {
+	curStr := fmt.Sprintf("%d", cur)
+	pos := 0
+	for i, o := range options {
+		if o == curStr {
+			pos = i
+			break
+		}
+	}
+	pos = (pos + delta + len(options)) % len(options)
+	val := 0
+	fmt.Sscanf(options[pos], "%d", &val)
+	return val
+}
+
 // cycleEnum cycles an enum option by delta (wraps around).
 func cycleEnum(s model.Settings, idx int, options []string, delta int) model.Settings {
 	cur := getEnum(s, idx)
@@ -239,6 +269,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m = m.SetSettings(msg.Settings)
 			m.wanderLust = msg.WanderLust
 			m.originalWanderLust = msg.WanderLust
+			m.maxThreadDepth = msg.MaxThreadDepth
+			m.originalMaxThreadDepth = msg.MaxThreadDepth
 		}
 		return m, nil
 
@@ -266,7 +298,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 
 		case " ", "enter": // space (bubbletea KeySpace.String() == " ") or enter
 			if m.cursor < total && items[m.cursor].kind == "bool" {
-				if m.cursor == 11 {
+				if m.cursor == 12 {
 					m.wanderLust = !m.wanderLust
 				} else {
 					m.settings = setBool(m.settings, m.cursor, !getBool(m.settings, m.cursor))
@@ -277,14 +309,22 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 
 		case "tab":
 			if m.cursor < total && items[m.cursor].kind == "enum" {
-				m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, +1)
+				if m.cursor == 11 {
+					m.maxThreadDepth = cycleIntEnum(m.maxThreadDepth, items[m.cursor].options, +1)
+				} else {
+					m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, +1)
+				}
 				m.saved = false
 			}
 			return m, nil
 
 		case "shift+tab":
 			if m.cursor < total && items[m.cursor].kind == "enum" {
-				m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, -1)
+				if m.cursor == 11 {
+					m.maxThreadDepth = cycleIntEnum(m.maxThreadDepth, items[m.cursor].options, -1)
+				} else {
+					m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, -1)
+				}
 				m.saved = false
 			}
 			return m, nil
@@ -293,7 +333,10 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			if m.IsDirty() {
 				s := m.settings
 				wl := m.wanderLust
-				return m, func() tea.Msg { return SaveSettingsMsg{Settings: s, WanderLust: wl} }
+				td := m.maxThreadDepth
+				return m, func() tea.Msg {
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td}
+				}
 			}
 			return m, nil
 
@@ -301,6 +344,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			// Revert to original.
 			m.settings = m.original
 			m.wanderLust = m.originalWanderLust
+			m.maxThreadDepth = m.originalMaxThreadDepth
 			m.saved = false
 			m.err = nil
 			return m, nil
@@ -340,7 +384,7 @@ func (m SettingsModel) View() string {
 			// Value rendering
 			if item.kind == "bool" {
 				var boolVal bool
-				if flatIdx == 11 {
+				if flatIdx == 12 {
 					boolVal = m.wanderLust
 				} else {
 					boolVal = getBool(m.settings, flatIdx)
@@ -351,7 +395,15 @@ func (m SettingsModel) View() string {
 					value = theme.Subtle.Render("[ ]")
 				}
 			} else {
-				cur := getEnum(m.settings, flatIdx)
+				var cur string
+				if flatIdx == 11 {
+					cur = fmt.Sprintf("%d", m.maxThreadDepth)
+					if cur == "0" {
+						cur = "3"
+					}
+				} else {
+					cur = getEnum(m.settings, flatIdx)
+				}
 				value = theme.Highlight.Render("< " + cur + " >")
 			}
 
