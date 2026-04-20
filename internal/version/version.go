@@ -1,7 +1,6 @@
 package version
 
-// Version, Commit, and Date are injected at build time via -ldflags.
-// When built without ldflags (e.g. go run .), they fall back to these defaults.
+// Injected at build time via -ldflags; fall back to sentinel values for go run / untagged builds.
 var (
 	Version = "dev"
 	Commit  = "none"

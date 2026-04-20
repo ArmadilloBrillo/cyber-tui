@@ -45,6 +45,8 @@ const (
 // availableThemes is the ordered list of selectable themes shown in the picker.
 var availableThemes = []string{"cyber", "c64", "vt320"}
 
+var renderedVersionLine = theme.Subtle.Render("version " + version.Version + " (" + version.Commit + ")")
+
 // menuTabs is the ordered list of navigable screens, shared by the
 // renderer and key handler so the order is never out of sync.
 var menuTabs = []struct {
@@ -1369,7 +1371,7 @@ func (a App) renderHelpModal() string {
 		localSection,
 		"",
 		theme.Subtle.Render("? or any key · close"),
-		theme.Subtle.Render("version "+version.Version),
+		renderedVersionLine,
 	)
 	return theme.ActiveBorder.Render(body)
 }
