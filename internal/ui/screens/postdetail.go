@@ -720,3 +720,15 @@ func (m PostDetailModel) View() string {
 	}
 	return m.viewport.View()
 }
+
+// GetFocusedURLs implements URLProvider. Returns URLs from the currently focused
+// item: the post itself when no reply is selected, or the selected reply.
+func (m PostDetailModel) GetFocusedURLs() []string {
+	if m.post.ID == "" {
+		return nil
+	}
+	if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
+		return extractURLs(m.flatTree[m.selectedReply].Reply.Content)
+	}
+	return extractURLs(m.post.Content)
+}

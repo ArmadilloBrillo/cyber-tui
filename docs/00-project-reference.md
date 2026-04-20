@@ -61,6 +61,10 @@ cyber-tui/
 │       ├── markdown/
 │       │   ├── renderer.go      # GFM markdown → ANSI renderer + @mention extension
 │       │   └── renderer_test.go # Renderer unit tests
+│       ├── urlutil/
+│       │   ├── extract.go       # ExtractURLs (goldmark AST walk) + NormalizeURL
+│       │   ├── open.go          # OpenURL — OS browser launch (xdg-open / open)
+│       │   └── extract_test.go  # URL extraction unit tests
 │       └── theme/
 │           ├── theme.go         # Color palettes + Lip Gloss styles
 │           └── theme_test.go    # Theme tests
@@ -303,7 +307,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 - Manages screen transitions (e.g., `ShowPostMsg` → navigate to PostDetail)
 - Broadcasts `SharedConfigMsg` to all screens on resize, theme change, or settings update
 - Renders tab bar, active screen, and status bar
-- Manages global shortcuts (`1`–`4` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `q`/`ctrl+c` quit)
+- Manages global shortcuts (`1`–`4` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `o` URL opener, `q`/`ctrl+c` quit)
 - Handles automatic token refresh on `ErrUnauthorized` responses
 - Runs background tick jobs: `schedulePollCmd` (60 s unread count), `scheduleWanderCmd` (1 h wander check)
 

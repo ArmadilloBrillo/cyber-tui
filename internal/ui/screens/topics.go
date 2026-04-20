@@ -424,6 +424,18 @@ func (m TopicsModel) location() *time.Location {
 	return m.loc
 }
 
+// GetFocusedURLs implements URLProvider. Returns URLs from the selected post when
+// in post-list view; returns nil when browsing the topic list.
+func (m TopicsModel) GetFocusedURLs() []string {
+	if m.view != viewTopicPosts || len(m.posts) == 0 {
+		return nil
+	}
+	if m.postIndex < 0 || m.postIndex >= len(m.posts) {
+		return nil
+	}
+	return extractURLs(m.posts[m.postIndex].Content)
+}
+
 // --- Helpers ---
 // truncate is defined in cmail.go; using same pattern here
 // Rather than import it, we inline a simple implementation in renderTopicItem

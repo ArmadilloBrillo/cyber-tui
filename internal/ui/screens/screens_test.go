@@ -1081,3 +1081,179 @@ func TestJournal_RevisionPreview_EscReturnsToList(t *testing.T) {
 	}
 }
 
+// --- URLProvider: GetFocusedURLs ---
+
+func TestFeedGetFocusedURLs_NoPosts(t *testing.T) {
+	m := screens.NewFeedModel()
+	if got := m.GetFocusedURLs(); got != nil {
+		t.Errorf("expected nil with no posts, got %v", got)
+	}
+}
+
+func TestFeedGetFocusedURLs_PostWithLink(t *testing.T) {
+	post := model.Post{ID: "p1", Content: "check [this](https://example.com) out"}
+	m := screens.NewFeedModel().SetPosts([]model.Post{post}, "")
+	got := m.GetFocusedURLs()
+	if len(got) != 1 || got[0] != "https://example.com" {
+		t.Errorf("expected [https://example.com], got %v", got)
+	}
+}
+
+func TestFeedGetFocusedURLs_PostNoLinks(t *testing.T) {
+	post := model.Post{ID: "p1", Content: "plain text, no links"}
+	m := screens.NewFeedModel().SetPosts([]model.Post{post}, "")
+	if got := m.GetFocusedURLs(); len(got) != 0 {
+		t.Errorf("expected empty, got %v", got)
+	}
+}
+
+func TestPostDetailGetFocusedURLs_PostSelected(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetPost(model.Post{ID: "p1", Content: "see [link](https://site.com)"})
+	got := m.GetFocusedURLs()
+	if len(got) != 1 || got[0] != "https://site.com" {
+		t.Errorf("expected [https://site.com], got %v", got)
+	}
+}
+
+func TestPostDetailGetFocusedURLs_ReplySelected(t *testing.T) {
+	now := time.Now()
+	m := screens.NewPostDetailModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetPost(model.Post{ID: "p1", Content: "no links in post"})
+	m = m.SetReplies([]model.Reply{
+		{ID: "r1", PostID: "p1", AuthorUsername: "alice", Content: "visit [here](https://reply.url)", CreatedAt: now},
+	})
+	// Navigate down once to select the reply
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	got := m.GetFocusedURLs()
+	if len(got) != 1 || got[0] != "https://reply.url" {
+		t.Errorf("expected [https://reply.url], got %v", got)
+	}
+}
+
+func TestPostDetailGetFocusedURLs_NoPost(t *testing.T) {
+	m := screens.NewPostDetailModel()
+	if got := m.GetFocusedURLs(); got != nil {
+		t.Errorf("expected nil with no post loaded, got %v", got)
+	}
+}
+
+func TestProfileGetFocusedURLs_URLFields(t *testing.T) {
+	u := model.User{
+		ID:              "u1",
+		Username:        "alice",
+		WebsiteUrl:      "https://alice.dev",
+		WebsiteImageUrl: "https://cdn.example.com/avatar.png",
+	}
+	m := screens.NewProfileModel().SetUser(u)
+	got := m.GetFocusedURLs()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 URLs, got %v", got)
+	}
+	if got[0] != "https://alice.dev" {
+		t.Errorf("expected WebsiteUrl first, got %q", got[0])
+	}
+	if got[1] != "https://cdn.example.com/avatar.png" {
+		t.Errorf("expected WebsiteImageUrl second, got %q", got[1])
+	}
+}
+
+func TestProfileGetFocusedURLs_NoURLs(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(model.User{ID: "u1", Username: "bob"})
+	if got := m.GetFocusedURLs(); len(got) != 0 {
+		t.Errorf("expected empty when no URLs set, got %v", got)
+	}
+}
+
+func TestProfileGetFocusedURLs_EditMode(t *testing.T) {
+	u := model.User{ID: "u1", Username: "alice", WebsiteUrl: "https://alice.dev"}
+	m := screens.NewProfileModel().SetUser(u)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	// Press 'e' to enter edit mode (only works for non-read-only profile)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if got := m.GetFocusedURLs(); got != nil {
+		t.Errorf("expected nil in edit mode, got %v", got)
+	}
+}
+
+func TestBookmarksGetFocusedURLs_PostBookmark(t *testing.T) {
+	bm := model.Bookmark{
+		ID:   "b1",
+		Type: "post",
+		Post: &model.Post{ID: "p1", Content: "[ref](https://post.example.com)"},
+	}
+	m := screens.NewBookmarksModel().SetBookmarks([]model.Bookmark{bm}, "")
+	got := m.GetFocusedURLs()
+	if len(got) != 1 || got[0] != "https://post.example.com" {
+		t.Errorf("expected [https://post.example.com], got %v", got)
+	}
+}
+
+func TestBookmarksGetFocusedURLs_ReplyBookmark(t *testing.T) {
+	bm := model.Bookmark{
+		ID:    "b2",
+		Type:  "reply",
+		Reply: &model.Reply{ID: "r1", Content: "see <https://reply.example.com>"},
+	}
+	m := screens.NewBookmarksModel().SetBookmarks([]model.Bookmark{bm}, "")
+	got := m.GetFocusedURLs()
+	if len(got) != 1 || got[0] != "https://reply.example.com" {
+		t.Errorf("expected [https://reply.example.com], got %v", got)
+	}
+}
+
+func TestBookmarksGetFocusedURLs_Empty(t *testing.T) {
+	m := screens.NewBookmarksModel()
+	if got := m.GetFocusedURLs(); got != nil {
+		t.Errorf("expected nil with no bookmarks, got %v", got)
+	}
+}
+
+func TestTopicsGetFocusedURLs_PostView(t *testing.T) {
+	post := model.Post{ID: "p1", Content: "[article](https://topics.example.com)"}
+	m := screens.NewTopicsModel().SetTopicPosts([]model.Post{post}, "")
+	got := m.GetFocusedURLs()
+	if len(got) != 1 || got[0] != "https://topics.example.com" {
+		t.Errorf("expected [https://topics.example.com], got %v", got)
+	}
+}
+
+func TestTopicsGetFocusedURLs_TopicListView(t *testing.T) {
+	topic := model.Topic{Slug: "go", PostCount: 5}
+	m := screens.NewTopicsModel().SetTopics([]model.Topic{topic}, "")
+	if got := m.GetFocusedURLs(); got != nil {
+		t.Errorf("expected nil in topic list view, got %v", got)
+	}
+}
+
+func TestJournalGetFocusedURLs_ListMode(t *testing.T) {
+	note := model.Note{ID: "n1", Content: "[docs](https://journal.example.com)"}
+	m := screens.NewJournalModel(80).SetNotes([]model.Note{note}, "")
+	got := m.GetFocusedURLs()
+	if len(got) != 1 || got[0] != "https://journal.example.com" {
+		t.Errorf("expected [https://journal.example.com], got %v", got)
+	}
+}
+
+func TestJournalGetFocusedURLs_EditMode(t *testing.T) {
+	note := model.Note{ID: "n1", Content: "[docs](https://journal.example.com)"}
+	m := screens.NewJournalModel(80).SetNotes([]model.Note{note}, "")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	// 'n' opens a new note (edit mode)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if got := m.GetFocusedURLs(); got != nil {
+		t.Errorf("expected nil in edit mode, got %v", got)
+	}
+}
+
+func TestJournalGetFocusedURLs_RevisionsMode(t *testing.T) {
+	rev := model.NoteRevision{RevisionNumber: 1, Content: "[rev](https://rev.example.com)"}
+	m := screens.NewJournalModel(80).SetRevisions("n1", []model.NoteRevision{rev}, "")
+	got := m.GetFocusedURLs()
+	if len(got) != 1 || got[0] != "https://rev.example.com" {
+		t.Errorf("expected [https://rev.example.com], got %v", got)
+	}
+}
+

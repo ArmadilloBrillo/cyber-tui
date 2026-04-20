@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	neturl "net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
+	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 	"github.com/ragnar/cyber-tui/internal/version"
 )
 
@@ -95,6 +97,11 @@ type App struct {
 
 	// helpModal state — open with '?', close with any key.
 	helpModalOpen bool
+
+	// urlPicker state — open with 'o' when multiple URLs are available.
+	urlPickerOpen   bool
+	urlPickerItems  []string
+	urlPickerCursor int
 
 	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
 	// loc is the parsed *time.Location derived from timezone.
@@ -285,6 +292,10 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		model, cmd := a.handleHelpModalKey(m)
 		return model.(App), cmd, true
 	}
+	if a.urlPickerOpen {
+		model, cmd := a.handleURLPickerKey(m)
+		return model.(App), cmd, true
+	}
 	// When a screen has a focused text input, let it consume all keys.
 	// ctrl+c is kept as a hard escape hatch.
 	if a.activeScreenHasFocusedInput() {
@@ -329,6 +340,11 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			a.helpModalOpen = true
 			return a, nil, true
+		}
+	case "o":
+		if a.active != screenLogin {
+			app, cmd := a.handleOpenURL(a.getFocusedURLs())
+			return app, cmd, true
 		}
 	case "ctrl+c", "q":
 		if a.active != screenLogin {
@@ -959,6 +975,9 @@ func (a App) View() string {
 	if a.helpModalOpen {
 		return overlayCenter(base, a.renderHelpModal(), a.width, a.height)
 	}
+	if a.urlPickerOpen {
+		return overlayCenter(base, a.renderURLPicker(), a.width, a.height)
+	}
 	return base
 }
 
@@ -1223,6 +1242,7 @@ func (a App) renderHelpModal() string {
 		row("t", "theme"),
 		row("z", "timezone"),
 		row("v", "density"),
+		row("o", "open url"),
 		row("q", "quit"),
 	)
 
@@ -1374,6 +1394,111 @@ func (a App) renderHelpModal() string {
 		renderedVersionLine,
 	)
 	return theme.ActiveBorder.Render(body)
+}
+
+// getFocusedURLs returns URLs from the currently selected item on the active screen.
+func (a App) getFocusedURLs() []string {
+	var p screens.URLProvider
+	switch a.active {
+	case screenFeed:
+		p = a.feed
+	case screenPostDetail:
+		p = a.postDetail
+	case screenProfile:
+		p = a.profile
+	case screenBookmarks:
+		p = a.bookmarks
+	case screenTopics:
+		p = a.topics
+	case screenJournal:
+		p = a.journal
+	}
+	if p == nil {
+		return nil
+	}
+	return p.GetFocusedURLs()
+}
+
+// handleOpenURL opens the given URLs: nothing if empty, direct open if one,
+// or shows the picker if multiple.
+func (a App) handleOpenURL(urls []string) (App, tea.Cmd) {
+	if len(urls) == 0 {
+		return a, nil
+	}
+	if len(urls) == 1 {
+		return a.routeURL(urls[0])
+	}
+	a.urlPickerOpen = true
+	a.urlPickerItems = urls
+	a.urlPickerCursor = 0
+	return a, nil
+}
+
+// routeURL navigates to an internal screen for known cyberspace.online paths,
+// or opens the URL in the OS browser for everything else.
+func (a App) routeURL(rawURL string) (App, tea.Cmd) {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return a, openExternalURL(rawURL)
+	}
+	if parsed.Host == "cyberspace.online" || parsed.Host == "www.cyberspace.online" {
+		parts := strings.SplitN(strings.TrimPrefix(parsed.Path, "/"), "/", 3)
+		if len(parts) >= 2 && parts[0] == "u" && parts[1] != "" {
+			a.profileReturn = a.active
+			return a, a.loadUserProfileCmd(parts[1])
+		}
+	}
+	return a, openExternalURL(rawURL)
+}
+
+// openExternalURL opens u in the OS default browser as a fire-and-forget command.
+func openExternalURL(u string) tea.Cmd {
+	return func() tea.Msg {
+		_ = urlutil.OpenURL(u)
+		return nil
+	}
+}
+
+// handleURLPickerKey processes keyboard input while the URL picker overlay is open.
+func (a App) handleURLPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	n := len(a.urlPickerItems)
+	switch msg.String() {
+	case "up", "k":
+		a.urlPickerCursor = (a.urlPickerCursor - 1 + n) % n
+	case "down", "j":
+		a.urlPickerCursor = (a.urlPickerCursor + 1) % n
+	case "enter":
+		u := a.urlPickerItems[a.urlPickerCursor]
+		a.urlPickerOpen = false
+		a.urlPickerItems = nil
+		return a.routeURL(u)
+	case "esc":
+		a.urlPickerOpen = false
+		a.urlPickerItems = nil
+	}
+	return a, nil
+}
+
+// renderURLPicker returns the URL picker overlay shown when the focused item has
+// multiple openable URLs.
+func (a App) renderURLPicker() string {
+	title := theme.Title.Render("open url")
+	items := make([]string, len(a.urlPickerItems))
+	for i, u := range a.urlPickerItems {
+		display := u
+		if len(display) > 60 {
+			display = display[:57] + "..."
+		}
+		if i == a.urlPickerCursor {
+			items[i] = theme.Highlight.Render("▸ " + display)
+		} else {
+			items[i] = theme.Subtle.Render("  " + display)
+		}
+	}
+	hint := theme.Subtle.Render("↑↓ select   enter open   esc cancel")
+	rows := append([]string{title, ""}, items...)
+	rows = append(rows, "", hint)
+	return theme.ActiveBorder.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
 // overlayCenter composites fg centered over bg using ANSI-aware string splicing.

@@ -11,6 +11,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
+	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
 const bioCharLimit = 127
@@ -1047,5 +1048,21 @@ func (m ProfileModel) editFormView(username string) string {
 	rows = append(rows, "", theme.Subtle.Render("ctrl+s · save   esc · cancel   tab · next field"))
 
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+// GetFocusedURLs implements URLProvider. Returns the profile's website URLs.
+// Returns nil in edit mode (text input is active).
+func (m ProfileModel) GetFocusedURLs() []string {
+	if m.editMode {
+		return nil
+	}
+	var urls []string
+	if m.user.WebsiteUrl != "" {
+		urls = append(urls, urlutil.NormalizeURL(m.user.WebsiteUrl))
+	}
+	if m.user.WebsiteImageUrl != "" {
+		urls = append(urls, urlutil.NormalizeURL(m.user.WebsiteImageUrl))
+	}
+	return urls
 }
 

@@ -382,3 +382,18 @@ func (m BookmarksModel) View() string {
 	}
 	return m.viewport.View()
 }
+
+// GetFocusedURLs implements URLProvider. Returns URLs from the selected bookmark's content.
+func (m BookmarksModel) GetFocusedURLs() []string {
+	if len(m.items) == 0 || m.selectedIndex < 0 || m.selectedIndex >= len(m.items) {
+		return nil
+	}
+	b := m.items[m.selectedIndex]
+	if b.Post != nil {
+		return extractURLs(b.Post.Content)
+	}
+	if b.Reply != nil {
+		return extractURLs(b.Reply.Content)
+	}
+	return nil
+}

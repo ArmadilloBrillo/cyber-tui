@@ -833,3 +833,24 @@ func (m JournalModel) confirmPrompt() string {
 	}
 	return ""
 }
+
+// GetFocusedURLs implements URLProvider. Returns URLs from the currently visible
+// note content. Returns nil when the compose box is open.
+func (m JournalModel) GetFocusedURLs() []string {
+	if m.editMode {
+		return nil
+	}
+	if m.revisionsMode {
+		if m.revPreview != nil {
+			return extractURLs(m.revPreview.Content)
+		}
+		if m.revSelectedIdx >= 0 && m.revSelectedIdx < len(m.revisions) {
+			return extractURLs(m.revisions[m.revSelectedIdx].Content)
+		}
+		return nil
+	}
+	if len(m.notes) == 0 || m.selectedIdx < 0 || m.selectedIdx >= len(m.notes) {
+		return nil
+	}
+	return extractURLs(m.notes[m.selectedIdx].Content)
+}

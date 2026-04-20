@@ -11,6 +11,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
+	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
 // filterAmbiguousKeyMsg replaces ambiguous-width runes in a KeyRunes message with spaces
@@ -106,6 +107,12 @@ func RenderPost(p model.Post, selected bool, width int, loc *time.Location, time
 //
 // Adding a new screen only requires handling this message in that screen's Update —
 // no App call sites need changing.
+// URLProvider is implemented by screens that can expose URLs from their
+// currently focused item. App calls GetFocusedURLs when the user presses 'o'.
+type URLProvider interface {
+	GetFocusedURLs() []string
+}
+
 type SharedConfigMsg struct {
 	Width          int
 	Height         int
@@ -223,4 +230,18 @@ type LoadNoteRevisionsMsg struct{ NoteID string }
 type LoadNoteRevisionMsg struct {
 	NoteID         string
 	RevisionNumber int
+}
+
+// extractURLs is a package-internal helper used by URLProvider implementations.
+// It normalizes each extracted URL so relative paths get the cyberspace.online prefix.
+func extractURLs(content string) []string {
+	raw := urlutil.ExtractURLs(content)
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, len(raw))
+	for i, u := range raw {
+		out[i] = urlutil.NormalizeURL(u)
+	}
+	return out
 }
