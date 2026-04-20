@@ -9,23 +9,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
-
-// stripAmbiguousRunes removes Unicode ambiguous-width characters (EAW = "A") from s.
-// Ambiguous-width chars have no defined column width — terminals may render them as 1 or 2
-// columns depending on font and locale. Stripping them is the only reliable way to prevent
-// border overflow and line-wrap corruption in width-constrained TUI boxes.
-// Wide (CJK), halfwidth, and zero-width characters are unaffected.
-func stripAmbiguousRunes(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if !runewidth.IsAmbiguousWidth(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
 
 // filterAmbiguousKeyMsg removes ambiguous-width runes from a KeyRunes message before it
 // reaches a textarea or textinput component. Returns the filtered message and true if it
@@ -82,17 +68,17 @@ func RenderPost(p model.Post, selected bool, width int, loc *time.Location, time
 
 	var body string
 	if innerWidth > 0 {
-		wrapped := theme.Base.Width(innerWidth).Render(stripAmbiguousRunes(p.Content))
-		lines := strings.Split(wrapped, "\n")
+		rendered := markdown.Render(p.Content, innerWidth)
+		lines := strings.Split(rendered, "\n")
 		if len(lines) > postMaxBodyLines {
 			body = strings.Join(lines[:postMaxBodyLines], "\n")
 			more := len(lines) - postMaxBodyLines
 			body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
 		} else {
-			body = wrapped
+			body = rendered
 		}
 	} else {
-		body = theme.Base.Render(stripAmbiguousRunes(p.Content))
+		body = markdown.Render(p.Content, 0)
 	}
 
 	topics := ""

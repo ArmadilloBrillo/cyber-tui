@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -511,7 +512,7 @@ func (m JournalModel) buildRevisionListContent() string {
 	noteTitle := ""
 	for _, n := range m.notes {
 		if n.ID == m.revisionsNoteID {
-			noteTitle = firstLine(n.Content)
+			noteTitle = markdown.FirstLine(n.Content)
 			break
 		}
 	}
@@ -529,7 +530,7 @@ func (m JournalModel) buildRevisionListContent() string {
 		if i == 0 {
 			label += " (latest)"
 		}
-		preview := firstLine(rev.Content)
+		preview := markdown.FirstLine(rev.Content)
 		if len([]rune(preview)) > 50 {
 			preview = string([]rune(preview)[:49]) + "…"
 		}
@@ -567,10 +568,14 @@ func (m JournalModel) buildRevisionPreviewContent() string {
 		}
 		header += "\n" + topics
 	}
+	innerWidth := m.width - 4
+	if innerWidth < 1 {
+		innerWidth = 80
+	}
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		"",
-		theme.Base.Render(n.Content),
+		markdown.Render(n.Content, innerWidth),
 		"",
 		theme.Subtle.Render("j/k · scroll   esc · back"),
 	)
@@ -719,8 +724,8 @@ func (m JournalModel) renderNote(note model.Note, selected bool) string {
 		innerWidth = 40 // safe fallback before first WindowSizeMsg
 	}
 
-	// First non-empty line as preview.
-	preview := firstLine(note.Content)
+	// First non-empty line as preview (markdown syntax stripped).
+	preview := markdown.FirstLine(note.Content)
 	if preview == "" {
 		preview = "(empty)"
 	}
@@ -761,16 +766,6 @@ func (m JournalModel) renderNote(note model.Note, selected bool) string {
 	return boxStyle.Render(content)
 }
 
-// firstLine returns the first non-empty line of s.
-func firstLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			return line
-		}
-	}
-	return ""
-}
 
 func (m JournalModel) View() string {
 	if m.err != nil {

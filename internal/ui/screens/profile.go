@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -899,7 +900,7 @@ func (m ProfileModel) renderPostItem(p model.Post, selected bool) string {
 		innerWidth = 40
 	}
 	ts := theme.Subtle.Render(displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, true))
-	left := theme.Highlight.Render("@"+p.AuthorUsername) + "  " + theme.Base.Render(truncateStr(p.Content, innerWidth-lipgloss.Width(ts)-lipgloss.Width(theme.Highlight.Render("@"+p.AuthorUsername))-4))
+	left := theme.Highlight.Render("@"+p.AuthorUsername) + "  " + theme.Base.Render(truncateStr(markdown.FirstLine(p.Content), innerWidth-lipgloss.Width(ts)-lipgloss.Width(theme.Highlight.Render("@"+p.AuthorUsername))-4))
 	gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ts)
 	var line string
 	if gap > 0 {
@@ -929,7 +930,7 @@ func (m ProfileModel) renderReplyItem(r model.Reply, selected bool) string {
 	if previewMaxW < 10 {
 		previewMaxW = 10
 	}
-	left := tag + theme.Base.Render(truncateStr(r.Content, previewMaxW))
+	left := tag + theme.Base.Render(truncateStr(markdown.FirstLine(r.Content), previewMaxW))
 	gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ts)
 	var line string
 	if gap > 0 {

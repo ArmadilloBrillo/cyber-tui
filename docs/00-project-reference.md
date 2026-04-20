@@ -58,6 +58,9 @@ cyber-tui/
 │       │   ├── settings_test.go
 │       │   ├── timezone_test.go
 │       │   └── screens_test.go
+│       ├── markdown/
+│       │   ├── renderer.go      # GFM markdown → ANSI renderer + @mention extension
+│       │   └── renderer_test.go # Renderer unit tests
 │       └── theme/
 │           ├── theme.go         # Color palettes + Lip Gloss styles
 │           └── theme_test.go    # Theme tests
@@ -70,6 +73,7 @@ cyber-tui/
 │   ├── 03-api-reference.md
 │   ├── 24-profile-sub-tabs.md   # Feature 24: profile Posts/Replies/Following/Followers tabs
 │   ├── 25-note-revisions.md     # Feature 25: journal revision history
+│   ├── 26-markdown-rendering.md # Feature 26: GFM markdown rendering
 │   └── ... (see docs/ listing)
 ├── go.mod                       # Go module definition
 ├── go.sum                       # Dependency checksums

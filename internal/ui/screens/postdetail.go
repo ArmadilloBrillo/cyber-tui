@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -612,12 +613,7 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 		theme.Subtle.Render("  "+displayTime(m.post.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
 
-	var body string
-	if innerWidth > 0 {
-		body = theme.Base.Width(innerWidth).Render(stripAmbiguousRunes(m.post.Content))
-	} else {
-		body = theme.Base.Render(stripAmbiguousRunes(m.post.Content))
-	}
+	body := markdown.Render(m.post.Content, innerWidth)
 
 	topics := ""
 	for _, t := range m.post.Topics {
@@ -655,12 +651,7 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 	)
 	header := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...)
 
-	var body string
-	if innerWidth > 0 {
-		body = theme.Base.Width(innerWidth).Render(stripAmbiguousRunes(node.Reply.Content))
-	} else {
-		body = theme.Base.Render(stripAmbiguousRunes(node.Reply.Content))
-	}
+	body := markdown.Render(node.Reply.Content, innerWidth)
 
 	boxStyle := theme.Border
 	if selected {

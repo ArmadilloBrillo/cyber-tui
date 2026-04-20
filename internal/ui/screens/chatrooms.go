@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -148,7 +149,7 @@ func (m ChatroomsModel) renderMessages() string {
 	for _, msg := range m.messages {
 		ts := theme.Subtle.Render(displayTime(msg.CreatedAt, m.location(), m.timeDisplayFormat, true))
 		author := theme.Highlight.Render("@" + msg.From.Username)
-		body := theme.Base.Render(msg.Body)
+		body := markdown.Render(msg.Body, m.viewport.Width)
 		out += lipgloss.JoinHorizontal(lipgloss.Top, ts, "  ", author, "  ", body) + "\n"
 	}
 	return out

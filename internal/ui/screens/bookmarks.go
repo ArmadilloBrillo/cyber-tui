@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -338,8 +339,8 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 	}
 	ts := theme.Subtle.Render(formatRelativeTime(createdAt, now, loc))
 
-	// Truncate content preview to one line.
-	preview := strings.ReplaceAll(content, "\n", " ")
+	// Truncate content preview to one line (markdown syntax stripped).
+	preview := strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
 	maxPreview := innerWidth - lipgloss.Width(typeTag) - lipgloss.Width(authorStyled) - lipgloss.Width(ts) - 3
 	if maxPreview < 10 {
 		maxPreview = 10
