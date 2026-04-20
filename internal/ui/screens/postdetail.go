@@ -152,6 +152,9 @@ func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 func (m PostDetailModel) SetReplies(replies []model.Reply) PostDetailModel {
 	m.selectedReply = -1 // keep post selected after replies load
 	m.loading = false
+	if len(replies) > m.post.RepliesCount {
+		m.post.RepliesCount = len(replies)
+	}
 	return m.applyReplies(replies)
 }
 
@@ -545,11 +548,19 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 func (m PostDetailModel) buildContent() (string, []int, []int) {
 	postContent := m.renderFullPost(m.selectedReply == -1)
 	var repliesHeaderText string
-	switch len(m.replies) {
+	total := m.post.RepliesCount
+	loaded := len(m.replies)
+	switch total {
+	case 0:
+		repliesHeaderText = "  no replies"
 	case 1:
 		repliesHeaderText = "  1 reply"
 	default:
-		repliesHeaderText = fmt.Sprintf("  %d replies", len(m.replies))
+		if loaded < total {
+			repliesHeaderText = fmt.Sprintf("  %d replies  (showing %d)", total, loaded)
+		} else {
+			repliesHeaderText = fmt.Sprintf("  %d replies", total)
+		}
 	}
 	repliesHeader := theme.Title.Render(repliesHeaderText)
 

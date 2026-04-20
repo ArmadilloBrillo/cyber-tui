@@ -652,20 +652,30 @@ func (c *HTTPClient) GetFeed(cursor string) ([]model.Post, string, error) {
 }
 
 func (c *HTTPClient) GetPostReplies(postID string) ([]model.Reply, error) {
-	path := "/v1/posts/" + url.PathEscape(postID) + "/replies?limit=20"
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, err
+	var all []model.Reply
+	cursor := ""
+	for {
+		path := "/v1/posts/" + url.PathEscape(postID) + "/replies?limit=20"
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		env, err := c.doRequest("GET", path, nil)
+		if err != nil {
+			return nil, err
+		}
+		var wire []wireReply
+		if err := json.Unmarshal(env.Data, &wire); err != nil {
+			return nil, err
+		}
+		for _, w := range wire {
+			all = append(all, wireReplyToModel(w))
+		}
+		if env.Cursor == "" || len(wire) == 0 {
+			break
+		}
+		cursor = env.Cursor
 	}
-	var wire []wireReply
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, err
-	}
-	replies := make([]model.Reply, len(wire))
-	for i, w := range wire {
-		replies[i] = wireReplyToModel(w)
-	}
-	return replies, nil
+	return all, nil
 }
 
 func (c *HTTPClient) CreatePost(content string, topics []string) (model.Post, error) {
