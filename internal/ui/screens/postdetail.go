@@ -125,6 +125,9 @@ type PostDetailModel struct {
 	currentUsername string        // set after login; guards the delete key to own content
 	confirming      pdConfirmKind // pending delete confirmation
 	maxThreadDepth  int           // max visual nesting depth; 0 treated as 3
+
+	bookmarkedPostIDs  map[string]struct{}
+	bookmarkedReplyIDs map[string]struct{}
 }
 
 func NewPostDetailModel() PostDetailModel {
@@ -362,6 +365,14 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		if msg.MaxThreadDepth != m.maxThreadDepth {
 			m.maxThreadDepth = msg.MaxThreadDepth
 			m = m.applyReplies(m.replies)
+		}
+		return m, nil
+
+	case BookmarkedIDsMsg:
+		m.bookmarkedPostIDs = msg.PostIDs
+		m.bookmarkedReplyIDs = msg.ReplyIDs
+		if m.ready {
+			m = m.refreshContent()
 		}
 		return m, nil
 
@@ -623,11 +634,19 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 		theme.Highlight.Render("@"+m.post.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(m.post.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
+	var rightParts []string
+	if ind := attachmentIndicator(m.post.Attachments); ind != "" {
+		rightParts = append(rightParts, ind)
+	}
+	if _, ok := m.bookmarkedPostIDs[m.post.ID]; ok {
+		rightParts = append(rightParts, theme.Highlight.Render("[★]"))
+	}
+	right := strings.Join(rightParts, " ")
 	var header string
-	if ind := attachmentIndicator(m.post.Attachments); ind != "" && innerWidth > 0 {
-		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ind)
+	if right != "" && innerWidth > 0 {
+		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap > 0 {
-			header = left + strings.Repeat(" ", gap) + ind
+			header = left + strings.Repeat(" ", gap) + right
 		} else {
 			header = left
 		}
@@ -675,11 +694,19 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 		theme.Subtle.Render("  "+displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
 	left := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...)
+	var replyRightParts []string
+	if ind := attachmentIndicator(node.Reply.Attachments); ind != "" {
+		replyRightParts = append(replyRightParts, ind)
+	}
+	if _, ok := m.bookmarkedReplyIDs[node.Reply.ID]; ok {
+		replyRightParts = append(replyRightParts, theme.Highlight.Render("[★]"))
+	}
+	replyRight := strings.Join(replyRightParts, " ")
 	header := left
-	if ind := attachmentIndicator(node.Reply.Attachments); ind != "" && innerWidth > 0 {
-		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ind)
+	if replyRight != "" && innerWidth > 0 {
+		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(replyRight)
 		if gap > 0 {
-			header = left + strings.Repeat(" ", gap) + ind
+			header = left + strings.Repeat(" ", gap) + replyRight
 		}
 	}
 

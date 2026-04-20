@@ -57,6 +57,8 @@ type FeedModel struct {
 
 	currentUsername  string // set after login; used to guard the delete key
 	confirmingDelete bool   // true while the delete-post confirmation overlay is shown
+
+	bookmarkedPostIDs map[string]struct{}
 }
 
 func NewFeedModel() FeedModel {
@@ -217,6 +219,13 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
+		return m, nil
+
+	case BookmarkedIDsMsg:
+		m.bookmarkedPostIDs = msg.PostIDs
+		if m.ready {
+			m = m.refreshContent()
+		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -451,7 +460,8 @@ func (m FeedModel) buildContent() (string, []int) {
 }
 
 func (m FeedModel) renderPost(p model.Post, selected bool) string {
-	return RenderPost(p, selected, m.width, m.location(), m.timeDisplayFormat)
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	return RenderPost(p, selected, bookmarked, m.width, m.location(), m.timeDisplayFormat)
 }
 
 func (m FeedModel) View() string {

@@ -141,6 +141,12 @@ type App struct {
 	wanderLust bool
 	// maxThreadDepth is the local config value for reply nesting depth. Defaults to 3.
 	maxThreadDepth int
+
+	// bookmarkedPostIDs and bookmarkedReplyIDs track which posts/replies the current
+	// user has bookmarked, populated from the bookmarks list and kept in sync on
+	// create/delete. Used to show [★] indicators in feed, postdetail, and topics.
+	bookmarkedPostIDs  map[string]struct{}
+	bookmarkedReplyIDs map[string]struct{}
 }
 
 func NewApp(client api.Client) App {
@@ -161,6 +167,8 @@ func NewApp(client api.Client) App {
 		bookmarks:      screens.NewBookmarksModel(),
 		topics:         screens.NewTopicsModel(),
 		journal:        screens.NewJournalModel(0),
+		bookmarkedPostIDs:  make(map[string]struct{}),
+		bookmarkedReplyIDs: make(map[string]struct{}),
 	}
 }
 
@@ -250,6 +258,19 @@ func (a *App) broadcastConfig() {
 	a.bookmarks, _ = a.bookmarks.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
 	a.journal, _ = a.journal.Update(msg)
+}
+
+// broadcastBookmarkedIDs pushes the current bookmarked-ID sets to all screens
+// that render posts or replies (feed, postDetail, topics). Call this whenever
+// the sets change (bookmark loaded, created, or deleted).
+func (a *App) broadcastBookmarkedIDs() {
+	msg := screens.BookmarkedIDsMsg{
+		PostIDs:  a.bookmarkedPostIDs,
+		ReplyIDs: a.bookmarkedReplyIDs,
+	}
+	a.feed, _ = a.feed.Update(msg)
+	a.postDetail, _ = a.postDetail.Update(msg)
+	a.topics, _ = a.topics.Update(msg)
 }
 
 // applyWindowSize stores the new terminal dimensions and broadcasts the size
@@ -697,9 +718,14 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case bookmarksLoadedMsg:
 		a.bookmarks = a.bookmarks.SetBookmarks(msg.items, msg.cursor)
+		a.bookmarkedPostIDs, a.bookmarkedReplyIDs = bookmarkIDSets(msg.items)
+		a.broadcastBookmarkedIDs()
 		return a, nil, true
 	case bookmarksPageMsg:
 		a.bookmarks = a.bookmarks.AppendBookmarks(msg.items, msg.cursor)
+		a.bookmarkedPostIDs, a.bookmarkedReplyIDs = mergeBookmarkIDSets(
+			a.bookmarkedPostIDs, a.bookmarkedReplyIDs, msg.items)
+		a.broadcastBookmarkedIDs()
 		return a, nil, true
 	case screens.RefreshBookmarksMsg:
 		return a, a.loadBookmarksCmd(""), true
@@ -725,25 +751,95 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.pendingReplyID = msg.replyID
 		return a, a.loadRepliesCmd(msg.post.ID), true
 	case screens.BookmarkPostMsg:
-		// Optimistic: show feedback immediately; fire API in background.
+		// Optimistic: show feedback and update indicator immediately.
 		a.bookmarks = a.bookmarks.SetStatusMsg("bookmarked")
 		postID := msg.PostID
+		newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs)+1)
+		for k := range a.bookmarkedPostIDs {
+			newPostIDs[k] = struct{}{}
+		}
+		newPostIDs[postID] = struct{}{}
+		a.bookmarkedPostIDs = newPostIDs
+		a.broadcastBookmarkedIDs()
 		return a, a.createBookmarkCmd(postID, ""), true
 	case bookmarkCreatedMsg:
 		if msg.err != nil {
-			// Revert status on failure.
+			// Revert optimistic indicator on failure.
 			a.bookmarks = a.bookmarks.SetStatusMsg("")
+			newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs))
+			for k := range a.bookmarkedPostIDs {
+				if k != msg.postID {
+					newPostIDs[k] = struct{}{}
+				}
+			}
+			a.bookmarkedPostIDs = newPostIDs
+			a.broadcastBookmarkedIDs()
 			return a, nil, true
 		}
 		return a, nil, true
 	case screens.DeleteBookmarkMsg:
-		// Optimistic update already applied in BookmarksModel.Update.
+		// Optimistic update already applied in BookmarksModel.Update; remove from sets.
+		if msg.PostID != "" {
+			newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs))
+			for k := range a.bookmarkedPostIDs {
+				if k != msg.PostID {
+					newPostIDs[k] = struct{}{}
+				}
+			}
+			a.bookmarkedPostIDs = newPostIDs
+		}
+		if msg.ReplyID != "" {
+			newReplyIDs := make(map[string]struct{}, len(a.bookmarkedReplyIDs))
+			for k := range a.bookmarkedReplyIDs {
+				if k != msg.ReplyID {
+					newReplyIDs[k] = struct{}{}
+				}
+			}
+			a.bookmarkedReplyIDs = newReplyIDs
+		}
+		a.broadcastBookmarkedIDs()
 		return a, a.deleteBookmarkCmd(msg.BookmarkID), true
 	case bookmarkDeletedMsg:
 		// Fire-and-forget; UI already updated.
 		return a, nil, true
 	}
 	return a, nil, false
+}
+
+// bookmarkIDSets builds post and reply ID sets from a fresh bookmark page.
+func bookmarkIDSets(items []model.Bookmark) (map[string]struct{}, map[string]struct{}) {
+	postIDs := make(map[string]struct{})
+	replyIDs := make(map[string]struct{})
+	for _, b := range items {
+		if b.PostID != "" {
+			postIDs[b.PostID] = struct{}{}
+		}
+		if b.ReplyID != "" {
+			replyIDs[b.ReplyID] = struct{}{}
+		}
+	}
+	return postIDs, replyIDs
+}
+
+// mergeBookmarkIDSets merges a new page of bookmarks into existing ID sets.
+func mergeBookmarkIDSets(postIDs, replyIDs map[string]struct{}, items []model.Bookmark) (map[string]struct{}, map[string]struct{}) {
+	newPostIDs := make(map[string]struct{}, len(postIDs)+len(items))
+	for k := range postIDs {
+		newPostIDs[k] = struct{}{}
+	}
+	newReplyIDs := make(map[string]struct{}, len(replyIDs)+len(items))
+	for k := range replyIDs {
+		newReplyIDs[k] = struct{}{}
+	}
+	for _, b := range items {
+		if b.PostID != "" {
+			newPostIDs[b.PostID] = struct{}{}
+		}
+		if b.ReplyID != "" {
+			newReplyIDs[b.ReplyID] = struct{}{}
+		}
+	}
+	return newPostIDs, newReplyIDs
 }
 
 // handleTopics processes topic list, topic posts, pagination, and post selection messages.
@@ -1683,6 +1779,7 @@ type bookmarksPageMsg struct {
 type bookmarkCreatedMsg struct {
 	bookmarkID string
 	postID     string
+	replyID    string
 	err        error
 }
 type bookmarkDeletedMsg struct{ bookmarkID string }
@@ -2168,7 +2265,7 @@ func (a *App) loadBookmarksPageCmd(cursor string) tea.Cmd {
 func (a *App) createBookmarkCmd(postID, replyID string) tea.Cmd {
 	return func() tea.Msg {
 		id, err := a.client.CreateBookmark(postID, replyID)
-		return bookmarkCreatedMsg{bookmarkID: id, postID: postID, err: err}
+		return bookmarkCreatedMsg{bookmarkID: id, postID: postID, replyID: replyID, err: err}
 	}
 }
 

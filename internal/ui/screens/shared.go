@@ -36,8 +36,9 @@ const postMaxBodyLines = 4
 
 // RenderPost renders a model.Post as a bordered card matching the feed style.
 // selected controls the border colour (active vs inactive).
+// bookmarked adds a [★] badge to the header right side.
 // width is the full terminal width; loc and timeFormat control the timestamp display.
-func RenderPost(p model.Post, selected bool, width int, loc *time.Location, timeFormat string) string {
+func RenderPost(p model.Post, selected bool, bookmarked bool, width int, loc *time.Location, timeFormat string) string {
 	innerWidth := width - 4
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -47,6 +48,9 @@ func RenderPost(p model.Post, selected bool, width int, loc *time.Location, time
 	var rightParts []string
 	if ind := attachmentIndicator(p.Attachments); ind != "" {
 		rightParts = append(rightParts, ind)
+	}
+	if bookmarked {
+		rightParts = append(rightParts, theme.Highlight.Render("[★]"))
 	}
 	switch p.RepliesCount {
 	case 1:
@@ -107,6 +111,14 @@ func RenderPost(p model.Post, selected bool, width int, loc *time.Location, time
 			fmt.Sprintf("\n%s", topics),
 		),
 	)
+}
+
+// BookmarkedIDsMsg is broadcast by App whenever the set of bookmarked post/reply
+// IDs changes (load, create, delete). Screens that render posts or replies handle
+// this to show the [★] indicator on already-bookmarked items.
+type BookmarkedIDsMsg struct {
+	PostIDs  map[string]struct{}
+	ReplyIDs map[string]struct{}
 }
 
 // SharedConfigMsg is broadcast by App whenever display-affecting settings change

@@ -58,6 +58,8 @@ type TopicsModel struct {
 	viewport         viewport.Model
 	itemOffsets      []int
 	width            int
+
+	bookmarkedPostIDs map[string]struct{}
 	height           int
 	selectedIndex    int
 	ready            bool
@@ -139,6 +141,13 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			m.loc = msg.Loc
 		}
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		if m.ready {
+			m = m.refreshContent()
+		}
+		return m, nil
+
+	case BookmarkedIDsMsg:
+		m.bookmarkedPostIDs = msg.PostIDs
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -360,7 +369,8 @@ func (m TopicsModel) renderTopicItem(index int) string {
 }
 
 func (m TopicsModel) renderPostItem(p model.Post, selected bool) string {
-	return RenderPost(p, selected, m.width, m.location(), m.timeDisplayFormat)
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	return RenderPost(p, selected, bookmarked, m.width, m.location(), m.timeDisplayFormat)
 }
 
 func (m TopicsModel) refreshContent() TopicsModel {

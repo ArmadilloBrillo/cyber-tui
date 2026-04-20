@@ -22,7 +22,12 @@ type LoadMoreBookmarksMsg struct{ Cursor string }
 type RefreshBookmarksMsg struct{}
 
 // DeleteBookmarkMsg is emitted when the user presses 'd' on the selected bookmark.
-type DeleteBookmarkMsg struct{ BookmarkID string }
+// PostID or ReplyID identifies the content so App can update its bookmarked-IDs set.
+type DeleteBookmarkMsg struct {
+	BookmarkID string
+	PostID     string
+	ReplyID    string
+}
 
 // BookmarkPostMsg is emitted from Feed or PostDetail when the user presses 'b'
 // to bookmark the currently selected post.
@@ -173,9 +178,12 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 			if len(m.items) == 0 || m.selectedIndex >= len(m.items) {
 				return m, nil
 			}
-			id := m.items[m.selectedIndex].ID
+			b := m.items[m.selectedIndex]
+			id := b.ID
 			m = m.MarkDeleted(id)
-			return m, func() tea.Msg { return DeleteBookmarkMsg{BookmarkID: id} }
+			return m, func() tea.Msg {
+				return DeleteBookmarkMsg{BookmarkID: id, PostID: b.PostID, ReplyID: b.ReplyID}
+			}
 		case "enter":
 			if len(m.items) == 0 || m.selectedIndex >= len(m.items) {
 				return m, nil
@@ -305,26 +313,29 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 
 	var typeTag string
 	if b.Type == "reply" {
-		typeTag = theme.Subtle.Render("[reply] ")
+		typeTag = theme.Subtle.Render("[reply]")
 	} else {
-		typeTag = theme.Subtle.Render("[post]  ")
+		typeTag = theme.Subtle.Render("[post] ")
 	}
 
-	// Derive display fields from embedded post/reply or fallback to IDs.
+	// Derive display fields from embedded post/reply or fallback.
 	var author, content string
 	var createdAt time.Time
+	var attachments []model.Attachment
+	var topics []string
 	switch {
 	case b.Post != nil:
 		author = b.Post.AuthorUsername
 		content = b.Post.Content
 		createdAt = b.Post.CreatedAt
+		attachments = b.Post.Attachments
+		topics = b.Post.Topics
 	case b.Reply != nil:
 		author = b.Reply.AuthorUsername
 		content = b.Reply.Content
 		createdAt = b.Reply.CreatedAt
+		attachments = b.Reply.Attachments
 	default:
-		// No embedded content from API — don't show a raw ID as the username.
-		author = ""
 		if b.PostID != "" || b.ReplyID != "" {
 			content = "(press enter to open)"
 		} else {
@@ -333,35 +344,53 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 		createdAt = b.CreatedAt
 	}
 
+	// Line 1 left: [type]  @author  [img][yt]
 	var authorStyled string
 	if author != "" {
-		authorStyled = theme.Highlight.Render("@" + author)
+		authorStyled = "  " + theme.Highlight.Render("@"+author)
 	}
-	ts := theme.Subtle.Render(formatRelativeTime(createdAt, now, loc))
+	attInd := attachmentIndicator(attachments)
+	left1 := typeTag + authorStyled
+	if attInd != "" {
+		left1 += "  " + attInd
+	}
 
-	// Truncate content preview to one line (markdown syntax stripped).
-	preview := strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
-	maxPreview := innerWidth - lipgloss.Width(typeTag) - lipgloss.Width(authorStyled) - lipgloss.Width(ts) - 3
-	if maxPreview < 10 {
-		maxPreview = 10
-	}
-	if utf8.RuneCountInString(preview) > maxPreview {
-		preview = string([]rune(preview)[:maxPreview-1]) + "…"
-	}
-	previewStyled := theme.Base.Render("  " + preview)
+	// Line 1 right: "posted Xh ago · saved Yd ago"
+	postedStr := formatRelativeTime(createdAt, now, loc)
+	savedStr := formatRelativeTime(b.CreatedAt, now, loc)
+	right1 := theme.Subtle.Render("posted " + postedStr + " · saved " + savedStr)
 
-	top := lipgloss.JoinHorizontal(lipgloss.Top, typeTag, authorStyled, previewStyled)
-	var line string
+	var line1 string
 	if innerWidth > 0 {
-		gap := innerWidth - lipgloss.Width(top) - lipgloss.Width(ts)
+		gap := innerWidth - lipgloss.Width(left1) - lipgloss.Width(right1)
 		if gap > 0 {
-			line = top + strings.Repeat(" ", gap) + ts
+			line1 = left1 + strings.Repeat(" ", gap) + right1
 		} else {
-			line = top
+			line1 = left1
 		}
 	} else {
-		line = top
+		line1 = left1
 	}
+
+	// Line 2: content preview at full inner width.
+	preview := strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
+	if innerWidth > 0 && utf8.RuneCountInString(preview) > innerWidth {
+		preview = string([]rune(preview)[:innerWidth-1]) + "…"
+	}
+	line2 := theme.Base.Render(preview)
+
+	rows := []string{line1, line2}
+
+	// Line 3 (posts only): topics.
+	if len(topics) > 0 {
+		var parts []string
+		for _, t := range topics {
+			parts = append(parts, theme.Subtle.Render("#"+t))
+		}
+		rows = append(rows, strings.Join(parts, " "))
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
 	boxStyle := theme.Border
 	if selected {
@@ -370,7 +399,7 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 	if innerWidth > 0 {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}
-	return boxStyle.Render(line)
+	return boxStyle.Render(body)
 }
 
 func (m BookmarksModel) View() string {
