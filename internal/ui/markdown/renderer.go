@@ -412,12 +412,14 @@ func (r *renderer) rawTextNode(node ast.Node) string {
 	return sb.String()
 }
 
-// stripAmbiguousRunes removes Unicode ambiguous-width characters so that
-// rendered output does not overflow width-constrained TUI boxes.
+// stripAmbiguousRunes replaces Unicode ambiguous-width characters with a space so that
+// rendered output does not overflow width-constrained TUI boxes while keeping text readable.
 func stripAmbiguousRunes(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if !runewidth.IsAmbiguousWidth(r) {
+		if runewidth.IsAmbiguousWidth(r) {
+			b.WriteRune(' ')
+		} else {
 			b.WriteRune(r)
 		}
 	}

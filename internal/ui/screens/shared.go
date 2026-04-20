@@ -13,21 +13,19 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-// filterAmbiguousKeyMsg removes ambiguous-width runes from a KeyRunes message before it
-// reaches a textarea or textinput component. Returns the filtered message and true if it
-// should still be processed, or the original message and false if all runes were stripped.
+// filterAmbiguousKeyMsg replaces ambiguous-width runes in a KeyRunes message with spaces
+// before they reach a textarea or textinput component.
 func filterAmbiguousKeyMsg(msg tea.KeyMsg) (tea.KeyMsg, bool) {
 	if msg.Type != tea.KeyRunes {
 		return msg, true
 	}
-	var filtered []rune
-	for _, r := range msg.Runes {
-		if !runewidth.IsAmbiguousWidth(r) {
-			filtered = append(filtered, r)
+	filtered := make([]rune, len(msg.Runes))
+	for i, r := range msg.Runes {
+		if runewidth.IsAmbiguousWidth(r) {
+			filtered[i] = ' '
+		} else {
+			filtered[i] = r
 		}
-	}
-	if len(filtered) == 0 {
-		return msg, false
 	}
 	msg.Runes = filtered
 	return msg, true
