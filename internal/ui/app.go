@@ -16,6 +16,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
+	"github.com/ragnar/cyber-tui/internal/version"
 )
 
 type screen int
@@ -1368,6 +1369,7 @@ func (a App) renderHelpModal() string {
 		localSection,
 		"",
 		theme.Subtle.Render("? or any key · close"),
+		theme.Subtle.Render("version "+version.Version),
 	)
 	return theme.ActiveBorder.Render(body)
 }

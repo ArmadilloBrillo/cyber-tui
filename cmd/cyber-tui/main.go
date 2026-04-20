@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -10,9 +11,18 @@ import (
 	internalssh "github.com/ragnar/cyber-tui/internal/ssh"
 	"github.com/ragnar/cyber-tui/internal/ui"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
+	"github.com/ragnar/cyber-tui/internal/version"
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Printf("cyber-tui %s (commit %s, built %s)\n",
+			version.Version, version.Commit, version.Date)
+		os.Exit(0)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)

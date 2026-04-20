@@ -730,8 +730,14 @@ Listed from `go.mod`. Only direct dependencies:
 ## Build & Test
 
 ```bash
-# Build
+# Build with version injection (recommended)
+make build          # outputs to dist/cyber-tui
+
+# Build without version (dev/quick)
 go build -o cyber-tui ./cmd/cyber-tui
+
+# Print version
+./dist/cyber-tui --version
 
 # Run all tests
 go test ./...
@@ -739,6 +745,12 @@ go test ./...
 # Static analysis
 go vet ./...
 ```
+
+### Versioning
+
+Version metadata is injected at build time via `-ldflags` from `Makefile`. The version package (`internal/version`) defines three vars — `Version`, `Commit`, `Date` — defaulting to `"dev"/"none"/"unknown"` for untagged builds.
+
+Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` flag and the help modal (`?`) both display the current version.
 
 ---
 
@@ -755,3 +767,4 @@ go vet ./...
 | **Attachments** | Image and YouTube audio attachments on posts/replies are not supported in the TUI |
 | **Note revision pagination** | `GetNoteRevisions` cursor is implemented in the API client but the UI loads only the first page |
 | **Profile navigation depth** | Navigating from a Following/Followers tab to another user's profile is single-level; ESC returns to the original `profileReturn` destination, not the intermediate profile |
+| **Ambiguous-width character stripping** | Unicode EAW = "A" characters (kaomoji symbols, `©`, `®`, `™`, Greek letters, etc.) are stripped at two points: (1) `stripAmbiguousRunes` in `shared.go` strips them from post/reply content before display; (2) `filterAmbiguousKeyMsg` in `shared.go` intercepts `tea.KeyRunes` messages before they reach any `textarea` or `textinput` component (compose, topics, profile fields, C-Mail, chatrooms). Their column width is undefined and varies by terminal/font, causing border overflow and cursor misalignment. Wide (CJK), halfwidth, and zero-width characters are unaffected. |
