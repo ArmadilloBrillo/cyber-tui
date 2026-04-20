@@ -433,7 +433,8 @@ func (m TopicsModel) GetFocusedURLs() []string {
 	if m.postIndex < 0 || m.postIndex >= len(m.posts) {
 		return nil
 	}
-	return extractURLs(m.posts[m.postIndex].Content)
+	p := m.posts[m.postIndex]
+	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
 }
 
 // --- Helpers ---

@@ -619,12 +619,26 @@ func (m PostDetailModel) buildContent() (string, []int, []int) {
 func (m PostDetailModel) renderFullPost(selected bool) string {
 	innerWidth := m.width - 4
 
-	header := lipgloss.JoinHorizontal(lipgloss.Top,
+	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+m.post.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(m.post.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
+	var header string
+	if ind := attachmentIndicator(m.post.Attachments); ind != "" && innerWidth > 0 {
+		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ind)
+		if gap > 0 {
+			header = left + strings.Repeat(" ", gap) + ind
+		} else {
+			header = left
+		}
+	} else {
+		header = left
+	}
 
 	body := markdown.Render(m.post.Content, innerWidth)
+	if att := renderAttachments(m.post.Attachments); att != "" {
+		body = body + "\n" + att
+	}
 
 	topics := ""
 	for _, t := range m.post.Topics {
@@ -660,9 +674,19 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 		theme.Highlight.Render("@"+node.Reply.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
-	header := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...)
+	left := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...)
+	header := left
+	if ind := attachmentIndicator(node.Reply.Attachments); ind != "" && innerWidth > 0 {
+		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ind)
+		if gap > 0 {
+			header = left + strings.Repeat(" ", gap) + ind
+		}
+	}
 
 	body := markdown.Render(node.Reply.Content, innerWidth)
+	if att := renderAttachments(node.Reply.Attachments); att != "" {
+		body = body + "\n" + att
+	}
 
 	boxStyle := theme.Border
 	if selected {
@@ -728,7 +752,8 @@ func (m PostDetailModel) GetFocusedURLs() []string {
 		return nil
 	}
 	if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
-		return extractURLs(m.flatTree[m.selectedReply].Reply.Content)
+		r := m.flatTree[m.selectedReply].Reply
+		return append(extractURLs(r.Content), attachmentURLs(r.Attachments)...)
 	}
-	return extractURLs(m.post.Content)
+	return append(extractURLs(m.post.Content), attachmentURLs(m.post.Attachments)...)
 }

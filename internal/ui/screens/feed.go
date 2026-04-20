@@ -496,5 +496,6 @@ func (m FeedModel) GetFocusedURLs() []string {
 	if len(m.posts) == 0 || m.selectedIndex < 0 || m.selectedIndex >= len(m.posts) {
 		return nil
 	}
-	return extractURLs(m.posts[m.selectedIndex].Content)
+	p := m.posts[m.selectedIndex]
+	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
 }

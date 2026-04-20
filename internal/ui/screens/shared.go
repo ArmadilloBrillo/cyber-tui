@@ -44,20 +44,24 @@ func RenderPost(p model.Post, selected bool, width int, loc *time.Location, time
 		theme.Highlight.Render("@"+p.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)),
 	)
-	var repliesLabel string
-	switch p.RepliesCount {
-	case 0:
-		// show nothing
-	case 1:
-		repliesLabel = theme.Subtle.Render("1 reply")
-	default:
-		repliesLabel = theme.Subtle.Render(fmt.Sprintf("%d replies", p.RepliesCount))
+	var rightParts []string
+	if ind := attachmentIndicator(p.Attachments); ind != "" {
+		rightParts = append(rightParts, ind)
 	}
+	switch p.RepliesCount {
+	case 1:
+		rightParts = append(rightParts, theme.Subtle.Render("1 reply"))
+	default:
+		if p.RepliesCount > 0 {
+			rightParts = append(rightParts, theme.Subtle.Render(fmt.Sprintf("%d replies", p.RepliesCount)))
+		}
+	}
+	right := strings.Join(rightParts, " ")
 	var header string
 	if innerWidth > 0 {
-		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(repliesLabel)
+		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap > 0 {
-			header = left + strings.Repeat(" ", gap) + repliesLabel
+			header = left + strings.Repeat(" ", gap) + right
 		} else {
 			header = left
 		}
@@ -78,6 +82,10 @@ func RenderPost(p model.Post, selected bool, width int, loc *time.Location, time
 		}
 	} else {
 		body = markdown.Render(p.Content, 0)
+	}
+
+	if att := renderAttachments(p.Attachments); att != "" {
+		body = body + "\n" + att
 	}
 
 	topics := ""
@@ -244,4 +252,63 @@ func extractURLs(content string) []string {
 		out[i] = urlutil.NormalizeURL(u)
 	}
 	return out
+}
+
+// attachmentURLs returns the Src URL for each attachment.
+func attachmentURLs(attachments []model.Attachment) []string {
+	if len(attachments) == 0 {
+		return nil
+	}
+	out := make([]string, len(attachments))
+	for i, a := range attachments {
+		out[i] = a.Src
+	}
+	return out
+}
+
+// attachmentIndicator returns a compact header badge for any attachments present,
+// e.g. "[img]", "[yt]", or "[img][yt]". Returns "" when there are no attachments.
+func attachmentIndicator(attachments []model.Attachment) string {
+	var img, yt bool
+	for _, a := range attachments {
+		switch a.Type {
+		case "image":
+			img = true
+		case "audio":
+			yt = true
+		}
+	}
+	var s string
+	if img {
+		s += theme.Subtle.Render("[img]")
+	}
+	if yt {
+		s += theme.Subtle.Render("[yt]")
+	}
+	return s
+}
+
+// renderAttachments returns a formatted block for each attachment,
+// rendered below post/reply content. Returns "" when there are no attachments.
+func renderAttachments(attachments []model.Attachment) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+	linkStyle := lipgloss.NewStyle().Underline(true).Foreground(theme.ColorCyan)
+	var lines []string
+	for _, a := range attachments {
+		switch a.Type {
+		case "image":
+			lines = append(lines, theme.Subtle.Render("[image]")+"  "+linkStyle.Render(a.Src))
+		case "audio":
+			meta := a.Artist + " \u2013 " + a.Title
+			if a.Genre != "" {
+				meta += " (" + a.Genre + ")"
+			}
+			lines = append(lines, theme.Subtle.Render("[audio]")+"  "+theme.Subtle.Render(meta)+"  "+linkStyle.Render(a.Src))
+		default:
+			lines = append(lines, theme.Subtle.Render("[attachment]")+"  "+linkStyle.Render(a.Src))
+		}
+	}
+	return strings.Join(lines, "\n")
 }

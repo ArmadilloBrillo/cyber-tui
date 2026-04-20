@@ -390,10 +390,10 @@ func (m BookmarksModel) GetFocusedURLs() []string {
 	}
 	b := m.items[m.selectedIndex]
 	if b.Post != nil {
-		return extractURLs(b.Post.Content)
+		return append(extractURLs(b.Post.Content), attachmentURLs(b.Post.Attachments)...)
 	}
 	if b.Reply != nil {
-		return extractURLs(b.Reply.Content)
+		return append(extractURLs(b.Reply.Content), attachmentURLs(b.Reply.Attachments)...)
 	}
 	return nil
 }

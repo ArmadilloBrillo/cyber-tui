@@ -37,6 +37,20 @@ type Follow struct {
 	CreatedAt        time.Time
 }
 
+// Attachment represents a media attachment on a post or reply.
+// Type is "image" or "audio". Src is always present.
+// Image-specific: Width, Height. Audio-specific: Origin, Artist, Title, Genre.
+type Attachment struct {
+	Type   string
+	Src    string
+	Width  int
+	Height int
+	Origin string
+	Artist string
+	Title  string
+	Genre  string
+}
+
 // Post maps to the post shape returned by GET /v1/posts.
 // Author is stored as flat fields (authorId + authorUsername) matching the API response.
 type Post struct {
@@ -51,6 +65,7 @@ type Post struct {
 	IsNSFW         bool
 	Deleted        bool
 	CreatedAt      time.Time
+	Attachments    []Attachment
 }
 
 // Reply maps to the reply shape returned by GET /v1/posts/:id/replies.
@@ -62,6 +77,7 @@ type Reply struct {
 	Content        string
 	ParentReplyID  string
 	CreatedAt      time.Time
+	Attachments    []Attachment
 }
 
 // ProfileUpdate carries the fields accepted by PATCH /v1/users/me.

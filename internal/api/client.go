@@ -57,18 +57,30 @@ type refreshResponseData struct {
 	RTDBToken string `json:"rtdbToken"`
 }
 
+type wireAttachment struct {
+	Type   string `json:"type"`
+	Src    string `json:"src"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+	Origin string `json:"origin,omitempty"`
+	Artist string `json:"artist,omitempty"`
+	Title  string `json:"title,omitempty"`
+	Genre  string `json:"genre,omitempty"`
+}
+
 type wirePost struct {
-	PostID         string   `json:"postId"`
-	AuthorID       string   `json:"authorId"`
-	AuthorUsername string   `json:"authorUsername"`
-	Content        string   `json:"content"`
-	Topics         []string `json:"topics"`
-	RepliesCount   int      `json:"repliesCount"`
-	BookmarksCount int      `json:"bookmarksCount"`
-	IsPublic       bool     `json:"isPublic"`
-	IsNSFW         bool     `json:"isNSFW"`
-	Deleted        bool     `json:"deleted"`
-	CreatedAt      string   `json:"createdAt"`
+	PostID         string            `json:"postId"`
+	AuthorID       string            `json:"authorId"`
+	AuthorUsername string            `json:"authorUsername"`
+	Content        string            `json:"content"`
+	Topics         []string          `json:"topics"`
+	RepliesCount   int               `json:"repliesCount"`
+	BookmarksCount int               `json:"bookmarksCount"`
+	IsPublic       bool              `json:"isPublic"`
+	IsNSFW         bool              `json:"isNSFW"`
+	Deleted        bool              `json:"deleted"`
+	CreatedAt      string            `json:"createdAt"`
+	Attachments    []wireAttachment  `json:"attachments"`
 }
 
 type wireUser struct {
@@ -106,13 +118,14 @@ type wireNoteRevision struct {
 }
 
 type wireReply struct {
-	ReplyID        string `json:"replyId"`
-	PostID         string `json:"postId"`
-	AuthorID       string `json:"authorId"`
-	AuthorUsername string `json:"authorUsername"`
-	Content        string `json:"content"`
-	ParentReplyID  string `json:"parentReplyId"`
-	CreatedAt      string `json:"createdAt"`
+	ReplyID        string           `json:"replyId"`
+	PostID         string           `json:"postId"`
+	AuthorID       string           `json:"authorId"`
+	AuthorUsername string           `json:"authorUsername"`
+	Content        string           `json:"content"`
+	ParentReplyID  string           `json:"parentReplyId"`
+	CreatedAt      string           `json:"createdAt"`
+	Attachments    []wireAttachment `json:"attachments"`
 }
 
 type wireBookmark struct {
@@ -437,6 +450,26 @@ func (c *HTTPClient) refresh() error {
 
 // --- conversion helpers ---
 
+func wireAttachmentsToModel(ws []wireAttachment) []model.Attachment {
+	if len(ws) == 0 {
+		return nil
+	}
+	out := make([]model.Attachment, len(ws))
+	for i, w := range ws {
+		out[i] = model.Attachment{
+			Type:   w.Type,
+			Src:    w.Src,
+			Width:  w.Width,
+			Height: w.Height,
+			Origin: w.Origin,
+			Artist: w.Artist,
+			Title:  w.Title,
+			Genre:  w.Genre,
+		}
+	}
+	return out
+}
+
 func wirePostToModel(w wirePost) model.Post {
 	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
 	return model.Post{
@@ -451,6 +484,7 @@ func wirePostToModel(w wirePost) model.Post {
 		IsNSFW:         w.IsNSFW,
 		Deleted:        w.Deleted,
 		CreatedAt:      t,
+		Attachments:    wireAttachmentsToModel(w.Attachments),
 	}
 }
 
@@ -464,6 +498,7 @@ func wireReplyToModel(w wireReply) model.Reply {
 		Content:        w.Content,
 		ParentReplyID:  w.ParentReplyID,
 		CreatedAt:      t,
+		Attachments:    wireAttachmentsToModel(w.Attachments),
 	}
 }
 
