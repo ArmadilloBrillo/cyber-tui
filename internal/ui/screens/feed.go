@@ -310,7 +310,11 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			}
 			if m.topicsFocused {
 				var cmd tea.Cmd
-				m.topicsInput, cmd = m.topicsInput.Update(msg)
+				filtered, ok := filterAmbiguousKeyMsg(msg)
+				if !ok {
+					return m, nil
+				}
+				m.topicsInput, cmd = m.topicsInput.Update(filtered)
 				return m, cmd
 			}
 			var cmd tea.Cmd

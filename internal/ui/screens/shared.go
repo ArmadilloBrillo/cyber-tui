@@ -5,10 +5,47 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
+
+// stripAmbiguousRunes removes Unicode ambiguous-width characters (EAW = "A") from s.
+// Ambiguous-width chars have no defined column width — terminals may render them as 1 or 2
+// columns depending on font and locale. Stripping them is the only reliable way to prevent
+// border overflow and line-wrap corruption in width-constrained TUI boxes.
+// Wide (CJK), halfwidth, and zero-width characters are unaffected.
+func stripAmbiguousRunes(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if !runewidth.IsAmbiguousWidth(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// filterAmbiguousKeyMsg removes ambiguous-width runes from a KeyRunes message before it
+// reaches a textarea or textinput component. Returns the filtered message and true if it
+// should still be processed, or the original message and false if all runes were stripped.
+func filterAmbiguousKeyMsg(msg tea.KeyMsg) (tea.KeyMsg, bool) {
+	if msg.Type != tea.KeyRunes {
+		return msg, true
+	}
+	var filtered []rune
+	for _, r := range msg.Runes {
+		if !runewidth.IsAmbiguousWidth(r) {
+			filtered = append(filtered, r)
+		}
+	}
+	if len(filtered) == 0 {
+		return msg, false
+	}
+	msg.Runes = filtered
+	return msg, true
+}
 
 const postMaxBodyLines = 4
 
@@ -45,7 +82,7 @@ func RenderPost(p model.Post, selected bool, width int, loc *time.Location, time
 
 	var body string
 	if innerWidth > 0 {
-		wrapped := theme.Base.Width(innerWidth).Render(p.Content)
+		wrapped := theme.Base.Width(innerWidth).Render(stripAmbiguousRunes(p.Content))
 		lines := strings.Split(wrapped, "\n")
 		if len(lines) > postMaxBodyLines {
 			body = strings.Join(lines[:postMaxBodyLines], "\n")
@@ -55,7 +92,7 @@ func RenderPost(p model.Post, selected bool, width int, loc *time.Location, time
 			body = wrapped
 		}
 	} else {
-		body = theme.Base.Render(p.Content)
+		body = theme.Base.Render(stripAmbiguousRunes(p.Content))
 	}
 
 	topics := ""

@@ -113,6 +113,13 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		}
 	}
 
+	if km, ok := msg.(tea.KeyMsg); ok {
+		km, ok = filterAmbiguousKeyMsg(km)
+		if !ok {
+			return m, nil
+		}
+		msg = km
+	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	var vpCmd tea.Cmd

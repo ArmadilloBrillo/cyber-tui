@@ -651,8 +651,12 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 			if m.focusedField == fieldBio {
 				m.compose, cmd = m.compose.Update(msg)
 			} else {
+				filtered, ok := filterAmbiguousKeyMsg(msg)
+				if !ok {
+					return m, nil
+				}
 				idx := inputIdx(m.focusedField)
-				m.inputs[idx], cmd = m.inputs[idx].Update(msg)
+				m.inputs[idx], cmd = m.inputs[idx].Update(filtered)
 			}
 			return m, cmd
 		}

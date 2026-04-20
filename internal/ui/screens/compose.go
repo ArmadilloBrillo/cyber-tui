@@ -141,6 +141,15 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 		return m, nil
 	}
 
+	if km, ok := msg.(tea.KeyMsg); ok {
+		var keep bool
+		km, keep = filterAmbiguousKeyMsg(km)
+		if !keep {
+			return m, nil
+		}
+		msg = km
+	}
+
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "ctrl+s":

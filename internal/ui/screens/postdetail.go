@@ -614,9 +614,9 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 
 	var body string
 	if innerWidth > 0 {
-		body = theme.Base.Width(innerWidth).Render(m.post.Content)
+		body = theme.Base.Width(innerWidth).Render(stripAmbiguousRunes(m.post.Content))
 	} else {
-		body = theme.Base.Render(m.post.Content)
+		body = theme.Base.Render(stripAmbiguousRunes(m.post.Content))
 	}
 
 	topics := ""
@@ -657,9 +657,9 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 
 	var body string
 	if innerWidth > 0 {
-		body = theme.Base.Width(innerWidth).Render(node.Reply.Content)
+		body = theme.Base.Width(innerWidth).Render(stripAmbiguousRunes(node.Reply.Content))
 	} else {
-		body = theme.Base.Render(node.Reply.Content)
+		body = theme.Base.Render(stripAmbiguousRunes(node.Reply.Content))
 	}
 
 	boxStyle := theme.Border

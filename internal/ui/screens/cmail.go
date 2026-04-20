@@ -315,6 +315,13 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		}
 	}
 
+	if km, ok := msg.(tea.KeyMsg); ok {
+		km, ok = filterAmbiguousKeyMsg(km)
+		if !ok {
+			return m, nil
+		}
+		msg = km
+	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	var vpCmd tea.Cmd
