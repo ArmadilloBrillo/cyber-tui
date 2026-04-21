@@ -666,6 +666,17 @@ func (c *HTTPClient) Logout() error {
 	return nil
 }
 
+// RawRequest makes an authenticated request and returns the raw JSON data from
+// the response envelope. Intended for developer tooling; the token refresh/retry
+// logic in doRequest applies normally.
+func (c *HTTPClient) RawRequest(method, path string, body []byte) (json.RawMessage, error) {
+	env, err := c.doRequest(method, path, body)
+	if err != nil {
+		return nil, err
+	}
+	return env.Data, nil
+}
+
 func (c *HTTPClient) GetFeed(cursor string) ([]model.Post, string, error) {
 	path := "/v1/posts?limit=20"
 	if cursor != "" {

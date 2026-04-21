@@ -13,3 +13,7 @@ LDFLAGS := -ldflags "\
 .PHONY: build
 build:
 	go build $(LDFLAGS) -o $(OUT) ./cmd/cyber-tui
+
+.PHONY: fetch
+fetch:
+	go run ./cmd/apifetch $(ARGS)

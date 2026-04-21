@@ -5,4 +5,6 @@
 *.test
 
 #CLAUDE
-.claude/
+.claude/*
+!.claude/commands/
+!.claude/commands/*
