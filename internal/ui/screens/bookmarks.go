@@ -18,9 +18,6 @@ import (
 // and more pages are available.
 type LoadMoreBookmarksMsg struct{ Cursor string }
 
-// RefreshBookmarksMsg is emitted when the user presses up at the top of the list.
-type RefreshBookmarksMsg struct{}
-
 // DeleteBookmarkMsg is emitted when the user presses 'd' on the selected bookmark.
 // PostID or ReplyID identifies the content so App can update its bookmarked-IDs set.
 type DeleteBookmarkMsg struct {
@@ -43,25 +40,34 @@ type OpenBookmarkMsg struct {
 
 type BookmarksModel struct {
 	items         []model.Bookmark
+	itemOffsets   []int
 	viewport      viewport.Model
-	itemOffsets   []int // start line of each item in viewport content
 	width         int
 	height        int
 	selectedIndex int
 	ready         bool
+	loaded        bool
 	loading       bool
-	refreshing    bool
+	fetching      bool
 	exhausted     bool
 	nextCursor    string
 	err           error
 	loc           *time.Location
 	relaxed       bool
-	// statusMsg is a transient message (e.g. "bookmarked") shown in the list header.
-	statusMsg string
 }
 
 func NewBookmarksModel() BookmarksModel {
 	return BookmarksModel{}
+}
+
+func (m BookmarksModel) IsLoaded() bool { return m.loaded }
+
+func (m BookmarksModel) SetFetching() BookmarksModel {
+	m.fetching = true
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
 }
 
 func (m BookmarksModel) SetBookmarks(items []model.Bookmark, cursor string) BookmarksModel {
@@ -69,7 +75,8 @@ func (m BookmarksModel) SetBookmarks(items []model.Bookmark, cursor string) Book
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.loading = false
-	m.refreshing = false
+	m.fetching = false
+	m.loaded = true
 	m.selectedIndex = 0
 	if m.ready {
 		m = m.refreshContent()
@@ -106,19 +113,10 @@ func (m BookmarksModel) MarkDeleted(id string) BookmarksModel {
 	return m
 }
 
-// SetStatusMsg stores a transient feedback message (displayed at top of list).
-func (m BookmarksModel) SetStatusMsg(msg string) BookmarksModel {
-	m.statusMsg = msg
-	if m.ready {
-		m = m.refreshContent()
-	}
-	return m
-}
-
 func (m BookmarksModel) SetError(err error) BookmarksModel {
 	m.err = err
 	m.loading = false
-	m.refreshing = false
+	m.fetching = false
 	return m
 }
 
@@ -157,10 +155,6 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 				m.selectedIndex--
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()
-			} else if !m.loading && !m.refreshing {
-				m.refreshing = true
-				m = m.refreshContent()
-				return m, func() tea.Msg { return RefreshBookmarksMsg{} }
 			}
 			return m, nil
 		case "down", "j":
@@ -220,11 +214,7 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 }
 
 func (m BookmarksModel) viewportHeight() int {
-	h := m.height - theme.ChromeHeight
-	if h < 1 {
-		h = 1
-	}
-	return h
+	return max(m.height-theme.ChromeHeight, 1)
 }
 
 func (m BookmarksModel) location() *time.Location {
@@ -233,6 +223,7 @@ func (m BookmarksModel) location() *time.Location {
 	}
 	return m.loc
 }
+
 
 func (m BookmarksModel) refreshContent() BookmarksModel {
 	content, offsets := m.buildContent()
@@ -248,10 +239,8 @@ func (m BookmarksModel) ensureSelectedVisible() BookmarksModel {
 	itemStart := m.itemOffsets[m.selectedIndex]
 	itemHeight := lipgloss.Height(m.renderItem(m.items[m.selectedIndex], false))
 	itemEnd := itemStart + itemHeight - 1
-
 	viewTop := m.viewport.YOffset
 	viewBottom := viewTop + m.viewport.Height - 1
-
 	if itemStart < viewTop {
 		m.viewport.SetYOffset(itemStart)
 	} else if itemEnd > viewBottom {
@@ -265,20 +254,11 @@ func (m BookmarksModel) ensureSelectedVisible() BookmarksModel {
 }
 
 func (m BookmarksModel) buildContent() (string, []int) {
-	var prefix string
-	startLine := 0
-
-	if m.statusMsg != "" {
-		prefix = theme.Highlight.Render("  "+m.statusMsg) + "\n"
-		startLine = 1
+	if m.fetching {
+		return theme.Subtle.Render("  Loading bookmarks…"), nil
 	}
-	if m.refreshing {
-		prefix += theme.Subtle.Render("  fetching bookmarks...") + "\n"
-		startLine++
-	}
-
 	if len(m.items) == 0 {
-		return prefix + theme.Subtle.Render("  no bookmarks yet — press b on a post to save it"), nil
+		return theme.Subtle.Render("  no bookmarks yet — press b on a post to save it"), nil
 	}
 
 	sep := "\n"
@@ -289,21 +269,21 @@ func (m BookmarksModel) buildContent() (string, []int) {
 	}
 
 	offsets := make([]int, len(m.items))
-	var out string
-	currentLine := startLine
-
+	var sb strings.Builder
+	currentLine := 0
 	for i, b := range m.items {
 		offsets[i] = currentLine
 		rendered := m.renderItem(b, i == m.selectedIndex)
-		out += rendered + sep
+		sb.WriteString(rendered)
+		sb.WriteString(sep)
 		currentLine += lipgloss.Height(rendered) + lineInc
 	}
 	if m.loading {
-		out += theme.Subtle.Render("  loading more…") + "\n"
+		sb.WriteString(theme.Subtle.Render("  loading more…") + "\n")
 	} else if m.exhausted {
-		out += theme.Subtle.Render("  — end —") + "\n"
+		sb.WriteString(theme.Subtle.Render("  — end —") + "\n")
 	}
-	return prefix + out, offsets
+	return sb.String(), offsets
 }
 
 func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
@@ -368,23 +348,46 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 		line1 = left1
 	}
 
-	// Line 2: content preview at full inner width.
+	// Line 2: content preview truncated to align under the gap before the timestamp.
+	rightWidth := lipgloss.Width(right1)
+	previewMax := max(innerWidth-rightWidth-1, 1)
 	preview := strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
-	if innerWidth > 0 && utf8.RuneCountInString(preview) > innerWidth {
-		preview = string([]rune(preview)[:innerWidth-1]) + "…"
+	if utf8.RuneCountInString(preview) > previewMax {
+		preview = string([]rune(preview)[:previewMax-1]) + "…"
 	}
 	line2 := theme.Base.Render(preview)
 
-	rows := []string{line1, line2}
-
-	// Line 3 (posts only): topics.
+	// Line 3: topics or "no topics" — always rendered so card height is fixed.
+	// Topics are truncated to innerWidth to prevent wrapping (which would break the 5-line guarantee).
+	var line3 string
 	if len(topics) > 0 {
 		var parts []string
 		for _, t := range topics {
 			parts = append(parts, theme.Subtle.Render("#"+t))
 		}
-		rows = append(rows, strings.Join(parts, " "))
+		line3 = strings.Join(parts, " ")
+		if innerWidth > 0 && lipgloss.Width(line3) > innerWidth {
+			line3 = ""
+			for _, p := range parts {
+				candidate := line3
+				if candidate != "" {
+					candidate += " "
+				}
+				candidate += p
+				if lipgloss.Width(candidate) > innerWidth {
+					break
+				}
+				line3 = candidate
+			}
+			if line3 == "" {
+				line3 = theme.Subtle.Render("no topics")
+			}
+		}
+	} else {
+		line3 = theme.Subtle.Render("no topics")
 	}
+
+	rows := []string{line1, line2, line3}
 
 	body := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
@@ -403,7 +406,7 @@ func (m BookmarksModel) View() string {
 		return theme.Error.Render(fmt.Sprintf("bookmarks error: %s", m.err))
 	}
 	if !m.ready {
-		return theme.Subtle.Render("loading bookmarks...")
+		return theme.Subtle.Render("  Loading bookmarks…")
 	}
 	return m.viewport.View()
 }

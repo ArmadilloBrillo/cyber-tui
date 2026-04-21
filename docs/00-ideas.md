@@ -9,4 +9,6 @@
 6. Visual feedback on bookmarking. Also show posts as bookmarked if they are.
 7. Automatically highlight previous notification (in unread mode) after opening an unread notification.
 8. Some url (ragnar/POSTID e.g.) don't open using 'o'
+9. When new notifications appear reload the Notifications screen. If it's currently active or always?
+10. 
 

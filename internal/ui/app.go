@@ -394,7 +394,11 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenBookmarks
-			return a, a.loadBookmarksCmd(""), true
+			if !a.bookmarks.IsLoaded() {
+				a.bookmarks = a.bookmarks.SetFetching()
+				return a, a.loadBookmarksCmd(""), true
+			}
+			return a, nil, true
 		}
 	case "5":
 		if a.active != screenLogin {
@@ -728,8 +732,6 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.bookmarkedPostIDs, a.bookmarkedReplyIDs, msg.items)
 		a.broadcastBookmarkedIDs()
 		return a, nil, true
-	case screens.RefreshBookmarksMsg:
-		return a, a.loadBookmarksCmd(""), true
 	case screens.LoadMoreBookmarksMsg:
 		return a, a.loadBookmarksPageCmd(msg.Cursor), true
 	case screens.OpenBookmarkMsg:
@@ -752,8 +754,6 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.pendingReplyID = msg.replyID
 		return a, a.loadRepliesCmd(msg.post.ID), true
 	case screens.BookmarkPostMsg:
-		// Optimistic: show feedback and update indicator immediately.
-		a.bookmarks = a.bookmarks.SetStatusMsg("bookmarked")
 		postID := msg.PostID
 		newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs)+1)
 		for k := range a.bookmarkedPostIDs {
@@ -765,8 +765,6 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.createBookmarkCmd(postID, ""), true
 	case bookmarkCreatedMsg:
 		if msg.err != nil {
-			// Revert optimistic indicator on failure.
-			a.bookmarks = a.bookmarks.SetStatusMsg("")
 			newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs))
 			for k := range a.bookmarkedPostIDs {
 				if k != msg.postID {
@@ -777,7 +775,8 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.broadcastBookmarkedIDs()
 			return a, nil, true
 		}
-		return a, nil, true
+		a.bookmarks = a.bookmarks.SetFetching()
+		return a, a.loadBookmarksCmd(""), true
 	case screens.DeleteBookmarkMsg:
 		// Optimistic update already applied in BookmarksModel.Update; remove from sets.
 		if msg.PostID != "" {
@@ -1009,7 +1008,11 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 	case screenSettings:
 		return nil // no load cmd; settings already in memory
 	case screenBookmarks:
-		return a.loadBookmarksCmd("")
+		if !a.bookmarks.IsLoaded() {
+			a.bookmarks = a.bookmarks.SetFetching()
+			return a.loadBookmarksCmd("")
+		}
+		return nil
 	case screenTopics:
 		return a.loadTopicsCmd()
 	case screenJournal:
