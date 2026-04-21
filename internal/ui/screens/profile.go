@@ -993,15 +993,10 @@ func (m ProfileModel) renderFollowItem(f model.Follow, selected bool) string {
 	return boxStyle.Render(line)
 }
 
-// truncateStr truncates s to maxW characters, appending "…" if truncated.
+// truncateStr truncates s to maxW terminal columns, appending "…" if truncated.
 func truncateStr(s string, maxW int) string {
-	// Collapse newlines for preview.
 	s = strings.ReplaceAll(s, "\n", " ")
-	r := []rune(s)
-	if len(r) <= maxW {
-		return s
-	}
-	return string(r[:maxW-1]) + "…"
+	return markdown.TruncateToWidth(s, maxW)
 }
 
 func (m ProfileModel) editFormView(username string) string {

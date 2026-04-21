@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
-
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -352,10 +350,7 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 	rightWidth := lipgloss.Width(right1)
 	previewMax := max(innerWidth-rightWidth-1, 1)
 	preview := strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
-	if utf8.RuneCountInString(preview) > previewMax {
-		preview = string([]rune(preview)[:previewMax-1]) + "…"
-	}
-	line2 := theme.Base.Render(preview)
+	line2 := theme.Base.Render(markdown.TruncateToWidth(preview, previewMax))
 
 	// Line 3: topics or "no topics" — always rendered so card height is fixed.
 	// Topics are truncated to innerWidth to prevent wrapping (which would break the 5-line guarantee).

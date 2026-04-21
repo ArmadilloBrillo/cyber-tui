@@ -417,11 +417,37 @@ func (r *renderer) rawTextNode(node ast.Node) string {
 func stripAmbiguousRunes(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if runewidth.IsAmbiguousWidth(r) {
-			b.WriteRune(' ')
-		} else {
+		rw := runewidth.RuneWidth(r)
+		switch {
+		case r == '\t' || r == '\n':
+			b.WriteRune(r) // preserve legitimate whitespace used by the parser
+		case rw == 0:
+			// strip: \r, ESC, zero-width spaces, bidirectional marks, etc.
+		case rw > 1 || runewidth.IsAmbiguousWidth(r):
+			b.WriteRune(' ') // normalise to single-column space
+		default:
 			b.WriteRune(r)
 		}
 	}
 	return b.String()
+}
+
+// TruncateToWidth shortens s to at most maxWidth terminal columns, appending "…" if
+// truncation occurs. Uses visual (runewidth) column measurement so double-width characters
+// (CJK, full-width) are handled correctly — unlike rune-count truncation which
+// under-counts their display width.
+func TruncateToWidth(s string, maxWidth int) string {
+	if maxWidth < 1 {
+		return s
+	}
+	var w int
+	runes := []rune(s)
+	for i, r := range runes {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > maxWidth-1 {
+			return string(runes[:i]) + "…"
+		}
+		w += rw
+	}
+	return s
 }

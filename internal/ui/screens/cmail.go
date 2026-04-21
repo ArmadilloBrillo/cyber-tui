@@ -470,14 +470,7 @@ func clamp(v, lo, hi int) int {
 	return v
 }
 
-// truncate shortens s to at most max runes, appending "…" if cut.
+// truncate shortens s to at most max terminal columns, appending "…" if cut.
 func truncate(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
-		return s
-	}
-	if max <= 1 {
-		return "…"
-	}
-	return string(runes[:max-1]) + "…"
+	return markdown.TruncateToWidth(s, max)
 }
