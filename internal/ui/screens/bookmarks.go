@@ -89,29 +89,6 @@ func (m BookmarksModel) AppendBookmarks(items []model.Bookmark, cursor string) B
 	return m
 }
 
-// EnrichBookmark fills in the embedded Post or Reply for a bookmark whose content
-// was not included in the list API response and has since been fetched separately.
-func (m BookmarksModel) EnrichBookmark(id string, post *model.Post, reply *model.Reply) BookmarksModel {
-	for i, b := range m.items {
-		if b.ID == id {
-			newItems := make([]model.Bookmark, len(m.items))
-			copy(newItems, m.items)
-			if post != nil {
-				newItems[i].Post = post
-			}
-			if reply != nil {
-				newItems[i].Reply = reply
-			}
-			m.items = newItems
-			break
-		}
-	}
-	if m.ready {
-		m = m.refreshContent()
-	}
-	return m
-}
-
 // MarkDeleted removes the bookmark with the given ID from the in-memory list (optimistic update).
 func (m BookmarksModel) MarkDeleted(id string) BookmarksModel {
 	for i, b := range m.items {
@@ -359,11 +336,7 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 		createdAt = b.Reply.CreatedAt
 		attachments = b.Reply.Attachments
 	default:
-		if b.PostID != "" || b.ReplyID != "" {
-			content = "(loading…)"
-		} else {
-			content = "(content unavailable)"
-		}
+		content = "(content unavailable)"
 		createdAt = b.CreatedAt
 	}
 

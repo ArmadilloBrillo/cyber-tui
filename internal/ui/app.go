@@ -7,6 +7,7 @@ import (
 	neturl "net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
@@ -720,15 +721,12 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.bookmarks = a.bookmarks.SetBookmarks(msg.items, msg.cursor)
 		a.bookmarkedPostIDs, a.bookmarkedReplyIDs = bookmarkIDSets(msg.items)
 		a.broadcastBookmarkedIDs()
-		return a, tea.Batch(a.fetchMissingBookmarkContentCmds(msg.items)...), true
+		return a, nil, true
 	case bookmarksPageMsg:
 		a.bookmarks = a.bookmarks.AppendBookmarks(msg.items, msg.cursor)
 		a.bookmarkedPostIDs, a.bookmarkedReplyIDs = mergeBookmarkIDSets(
 			a.bookmarkedPostIDs, a.bookmarkedReplyIDs, msg.items)
 		a.broadcastBookmarkedIDs()
-		return a, tea.Batch(a.fetchMissingBookmarkContentCmds(msg.items)...), true
-	case bookmarkItemEnrichedMsg:
-		a.bookmarks = a.bookmarks.EnrichBookmark(msg.bookmarkID, msg.post, msg.reply)
 		return a, nil, true
 	case screens.RefreshBookmarksMsg:
 		return a, a.loadBookmarksCmd(""), true
@@ -822,37 +820,6 @@ func bookmarkIDSets(items []model.Bookmark) (map[string]struct{}, map[string]str
 		}
 	}
 	return postIDs, replyIDs
-}
-
-// fetchMissingBookmarkContentCmds returns one command per bookmark that has no
-// embedded post/reply content, each of which fetches the content and returns
-// a bookmarkItemEnrichedMsg so the list can re-render with real data.
-func (a *App) fetchMissingBookmarkContentCmds(items []model.Bookmark) []tea.Cmd {
-	var cmds []tea.Cmd
-	for _, b := range items {
-		if b.Post != nil || b.Reply != nil {
-			continue
-		}
-		b := b
-		if b.PostID != "" {
-			cmds = append(cmds, func() tea.Msg {
-				post, err := a.client.GetPost(b.PostID)
-				if err != nil {
-					return nil
-				}
-				return bookmarkItemEnrichedMsg{bookmarkID: b.ID, post: &post}
-			})
-		} else if b.ReplyID != "" {
-			cmds = append(cmds, func() tea.Msg {
-				reply, err := a.client.GetReply(b.ReplyID)
-				if err != nil {
-					return nil
-				}
-				return bookmarkItemEnrichedMsg{bookmarkID: b.ID, reply: &reply}
-			})
-		}
-	}
-	return cmds
 }
 
 // mergeBookmarkIDSets merges a new page of bookmarks into existing ID sets.
@@ -1816,11 +1783,6 @@ type bookmarkCreatedMsg struct {
 	replyID    string
 	err        error
 }
-type bookmarkItemEnrichedMsg struct {
-	bookmarkID string
-	post       *model.Post
-	reply      *model.Reply
-}
 type bookmarkDeletedMsg struct{ bookmarkID string }
 type bookmarkPostLoadedMsg struct{ post model.Post }
 type bookmarkReplyLoadedMsg struct {
@@ -2281,12 +2243,58 @@ func (a *App) loadBookmarkReplyCmd(replyID string) tea.Cmd {
 	}
 }
 
+// enrichBookmarks fetches embedded post/reply content for any bookmark that the
+// list API returned without it. All fetches run in parallel; failures are silently
+// skipped so the list still shows with whatever data is available.
+func enrichBookmarks(client api.Client, items []model.Bookmark) []model.Bookmark {
+	type result struct {
+		idx   int
+		post  *model.Post
+		reply *model.Reply
+	}
+	ch := make(chan result, len(items))
+	var wg sync.WaitGroup
+	for i, b := range items {
+		if b.Post != nil || b.Reply != nil {
+			continue
+		}
+		wg.Add(1)
+		i, b := i, b
+		go func() {
+			defer wg.Done()
+			if b.PostID != "" {
+				if p, err := client.GetPost(b.PostID); err == nil {
+					ch <- result{idx: i, post: &p}
+				}
+			} else if b.ReplyID != "" {
+				if r, err := client.GetReply(b.ReplyID); err == nil {
+					ch <- result{idx: i, reply: &r}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(ch)
+	out := make([]model.Bookmark, len(items))
+	copy(out, items)
+	for r := range ch {
+		if r.post != nil {
+			out[r.idx].Post = r.post
+		}
+		if r.reply != nil {
+			out[r.idx].Reply = r.reply
+		}
+	}
+	return out
+}
+
 func (a *App) loadBookmarksCmd(cursor string) tea.Cmd {
 	return func() tea.Msg {
 		items, nextCursor, err := a.client.GetBookmarks(cursor)
 		if err != nil {
 			return errMsg{err}
 		}
+		items = enrichBookmarks(a.client, items)
 		return bookmarksLoadedMsg{items: items, cursor: nextCursor}
 	}
 }
@@ -2297,6 +2305,7 @@ func (a *App) loadBookmarksPageCmd(cursor string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
+		items = enrichBookmarks(a.client, items)
 		return bookmarksPageMsg{items: items, cursor: nextCursor}
 	}
 }
