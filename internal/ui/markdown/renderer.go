@@ -421,8 +421,10 @@ func stripAmbiguousRunes(s string) string {
 		switch {
 		case r == '\t' || r == '\n':
 			b.WriteRune(r) // preserve legitimate whitespace used by the parser
-		case rw == 0:
-			// strip: \r, ESC, zero-width spaces, bidirectional marks, etc.
+		case rw == 0 || runewidth.StringWidth("x"+string(r)) < 1+rw:
+			// strip: zero-width chars, and grapheme-extend modifiers (e.g. ﾟ U+FF9F)
+			// that runewidth.StringWidth treats as 0-width in context but the terminal
+			// renders as 1 column (wcwidth), causing layout overflow
 		case rw > 1 || runewidth.IsAmbiguousWidth(r):
 			b.WriteRune(' ') // normalise to single-column space
 		default:

@@ -286,6 +286,19 @@ func TestRender_AmbiguousRunesStripped(t *testing.T) {
 	}
 }
 
+func TestRender_HalfwidthKatakanaModifierStripped(t *testing.T) {
+	// U+FF9F HALFWIDTH KATAKANA VOICED ITERATION MARK has GCB=Extend:
+	// go-runewidth says width=1 (not ambiguous), but rivo/uniseg (used by lipgloss)
+	// measures it as 0. It must be stripped so layout width calculations are consistent.
+	raw := Render("kaomoji ﾟ test", 80)
+	if strings.ContainsRune(strip(raw), 'ﾟ') {
+		t.Errorf("grapheme-extend modifier U+FF9F should be stripped: %q", strip(raw))
+	}
+	if !strings.Contains(strip(raw), "kaomoji") {
+		t.Errorf("surrounding text not preserved: %q", strip(raw))
+	}
+}
+
 func TestRender_TruncationSafeANSI(t *testing.T) {
 	md := "Para one.\n\nPara two.\n\nPara three.\n\nPara four.\n\nPara five."
 	out := Render(md, 80)
