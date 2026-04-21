@@ -720,12 +720,15 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.bookmarks = a.bookmarks.SetBookmarks(msg.items, msg.cursor)
 		a.bookmarkedPostIDs, a.bookmarkedReplyIDs = bookmarkIDSets(msg.items)
 		a.broadcastBookmarkedIDs()
-		return a, nil, true
+		return a, tea.Batch(a.fetchMissingBookmarkContentCmds(msg.items)...), true
 	case bookmarksPageMsg:
 		a.bookmarks = a.bookmarks.AppendBookmarks(msg.items, msg.cursor)
 		a.bookmarkedPostIDs, a.bookmarkedReplyIDs = mergeBookmarkIDSets(
 			a.bookmarkedPostIDs, a.bookmarkedReplyIDs, msg.items)
 		a.broadcastBookmarkedIDs()
+		return a, tea.Batch(a.fetchMissingBookmarkContentCmds(msg.items)...), true
+	case bookmarkItemEnrichedMsg:
+		a.bookmarks = a.bookmarks.EnrichBookmark(msg.bookmarkID, msg.post, msg.reply)
 		return a, nil, true
 	case screens.RefreshBookmarksMsg:
 		return a, a.loadBookmarksCmd(""), true
@@ -819,6 +822,37 @@ func bookmarkIDSets(items []model.Bookmark) (map[string]struct{}, map[string]str
 		}
 	}
 	return postIDs, replyIDs
+}
+
+// fetchMissingBookmarkContentCmds returns one command per bookmark that has no
+// embedded post/reply content, each of which fetches the content and returns
+// a bookmarkItemEnrichedMsg so the list can re-render with real data.
+func (a *App) fetchMissingBookmarkContentCmds(items []model.Bookmark) []tea.Cmd {
+	var cmds []tea.Cmd
+	for _, b := range items {
+		if b.Post != nil || b.Reply != nil {
+			continue
+		}
+		b := b
+		if b.PostID != "" {
+			cmds = append(cmds, func() tea.Msg {
+				post, err := a.client.GetPost(b.PostID)
+				if err != nil {
+					return nil
+				}
+				return bookmarkItemEnrichedMsg{bookmarkID: b.ID, post: &post}
+			})
+		} else if b.ReplyID != "" {
+			cmds = append(cmds, func() tea.Msg {
+				reply, err := a.client.GetReply(b.ReplyID)
+				if err != nil {
+					return nil
+				}
+				return bookmarkItemEnrichedMsg{bookmarkID: b.ID, reply: &reply}
+			})
+		}
+	}
+	return cmds
 }
 
 // mergeBookmarkIDSets merges a new page of bookmarks into existing ID sets.
@@ -1781,6 +1815,11 @@ type bookmarkCreatedMsg struct {
 	postID     string
 	replyID    string
 	err        error
+}
+type bookmarkItemEnrichedMsg struct {
+	bookmarkID string
+	post       *model.Post
+	reply      *model.Reply
 }
 type bookmarkDeletedMsg struct{ bookmarkID string }
 type bookmarkPostLoadedMsg struct{ post model.Post }
