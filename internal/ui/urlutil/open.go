@@ -9,14 +9,15 @@ import (
 // OpenURL opens u in the OS default browser. The call is fire-and-forget;
 // errors from the launched process are not returned.
 func OpenURL(u string) error {
-	var cmd string
 	switch runtime.GOOS {
 	case "linux":
-		cmd = "xdg-open"
+		return exec.Command("xdg-open", u).Start()
 	case "darwin":
-		cmd = "open"
+		return exec.Command("open", u).Start()
+	case "windows":
+		// "start" requires an empty title arg when the URL contains & characters.
+		return exec.Command("cmd", "/c", "start", "", u).Start()
 	default:
 		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
-	return exec.Command(cmd, u).Start()
 }
