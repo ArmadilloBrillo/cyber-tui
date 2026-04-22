@@ -148,6 +148,10 @@ type App struct {
 	// create/delete. Used to show [★] indicators in feed, postdetail, and topics.
 	bookmarkedPostIDs  map[string]struct{}
 	bookmarkedReplyIDs map[string]struct{}
+	// postBookmarkIDs and replyBookmarkIDs are reverse lookups: content ID → bookmark UUID.
+	// Required to call deleteBookmarkCmd when the user toggles off a bookmark with 'b'.
+	postBookmarkIDs  map[string]string // postID  → bookmark UUID
+	replyBookmarkIDs map[string]string // replyID → bookmark UUID
 }
 
 func NewApp(client api.Client) App {
@@ -170,6 +174,8 @@ func NewApp(client api.Client) App {
 		journal:        screens.NewJournalModel(0),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
+		postBookmarkIDs:    make(map[string]string),
+		replyBookmarkIDs:   make(map[string]string),
 	}
 }
 
@@ -727,13 +733,13 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case bookmarksLoadedMsg:
 		a.bookmarks = a.bookmarks.SetBookmarks(msg.items, msg.cursor)
-		a.bookmarkedPostIDs, a.bookmarkedReplyIDs = bookmarkIDSets(msg.items)
+		a.bookmarkedPostIDs, a.bookmarkedReplyIDs, a.postBookmarkIDs, a.replyBookmarkIDs = bookmarkIDSets(msg.items)
 		a.broadcastBookmarkedIDs()
 		return a, nil, true
 	case bookmarksPageMsg:
 		a.bookmarks = a.bookmarks.AppendBookmarks(msg.items, msg.cursor)
-		a.bookmarkedPostIDs, a.bookmarkedReplyIDs = mergeBookmarkIDSets(
-			a.bookmarkedPostIDs, a.bookmarkedReplyIDs, msg.items)
+		a.bookmarkedPostIDs, a.bookmarkedReplyIDs, a.postBookmarkIDs, a.replyBookmarkIDs = mergeBookmarkIDSets(
+			a.bookmarkedPostIDs, a.bookmarkedReplyIDs, a.postBookmarkIDs, a.replyBookmarkIDs, msg.items)
 		a.broadcastBookmarkedIDs()
 		return a, nil, true
 	case screens.LoadMoreBookmarksMsg:
@@ -758,7 +764,48 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.pendingReplyID = msg.replyID
 		return a, a.loadRepliesCmd(msg.post.ID), true
 	case screens.BookmarkPostMsg:
+		if msg.ReplyID != "" {
+			replyID := msg.ReplyID
+			if _, alreadyBookmarked := a.bookmarkedReplyIDs[replyID]; alreadyBookmarked {
+				// Toggle off: optimistic remove.
+				bookmarkID := a.replyBookmarkIDs[replyID]
+				newReplyIDs := make(map[string]struct{}, len(a.bookmarkedReplyIDs))
+				for k := range a.bookmarkedReplyIDs {
+					if k != replyID {
+						newReplyIDs[k] = struct{}{}
+					}
+				}
+				a.bookmarkedReplyIDs = newReplyIDs
+				delete(a.replyBookmarkIDs, replyID)
+				a.broadcastBookmarkedIDs()
+				return a, a.deleteBookmarkCmd(bookmarkID), true
+			}
+			// Toggle on: optimistic add.
+			newReplyIDs := make(map[string]struct{}, len(a.bookmarkedReplyIDs)+1)
+			for k := range a.bookmarkedReplyIDs {
+				newReplyIDs[k] = struct{}{}
+			}
+			newReplyIDs[replyID] = struct{}{}
+			a.bookmarkedReplyIDs = newReplyIDs
+			a.broadcastBookmarkedIDs()
+			return a, a.createBookmarkCmd("", replyID), true
+		}
 		postID := msg.PostID
+		if _, alreadyBookmarked := a.bookmarkedPostIDs[postID]; alreadyBookmarked {
+			// Toggle off: optimistic remove.
+			bookmarkID := a.postBookmarkIDs[postID]
+			newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs))
+			for k := range a.bookmarkedPostIDs {
+				if k != postID {
+					newPostIDs[k] = struct{}{}
+				}
+			}
+			a.bookmarkedPostIDs = newPostIDs
+			delete(a.postBookmarkIDs, postID)
+			a.broadcastBookmarkedIDs()
+			return a, a.deleteBookmarkCmd(bookmarkID), true
+		}
+		// Toggle on: optimistic add.
 		newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs)+1)
 		for k := range a.bookmarkedPostIDs {
 			newPostIDs[k] = struct{}{}
@@ -769,13 +816,24 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.createBookmarkCmd(postID, ""), true
 	case bookmarkCreatedMsg:
 		if msg.err != nil {
-			newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs))
-			for k := range a.bookmarkedPostIDs {
-				if k != msg.postID {
-					newPostIDs[k] = struct{}{}
+			// Roll back the optimistic add.
+			if msg.replyID != "" {
+				newReplyIDs := make(map[string]struct{}, len(a.bookmarkedReplyIDs))
+				for k := range a.bookmarkedReplyIDs {
+					if k != msg.replyID {
+						newReplyIDs[k] = struct{}{}
+					}
 				}
+				a.bookmarkedReplyIDs = newReplyIDs
+			} else {
+				newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs))
+				for k := range a.bookmarkedPostIDs {
+					if k != msg.postID {
+						newPostIDs[k] = struct{}{}
+					}
+				}
+				a.bookmarkedPostIDs = newPostIDs
 			}
-			a.bookmarkedPostIDs = newPostIDs
 			a.broadcastBookmarkedIDs()
 			return a, nil, true
 		}
@@ -791,6 +849,7 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 				}
 			}
 			a.bookmarkedPostIDs = newPostIDs
+			delete(a.postBookmarkIDs, msg.PostID)
 		}
 		if msg.ReplyID != "" {
 			newReplyIDs := make(map[string]struct{}, len(a.bookmarkedReplyIDs))
@@ -800,33 +859,38 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 				}
 			}
 			a.bookmarkedReplyIDs = newReplyIDs
+			delete(a.replyBookmarkIDs, msg.ReplyID)
 		}
 		a.broadcastBookmarkedIDs()
 		return a, a.deleteBookmarkCmd(msg.BookmarkID), true
 	case bookmarkDeletedMsg:
-		// Fire-and-forget; UI already updated.
-		return a, nil, true
+		a.bookmarks = a.bookmarks.SetFetching()
+		return a, a.loadBookmarksCmd(""), true
 	}
 	return a, nil, false
 }
 
-// bookmarkIDSets builds post and reply ID sets from a fresh bookmark page.
-func bookmarkIDSets(items []model.Bookmark) (map[string]struct{}, map[string]struct{}) {
+// bookmarkIDSets builds post/reply ID sets and reverse lookup maps from a fresh bookmark page.
+func bookmarkIDSets(items []model.Bookmark) (map[string]struct{}, map[string]struct{}, map[string]string, map[string]string) {
 	postIDs := make(map[string]struct{})
 	replyIDs := make(map[string]struct{})
+	postBookmarks := make(map[string]string)
+	replyBookmarks := make(map[string]string)
 	for _, b := range items {
 		if b.PostID != "" {
 			postIDs[b.PostID] = struct{}{}
+			postBookmarks[b.PostID] = b.ID
 		}
 		if b.ReplyID != "" {
 			replyIDs[b.ReplyID] = struct{}{}
+			replyBookmarks[b.ReplyID] = b.ID
 		}
 	}
-	return postIDs, replyIDs
+	return postIDs, replyIDs, postBookmarks, replyBookmarks
 }
 
-// mergeBookmarkIDSets merges a new page of bookmarks into existing ID sets.
-func mergeBookmarkIDSets(postIDs, replyIDs map[string]struct{}, items []model.Bookmark) (map[string]struct{}, map[string]struct{}) {
+// mergeBookmarkIDSets merges a new page of bookmarks into existing ID sets and reverse maps.
+func mergeBookmarkIDSets(postIDs, replyIDs map[string]struct{}, postBookmarks, replyBookmarks map[string]string, items []model.Bookmark) (map[string]struct{}, map[string]struct{}, map[string]string, map[string]string) {
 	newPostIDs := make(map[string]struct{}, len(postIDs)+len(items))
 	for k := range postIDs {
 		newPostIDs[k] = struct{}{}
@@ -835,15 +899,25 @@ func mergeBookmarkIDSets(postIDs, replyIDs map[string]struct{}, items []model.Bo
 	for k := range replyIDs {
 		newReplyIDs[k] = struct{}{}
 	}
+	newPostBookmarks := make(map[string]string, len(postBookmarks)+len(items))
+	for k, v := range postBookmarks {
+		newPostBookmarks[k] = v
+	}
+	newReplyBookmarks := make(map[string]string, len(replyBookmarks)+len(items))
+	for k, v := range replyBookmarks {
+		newReplyBookmarks[k] = v
+	}
 	for _, b := range items {
 		if b.PostID != "" {
 			newPostIDs[b.PostID] = struct{}{}
+			newPostBookmarks[b.PostID] = b.ID
 		}
 		if b.ReplyID != "" {
 			newReplyIDs[b.ReplyID] = struct{}{}
+			newReplyBookmarks[b.ReplyID] = b.ID
 		}
 	}
-	return newPostIDs, newReplyIDs
+	return newPostIDs, newReplyIDs, newPostBookmarks, newReplyBookmarks
 }
 
 // handleTopics processes topic list, topic posts, pagination, and post selection messages.

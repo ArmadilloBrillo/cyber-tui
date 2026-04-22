@@ -25,8 +25,11 @@ type DeleteBookmarkMsg struct {
 }
 
 // BookmarkPostMsg is emitted from Feed or PostDetail when the user presses 'b'
-// to bookmark the currently selected post.
-type BookmarkPostMsg struct{ PostID string }
+// to toggle a bookmark. Exactly one of PostID or ReplyID is set.
+type BookmarkPostMsg struct {
+	PostID  string
+	ReplyID string
+}
 
 // OpenBookmarkMsg is emitted when the user presses Enter on a bookmark that has
 // no embedded post/reply content. App fetches the item by ID then navigates to PostDetail.
