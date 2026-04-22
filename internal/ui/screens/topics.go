@@ -305,7 +305,7 @@ func (m TopicsModel) buildContent() (string, []int) {
 		}
 		// Footer
 		if m.loading {
-			out += theme.Subtle.Render("  loading…")
+			out += theme.Subtle.Render("  loading more…")
 		} else if m.topicsExhausted && len(m.topics) > 0 {
 			out += theme.Subtle.Render("  — end —")
 		}
@@ -327,7 +327,7 @@ func (m TopicsModel) buildContent() (string, []int) {
 	}
 	// Footer
 	if m.loading {
-		out += theme.Subtle.Render("  loading…")
+		out += theme.Subtle.Render("  loading more…")
 	} else if m.exhausted {
 		out += theme.Subtle.Render("  — end —")
 	}
