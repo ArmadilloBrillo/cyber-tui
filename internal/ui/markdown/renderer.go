@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"html"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"golang.org/x/text/unicode/norm"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -83,8 +85,9 @@ var mdInstance = goldmark.New(
 // Render parses content as GFM and returns an ANSI-styled string suitable for
 // viewport display. width is the inner content width for word-wrapping.
 func Render(content string, width int) string {
-	content = stripAmbiguousRunes(content)
 	content = html.UnescapeString(content)
+	content = norm.NFC.String(content)
+	content = stripAmbiguousRunes(content)
 	if strings.TrimSpace(content) == "" {
 		return ""
 	}
@@ -108,8 +111,9 @@ func Render(content string, width int) string {
 // plain text. Use this for compact single-line previews where full rendering
 // is not appropriate (bookmarks, profile post lists).
 func FirstLine(content string) string {
-	content = stripAmbiguousRunes(content)
 	content = html.UnescapeString(content)
+	content = norm.NFC.String(content)
+	content = stripAmbiguousRunes(content)
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -431,8 +435,8 @@ func stripAmbiguousRunes(s string) string {
 			// strip: zero-width chars, and grapheme-extend modifiers (e.g. ﾟ U+FF9F)
 			// that runewidth.StringWidth treats as 0-width in context but the terminal
 			// renders as 1 column (wcwidth), causing layout overflow
-		case runewidth.IsAmbiguousWidth(r):
-			b.WriteRune(' ') // ambiguous EAW=A: 1 column in non-CJK, 2 in CJK — normalise to space
+		case runewidth.IsAmbiguousWidth(r) && !unicode.IsLetter(r):
+			b.WriteRune(' ') // ambiguous EAW=A non-letter symbol — normalise to space to avoid CJK layout overflow
 		default:
 			b.WriteRune(r)
 		}

@@ -44,7 +44,7 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, width int, loc *ti
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+p.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)),
-	)
+	) + audioIcon(p.Attachments)
 	var rightParts []string
 	if ind := attachmentIndicator(p.Attachments); ind != "" {
 		rightParts = append(rightParts, ind)
@@ -279,25 +279,24 @@ func attachmentURLs(attachments []model.Attachment) []string {
 }
 
 // attachmentIndicator returns a compact header badge for any attachments present,
-// e.g. "[img]", "[yt]", or "[img][yt]". Returns "" when there are no attachments.
+// e.g. "[img]". Returns "" when there are no attachments.
 func attachmentIndicator(attachments []model.Attachment) string {
-	var img, yt bool
 	for _, a := range attachments {
-		switch a.Type {
-		case "image":
-			img = true
-		case "audio":
-			yt = true
+		if a.Type == "image" {
+			return theme.Subtle.Render("[img]")
 		}
 	}
-	var s string
-	if img {
-		s += theme.Subtle.Render("[img]")
+	return ""
+}
+
+// audioIcon returns a ♫ icon (with leading spaces) when any attachment is audio, else "".
+func audioIcon(attachments []model.Attachment) string {
+	for _, a := range attachments {
+		if a.Type == "audio" {
+			return "  " + theme.Highlight.Render("♫")
+		}
 	}
-	if yt {
-		s += theme.Subtle.Render("[yt]")
-	}
-	return s
+	return ""
 }
 
 // renderAttachments returns a formatted block for each attachment,
@@ -313,11 +312,14 @@ func renderAttachments(attachments []model.Attachment) string {
 		case "image":
 			lines = append(lines, theme.Subtle.Render("[image]")+"  "+linkStyle.Render(a.Src))
 		case "audio":
-			meta := a.Artist + " \u2013 " + a.Title
-			if a.Genre != "" {
-				meta += " (" + a.Genre + ")"
+			label := a.Src
+			if a.Artist != "" || a.Title != "" {
+				label = a.Artist + " – " + a.Title
+				if a.Genre != "" {
+					label += " (" + a.Genre + ")"
+				}
 			}
-			lines = append(lines, theme.Subtle.Render("[audio]")+"  "+theme.Subtle.Render(meta)+"  "+linkStyle.Render(a.Src))
+			lines = append(lines, theme.Subtle.Render("[AUDIO]")+"  "+linkStyle.Render(label))
 		default:
 			lines = append(lines, theme.Subtle.Render("[attachment]")+"  "+linkStyle.Render(a.Src))
 		}

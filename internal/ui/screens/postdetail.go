@@ -633,7 +633,7 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+m.post.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(m.post.CreatedAt, m.location(), m.timeDisplayFormat, false)),
-	)
+	) + audioIcon(m.post.Attachments)
 	var rightParts []string
 	if ind := attachmentIndicator(m.post.Attachments); ind != "" {
 		rightParts = append(rightParts, ind)
@@ -693,7 +693,7 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 		theme.Highlight.Render("@"+node.Reply.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
-	left := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...)
+	left := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...) + audioIcon(node.Reply.Attachments)
 	var replyRightParts []string
 	if ind := attachmentIndicator(node.Reply.Attachments); ind != "" {
 		replyRightParts = append(replyRightParts, ind)
