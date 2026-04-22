@@ -1730,6 +1730,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	return tea.Batch(
 		a.loadFeedCmd(),
 		a.loadProfileCmd(),
+		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
 		a.loadSettingsCmd(),
 		a.scheduleWanderCmd(),
