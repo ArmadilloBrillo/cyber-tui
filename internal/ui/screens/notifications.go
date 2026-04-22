@@ -152,13 +152,12 @@ func (m NotificationsModel) MarkRead(id string) NotificationsModel {
 			break
 		}
 	}
-	if m.ready {
-		m = m.refreshContent()
-	}
-	// Clamp selectedIndex: the just-read notification may have vanished from the
-	// unread-only view, leaving the index out of bounds.
+	// Clamp before rebuilding content so the highlight renders at the correct index.
 	if visible := m.visibleNotifs(); m.selectedIndex >= len(visible) && len(visible) > 0 {
 		m.selectedIndex = len(visible) - 1
+	}
+	if m.ready {
+		m = m.refreshContent()
 	}
 	return m
 }

@@ -229,6 +229,32 @@ func TestNotifs_Enter_AutoMarksRead(t *testing.T) {
 	}
 }
 
+func TestNotifs_Enter_LastUnread_ClampsAndHighlights(t *testing.T) {
+	// Bug: when the last unread item is entered, MarkRead used to call refreshContent()
+	// before clamping selectedIndex, leaving the viewport with no highlighted item.
+	notifs := []model.Notification{
+		makeNotif("n1", "reply", "p1", false),
+		makeNotif("n2", "reply", "p2", false),
+		makeNotif("n3", "reply", "p3", false),
+	}
+	m := initNotifs(notifs)
+	// Navigate to last item (index 2).
+	m, _ = runKey(m, "j")
+	m, _ = runKey(m, "j")
+	if m.selectedIndex != 2 {
+		t.Fatalf("expected selectedIndex 2, got %d", m.selectedIndex)
+	}
+	// Enter: marks n3 read, navigates away; unread list now has 2 items (indices 0-1).
+	m2, _ := runKey(m, "enter")
+	if m2.selectedIndex != 1 {
+		t.Errorf("expected selectedIndex clamped to 1, got %d", m2.selectedIndex)
+	}
+	// The viewport content must contain a highlighted item (rounded-border corner ╭).
+	if !strings.Contains(m2.View(), "╭") {
+		t.Error("expected viewport content to contain a highlighted item after clamp")
+	}
+}
+
 func TestNotifs_Enter_Mention_EmitsShowPost(t *testing.T) {
 	notifs := []model.Notification{makeNotif("n1", "mention", "p2", false)}
 	m := initNotifs(notifs)
