@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.3.3
+# ᑕ¥βєяรקค¢є API v0.3.6
 
 ## Authentication
 
@@ -104,9 +104,9 @@ No authentication required.
 
 ---
 
-## Posts
+## Entries
 
-### List Posts (Feed)
+### List Entries (Feed)
 
 ```
 GET /v1/posts?limit=20&cursor=<postId>
@@ -114,9 +114,9 @@ GET /v1/posts?limit=20&cursor=<postId>
 
 Query params:
 - `limit` -- 1-50, default 20
-- `cursor` -- post ID to start after (for pagination)
+- `cursor` -- entry ID to start after (for pagination)
 
-To list a specific user's posts, use `GET /v1/users/:username/posts` instead.
+To list a specific user's entries, use `GET /v1/users/:username/posts` instead.
 
 Returns:
 
@@ -144,13 +144,13 @@ Returns:
 
 Pass `cursor` from the response to get the next page. `cursor` is `null` when there are no more results.
 
-### Get Post
+### Get Entry
 
 ```
 GET /v1/posts/:id
 ```
 
-### Create Post
+### Create Entry
 
 ```
 POST /v1/posts
@@ -158,44 +158,35 @@ POST /v1/posts
 
 ```json
 {
-  "content": "Your post content (markdown)",
+  "content": "Your entry content (markdown)",
   "topics": ["tag1", "tag2"],
   "isPublic": false,
-  "isNSFW": false,
-  "attachments": [
-    {
-      "type": "image",
-      "src": "https://example.com/image.png",
-      "width": 640,
-      "height": 480
-    }
-  ]
+  "isNSFW": false
 }
 ```
 
 - `content` -- required, max 32,768 characters
 - `topics` -- optional, max 3, must be lowercase
-- `isPublic` -- optional, makes post visible without login
+- `isPublic` -- optional, makes entry visible without login
 - `isNSFW` -- optional, content warning flag
-- `attachments` -- optional, max 1 attachment per post (see Attachments section)
 
 Returns `{ "data": { "postId": "..." } }` (201).
 
-Rate limit: 2/min, 10/day.
+Rate limit: 2/min, 15/day.
 
-### Delete Post
+### Delete Entry
 
 ```
 DELETE /v1/posts/:id
 ```
 
-Deletes the post. Only the author (or site admin) can delete.
+Deletes the entry. Only the author (or site admin) can delete.
 
 ---
 
 ## Replies
 
-### List Replies for a Post
+### List Replies for an Entry
 
 ```
 GET /v1/posts/:postId/replies?limit=20&cursor=<replyId>
@@ -224,13 +215,12 @@ POST /v1/replies
 ```
 
 - `content` -- required, max 32,768 characters
-- `postId` -- required, must reference an existing post
-- `parentReplyId` -- optional, ID of the reply you're responding to (must belong to the same post)
-- `attachments` -- optional, max 1 attachment (see Attachments section)
+- `postId` -- required, must reference an existing entry
+- `parentReplyId` -- optional, ID of the reply you're responding to (must belong to the same entry)
 
 Returns `{ "data": { "replyId": "..." } }` (201).
 
-Rate limit: 3/min, 10/day.
+Rate limit: 3/min, 15/day.
 
 ### Delete Reply
 
@@ -256,17 +246,17 @@ GET /v1/users/me
 GET /v1/users/:username
 ```
 
-Rate limit: 20/min.
+Rate limit: 30/min.
 
-### List User's Posts
+### List User's Entries
 
 ```
 GET /v1/users/:username/posts?limit=20&cursor=<postId>
 ```
 
-Returns paginated posts by the specified user, newest first.
+Returns paginated entries by the specified user, newest first.
 
-Rate limit: 30/min.
+Rate limit: 45/min.
 
 ### List User's Replies
 
@@ -276,7 +266,7 @@ GET /v1/users/:username/replies?limit=20&cursor=<replyId>
 
 Returns paginated replies by the specified user, newest first.
 
-Rate limit: 30/min.
+Rate limit: 45/min.
 
 ### Update Own Profile
 
@@ -299,7 +289,7 @@ PATCH /v1/users/me
 ```
 
 - `bio` -- max 127 characters, or `null` to clear
-- `pinnedPostId` -- post ID to pin, or `null` to unpin (must be your own post)
+- `pinnedPostId` -- entry ID to pin, or `null` to unpin (must be your own entry)
 - `displayName` -- max 64 characters, or `null` to clear
 - `websiteUrl` -- must start with `http://` or `https://`, max 2048 characters, or `null` to clear
 - `websiteName` -- max 64 characters, or `null` to clear
@@ -308,7 +298,7 @@ PATCH /v1/users/me
 - `locationLongitude` -- number between -180 and 180, or `null` to clear (requires `locationLatitude`)
 - `locationName` -- max 64 characters, or `null` to clear
 
-Rate limit: 2/min, 10/day.
+Rate limit: 2/min, 15/day.
 
 ---
 
@@ -320,7 +310,7 @@ Rate limit: 2/min, 10/day.
 GET /v1/bookmarks?limit=20&cursor=<bookmarkId>
 ```
 
-Rate limit: 20/min.
+Rate limit: 30/min.
 
 ### Create Bookmark
 
@@ -338,7 +328,7 @@ or
 { "replyId": "def456", "type": "reply" }
 ```
 
-Rate limit: 5/min, 50/day.
+Rate limit: 5/min, 75/day.
 
 ### Remove Bookmark
 
@@ -362,7 +352,7 @@ GET /v1/follows?type=following&limit=20&cursor=<followId>
 - `limit` -- 1-50, default 20
 - `cursor` -- follow ID for pagination
 
-Rate limit: 20/min.
+Rate limit: 30/min.
 
 ### Follow a User
 
@@ -374,7 +364,7 @@ POST /v1/follows
 { "followedId": "user_id_to_follow" }
 ```
 
-Rate limit: 3/min, 10/day.
+Rate limit: 3/min, 15/day.
 
 ### Unfollow
 
@@ -384,7 +374,7 @@ DELETE /v1/follows/:id
 
 `:id` is the follow document ID returned when you followed.
 
-Rate limit: 3/min, 10/day.
+Rate limit: 3/min, 15/day.
 
 ---
 
@@ -393,10 +383,27 @@ Rate limit: 3/min, 10/day.
 ### List Notifications
 
 ```
-GET /v1/notifications?limit=20&cursor=<notificationId>
+GET /v1/notifications?limit=20&cursor=<notificationId>&read=false&type=reply,reply_mention
 ```
 
-Rate limit: 20/min.
+Query params:
+- `limit` (1-50, default 20), `cursor` -- standard pagination
+- `read` -- `true` or `false` to filter by read status. Omit for all.
+- `type` -- comma-separated list of notification types (1-20 values). Omit for all.
+
+Notification types: `bookmark`, `reply`, `thread_reply`, `new_follower`, `unfollowed`, `new_post_following`, `new_post_friend`, `poke`, `chat_mention`, `post_mention`, `reply_mention`, `dm_message`, `guild_new_thread`, `supporter_granted`, `supporter_removed`, `hacker_granted`, `hacker_removed`, `image_permission_granted`, `image_permission_removed`, `attachment_permission_granted`, `attachment_permission_removed`, `system_ban`.
+
+Rate limit: 30/min.
+
+### Unread Count
+
+```
+GET /v1/notifications/unread-count
+```
+
+Returns `{ "data": { "count": 7 } }` -- the number of unread notifications for the authenticated user.
+
+Cached for 5 seconds. The count is raw and may include notifications whose actor has since been banned or shadow-banned (those are filtered out of `GET /v1/notifications` but not from this count).
 
 ### Mark as Read
 
@@ -430,7 +437,7 @@ Notes support **revisions** — editing a note creates a new revision rather tha
 GET /v1/notes?limit=20&cursor=<cursor>
 ```
 
-Returns the latest revision of each note. Rate limit: 20/min.
+Returns the latest revision of each note. Rate limit: 30/min.
 
 ### Get Note
 
@@ -465,7 +472,7 @@ POST /v1/notes
 - `content` -- required, max 32,768 characters
 - `topics` -- optional, max 3, lowercase
 
-Rate limit: 3/min, 20/day.
+Rate limit: 3/min, 30/day.
 
 ### Update Note
 
@@ -500,11 +507,11 @@ Soft-deletes all revisions of the note.
 GET /v1/topics
 ```
 
-Returns all topics sorted by post count (most popular first).
+Returns all topics sorted by entry count (most popular first).
 
-Rate limit: 20/min.
+Rate limit: 30/min.
 
-### List Posts by Topic
+### List Entries by Topic
 
 ```
 GET /v1/topics/:slug/posts?limit=20&cursor=<postId>
@@ -512,7 +519,7 @@ GET /v1/topics/:slug/posts?limit=20&cursor=<postId>
 
 `:slug` is the topic name in lowercase (e.g., `music`, `linux`).
 
-Rate limit: 30/min.
+Rate limit: 45/min.
 
 ---
 
@@ -544,47 +551,7 @@ PATCH /v1/settings
 
 Available fields: `notifications`, `filterNSFW`, `showFollowerCount`, `hideImagesInFeed`, `hideAudioInFeed`, `autoWatchOnReply`, `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom`, `iconTheme`, `followedTopics`, `mutedTopics`, `imagePixelSize`, `timeDisplayFormat`, `useLegacyMenuOrder`, `defaultPublicPost`.
 
-Rate limit: 2/min, 10/day.
-
----
-
-## Attachments
-
-Posts and replies can include up to 1 attachment.
-
-### Image Attachment
-
-```json
-{
-  "type": "image",
-  "src": "https://example.com/image.png",
-  "width": 640,
-  "height": 480
-}
-```
-
-- `src` -- http/https URL
-- `width` -- 1-640 pixels
-- `height` -- 1-640 pixels
-
-### Audio Attachment (YouTube)
-
-```json
-{
-  "type": "audio",
-  "src": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "origin": "youtube",
-  "artist": "Artist Name",
-  "title": "Song Title",
-  "genre": "electronic"
-}
-```
-
-- `src` -- valid YouTube URL
-- `origin` -- must be `"youtube"`
-- `artist` -- required, max 100 characters
-- `title` -- required, max 150 characters
-- `genre` -- required, max 50 characters, lowercase
+Rate limit: 2/min, 15/day.
 
 ---
 
@@ -631,7 +598,7 @@ All responses follow this structure:
 
 | Action | Per Minute | Per Day |
 |--------|-----------|---------|
-| Posts | 2 | 10 |
+| Entries | 2 | 10 |
 | Replies | 3 | 10 |
 | Follows | 3 | 10 |
 | Unfollows | 3 | 10 |
@@ -644,15 +611,16 @@ All responses follow this structure:
 
 | Endpoint | Per Minute |
 |----------|-----------|
-| List posts | 30 |
+| List entries | 30 |
 | List replies | 30 |
-| List user posts | 30 |
+| List user entries | 30 |
 | List user replies | 30 |
-| List topic posts | 30 |
+| List topic entries | 30 |
 | List topics | 20 |
 | List bookmarks | 20 |
 | List notes | 20 |
-| List notifications | 20 |
+| List notifications | 30 |
+| Unread notification count | 30 |
 | List followers/following | 20 |
 | View user profile | 20 |
 
@@ -662,17 +630,12 @@ Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for 
 
 | Field | Max Length |
 |-------|-----------|
-| Post/reply/note content | 32,768 chars |
+| Entry/reply/note content | 32,768 chars |
 | Chat/DM message | 2,048 chars |
 | Bio | 127 chars |
 | Display name | 64 chars |
 | Website URL | 2,048 chars |
 | Website name | 64 chars |
 | Location name | 64 chars |
-| Topics per post | 3 |
+| Topics per entry | 3 |
 | Username | 3-20 chars |
-| Attachments per post/reply | 1 |
-| Image dimensions | 640x640 max |
-| Audio artist | 100 chars |
-| Audio title | 150 chars |
-| Audio genre | 50 chars |
