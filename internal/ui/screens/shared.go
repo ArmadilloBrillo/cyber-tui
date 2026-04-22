@@ -138,6 +138,7 @@ type SharedConfigMsg struct {
 	Settings       model.Settings
 	WanderLust     bool
 	MaxThreadDepth int
+	Timezone       string
 }
 
 // ShowUserProfileMsg is emitted by Feed, PostDetail, and Notifications when
@@ -154,6 +155,7 @@ type SaveSettingsMsg struct {
 	Settings       model.Settings
 	WanderLust     bool
 	MaxThreadDepth int
+	Timezone       string
 }
 
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark

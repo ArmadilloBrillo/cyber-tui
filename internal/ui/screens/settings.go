@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
@@ -64,6 +65,11 @@ var settingsGroups = []settingsGroup{
 				kind:    "enum",
 				options: []string{"1", "2", "3", "4", "5"},
 			},
+			{
+				label:   "timezone",
+				kind:    "enum",
+				options: config.AvailableTimezones,
+			},
 		},
 	},
 	{
@@ -82,6 +88,8 @@ type SettingsModel struct {
 	originalWanderLust     bool           // last saved baseline for wanderLust
 	maxThreadDepth         int            // live local config value (1–5)
 	originalMaxThreadDepth int            // last saved baseline
+	timezone               string         // live local config value (UTC offset label)
+	originalTimezone       string         // last saved baseline
 	cursor                 int
 	width                  int
 	height                 int
@@ -104,7 +112,7 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int) SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone string) SettingsModel {
 	m.saved = true
 	m.err = nil
 	m.original = m.settings
@@ -112,6 +120,8 @@ func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int) SettingsMod
 	m.originalWanderLust = wanderLust
 	m.maxThreadDepth = maxThreadDepth
 	m.originalMaxThreadDepth = maxThreadDepth
+	m.timezone = timezone
+	m.originalTimezone = timezone
 	return m
 }
 
@@ -125,7 +135,8 @@ func (m SettingsModel) SetError(err error) SettingsModel {
 func (m SettingsModel) IsDirty() bool {
 	return !settingsEqual(m.settings, m.original) ||
 		m.wanderLust != m.originalWanderLust ||
-		m.maxThreadDepth != m.originalMaxThreadDepth
+		m.maxThreadDepth != m.originalMaxThreadDepth ||
+		m.timezone != m.originalTimezone
 }
 
 // settingsEqual compares only the editable scalar fields.
@@ -237,6 +248,19 @@ func cycleIntEnum(cur int, options []string, delta int) int {
 	return val
 }
 
+// cycleStringEnum cycles a plain string value through a set of options (wraps around).
+func cycleStringEnum(cur string, options []string, delta int) string {
+	pos := 0
+	for i, o := range options {
+		if o == cur {
+			pos = i
+			break
+		}
+	}
+	pos = (pos + delta + len(options)) % len(options)
+	return options[pos]
+}
+
 // cycleEnum cycles an enum option by delta (wraps around).
 func cycleEnum(s model.Settings, idx int, options []string, delta int) model.Settings {
 	cur := getEnum(s, idx)
@@ -271,6 +295,12 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.originalWanderLust = msg.WanderLust
 			m.maxThreadDepth = msg.MaxThreadDepth
 			m.originalMaxThreadDepth = msg.MaxThreadDepth
+			tz := msg.Timezone
+			if tz == "" {
+				tz = "UTC"
+			}
+			m.timezone = tz
+			m.originalTimezone = tz
 		}
 		return m, nil
 
@@ -298,7 +328,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 
 		case " ", "enter": // space (bubbletea KeySpace.String() == " ") or enter
 			if m.cursor < total && items[m.cursor].kind == "bool" {
-				if m.cursor == 12 {
+				if m.cursor == 13 {
 					m.wanderLust = !m.wanderLust
 				} else {
 					m.settings = setBool(m.settings, m.cursor, !getBool(m.settings, m.cursor))
@@ -311,6 +341,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			if m.cursor < total && items[m.cursor].kind == "enum" {
 				if m.cursor == 11 {
 					m.maxThreadDepth = cycleIntEnum(m.maxThreadDepth, items[m.cursor].options, +1)
+				} else if m.cursor == 12 {
+					m.timezone = cycleStringEnum(m.timezone, items[m.cursor].options, +1)
 				} else {
 					m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, +1)
 				}
@@ -322,6 +354,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			if m.cursor < total && items[m.cursor].kind == "enum" {
 				if m.cursor == 11 {
 					m.maxThreadDepth = cycleIntEnum(m.maxThreadDepth, items[m.cursor].options, -1)
+				} else if m.cursor == 12 {
+					m.timezone = cycleStringEnum(m.timezone, items[m.cursor].options, -1)
 				} else {
 					m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, -1)
 				}
@@ -334,8 +368,9 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				s := m.settings
 				wl := m.wanderLust
 				td := m.maxThreadDepth
+				tz := m.timezone
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz}
 				}
 			}
 			return m, nil
@@ -345,6 +380,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.settings = m.original
 			m.wanderLust = m.originalWanderLust
 			m.maxThreadDepth = m.originalMaxThreadDepth
+			m.timezone = m.originalTimezone
 			m.saved = false
 			m.err = nil
 			return m, nil
@@ -384,7 +420,7 @@ func (m SettingsModel) View() string {
 			// Value rendering
 			if item.kind == "bool" {
 				var boolVal bool
-				if flatIdx == 12 {
+				if flatIdx == 13 {
 					boolVal = m.wanderLust
 				} else {
 					boolVal = getBool(m.settings, flatIdx)
@@ -400,6 +436,11 @@ func (m SettingsModel) View() string {
 					cur = fmt.Sprintf("%d", m.maxThreadDepth)
 					if cur == "0" {
 						cur = "3"
+					}
+				} else if flatIdx == 12 {
+					cur = m.timezone
+					if cur == "" {
+						cur = "UTC"
 					}
 				} else {
 					cur = getEnum(m.settings, flatIdx)

@@ -91,11 +91,6 @@ type App struct {
 	themePickerCursor int    // index into availableThemes
 	themePickerOrig   string // theme name when picker was opened (for Esc revert)
 
-	// timezonePicker state — open with 'z', close with Enter/Esc.
-	timezonePickerOpen   bool
-	timezonePickerCursor int    // index into config.AvailableTimezones
-	timezonePickerOrig   string // timezone label when picker was opened (for Esc revert)
-
 	// helpModal state — open with '?', close with any key.
 	helpModalOpen bool
 
@@ -254,7 +249,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // Adding a new screen only requires handling SharedConfigMsg in that
 // screen's Update — no changes here are needed.
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth}
+	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone}
 	a.feed, _ = a.feed.Update(msg)
 	a.chatrooms, _ = a.chatrooms.Update(msg)
 	a.cmail, _ = a.cmail.Update(msg)
@@ -308,10 +303,6 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, false
 	}
 	// Modal overlays intercept all keys while open.
-	if a.timezonePickerOpen {
-		model, cmd := a.handleTimezonePickerKey(m)
-		return model.(App), cmd, true
-	}
 	if a.themePickerOpen {
 		model, cmd := a.handleThemePickerKey(m)
 		return model.(App), cmd, true
@@ -338,13 +329,6 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.themePickerOpen = true
 			a.themePickerOrig = theme.CurrentName()
 			a.themePickerCursor = themeIndex(theme.CurrentName())
-			return a, nil, true
-		}
-	case "z":
-		if a.active != screenLogin {
-			a.timezonePickerOpen = true
-			a.timezonePickerOrig = a.timezone
-			a.timezonePickerCursor = timezoneIndex(a.timezone)
 			return a, nil, true
 		}
 	case "v":
@@ -693,6 +677,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		s := msg.Settings
 		wl := msg.WanderLust
 		td := msg.MaxThreadDepth
+		tz := msg.Timezone
 		return a, func() tea.Msg {
 			if err := a.client.UpdateSettings(s); err != nil {
 				return errMsg{err}
@@ -700,17 +685,21 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 			if cfg, err := config.Load(); err == nil {
 				cfg.WanderLust = wl
 				cfg.MaxThreadDepth = td
+				cfg.Timezone = tz
 				_ = config.Save(cfg)
 			}
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz}
 		}, true
 
 	case settingsSavedMsg:
 		a.settings = msg.settings
 		a.wanderLust = msg.wanderLust
 		a.maxThreadDepth = msg.maxThreadDepth
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth)
+		a.timezone = msg.timezone
+		a.loc = config.ParseTimezoneLabel(msg.timezone)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone)
 		a.broadcastConfig()
+		a.refreshViewports()
 		return a, nil, true
 
 	case wanderTickMsg:
@@ -1151,9 +1140,6 @@ func (a App) View() string {
 	if a.themePickerOpen {
 		return overlayCenter(base, a.renderThemePicker(), a.width, a.height)
 	}
-	if a.timezonePickerOpen {
-		return overlayCenter(base, a.renderTimezonePicker(), a.width, a.height)
-	}
 	if a.helpModalOpen {
 		return overlayCenter(base, a.renderHelpModal(), a.width, a.height)
 	}
@@ -1396,90 +1382,6 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// --- timezone picker ---
-
-// timezoneIndex returns the index of label in config.AvailableTimezones,
-// defaulting to the index of "UTC".
-func timezoneIndex(label string) int {
-	for i, t := range config.AvailableTimezones {
-		if t == label {
-			return i
-		}
-	}
-	for i, t := range config.AvailableTimezones {
-		if t == "UTC" {
-			return i
-		}
-	}
-	return 0
-}
-
-// handleTimezonePickerKey processes keyboard input while the timezone picker is open.
-func (a App) handleTimezonePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	refreshCmd := func() tea.Msg { return tea.WindowSizeMsg{Width: a.width, Height: a.height} }
-	n := len(config.AvailableTimezones)
-	switch msg.String() {
-	case "up", "k":
-		a.timezonePickerCursor = (a.timezonePickerCursor - 1 + n) % n
-	case "down", "j":
-		a.timezonePickerCursor = (a.timezonePickerCursor + 1) % n
-	case "enter":
-		selected := config.AvailableTimezones[a.timezonePickerCursor]
-		a.timezone = selected
-		a.loc = config.ParseTimezoneLabel(selected)
-		a.timezonePickerOpen = false
-		a.broadcastConfig()
-		a.refreshViewports()
-		return a, tea.Batch(
-			refreshCmd,
-			func() tea.Msg {
-				if cfg, err := config.Load(); err == nil {
-					cfg.Timezone = selected
-					_ = config.Save(cfg)
-				}
-				return nil
-			},
-		)
-	case "esc":
-		a.timezonePickerOpen = false
-		return a, refreshCmd
-	}
-	return a, nil
-}
-
-// renderTimezonePicker returns the centered overlay box for timezone selection.
-// Shows a scrolling window of 13 items centered on the cursor.
-func (a App) renderTimezonePicker() string {
-	title := theme.Title.Render("timezone")
-	zones := config.AvailableTimezones
-	n := len(zones)
-	const window = 13
-	start := a.timezonePickerCursor - window/2
-	if start < 0 {
-		start = 0
-	}
-	if start+window > n {
-		start = n - window
-	}
-	var items []string
-	for i := start; i < start+window; i++ {
-		if i == a.timezonePickerCursor {
-			items = append(items, theme.Highlight.Render("▸ "+zones[i]))
-		} else {
-			items = append(items, theme.Subtle.Render("  "+zones[i]))
-		}
-	}
-	hint := theme.Subtle.Render("↑↓ select   enter save   esc cancel")
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		"",
-		lipgloss.JoinVertical(lipgloss.Left, items...),
-		"",
-		hint,
-	)
-	return theme.ActiveBorder.Render(body)
-}
-
 // refreshViewports forces all screen viewports to re-render with the current
 // theme by re-broadcasting the current terminal size. Called synchronously so
 // View() sees fresh content in the same frame.
@@ -1541,7 +1443,6 @@ func (a App) renderHelpModal() string {
 		row("1-7", "feed · notifs · journal · bookmarks · topics · profile · settings"),
 		row("← →", "cycle tabs"),
 		row("t", "theme"),
-		row("z", "timezone"),
 		row("v", "density"),
 		row("o", "open url"),
 		row("q", "quit"),
@@ -1971,6 +1872,7 @@ type settingsSavedMsg struct {
 	settings       model.Settings
 	wanderLust     bool
 	maxThreadDepth int
+	timezone       string
 }
 type wanderTickMsg struct{}
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made

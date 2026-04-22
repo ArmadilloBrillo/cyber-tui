@@ -254,7 +254,7 @@ func TestSettings_Esc_ClearsError(t *testing.T) {
 func TestSettings_SetSaved_ClearsError(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetError(testErr)
-	m = m.SetSaved(false, 3)
+	m = m.SetSaved(false, 3, "UTC")
 	if m.err != nil {
 		t.Error("SetSaved should clear error")
 	}
@@ -266,7 +266,7 @@ func TestSettings_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty after change")
 	}
-	m = m.SetSaved(false, 3)
+	m = m.SetSaved(false, 3, "UTC")
 	if m.IsDirty() {
 		t.Error("after SetSaved, should not be dirty")
 	}
@@ -391,7 +391,7 @@ func TestSettings_View_DirtyFooterHint(t *testing.T) {
 
 func TestSettings_View_SavedMessage(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m = m.SetSaved(false, 3)
+	m = m.SetSaved(false, 3, "UTC")
 	view := m.View()
 	if !containsSubstring(view, "saved!") {
 		t.Error("View should show 'saved!' when saved=true")
@@ -420,7 +420,7 @@ func TestSettings_WanderGroup_Visible(t *testing.T) {
 func TestSettings_WanderToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
-	m.cursor = 12 // wander mode item (shifted by thread depth addition)
+	m.cursor = 13 // wander mode item (shifted by timezone addition)
 	m, _ = m.Update(keyMsg("enter"))
 	if m.wanderLust {
 		t.Error("toggling wander mode should flip wanderLust to false")
@@ -462,12 +462,110 @@ func TestSettings_WanderSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
 	m.originalWanderLust = false // dirty
-	m = m.SetSaved(true, 3)
+	m = m.SetSaved(true, 3, "UTC")
 	if m.originalWanderLust != true {
 		t.Error("SetSaved should update originalWanderLust to the saved value")
 	}
 	if m.IsDirty() {
 		t.Error("should not be dirty after SetSaved")
+	}
+}
+
+// --- Timezone Tests ---
+
+func TestSettings_Timezone_CyclesForward(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.timezone = "UTC"
+	m.originalTimezone = "UTC"
+	m.cursor = 12 // timezone item
+	m, _ = m.Update(keyMsg("tab"))
+	if m.timezone == "UTC" {
+		t.Error("tab should advance timezone from UTC")
+	}
+}
+
+func TestSettings_Timezone_CyclesBackward(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.timezone = "UTC"
+	m.originalTimezone = "UTC"
+	m.cursor = 12
+	m, _ = m.Update(keyMsg("shift+tab"))
+	if m.timezone == "UTC" {
+		t.Error("shift+tab should cycle timezone backward from UTC")
+	}
+}
+
+func TestSettings_Timezone_Wraps(t *testing.T) {
+	m := initSettings(defaultSettings())
+	items := flatItems()
+	last := items[12].options[len(items[12].options)-1]
+	m.timezone = last
+	m.originalTimezone = last
+	m.cursor = 12
+	m, _ = m.Update(keyMsg("tab"))
+	first := items[12].options[0]
+	if m.timezone != first {
+		t.Errorf("tab from last timezone should wrap to first, got %s", m.timezone)
+	}
+}
+
+func TestSettings_Timezone_IsDirty(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.timezone = "UTC"
+	m.originalTimezone = "UTC"
+	if m.IsDirty() {
+		t.Error("should not be dirty before change")
+	}
+	m.timezone = "UTC+2"
+	if !m.IsDirty() {
+		t.Error("changing timezone should make IsDirty true")
+	}
+}
+
+func TestSettings_Timezone_Esc_Reverts(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.timezone = "UTC+2"
+	m.originalTimezone = "UTC"
+	m, _ = m.Update(keyMsg("esc"))
+	if m.timezone != "UTC" {
+		t.Errorf("esc should revert timezone to original, got %s", m.timezone)
+	}
+}
+
+func TestSettings_Timezone_SaveMsg(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.timezone = "UTC+2"
+	m.originalTimezone = "UTC"
+	var got tea.Msg
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd != nil {
+		got = cmd()
+	}
+	save, ok := got.(SaveSettingsMsg)
+	if !ok {
+		t.Fatal("ctrl+s should emit SaveSettingsMsg")
+	}
+	if save.Timezone != "UTC+2" {
+		t.Errorf("SaveSettingsMsg.Timezone should be UTC+2, got %s", save.Timezone)
+	}
+}
+
+func TestSettings_SharedConfigMsg_SetsTimezone(t *testing.T) {
+	m := NewSettingsModel()
+	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 24, Settings: defaultSettings(), Timezone: "UTC+5:30"})
+	if m.timezone != "UTC+5:30" {
+		t.Errorf("SharedConfigMsg should set timezone, got %s", m.timezone)
+	}
+	if m.originalTimezone != "UTC+5:30" {
+		t.Errorf("SharedConfigMsg should set originalTimezone, got %s", m.originalTimezone)
+	}
+}
+
+func TestSettings_SharedConfigMsg_DefaultsTimezoneToUTC(t *testing.T) {
+	m := NewSettingsModel()
+	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 24, Settings: defaultSettings(), Timezone: ""})
+	if m.timezone != "UTC" {
+		t.Errorf("empty Timezone in SharedConfigMsg should default to UTC, got %s", m.timezone)
 	}
 }
 
