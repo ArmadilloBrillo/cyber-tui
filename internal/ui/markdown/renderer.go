@@ -5,6 +5,7 @@ package markdown
 
 import (
 	"fmt"
+	"html"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -83,6 +84,7 @@ var mdInstance = goldmark.New(
 // viewport display. width is the inner content width for word-wrapping.
 func Render(content string, width int) string {
 	content = stripAmbiguousRunes(content)
+	content = html.UnescapeString(content)
 	if strings.TrimSpace(content) == "" {
 		return ""
 	}
@@ -107,6 +109,7 @@ func Render(content string, width int) string {
 // is not appropriate (bookmarks, profile post lists).
 func FirstLine(content string) string {
 	content = stripAmbiguousRunes(content)
+	content = html.UnescapeString(content)
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
