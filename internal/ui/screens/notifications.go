@@ -43,6 +43,7 @@ type NotificationsModel struct {
 	selectedIndex int
 	ready         bool
 	loading       bool
+	fetching      bool // true while the initial (or tab-switch) load is in flight
 	refreshing    bool
 	exhausted     bool
 	nextCursor    string
@@ -59,11 +60,20 @@ func NewNotificationsModel() NotificationsModel {
 // IsReady reports whether the viewport has been initialised.
 func (m NotificationsModel) IsReady() bool { return m.ready }
 
+func (m NotificationsModel) SetFetching() NotificationsModel {
+	m.fetching = true
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
 func (m NotificationsModel) SetNotifs(notifs []model.Notification, cursor string) NotificationsModel {
 	m.notifs = notifs
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.loading = false
+	m.fetching = false
 	m.refreshing = false
 	m.selectedIndex = 0
 	if m.ready {
@@ -78,6 +88,7 @@ func (m NotificationsModel) AppendNotifs(notifs []model.Notification, cursor str
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.loading = false
+	m.fetching = false
 	if m.ready {
 		m = m.refreshContent() // selectedIndex preserved; scroll position preserved
 	}
@@ -87,6 +98,7 @@ func (m NotificationsModel) AppendNotifs(notifs []model.Notification, cursor str
 func (m NotificationsModel) SetError(err error) NotificationsModel {
 	m.err = err
 	m.loading = false
+	m.fetching = false
 	m.refreshing = false
 	return m
 }
@@ -322,6 +334,9 @@ func (m NotificationsModel) viewportHeight() int {
 }
 
 func (m NotificationsModel) buildContent() (string, []int) {
+	if m.fetching {
+		return theme.Subtle.Render("  loading notifications…"), nil
+	}
 	visible := m.visibleNotifs()
 
 	var prefix string

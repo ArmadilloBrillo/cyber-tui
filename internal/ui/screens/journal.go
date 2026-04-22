@@ -33,6 +33,7 @@ type JournalModel struct {
 	nextCursor string
 	exhausted  bool
 	loading    bool
+	fetching   bool // true while the initial (or tab-switch) load is in flight
 
 	selectedIdx  int
 	noteOffsets  []int // start line of each note within viewport content
@@ -75,12 +76,21 @@ func NewJournalModel(width int) JournalModel {
 	}
 }
 
+func (m JournalModel) SetFetching() JournalModel {
+	m.fetching = true
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
 // SetNotes replaces the note list (first load / refresh) and resets scroll.
 func (m JournalModel) SetNotes(notes []model.Note, cursor string) JournalModel {
 	m.notes = notes
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.loading = false
+	m.fetching = false
 	m.selectedIdx = 0
 	m.err = nil
 	if m.ready {
@@ -96,6 +106,7 @@ func (m JournalModel) AppendNotes(notes []model.Note, cursor string) JournalMode
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.loading = false
+	m.fetching = false
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -174,6 +185,7 @@ func (m JournalModel) SetRevisionPreview(note model.Note) JournalModel {
 func (m JournalModel) SetError(err error) JournalModel {
 	m.err = err
 	m.loading = false
+	m.fetching = false
 	return m
 }
 
@@ -683,6 +695,9 @@ func (m JournalModel) ensureSelectedVisible() JournalModel {
 // buildContent renders all notes into a single string and returns the start
 // line of each note so ensureSelectedVisible can scroll accurately.
 func (m JournalModel) buildContent() (string, []int) {
+	if m.fetching {
+		return theme.Subtle.Render("  loading notes…"), nil
+	}
 	if len(m.notes) == 0 {
 		if m.loading {
 			return theme.Subtle.Render("  loading notes…"), nil

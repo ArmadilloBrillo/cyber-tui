@@ -376,18 +376,21 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenFeed
+			a.feed = a.feed.SetFetching()
 			return a, a.loadFeedCmd(), true
 		}
 	case "2":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenNotifications
+			a.notifications = a.notifications.SetFetching()
 			return a, a.loadNotifsCmd(), true
 		}
 	case "3":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenJournal
+			a.journal = a.journal.SetFetching()
 			return a, a.loadJournalCmd(), true
 		}
 	case "4":
@@ -404,6 +407,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenTopics
+			a.topics = a.topics.SetFetching()
 			return a, a.loadTopicsCmd(), true
 		}
 	case "6":
@@ -996,6 +1000,7 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 	a.active = menuTabs[idx].s
 	switch a.active {
 	case screenFeed:
+		a.feed = a.feed.SetFetching()
 		return a.loadFeedCmd()
 	case screenChatrooms:
 		return a.loadRoomsCmd()
@@ -1004,6 +1009,7 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 	case screenProfile:
 		return a.loadProfileCmd()
 	case screenNotifications:
+		a.notifications = a.notifications.SetFetching()
 		return a.loadNotifsCmd()
 	case screenSettings:
 		return nil // no load cmd; settings already in memory
@@ -1014,8 +1020,10 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 		}
 		return nil
 	case screenTopics:
+		a.topics = a.topics.SetFetching()
 		return a.loadTopicsCmd()
 	case screenJournal:
+		a.journal = a.journal.SetFetching()
 		return a.loadJournalCmd()
 	}
 	return nil
@@ -1725,6 +1733,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	a.active = screenFeed
 	a.profile = a.profile.SetUser(a.currentUser)
 	a.feed = a.feed.SetCurrentUsername(a.currentUser.Username)
+	a.feed = a.feed.SetFetching()
 	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username)
 	a.broadcastConfig()
 	return tea.Batch(

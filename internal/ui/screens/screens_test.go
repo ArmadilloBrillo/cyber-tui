@@ -1257,3 +1257,90 @@ func TestJournalGetFocusedURLs_RevisionsMode(t *testing.T) {
 	}
 }
 
+// Loading-state tests — verify SetFetching shows a loading message and
+// the subsequent Set* call clears it back to normal content.
+
+func TestFeed_SetFetching_ShowsLoadingMessage(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetFetching()
+	view := m.View()
+	if !strings.Contains(view, "loading feed") {
+		t.Errorf("expected 'loading feed' in view while fetching, got: %q", view)
+	}
+}
+
+func TestFeed_SetFetching_ClearedBySetPosts(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetFetching()
+	m = m.SetPosts([]model.Post{makePost()}, "")
+	view := m.View()
+	if strings.Contains(view, "loading feed") {
+		t.Errorf("expected loading message to be gone after SetPosts, got: %q", view)
+	}
+}
+
+func TestNotifications_SetFetching_ShowsLoadingMessage(t *testing.T) {
+	m := screens.NewNotificationsModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetFetching()
+	view := m.View()
+	if !strings.Contains(view, "loading notifications") {
+		t.Errorf("expected 'loading notifications' in view while fetching, got: %q", view)
+	}
+}
+
+func TestNotifications_SetFetching_ClearedBySetNotifs(t *testing.T) {
+	m := screens.NewNotificationsModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetFetching()
+	m = m.SetNotifs([]model.Notification{}, "")
+	view := m.View()
+	if strings.Contains(view, "loading notifications") {
+		t.Errorf("expected loading message to be gone after SetNotifs, got: %q", view)
+	}
+}
+
+func TestTopics_SetFetching_ShowsLoadingMessage(t *testing.T) {
+	m := screens.NewTopicsModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetFetching()
+	view := m.View()
+	if !strings.Contains(view, "loading topics") {
+		t.Errorf("expected 'loading topics' in view while fetching, got: %q", view)
+	}
+}
+
+func TestTopics_SetFetching_ClearedBySetTopics(t *testing.T) {
+	m := screens.NewTopicsModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetFetching()
+	m = m.SetTopics([]model.Topic{}, "")
+	view := m.View()
+	if strings.Contains(view, "loading topics") {
+		t.Errorf("expected loading message to be gone after SetTopics, got: %q", view)
+	}
+}
+
+func TestJournal_SetFetching_ShowsLoadingMessage(t *testing.T) {
+	m := screens.NewJournalModel(80)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetFetching()
+	view := m.View()
+	if !strings.Contains(view, "loading notes") {
+		t.Errorf("expected 'loading notes' in view while fetching, got: %q", view)
+	}
+}
+
+func TestJournal_SetFetching_ClearedBySetNotes(t *testing.T) {
+	m := screens.NewJournalModel(80)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetFetching()
+	m = m.SetNotes([]model.Note{}, "")
+	view := m.View()
+	if strings.Contains(view, "loading notes") {
+		t.Errorf("expected loading message to be gone after SetNotes, got: %q", view)
+	}
+}
+

@@ -52,6 +52,7 @@ type TopicsModel struct {
 	nextCursor   string
 	exhausted    bool
 	loading      bool
+	fetching     bool // true while the initial (or tab-switch) load is in flight
 	refreshing   bool
 
 	// Shared
@@ -73,12 +74,21 @@ func NewTopicsModel() TopicsModel {
 	return TopicsModel{}
 }
 
+func (m TopicsModel) SetFetching() TopicsModel {
+	m.fetching = true
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
 func (m TopicsModel) SetTopics(items []model.Topic, cursor string) TopicsModel {
 	m.topics = items
 	m.topicIndex = 0
 	m.topicsNextCursor = cursor
 	m.topicsExhausted = cursor == ""
 	m.loading = false
+	m.fetching = false
 	m.refreshing = false
 	if m.ready {
 		m = m.refreshContent()
@@ -92,6 +102,7 @@ func (m TopicsModel) AppendTopics(items []model.Topic, cursor string) TopicsMode
 	m.topicsNextCursor = cursor
 	m.topicsExhausted = cursor == ""
 	m.loading = false
+	m.fetching = false
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -104,6 +115,7 @@ func (m TopicsModel) SetTopicPosts(posts []model.Post, cursor string) TopicsMode
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.loading = false
+	m.fetching = false
 	m.refreshing = false
 	m.view = viewTopicPosts
 	if m.ready {
@@ -118,6 +130,7 @@ func (m TopicsModel) AppendTopicPosts(posts []model.Post, cursor string) TopicsM
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.loading = false
+	m.fetching = false
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -127,6 +140,7 @@ func (m TopicsModel) AppendTopicPosts(posts []model.Post, cursor string) TopicsM
 func (m TopicsModel) SetError(err error) TopicsModel {
 	m.err = err
 	m.loading = false
+	m.fetching = false
 	m.refreshing = false
 	return m
 }
@@ -275,6 +289,9 @@ func (m TopicsModel) View() string {
 }
 
 func (m TopicsModel) buildContent() (string, []int) {
+	if m.fetching {
+		return theme.Subtle.Render("  loading topics…"), nil
+	}
 	sep := "\n"
 	lineInc := 1
 	if m.relaxed {

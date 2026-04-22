@@ -49,6 +49,7 @@ type FeedModel struct {
 	err                error
 	nextCursor         string
 	loading            bool
+	fetching           bool // true while the initial (or tab-switch) load is in flight
 	refreshing         bool // true while re-fetching newest posts (up at top)
 	exhausted          bool // true once API returned an empty cursor
 	relaxed            bool           // true = blank line between posts (relaxed density)
@@ -86,11 +87,20 @@ func ParseTopics(s string) []string {
 	return out
 }
 
+func (m FeedModel) SetFetching() FeedModel {
+	m.fetching = true
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
 func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
 	m.posts = posts
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.loading = false
+	m.fetching = false
 	m.refreshing = false
 	m.selectedIndex = 0
 	if m.ready {
@@ -105,6 +115,7 @@ func (m FeedModel) AppendPosts(posts []model.Post, cursor string) FeedModel {
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.loading = false
+	m.fetching = false
 	if m.ready {
 		m = m.refreshContent() // selectedIndex preserved; scroll position preserved
 	}
@@ -114,6 +125,7 @@ func (m FeedModel) AppendPosts(posts []model.Post, cursor string) FeedModel {
 func (m FeedModel) SetError(err error) FeedModel {
 	m.err = err
 	m.loading = false
+	m.fetching = false
 	return m
 }
 
@@ -431,6 +443,9 @@ func (m FeedModel) viewportHeight() int {
 // buildContent renders all posts into a single string for the viewport and
 // returns the start line of each post so ensureSelectedVisible can scroll accurately.
 func (m FeedModel) buildContent() (string, []int) {
+	if m.fetching {
+		return theme.Subtle.Render("  loading feed…"), nil
+	}
 	var prefix string
 	startLine := 0
 	if m.refreshing {
