@@ -1205,9 +1205,84 @@ func (a App) renderActiveScreen() string {
 	return ""
 }
 
+// hint is a compact key+description pair shown in the status bar.
+type hint struct{ key, desc string }
+
+// screenHints returns context-sensitive hints for the active screen/state.
+// Keys and descriptions mirror the ?-modal exactly so both surfaces stay in sync.
+// The last entry is always {key:"?", desc:"more"} as the escape hatch to the full modal.
+func (a App) screenHints() []hint {
+	more := hint{"?", "more"}
+	switch a.active {
+	case screenFeed:
+		if a.feed.ComposeActive() {
+			return []hint{{"Ctrl+S", "send"}, {"Tab", "topics"}, {"Esc", "cancel"}, more}
+		}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open post"}, {"r", "reply"}, {"n", "new post"}, {"b", "bookmark"}, more}
+	case screenPostDetail:
+		if a.postDetail.ComposeActive() {
+			return []hint{{"Ctrl+S", "send"}, {"Esc", "cancel"}, more}
+		}
+		return []hint{{"↑↓", "scroll/navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"esc", "back"}, more}
+	case screenProfile:
+		if a.profile.ComposeActive() {
+			return []hint{{"tab/shift+tab", "cycle fields"}, {"Ctrl+S", "save"}, {"Esc", "cancel"}, more}
+		}
+		if a.profile.IsReadOnly() {
+			return []hint{{"tab/shift+tab", "switch tab"}, {"j/k", "navigate"}, {"f", "follow/unfollow"}, {"esc", "back"}, more}
+		}
+		return []hint{{"tab/shift+tab", "switch tab"}, {"j/k", "navigate"}, {"e", "edit profile"}, {"esc", "back"}, more}
+	case screenNotifications:
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle filter"}, more}
+	case screenJournal:
+		if a.journal.ComposeActive() {
+			return []hint{{"Ctrl+S", "save"}, {"Ctrl+P", "publish as post"}, {"Esc", "cancel"}, more}
+		}
+		return []hint{{"↑↓", "navigate"}, {"enter", "edit note"}, {"n", "new note"}, {"d", "delete"}, more}
+	case screenBookmarks:
+		return []hint{{"↑↓", "navigate"}, {"enter", "open post"}, {"d", "delete"}, more}
+	case screenTopics:
+		return []hint{{"↑↓", "navigate"}, {"enter", "browse/open"}, {"esc", "back"}, more}
+	case screenSettings:
+		if a.settingsScreen.IsDirty() {
+			return []hint{{"Ctrl+S", "save"}, {"Esc", "revert"}, more}
+		}
+		return []hint{{"↑↓", "navigate"}, {"space/enter", "toggle"}, {"tab/shift+tab", "cycle"}, more}
+	case screenCMail:
+		return []hint{{"← →", "switch pane"}, {"j/k", "navigate"}, {"enter", "send"}, more}
+	}
+	return []hint{more}
+}
+
+// sbStyle returns a bare style with the status bar background but no padding,
+// so fragments can be composed without accumulating per-fragment padding gaps.
+func sbStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(theme.ColorDimGreen)
+}
+
+// renderHints renders a []hint slice as a compact styled string with no padding.
+func renderHints(hints []hint) string {
+	key := sbStyle().Foreground(theme.ColorCyan).Bold(true)
+	desc := sbStyle().Foreground(theme.ColorWhite)
+	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
+	parts := make([]string, 0, len(hints)*3)
+	for i, h := range hints {
+		if i > 0 {
+			parts = append(parts, sep)
+		}
+		parts = append(parts, key.Render(h.key))
+		if h.desc != "" {
+			parts = append(parts, desc.Render(" "+h.desc))
+		}
+	}
+	return strings.Join(parts, "")
+}
+
 func (a App) renderStatusBar() string {
-	userStyle := theme.StatusBar.Copy().Foreground(theme.ColorCyan)
-	metaStyle := theme.StatusBar.Copy().Foreground(theme.ColorMuted)
+	user := sbStyle().Foreground(theme.ColorCyan).Bold(true)
+	meta := sbStyle().Foreground(theme.ColorWhite)
+	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
+
 	densityLabel := "dense"
 	if a.relaxed {
 		densityLabel = "relaxed"
@@ -1220,16 +1295,53 @@ func (a App) renderStatusBar() string {
 	if timeFmt == "" {
 		timeFmt = "datetime"
 	}
-	user := lipgloss.JoinHorizontal(lipgloss.Top,
-		userStyle.Render("@"+a.currentUser.Username),
-		metaStyle.Render("  ·  "+densityLabel),
-		metaStyle.Render("  ·  "+theme.CurrentName()),
-		metaStyle.Render("  ·  "+tzLabel),
-		metaStyle.Render("  ·  "+timeFmt),
-	)
-	hint := theme.StatusBar.Render("  ? · show shortcuts")
-	spacer := theme.StatusBar.Width(a.width - lipgloss.Width(user) - lipgloss.Width(hint)).Render("")
-	return lipgloss.JoinHorizontal(lipgloss.Top, user, spacer, hint)
+
+	username := user.Render("@" + a.currentUser.Username)
+	// Info items ordered by drop priority (last dropped = most important).
+	infoItems := []string{
+		sep + meta.Render(densityLabel),
+		sep + meta.Render(theme.CurrentName()),
+		sep + meta.Render(tzLabel),
+		sep + meta.Render(timeFmt),
+	}
+
+	hints := a.screenHints()
+	// Outer bar padding (1 char each side, matching StatusBar Padding(0,1)).
+	const barPad = 2
+
+	measure := func(numInfo, numHints int) int {
+		left := lipgloss.Width(username)
+		for _, item := range infoItems[:numInfo] {
+			left += lipgloss.Width(item)
+		}
+		right := lipgloss.Width(renderHints(hints[:numHints]))
+		return left + right + barPad
+	}
+
+	// Collapse info items first, then hints. Always keep at least "?".
+	numInfo := len(infoItems)
+	numHints := len(hints)
+	for numInfo >= 0 {
+		if measure(numInfo, numHints) <= a.width {
+			break
+		}
+		numInfo--
+	}
+	if numInfo < 0 {
+		numInfo = 0
+		for numHints > 1 && measure(0, numHints) > a.width {
+			numHints--
+		}
+	}
+
+	bg := sbStyle()
+	leftParts := []string{username}
+	leftParts = append(leftParts, infoItems[:numInfo]...)
+	left := lipgloss.JoinHorizontal(lipgloss.Top, leftParts...)
+	right := renderHints(hints[:numHints])
+	spacer := bg.Width(a.width - lipgloss.Width(left) - lipgloss.Width(right) - barPad).Render("")
+	bar := lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, right)
+	return bg.Padding(0, 1).Render(bar)
 }
 
 // --- theme picker ---
