@@ -44,13 +44,10 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, width int, loc *ti
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+p.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)),
-	) + audioIcon(p.Attachments)
+	) + audioIcon(p.Attachments) + bookmarkIcon(bookmarked)
 	var rightParts []string
 	if ind := attachmentIndicator(p.Attachments); ind != "" {
 		rightParts = append(rightParts, ind)
-	}
-	if bookmarked {
-		rightParts = append(rightParts, theme.Highlight.Render("[★]"))
 	}
 	switch p.RepliesCount {
 	case 1:
@@ -295,6 +292,14 @@ func audioIcon(attachments []model.Attachment) string {
 		if a.Type == "audio" {
 			return "  " + theme.Highlight.Render("♫")
 		}
+	}
+	return ""
+}
+
+// bookmarkIcon returns a ★ icon (with leading spaces) when bookmarked, else "".
+func bookmarkIcon(bookmarked bool) string {
+	if bookmarked {
+		return "  " + theme.Highlight.Render("★")
 	}
 	return ""
 }
