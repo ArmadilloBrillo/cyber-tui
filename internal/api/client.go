@@ -864,8 +864,11 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 
 // --- Notifications ---
 
-func (c *HTTPClient) GetNotifications(cursor string) ([]model.Notification, string, error) {
+func (c *HTTPClient) GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error) {
 	path := "/v1/notifications?limit=20"
+	if unreadOnly {
+		path += "&read=false"
+	}
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
@@ -892,6 +895,20 @@ func (c *HTTPClient) MarkNotificationRead(id string) error {
 func (c *HTTPClient) MarkAllNotificationsRead() error {
 	_, err := c.doRequest("POST", "/v1/notifications/read-all", nil)
 	return err
+}
+
+func (c *HTTPClient) GetUnreadNotificationCount() (int, error) {
+	env, err := c.doRequest("GET", "/v1/notifications/unread-count", nil)
+	if err != nil {
+		return 0, err
+	}
+	var data struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return 0, err
+	}
+	return data.Count, nil
 }
 
 // --- Bookmarks ---

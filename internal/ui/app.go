@@ -2199,8 +2199,9 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 func (a *App) loadNotifsCmd() tea.Cmd {
+	unreadOnly := a.notifications.ShowUnreadOnly()
 	return func() tea.Msg {
-		notifs, cursor, err := a.client.GetNotifications("")
+		notifs, cursor, err := a.client.GetNotifications("", unreadOnly)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -2209,8 +2210,9 @@ func (a *App) loadNotifsCmd() tea.Cmd {
 }
 
 func (a *App) loadNotifsPageCmd(cursor string) tea.Cmd {
+	unreadOnly := a.notifications.ShowUnreadOnly()
 	return func() tea.Msg {
-		notifs, nextCursor, err := a.client.GetNotifications(cursor)
+		notifs, nextCursor, err := a.client.GetNotifications(cursor, unreadOnly)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -2516,15 +2518,9 @@ func (a *App) checkAndWanderCmd() tea.Cmd {
 
 func (a *App) fetchUnreadCountCmd() tea.Cmd {
 	return func() tea.Msg {
-		notifs, _, err := a.client.GetNotifications("")
+		count, err := a.client.GetUnreadNotificationCount()
 		if err != nil {
 			return nil
-		}
-		count := 0
-		for _, n := range notifs {
-			if !n.Read {
-				count++
-			}
 		}
 		return unreadCountMsg{count}
 	}

@@ -560,7 +560,7 @@ func TestHTTPGetNotifications_ParsesNotifs(t *testing.T) {
 		}, "next-cursor")
 	})))
 	c.LoginWithRefreshToken("tok")
-	notifs, cursor, err := c.GetNotifications("")
+	notifs, cursor, err := c.GetNotifications("", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -594,9 +594,54 @@ func TestHTTPGetNotifications_CursorInURL(t *testing.T) {
 		writeOKWithCursor(t, w, []map[string]any{}, "")
 	})))
 	c.LoginWithRefreshToken("tok")
-	c.GetNotifications("cursor-abc")
+	c.GetNotifications("cursor-abc", false)
 	if !strings.Contains(capturedURL, "cursor=cursor-abc") {
 		t.Errorf("expected cursor in URL, got: %s", capturedURL)
+	}
+}
+
+func TestHTTPGetNotifications_UnreadOnlyParam(t *testing.T) {
+	var capturedURL string
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	})))
+	c.LoginWithRefreshToken("tok")
+	c.GetNotifications("", true)
+	if !strings.Contains(capturedURL, "read=false") {
+		t.Errorf("expected read=false in URL, got: %s", capturedURL)
+	}
+}
+
+func TestHTTPGetNotifications_AllDoesNotAddReadParam(t *testing.T) {
+	var capturedURL string
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	})))
+	c.LoginWithRefreshToken("tok")
+	c.GetNotifications("", false)
+	if strings.Contains(capturedURL, "read=") {
+		t.Errorf("expected no read param in URL, got: %s", capturedURL)
+	}
+}
+
+func TestHTTPGetUnreadNotificationCount_ReturnsCount(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/notifications/unread-count" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"data":{"count":7}}`)
+	})))
+	c.LoginWithRefreshToken("tok")
+	count, err := c.GetUnreadNotificationCount()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 7 {
+		t.Errorf("expected count 7, got %d", count)
 	}
 }
 

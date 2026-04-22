@@ -257,8 +257,27 @@ func (m *MockClient) GetTopicPosts(slug string, cursor string) ([]model.Post, st
 	return topicPosts, "", nil
 }
 
-func (m *MockClient) GetNotifications(cursor string) ([]model.Notification, string, error) {
-	return mockNotifications, "", nil
+func (m *MockClient) GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error) {
+	if !unreadOnly {
+		return mockNotifications, "", nil
+	}
+	var out []model.Notification
+	for _, n := range mockNotifications {
+		if !n.Read {
+			out = append(out, n)
+		}
+	}
+	return out, "", nil
+}
+
+func (m *MockClient) GetUnreadNotificationCount() (int, error) {
+	count := 0
+	for _, n := range mockNotifications {
+		if !n.Read {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (m *MockClient) MarkNotificationRead(id string) error { return nil }

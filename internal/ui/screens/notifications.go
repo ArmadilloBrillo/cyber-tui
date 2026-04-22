@@ -123,6 +123,9 @@ func (m NotificationsModel) SetLocation(loc *time.Location) NotificationsModel {
 	return m
 }
 
+// ShowUnreadOnly reports whether the screen is currently filtering to unread-only.
+func (m NotificationsModel) ShowUnreadOnly() bool { return m.showUnreadOnly }
+
 // UnreadCount returns the number of unread notifications in the current page.
 func (m NotificationsModel) UnreadCount() int {
 	n := 0
@@ -279,8 +282,11 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 		case "u":
 			m.showUnreadOnly = !m.showUnreadOnly
 			m.selectedIndex = 0
+			m.notifs = nil
+			m.nextCursor = ""
+			m.exhausted = false
 			m = m.refreshContent()
-			return m, nil
+			return m, func() tea.Msg { return RefreshNotifsMsg{} }
 		case "enter":
 			if len(visible) == 0 || m.selectedIndex >= len(visible) {
 				return m, nil

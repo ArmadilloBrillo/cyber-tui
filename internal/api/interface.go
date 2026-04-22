@@ -60,7 +60,11 @@ type Client interface {
 
 	// Notifications — cursor-paginated; mark-read methods are fire-and-forget.
 	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.
-	GetNotifications(cursor string) ([]model.Notification, string, error)
+	// Set unreadOnly to true to request only unread notifications from the server.
+	GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error)
+	// GetUnreadNotificationCount returns the server-side count of unread notifications.
+	// The value is cached for ~5 s on the server side.
+	GetUnreadNotificationCount() (int, error)
 	MarkNotificationRead(id string) error
 	MarkAllNotificationsRead() error
 

@@ -12,4 +12,7 @@
 9. ~~When new notifications appear reload the Notifications screen. If it's currently active or always?~~
 10. Filter NSFW, if set
 11. ~~Render fiancé properly?~~
+12. Open 'local' URL's in teh TUI rather than outside, where possible
+13. Implement new API method for unread notifications and unread notification counts.
+14. 
 

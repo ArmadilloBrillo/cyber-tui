@@ -446,6 +446,36 @@ func TestNotifs_UnreadFilter_Toggle(t *testing.T) {
 	}
 }
 
+func TestNotifs_UnreadFilter_ToggleEmitsRefresh(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	_, msg := runKey(m, "u")
+	_, ok := msg.(RefreshNotifsMsg)
+	if !ok {
+		t.Fatalf("expected RefreshNotifsMsg after u toggle, got %T", msg)
+	}
+}
+
+func TestNotifs_UnreadFilter_ToggleClearsNotifs(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	m2, _ := runKey(m, "u")
+	if len(m2.notifs) != 0 {
+		t.Errorf("expected notifs to be cleared after toggle, got %d", len(m2.notifs))
+	}
+}
+
+func TestNotifs_ShowUnreadOnly_Accessor(t *testing.T) {
+	m := NewNotificationsModel()
+	if !m.ShowUnreadOnly() {
+		t.Error("expected ShowUnreadOnly true by default")
+	}
+	m.showUnreadOnly = false
+	if m.ShowUnreadOnly() {
+		t.Error("expected ShowUnreadOnly false after setting field")
+	}
+}
+
 func TestNotifs_UnreadFilter_ResetsIndex(t *testing.T) {
 	notifs := []model.Notification{
 		makeNotif("n1", "reply", "p1", false),
