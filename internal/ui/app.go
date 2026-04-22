@@ -463,7 +463,7 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.LoadMoreFeedMsg:
 		return a, a.loadFeedPageCmd(msg.Cursor), true
 	case screens.ShowPostMsg:
-		a.postDetailReturn = screenFeed
+		a.postDetailReturn = a.active
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.Post)
 		return a, a.loadRepliesCmd(msg.Post.ID), true
