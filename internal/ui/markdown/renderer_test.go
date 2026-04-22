@@ -299,6 +299,16 @@ func TestRender_HalfwidthKatakanaModifierStripped(t *testing.T) {
 	}
 }
 
+func TestRender_DoubleWidthPreserved(t *testing.T) {
+	// Double-wide characters (CJK, fullwidth) must pass through unchanged:
+	// runewidth, lipgloss, and terminal wcwidth all agree on 2 columns, so
+	// they render correctly inside lipgloss width-constrained boxes.
+	raw := Render("kaomoji ヮ test", 80)
+	if !strings.ContainsRune(strip(raw), 'ヮ') {
+		t.Errorf("double-wide rune U+30EE should be preserved: %q", strip(raw))
+	}
+}
+
 func TestRender_TruncationSafeANSI(t *testing.T) {
 	md := "Para one.\n\nPara two.\n\nPara three.\n\nPara four.\n\nPara five."
 	out := Render(md, 80)

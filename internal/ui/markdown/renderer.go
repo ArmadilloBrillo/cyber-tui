@@ -412,8 +412,11 @@ func (r *renderer) rawTextNode(node ast.Node) string {
 	return sb.String()
 }
 
-// stripAmbiguousRunes replaces Unicode ambiguous-width characters with a space so that
-// rendered output does not overflow width-constrained TUI boxes while keeping text readable.
+// stripAmbiguousRunes normalises Unicode characters whose display width cannot be
+// reliably determined so that rendered output does not overflow width-constrained
+// TUI boxes. Double-wide characters (CJK, fullwidth) are passed through unchanged
+// because all three measurement layers — runewidth, lipgloss, and terminal wcwidth —
+// agree on their 2-column width.
 func stripAmbiguousRunes(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -425,8 +428,8 @@ func stripAmbiguousRunes(s string) string {
 			// strip: zero-width chars, and grapheme-extend modifiers (e.g. ﾟ U+FF9F)
 			// that runewidth.StringWidth treats as 0-width in context but the terminal
 			// renders as 1 column (wcwidth), causing layout overflow
-		case rw > 1 || runewidth.IsAmbiguousWidth(r):
-			b.WriteRune(' ') // normalise to single-column space
+		case runewidth.IsAmbiguousWidth(r):
+			b.WriteRune(' ') // ambiguous EAW=A: 1 column in non-CJK, 2 in CJK — normalise to space
 		default:
 			b.WriteRune(r)
 		}

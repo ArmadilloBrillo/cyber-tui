@@ -174,13 +174,14 @@ The `"x"` prefix is a stable ASCII base. Any rune `r` that reduces `StringWidth(
 | `r == '\t' \|\| r == '\n'` | Keep — goldmark needs these | Tabs, newlines |
 | `rw == 0` | Strip — genuinely invisible | `\r`, ESC, U+200B zero-width space, bidi marks |
 | `runewidth.StringWidth("x"+string(r)) < 1+rw` | Strip — grapheme extender that the terminal renders wider than tools measure | `ﾟ` U+FF9F, `ﾞ` U+FF9E |
-| `rw > 1` | Replace with space — CJK/fullwidth double-wide | `ヮ` U+30EE, `Ａ` U+FF21 |
 | `runewidth.IsAmbiguousWidth(r)` | Replace with space — Unicode EAW=A | `°` U+00B0, `∩` U+2229, `★` U+2605 |
-| Everything else | Keep as-is | ASCII, halfwidth katakana `ﾉ･｡`, Latin, Cyrillic, etc. |
+| Everything else | Keep as-is | ASCII, halfwidth katakana `ﾉ･｡`, Latin, Cyrillic, CJK `ヮ` U+30EE, fullwidth `Ａ` U+FF21 |
 
-**Why replace double-wide / ambiguous with space rather than stripping?** A space preserves the visual blank — readers understand there was a character there. Stripping would silently collapse surrounding text (e.g. `foo★bar` → `foobar`).
+**Why replace ambiguous-width with space rather than stripping?** A space preserves the visual blank — readers understand there was a character there. Stripping would silently collapse surrounding text (e.g. `foo★bar` → `foobar`).
 
 **Why strip grapheme extenders rather than replacing?** An extender such as `ﾟ` has no visual presence of its own; it modifies the preceding character. Replacing it with a space would introduce a spurious gap that wasn't in the original text.
+
+**Why pass double-wide characters (CJK, fullwidth) through unchanged?** All three measurement layers — `runewidth.RuneWidth`, `runewidth.StringWidth`, `lipgloss.Width`, and terminal `wcwidth` — agree that double-wide characters occupy exactly 2 columns. There is no measurement mismatch and therefore no overflow risk. Replacing them with spaces would degrade kaomoji and CJK text for no benefit.
 
 ---
 
@@ -192,12 +193,12 @@ Styles are built from `theme.*` color and style vars at render time. When the us
 
 ## Tests
 
-`internal/ui/markdown/renderer_test.go` — 32 unit tests covering:
+`internal/ui/markdown/renderer_test.go` — 33 unit tests covering:
 - Empty input, plain text passthrough
 - Bold, italic, links, images, inline code, code blocks, blockquotes
 - Bullet lists, ordered lists, H1/H2/H3, horizontal rule
 - `@mention` parsing, mention inside code block (no highlight), mention inside blockquote
-- Strikethrough, ambiguous-rune stripping, halfwidth katakana modifier stripping
+- Strikethrough, ambiguous-rune stripping, halfwidth katakana modifier stripping, double-wide character preservation
 - ANSI truncation safety, theme switching, width clamping
 - `FirstLine`: plain text, heading strip, markdown strip, empty line skip, no-ANSI assertion
 
