@@ -285,6 +285,7 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 			m.notifs = nil
 			m.nextCursor = ""
 			m.exhausted = false
+			m.fetching = true
 			m = m.refreshContent()
 			return m, func() tea.Msg { return RefreshNotifsMsg{} }
 		case "enter":
