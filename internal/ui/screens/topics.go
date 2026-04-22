@@ -201,6 +201,8 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					m = m.ensureSelectedVisible()
 				} else if !m.topicsExhausted && !m.loading {
 					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
 					return m, func() tea.Msg {
 						return LoadMoreTopicsMsg{Cursor: m.topicsNextCursor}
 					}
@@ -212,6 +214,8 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					m = m.ensureSelectedVisible()
 				} else if !m.exhausted && !m.loading {
 					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
 					return m, func() tea.Msg {
 						return LoadMoreTopicPostsMsg{Slug: m.activeTopic, Cursor: m.nextCursor}
 					}
@@ -250,6 +254,8 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 	// Check if user scrolled to bottom
 	if m.view == viewTopicPosts && m.viewport.AtBottom() && !m.exhausted && !m.loading {
 		m.loading = true
+		m = m.refreshContent()
+		m.viewport.ScrollDown(1)
 		return m, func() tea.Msg {
 			return LoadMoreTopicPostsMsg{Slug: m.activeTopic, Cursor: m.nextCursor}
 		}

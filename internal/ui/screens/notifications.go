@@ -244,6 +244,8 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 			} else if !m.loading && !m.exhausted && m.nextCursor != "" {
 				m.loading = true
 				cursor := m.nextCursor
+				m = m.refreshContent()
+				m.viewport.ScrollDown(1)
 				return m, func() tea.Msg { return LoadMoreNotifsMsg{Cursor: cursor} }
 			}
 			return m, nil
@@ -301,6 +303,8 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 	if m.ready && !m.loading && !m.exhausted && m.viewport.AtBottom() && m.nextCursor != "" && len(visible) == len(m.notifs) {
 		m.loading = true
 		cursor := m.nextCursor
+		m = m.refreshContent()
+		m.viewport.ScrollDown(1)
 		return m, tea.Batch(cmd, func() tea.Msg {
 			return LoadMoreNotifsMsg{Cursor: cursor}
 		})

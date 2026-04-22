@@ -163,6 +163,8 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 			} else if !m.loading && !m.exhausted && m.nextCursor != "" {
 				m.loading = true
 				cursor := m.nextCursor
+				m = m.refreshContent()
+				m.viewport.ScrollDown(1)
 				return m, func() tea.Msg { return LoadMoreBookmarksMsg{Cursor: cursor} }
 			}
 			return m, nil
@@ -203,6 +205,8 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 	if m.ready && !m.loading && !m.exhausted && m.viewport.AtBottom() && m.nextCursor != "" {
 		m.loading = true
 		cursor := m.nextCursor
+		m = m.refreshContent()
+		m.viewport.ScrollDown(1)
 		return m, tea.Batch(cmd, func() tea.Msg {
 			return LoadMoreBookmarksMsg{Cursor: cursor}
 		})

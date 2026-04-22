@@ -256,6 +256,8 @@ func (m JournalModel) Update(msg tea.Msg) (JournalModel, tea.Cmd) {
 	if m.ready && !m.loading && !m.exhausted && m.viewport.AtBottom() && m.nextCursor != "" {
 		m.loading = true
 		cursor := m.nextCursor
+		m = m.refreshContent()
+		m.viewport.ScrollDown(1)
 		return m, tea.Batch(cmd, func() tea.Msg {
 			return LoadMoreJournalMsg{Cursor: cursor}
 		})
@@ -392,6 +394,8 @@ func (m JournalModel) handleListKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
 		} else if !m.loading && !m.exhausted && m.nextCursor != "" {
 			m.loading = true
 			cursor := m.nextCursor
+			m = m.refreshContent()
+			m.viewport.ScrollDown(1)
 			return m, func() tea.Msg { return LoadMoreJournalMsg{Cursor: cursor} }
 		}
 		return m, nil
