@@ -1164,19 +1164,26 @@ func (a App) View() string {
 }
 
 func (a App) renderTabBar() string {
-	var bar string
+	var tabs string
 	for _, t := range menuTabs {
 		label := t.label
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			label = fmt.Sprintf("%s (%d)", label, a.polledUnreadCount)
 		}
 		if a.active == t.s {
-			bar += theme.ActiveTab.Render(label)
+			tabs += theme.ActiveTab.Render(label)
 		} else {
-			bar += theme.Tab.Render(label)
+			tabs += theme.Tab.Render(label)
 		}
 	}
-	return bar
+	logo := lipgloss.NewStyle().
+		Background(theme.ColorGreen).
+		Foreground(theme.ColorBackground).
+		Bold(true).
+		Padding(0, 1).
+		Render("ᑕ¥βєяรקค¢є")
+	spacer := strings.Repeat(" ", max(0, a.width-lipgloss.Width(tabs)-lipgloss.Width(logo)))
+	return tabs + spacer + logo
 }
 
 func (a App) renderActiveScreen() string {
