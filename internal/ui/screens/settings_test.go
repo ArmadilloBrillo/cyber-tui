@@ -64,20 +64,20 @@ func TestSettings_CursorDown_Increments(t *testing.T) {
 	}
 }
 
-func TestSettings_CursorUp_ClampsAtZero(t *testing.T) {
+func TestSettings_CursorUp_WrapsToBottom(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m, _ = m.Update(keyMsg("k"))
-	if m.cursor != 0 {
-		t.Errorf("expected cursor=0 (clamped), got %d", m.cursor)
+	if m.cursor != len(flatItems())-1 {
+		t.Errorf("expected cursor=%d (wrapped), got %d", len(flatItems())-1, m.cursor)
 	}
 }
 
-func TestSettings_CursorDown_ClampsAtBottom(t *testing.T) {
+func TestSettings_CursorDown_WrapsToTop(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.cursor = len(flatItems()) - 1
 	m, _ = m.Update(keyMsg("j"))
-	if m.cursor != len(flatItems())-1 {
-		t.Errorf("expected cursor=%d (clamped), got %d", len(flatItems())-1, m.cursor)
+	if m.cursor != 0 {
+		t.Errorf("expected cursor=0 (wrapped), got %d", m.cursor)
 	}
 }
 

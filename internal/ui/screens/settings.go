@@ -315,15 +315,11 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 
 		switch msg.String() {
 		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			}
+			m.cursor = (m.cursor - 1 + total) % total
 			return m, nil
 
 		case "down", "j":
-			if m.cursor < total-1 {
-				m.cursor++
-			}
+			m.cursor = (m.cursor + 1) % total
 			return m, nil
 
 		case " ", "enter": // space (bubbletea KeySpace.String() == " ") or enter
@@ -417,7 +413,10 @@ func (m SettingsModel) View() string {
 				cursor = "  "
 			}
 
-			// Value rendering
+			// Value rendering — compute raw text first so the selected row can
+			// use plain text with a uniform background (pre-rendered ANSI segments
+			// don't inherit an outer background style).
+			var rawValue string
 			if item.kind == "bool" {
 				var boolVal bool
 				if flatIdx == 13 {
@@ -426,8 +425,10 @@ func (m SettingsModel) View() string {
 					boolVal = getBool(m.settings, flatIdx)
 				}
 				if boolVal {
+					rawValue = "[x]"
 					value = theme.Highlight.Render("[x]")
 				} else {
+					rawValue = "[ ]"
 					value = theme.Subtle.Render("[ ]")
 				}
 			} else {
@@ -445,7 +446,8 @@ func (m SettingsModel) View() string {
 				} else {
 					cur = getEnum(m.settings, flatIdx)
 				}
-				value = theme.Highlight.Render("< " + cur + " >")
+				rawValue = "< " + cur + " >"
+				value = theme.Highlight.Render(rawValue)
 			}
 
 			// Label rendering (highlight if selected)
@@ -458,7 +460,13 @@ func (m SettingsModel) View() string {
 			// Layout: cursor + label + gap + value, right-aligned
 			innerW := max(20, m.width-2) // 2 for cursor prefix
 			gap := max(1, innerW-lipgloss.Width(label)-lipgloss.Width(value))
-			line := cursor + label + strings.Repeat(" ", gap) + value
+			var line string
+			if selected {
+				plain := "▸ " + item.label + strings.Repeat(" ", gap) + rawValue
+				line = theme.SelectedRow.Width(m.width).Render(plain)
+			} else {
+				line = cursor + label + strings.Repeat(" ", gap) + value
+			}
 
 			rows = append(rows, line)
 			flatIdx++

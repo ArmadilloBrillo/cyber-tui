@@ -74,6 +74,11 @@ var (
 		Foreground(ColorGreen).
 		Bold(true).
 		Padding(0, 2)
+
+	SelectedRow = lipgloss.NewStyle().
+		Background(ColorDimGreen).
+		Foreground(ColorGreen).
+		Bold(true)
 )
 
 // Set applies the named theme by reassigning all color and style vars.
@@ -177,4 +182,9 @@ func applyStyles() {
 		Foreground(ColorGreen).
 		Bold(true).
 		Padding(0, 2)
+
+	SelectedRow = lipgloss.NewStyle().
+		Background(ColorDimGreen).
+		Foreground(ColorGreen).
+		Bold(true)
 }
