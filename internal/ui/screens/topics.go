@@ -457,6 +457,9 @@ func (m TopicsModel) location() *time.Location {
 	return m.loc
 }
 
+// IsBrowsingTopic reports whether the user is viewing a specific topic's posts.
+func (m TopicsModel) IsBrowsingTopic() bool { return m.activeTopic != "" }
+
 // GetFocusedURLs implements URLProvider. Returns URLs from the selected post when
 // in post-list view; returns nil when browsing the topic list.
 func (m TopicsModel) GetFocusedURLs() []string {
