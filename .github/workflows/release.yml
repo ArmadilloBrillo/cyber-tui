@@ -13,6 +13,14 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor ${{ github.sha }} origin/main \
+            || { echo "Tag is not on main — release aborted."; exit 1; }
 
       - uses: actions/setup-go@v5
         with:
