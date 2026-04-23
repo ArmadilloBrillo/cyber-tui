@@ -1453,7 +1453,7 @@ func (a App) handleHelpModalKey(_ tea.KeyMsg) (tea.Model, tea.Cmd) {
 // for the global scope and the currently active screen.
 func (a App) renderHelpModal() string {
 	title := theme.Title.Render("shortcuts")
-	sectionStyle := theme.Subtle.Copy().Bold(true)
+	sectionStyle := theme.Subtle.Bold(true)
 	row := func(key, desc string) string {
 		k := theme.Highlight.Render(fmt.Sprintf("%-14s", key))
 		return lipgloss.JoinHorizontal(lipgloss.Top, k, theme.Subtle.Render(desc))

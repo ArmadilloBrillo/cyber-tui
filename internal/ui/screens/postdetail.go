@@ -504,7 +504,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				replyTop := m.replyOffsets[m.selectedReply]
 				if replyTop < m.viewport.YOffset {
 					// Reply top is above the visible area — scroll up.
-					m.viewport.LineUp(1)
+					m.viewport.ScrollUp(1)
 				} else {
 					// Reply top is visible — move to previous item.
 					m.selectedReply--
@@ -513,7 +513,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				}
 			} else {
 				// Post is selected — scroll viewport up (pager behaviour).
-				m.viewport.LineUp(1)
+				m.viewport.ScrollUp(1)
 			}
 			return m, nil
 		case "down", "j":
@@ -527,7 +527,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
 				} else {
-					m.viewport.LineDown(1)
+					m.viewport.ScrollDown(1)
 				}
 			} else {
 				// Reply is selected — scroll through it first (pager behaviour).
@@ -536,7 +536,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				viewBottom := m.viewport.YOffset + m.viewport.Height - 1
 				if replyBottom > viewBottom {
 					// Reply bottom is below the visible area — scroll down.
-					m.viewport.LineDown(1)
+					m.viewport.ScrollDown(1)
 				} else if m.selectedReply < len(m.flatTree)-1 {
 					// Reply bottom is visible — advance to next reply.
 					m.selectedReply++

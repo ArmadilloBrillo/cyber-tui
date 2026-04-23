@@ -62,7 +62,6 @@ type TopicsModel struct {
 
 	bookmarkedPostIDs map[string]struct{}
 	height           int
-	selectedIndex    int
 	ready            bool
 	err              error
 	loc              *time.Location
