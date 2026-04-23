@@ -65,7 +65,12 @@ This file defines workflow guardrails for Claude. It is not project documentatio
 - Always explain planned changes before making them
 - Always ask when unsure — do not guess
 - No monoliths: one responsibility per package, docs per feature
-- No linter warnings (`go vet`, `staticcheck` or equivalent must be clean)
+- No linter warnings — run all three before every commit:
+  ```
+  go test ./...
+  go vet ./...
+  staticcheck ./...
+  ```
 - Never commit secrets, tokens, credentials, or SSH keys
 - `.env` is gitignored; `.env.example` is committed with placeholder values only
 
