@@ -30,10 +30,14 @@ This file defines workflow guardrails for Claude. It is not project documentatio
 - `chore/short-description` — non-functional changes (tooling, config, deps)
 
 ### PR workflow
-- All changes to `dev` and `main` go through a pull request — Claude Code included
-- Never push directly to `dev` or `main`
-- Open a PR against `dev` after pushing a feature branch; request maintainer review
-- CI must pass (`go test ./...`, `go vet ./...`, `staticcheck`) before merge
+**Contributors (fork and PR):**
+- Fork the repo, branch from `dev`, submit a PR targeting `dev`
+- CI must pass before the maintainer merges
+
+**Maintainer:**
+- Direct push to `dev` is allowed for trivial changes (docs, config); CI will not run
+- Open a PR when the change is significant enough to warrant CI validation
+- Releases (`dev` → `main`): always open a PR so CI runs before merge
 
 ### Commit messages — Conventional Commits
 - `feat:` new feature
