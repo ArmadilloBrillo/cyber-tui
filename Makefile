@@ -14,6 +14,12 @@ LDFLAGS := -ldflags "\
 build:
 	go build $(LDFLAGS) -o $(OUT) ./cmd/cyber-tui
 
+.PHONY: build-all
+build-all:
+	GOOS=linux  GOARCH=amd64 go build $(LDFLAGS) -o dist/$(BINARY)-linux-amd64   ./cmd/cyber-tui
+	GOOS=linux  GOARCH=arm64 go build $(LDFLAGS) -o dist/$(BINARY)-linux-arm64   ./cmd/cyber-tui
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o dist/$(BINARY)-windows-amd64.exe ./cmd/cyber-tui
+
 .PHONY: fetch
 fetch:
 	go run ./cmd/apifetch $(ARGS)
