@@ -55,7 +55,7 @@ This file defines workflow guardrails for Claude. It is not project documentatio
 - Current target: **v0.3.6** (see `docs/00-latest-api-reference.md`)
 - When the API ships a new version, open a new milestone on `dev` targeting that version
 - When the milestone is complete and the user approves, merge `dev` → `main` and tag with the API version
-- Patch releases (e.g. `v0.3.7`) are allowed for TUI-only fixes between API updates
+- Incremental TUI releases within an API version use a fourth segment: `v0.3.6.1`, `v0.3.6.2`, etc.
 - A milestone is a named set of features forming a coherent releasable version; the user defines scope and approves each release
 
 ---
