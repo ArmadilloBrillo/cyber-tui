@@ -94,18 +94,18 @@ func TestSettings_UpKey_Decrements(t *testing.T) {
 
 func TestSettings_Space_TogglesBool(t *testing.T) {
 	m := initSettings(defaultSettings())
-	original := getBool(m.settings, 0) // bookmark alerts at idx 0
-	m.settings = setBool(m.settings, 0, !getBool(m.settings, 0))
-	if getBool(m.settings, 0) == original {
+	original := m.settings.Notifications.Bookmark
+	m.settings.Notifications.Bookmark = !m.settings.Notifications.Bookmark
+	if m.settings.Notifications.Bookmark == original {
 		t.Error("toggle should flip the bool value")
 	}
 }
 
 func TestSettings_Enter_TogglesBool(t *testing.T) {
 	m := initSettings(defaultSettings())
-	original := getBool(m.settings, 3) // filter nsfw at idx 3
-	m.settings = setBool(m.settings, 3, !getBool(m.settings, 3))
-	if getBool(m.settings, 3) == original {
+	original := m.settings.FilterNSFW
+	m.settings.FilterNSFW = !m.settings.FilterNSFW
+	if m.settings.FilterNSFW == original {
 		t.Error("toggle should flip the bool value")
 	}
 }
@@ -123,9 +123,9 @@ func TestSettings_Space_SetsDirty(t *testing.T) {
 
 func TestSettings_Space_OnEnum_IsNoop(t *testing.T) {
 	m := initSettings(defaultSettings())
-	original := getEnum(m.settings, 9) // time format (enum) at idx 9
+	original := m.settings.TimeDisplayFormat
 	// Space on enum should be noop - don't change anything
-	if getEnum(m.settings, 9) != original {
+	if m.settings.TimeDisplayFormat != original {
 		t.Error("enum value should remain unchanged")
 	}
 }
@@ -135,7 +135,7 @@ func TestSettings_Toggle_Notifications_Bookmark(t *testing.T) {
 	if !m.settings.Notifications.Bookmark {
 		t.Error("default should have Bookmark=true")
 	}
-	m.settings = setBool(m.settings, 0, !getBool(m.settings, 0))
+	m.settings.Notifications.Bookmark = !m.settings.Notifications.Bookmark
 	if m.settings.Notifications.Bookmark {
 		t.Error("after toggle, Bookmark should be false")
 	}
@@ -143,11 +143,10 @@ func TestSettings_Toggle_Notifications_Bookmark(t *testing.T) {
 
 func TestSettings_Toggle_FilterNSFW(t *testing.T) {
 	m := initSettings(defaultSettings())
-	// filter nsfw is at idx 3
 	if m.settings.FilterNSFW {
 		t.Error("default should have FilterNSFW=false")
 	}
-	m.settings = setBool(m.settings, 3, !getBool(m.settings, 3))
+	m.settings.FilterNSFW = !m.settings.FilterNSFW
 	if !m.settings.FilterNSFW {
 		t.Error("after toggle, FilterNSFW should be true")
 	}
@@ -158,11 +157,11 @@ func TestSettings_Toggle_FilterNSFW(t *testing.T) {
 func TestSettings_Tab_CyclesEnum(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.cursor = 9 // time format
-	if getEnum(m.settings, 9) != "relative" {
+	if m.settings.TimeDisplayFormat != "relative" {
 		t.Error("default TimeDisplayFormat should be 'relative'")
 	}
 	m, _ = m.Update(keyMsg("tab"))
-	if getEnum(m.settings, 9) != "unix" {
+	if m.settings.TimeDisplayFormat != "unix" {
 		t.Error("after tab, TimeDisplayFormat should be 'unix'")
 	}
 }
@@ -171,7 +170,7 @@ func TestSettings_ShiftTab_CyclesEnum(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.cursor = 9
 	m, _ = m.Update(keyMsg("shift+tab"))
-	if getEnum(m.settings, 9) != "datetime" {
+	if m.settings.TimeDisplayFormat != "datetime" {
 		t.Error("shift+tab from 'relative' should cycle to 'datetime'")
 	}
 }
@@ -180,9 +179,9 @@ func TestSettings_Enum_WrapsForward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.cursor = 9
 	// Cycle from relative -> unix -> swatch -> datetime -> relative
-	m.settings = setEnum(m.settings, 9, "swatch")
+	m.settings.TimeDisplayFormat = "swatch"
 	m, _ = m.Update(keyMsg("tab"))
-	if getEnum(m.settings, 9) != "datetime" {
+	if m.settings.TimeDisplayFormat != "datetime" {
 		t.Error("tab from 'swatch' should wrap to 'datetime'")
 	}
 }
@@ -190,9 +189,9 @@ func TestSettings_Enum_WrapsForward(t *testing.T) {
 func TestSettings_Enum_WrapsBackward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.cursor = 9
-	m.settings = setEnum(m.settings, 9, "datetime")
+	m.settings.TimeDisplayFormat = "datetime"
 	m, _ = m.Update(keyMsg("shift+tab"))
-	if getEnum(m.settings, 9) != "swatch" {
+	if m.settings.TimeDisplayFormat != "swatch" {
 		t.Error("shift+tab from 'datetime' should wrap to 'swatch'")
 	}
 }
@@ -200,9 +199,9 @@ func TestSettings_Enum_WrapsBackward(t *testing.T) {
 func TestSettings_Tab_OnBool_IsNoop(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.cursor = 0 // bool item
-	original := getBool(m.settings, 0)
+	original := m.settings.Notifications.Bookmark
 	m, _ = m.Update(keyMsg("tab"))
-	if getBool(m.settings, 0) != original {
+	if m.settings.Notifications.Bookmark != original {
 		t.Error("tab on bool should be noop")
 	}
 }

@@ -66,6 +66,16 @@ var visibleProfileTabs = []profileTab{tabInfo, tabPosts, tabReplies}
 // Bordered box items are 3 lines: top border + 1 content line + bottom border.
 const tabItemLines = 3
 
+// tabScrollMeta holds the pagination and scroll state for one list tab.
+// Kept separate from the typed item slices so it can be stored in an array
+// indexed by profileTab, eliminating repeated field groups and switch statements.
+type tabScrollMeta struct {
+	cursor    string
+	loaded    bool
+	exhausted bool
+	top       int // first visible item index (scroll offset)
+}
+
 // profileChrome is the number of lines consumed by the profile header
 // (username + counts + blank), tab bar, and blank separator.
 const profileChrome = 5
@@ -91,33 +101,14 @@ type ProfileModel struct {
 	loc               *time.Location
 
 	// Sub-tab state (view mode only).
-	activeTab profileTab
+	activeTab   profileTab
+	tabMeta     [numProfileTabs]tabScrollMeta // pagination + scroll state per tab
+	tabSelected int                           // selected item index within the active list tab
 
-	posts            []model.Post
-	postsCursor      string
-	postsLoaded      bool
-	postsExhausted   bool
-	tabPostsTop      int // first visible post index
-
-	replies          []model.Reply
-	repliesCursor    string
-	repliesLoaded    bool
-	repliesExhausted bool
-	tabRepliesTop    int
-
-	following          []model.Follow
-	followingCursor    string
-	followingLoaded    bool
-	followingExhausted bool
-	tabFollowingTop    int
-
-	followers          []model.Follow
-	followersCursor    string
-	followersLoaded    bool
-	followersExhausted bool
-	tabFollowersTop    int
-
-	tabSelected int // selected item index within the active list tab
+	posts     []model.Post
+	replies   []model.Reply
+	following []model.Follow
+	followers []model.Follow
 }
 
 // SaveProfileMsg carries all editable profile fields.
@@ -199,102 +190,75 @@ func (m ProfileModel) SetError(err error) ProfileModel {
 func (m ProfileModel) ClearTabs() ProfileModel {
 	m.activeTab = tabInfo
 	m.tabSelected = 0
+	m.tabMeta = [numProfileTabs]tabScrollMeta{}
 	m.posts = nil
-	m.postsCursor = ""
-	m.postsLoaded = false
-	m.postsExhausted = false
-	m.tabPostsTop = 0
 	m.replies = nil
-	m.repliesCursor = ""
-	m.repliesLoaded = false
-	m.repliesExhausted = false
-	m.tabRepliesTop = 0
 	m.following = nil
-	m.followingCursor = ""
-	m.followingLoaded = false
-	m.followingExhausted = false
-	m.tabFollowingTop = 0
 	m.followers = nil
-	m.followersCursor = ""
-	m.followersLoaded = false
-	m.followersExhausted = false
-	m.tabFollowersTop = 0
 	return m
 }
 
 // SetUserPosts stores the first page of posts for the Posts tab.
 func (m ProfileModel) SetUserPosts(posts []model.Post, cursor string) ProfileModel {
 	m.posts = posts
-	m.postsCursor = cursor
-	m.postsLoaded = true
-	m.postsExhausted = cursor == ""
+	m.tabMeta[tabPosts] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
-	m.tabPostsTop = 0
 	return m
 }
 
 // AppendUserPosts adds a next page to the Posts tab.
 func (m ProfileModel) AppendUserPosts(posts []model.Post, cursor string) ProfileModel {
 	m.posts = append(m.posts, posts...)
-	m.postsCursor = cursor
-	m.postsExhausted = cursor == ""
+	m.tabMeta[tabPosts].cursor = cursor
+	m.tabMeta[tabPosts].exhausted = cursor == ""
 	return m
 }
 
 // SetUserReplies stores the first page of replies for the Replies tab.
 func (m ProfileModel) SetUserReplies(replies []model.Reply, cursor string) ProfileModel {
 	m.replies = replies
-	m.repliesCursor = cursor
-	m.repliesLoaded = true
-	m.repliesExhausted = cursor == ""
+	m.tabMeta[tabReplies] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
-	m.tabRepliesTop = 0
 	return m
 }
 
 // AppendUserReplies adds a next page to the Replies tab.
 func (m ProfileModel) AppendUserReplies(replies []model.Reply, cursor string) ProfileModel {
 	m.replies = append(m.replies, replies...)
-	m.repliesCursor = cursor
-	m.repliesExhausted = cursor == ""
+	m.tabMeta[tabReplies].cursor = cursor
+	m.tabMeta[tabReplies].exhausted = cursor == ""
 	return m
 }
 
 // SetUserFollowing stores the first page of following for the Following tab.
 func (m ProfileModel) SetUserFollowing(follows []model.Follow, cursor string) ProfileModel {
 	m.following = follows
-	m.followingCursor = cursor
-	m.followingLoaded = true
-	m.followingExhausted = cursor == ""
+	m.tabMeta[tabFollowing] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
-	m.tabFollowingTop = 0
 	return m
 }
 
 // AppendUserFollowing adds a next page to the Following tab.
 func (m ProfileModel) AppendUserFollowing(follows []model.Follow, cursor string) ProfileModel {
 	m.following = append(m.following, follows...)
-	m.followingCursor = cursor
-	m.followingExhausted = cursor == ""
+	m.tabMeta[tabFollowing].cursor = cursor
+	m.tabMeta[tabFollowing].exhausted = cursor == ""
 	return m
 }
 
 // SetUserFollowers stores the first page of followers for the Followers tab.
 func (m ProfileModel) SetUserFollowers(follows []model.Follow, cursor string) ProfileModel {
 	m.followers = follows
-	m.followersCursor = cursor
-	m.followersLoaded = true
-	m.followersExhausted = cursor == ""
+	m.tabMeta[tabFollowers] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
-	m.tabFollowersTop = 0
 	return m
 }
 
 // AppendUserFollowers adds a next page to the Followers tab.
 func (m ProfileModel) AppendUserFollowers(follows []model.Follow, cursor string) ProfileModel {
 	m.followers = append(m.followers, follows...)
-	m.followersCursor = cursor
-	m.followersExhausted = cursor == ""
+	m.tabMeta[tabFollowers].cursor = cursor
+	m.tabMeta[tabFollowers].exhausted = cursor == ""
 	return m
 }
 
@@ -416,22 +380,22 @@ func (m ProfileModel) switchTab(delta int) (ProfileModel, tea.Cmd) {
 	var lazyLoad tea.Cmd
 	switch m.activeTab {
 	case tabPosts:
-		if !m.postsLoaded {
+		if !m.tabMeta[tabPosts].loaded {
 			username := m.user.Username
 			lazyLoad = func() tea.Msg { return ShowUserPostsMsg{Username: username} }
 		}
 	case tabReplies:
-		if !m.repliesLoaded {
+		if !m.tabMeta[tabReplies].loaded {
 			username := m.user.Username
 			lazyLoad = func() tea.Msg { return ShowUserRepliesMsg{Username: username} }
 		}
 	case tabFollowing:
-		if !m.followingLoaded {
+		if !m.tabMeta[tabFollowing].loaded {
 			userID := m.user.ID
 			lazyLoad = func() tea.Msg { return ShowUserFollowingMsg{UserID: userID} }
 		}
 	case tabFollowers:
-		if !m.followersLoaded {
+		if !m.tabMeta[tabFollowers].loaded {
 			userID := m.user.ID
 			lazyLoad = func() tea.Msg { return ShowUserFollowersMsg{UserID: userID} }
 		}
@@ -483,7 +447,7 @@ func (m ProfileModel) moveTabSelection(delta int) (ProfileModel, tea.Cmd) {
 	if m.tabSelected >= top+numVisible {
 		top = m.tabSelected - numVisible + 1
 	}
-	m.setScrollTopForActiveTab(top)
+	m = m.setScrollTopForActiveTab(top)
 
 	// Check for pagination near the bottom of the list.
 	var pageCmd tea.Cmd
@@ -493,62 +457,35 @@ func (m ProfileModel) moveTabSelection(delta int) (ProfileModel, tea.Cmd) {
 	return m, pageCmd
 }
 
-// scrollTopForActiveTab returns the current scroll offset for the active tab.
 func (m ProfileModel) scrollTopForActiveTab() int {
-	switch m.activeTab {
-	case tabPosts:
-		return m.tabPostsTop
-	case tabReplies:
-		return m.tabRepliesTop
-	case tabFollowing:
-		return m.tabFollowingTop
-	case tabFollowers:
-		return m.tabFollowersTop
-	}
-	return 0
+	return m.tabMeta[m.activeTab].top
 }
 
-// setScrollTopForActiveTab updates the scroll offset for the active tab.
-func (m *ProfileModel) setScrollTopForActiveTab(top int) {
-	switch m.activeTab {
-	case tabPosts:
-		m.tabPostsTop = top
-	case tabReplies:
-		m.tabRepliesTop = top
-	case tabFollowing:
-		m.tabFollowingTop = top
-	case tabFollowers:
-		m.tabFollowersTop = top
-	}
+func (m ProfileModel) setScrollTopForActiveTab(top int) ProfileModel {
+	m.tabMeta[m.activeTab].top = top
+	return m
 }
 
 // loadMoreCmd returns a pagination command if the active tab has more pages.
 func (m ProfileModel) loadMoreCmd() tea.Cmd {
+	meta := m.tabMeta[m.activeTab]
+	if meta.exhausted || meta.cursor == "" {
+		return nil
+	}
+	cursor := meta.cursor
 	switch m.activeTab {
 	case tabPosts:
-		if !m.postsExhausted && m.postsCursor != "" {
-			cursor := m.postsCursor
-			username := m.user.Username
-			return func() tea.Msg { return LoadMoreUserPostsMsg{Username: username, Cursor: cursor} }
-		}
+		username := m.user.Username
+		return func() tea.Msg { return LoadMoreUserPostsMsg{Username: username, Cursor: cursor} }
 	case tabReplies:
-		if !m.repliesExhausted && m.repliesCursor != "" {
-			cursor := m.repliesCursor
-			username := m.user.Username
-			return func() tea.Msg { return LoadMoreUserRepliesMsg{Username: username, Cursor: cursor} }
-		}
+		username := m.user.Username
+		return func() tea.Msg { return LoadMoreUserRepliesMsg{Username: username, Cursor: cursor} }
 	case tabFollowing:
-		if !m.followingExhausted && m.followingCursor != "" {
-			cursor := m.followingCursor
-			userID := m.user.ID
-			return func() tea.Msg { return LoadMoreUserFollowingMsg{UserID: userID, Cursor: cursor} }
-		}
+		userID := m.user.ID
+		return func() tea.Msg { return LoadMoreUserFollowingMsg{UserID: userID, Cursor: cursor} }
 	case tabFollowers:
-		if !m.followersExhausted && m.followersCursor != "" {
-			cursor := m.followersCursor
-			userID := m.user.ID
-			return func() tea.Msg { return LoadMoreUserFollowersMsg{UserID: userID, Cursor: cursor} }
-		}
+		userID := m.user.ID
+		return func() tea.Msg { return LoadMoreUserFollowersMsg{UserID: userID, Cursor: cursor} }
 	}
 	return nil
 }
@@ -756,9 +693,9 @@ func (m ProfileModel) View() string {
 	case tabReplies:
 		content = m.repliesTabView()
 	case tabFollowing:
-		content = m.followListTabView(m.following, m.followingLoaded, "following", m.tabFollowingTop)
+		content = m.followListTabView(m.following, tabFollowing, "following")
 	case tabFollowers:
-		content = m.followListTabView(m.followers, m.followersLoaded, "followers", m.tabFollowersTop)
+		content = m.followListTabView(m.followers, tabFollowers, "followers")
 	}
 
 	out := lipgloss.JoinVertical(lipgloss.Left,
@@ -817,26 +754,31 @@ func (m ProfileModel) infoTabView() string {
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
+// tabSliceRange returns the [top, end) index range of items to render for the
+// active tab, clipped to n (the total number of items in that tab).
+func (m ProfileModel) tabSliceRange(n int) (top, end int) {
+	numVisible := m.contentHeight() / tabItemLines
+	if numVisible < 1 {
+		numVisible = 1
+	}
+	top = m.tabMeta[m.activeTab].top
+	end = top + numVisible
+	if end > n {
+		end = n
+	}
+	return
+}
+
 // postsTabView renders the Posts tab content.
 func (m ProfileModel) postsTabView() string {
-	if !m.postsLoaded {
+	if !m.tabMeta[tabPosts].loaded {
 		return theme.Subtle.Render("loading…")
 	}
 	if len(m.posts) == 0 {
 		return theme.Subtle.Render("no posts.")
 	}
-
-	numVisible := m.contentHeight() / tabItemLines
-	if numVisible < 1 {
-		numVisible = 1
-	}
-	top := m.tabPostsTop
-	end := top + numVisible
-	if end > len(m.posts) {
-		end = len(m.posts)
-	}
-
-	var lines []string
+	top, end := m.tabSliceRange(len(m.posts))
+	lines := make([]string, 0, end-top)
 	for i := top; i < end; i++ {
 		lines = append(lines, m.renderPostItem(m.posts[i], i == m.tabSelected))
 	}
@@ -845,24 +787,14 @@ func (m ProfileModel) postsTabView() string {
 
 // repliesTabView renders the Replies tab content.
 func (m ProfileModel) repliesTabView() string {
-	if !m.repliesLoaded {
+	if !m.tabMeta[tabReplies].loaded {
 		return theme.Subtle.Render("loading…")
 	}
 	if len(m.replies) == 0 {
 		return theme.Subtle.Render("no replies.")
 	}
-
-	numVisible := m.contentHeight() / tabItemLines
-	if numVisible < 1 {
-		numVisible = 1
-	}
-	top := m.tabRepliesTop
-	end := top + numVisible
-	if end > len(m.replies) {
-		end = len(m.replies)
-	}
-
-	var lines []string
+	top, end := m.tabSliceRange(len(m.replies))
+	lines := make([]string, 0, end-top)
 	for i := top; i < end; i++ {
 		lines = append(lines, m.renderReplyItem(m.replies[i], i == m.tabSelected))
 	}
@@ -870,24 +802,15 @@ func (m ProfileModel) repliesTabView() string {
 }
 
 // followListTabView renders a Following or Followers tab.
-func (m ProfileModel) followListTabView(follows []model.Follow, loaded bool, kind string, top int) string {
-	if !loaded {
+func (m ProfileModel) followListTabView(follows []model.Follow, tab profileTab, kind string) string {
+	if !m.tabMeta[tab].loaded {
 		return theme.Subtle.Render("loading…")
 	}
 	if len(follows) == 0 {
 		return theme.Subtle.Render("no " + kind + ".")
 	}
-
-	numVisible := m.contentHeight() / tabItemLines
-	if numVisible < 1 {
-		numVisible = 1
-	}
-	end := top + numVisible
-	if end > len(follows) {
-		end = len(follows)
-	}
-
-	var lines []string
+	top, end := m.tabSliceRange(len(follows))
+	lines := make([]string, 0, end-top)
 	for i := top; i < end; i++ {
 		lines = append(lines, m.renderFollowItem(follows[i], i == m.tabSelected))
 	}

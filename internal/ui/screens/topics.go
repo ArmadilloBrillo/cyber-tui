@@ -320,11 +320,7 @@ func (m TopicsModel) buildContent() (string, []int) {
 			currentLine += lipgloss.Height(rendered) + lineInc - 1
 		}
 		// Footer
-		if m.loading {
-			out += theme.Subtle.Render("  loading more…")
-		} else if m.topicsExhausted && len(m.topics) > 0 {
-			out += theme.Subtle.Render("  — end —")
-		}
+		out += listFooter(m.loading, m.topicsExhausted && len(m.topics) > 0)
 		return prefix + strings.TrimRight(out, "\n"), offsets
 	}
 
@@ -342,11 +338,7 @@ func (m TopicsModel) buildContent() (string, []int) {
 		currentLine += lipgloss.Height(rendered) + lineInc - 1
 	}
 	// Footer
-	if m.loading {
-		out += theme.Subtle.Render("  loading more…")
-	} else if m.exhausted {
-		out += theme.Subtle.Render("  — end —")
-	}
+	out += listFooter(m.loading, m.exhausted)
 	return prefix + strings.TrimRight(out, "\n"), offsets
 }
 

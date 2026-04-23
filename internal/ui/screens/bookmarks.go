@@ -283,10 +283,8 @@ func (m BookmarksModel) buildContent() (string, []int) {
 		sb.WriteString(sep)
 		currentLine += lipgloss.Height(rendered) + lineInc
 	}
-	if m.loading {
-		sb.WriteString(theme.Subtle.Render("  loading more…") + "\n")
-	} else if m.exhausted {
-		sb.WriteString(theme.Subtle.Render("  — end —") + "\n")
+	if f := listFooter(m.loading, m.exhausted); f != "" {
+		sb.WriteString(f + "\n")
 	}
 	return sb.String(), offsets
 }

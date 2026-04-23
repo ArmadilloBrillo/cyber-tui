@@ -243,13 +243,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, a.delegateUpdate(msg)
 }
 
-// broadcastConfig pushes the current display settings to all screens.
-// Call this whenever loc, relaxed, or dimensions change outside of a
-// WindowSizeMsg (e.g. after login, timezone change, or density toggle).
-// Adding a new screen only requires handling SharedConfigMsg in that
-// screen's Update — no changes here are needed.
-func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone}
+// updateAll sends msg to every screen, discarding returned commands.
+// Adding a new screen: add one line here. All broadcast helpers call this.
+func (a App) updateAll(msg tea.Msg) App {
 	a.feed, _ = a.feed.Update(msg)
 	a.chatrooms, _ = a.chatrooms.Update(msg)
 	a.cmail, _ = a.cmail.Update(msg)
@@ -260,6 +256,15 @@ func (a *App) broadcastConfig() {
 	a.bookmarks, _ = a.bookmarks.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
 	a.journal, _ = a.journal.Update(msg)
+	return a
+}
+
+// broadcastConfig pushes the current display settings to all screens.
+// Call this whenever loc, relaxed, or dimensions change outside of a
+// WindowSizeMsg (e.g. after login, timezone change, or density toggle).
+func (a *App) broadcastConfig() {
+	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone}
+	*a = a.updateAll(msg)
 }
 
 // broadcastBookmarkedIDs pushes the current bookmarked-ID sets to all screens
@@ -277,22 +282,11 @@ func (a *App) broadcastBookmarkedIDs() {
 
 // applyWindowSize stores the new terminal dimensions and broadcasts the size
 // to all screens so their viewports initialise before they become active.
+// The active screen gets a second update via delegateUpdate, which is harmless.
 func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
 	a.width = m.Width
 	a.height = m.Height
-	// Broadcast to all screens; the active screen gets a second update via
-	// delegateUpdate in Update, which is harmless (re-applies the same size).
-	a.feed, _ = a.feed.Update(m)
-	a.chatrooms, _ = a.chatrooms.Update(m)
-	a.cmail, _ = a.cmail.Update(m)
-	a.postDetail, _ = a.postDetail.Update(m)
-	a.profile, _ = a.profile.Update(m)
-	a.notifications, _ = a.notifications.Update(m)
-	a.settingsScreen, _ = a.settingsScreen.Update(m)
-	a.bookmarks, _ = a.bookmarks.Update(m)
-	a.topics, _ = a.topics.Update(m)
-	a.journal, _ = a.journal.Update(m)
-	return a
+	return a.updateAll(m)
 }
 
 // handleKeys processes tea.KeyMsg events: modal intercepts, focused-input

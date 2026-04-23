@@ -89,10 +89,11 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, width int, loc *ti
 		body = body + "\n" + att
 	}
 
-	topics := ""
+	var topicsSB strings.Builder
 	for _, t := range p.Topics {
-		topics += theme.Subtle.Render("#"+t) + " "
+		topicsSB.WriteString(theme.Subtle.Render("#"+t) + " ")
 	}
+	topics := topicsSB.String()
 
 	boxStyle := theme.Border
 	if selected {
@@ -332,4 +333,27 @@ func renderAttachments(attachments []model.Attachment) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// listFooter returns a styled "loading more…" or "— end —" line, or "" when neither applies.
+func listFooter(loading, exhausted bool) string {
+	if loading {
+		return theme.Subtle.Render("  loading more…")
+	}
+	if exhausted {
+		return theme.Subtle.Render("  — end —")
+	}
+	return ""
+}
+
+// renderChatMessages renders a list of chat messages (used by both CMail and Chatrooms).
+func renderChatMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int) string {
+	var sb strings.Builder
+	for _, msg := range msgs {
+		ts := theme.Subtle.Render(displayTime(msg.CreatedAt, loc, timeDisplayFormat, true))
+		author := theme.Highlight.Render("@" + msg.From.Username)
+		body := markdown.Render(msg.Body, viewportWidth)
+		sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, ts, "  ", author, "  ", body) + "\n")
+	}
+	return sb.String()
 }

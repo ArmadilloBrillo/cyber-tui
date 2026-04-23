@@ -11,11 +11,66 @@ import (
 // MockClient implements Client with static fake data.
 // Used during development before the real API is available.
 type MockClient struct {
-	tokens model.Tokens
+	tokens    model.Tokens
+	bookmarks []model.Bookmark
+	notes     []model.Note
+	settings  model.Settings
 }
 
 func NewMockClient() *MockClient {
-	return &MockClient{}
+	return &MockClient{
+		bookmarks: []model.Bookmark{
+			{
+				ID:        "bm1",
+				Type:      "post",
+				PostID:    "p1",
+				Post:      &model.Post{ID: "p1", AuthorUsername: "neuromancer", Content: "flatline is not death, it is elsewhere"},
+				CreatedAt: time.Now().Add(-30 * time.Minute),
+			},
+			{
+				ID:        "bm2",
+				Type:      "post",
+				PostID:    "p2",
+				Post:      &model.Post{ID: "p2", AuthorUsername: "molly_millions", Content: "the matrix has its roots in primitive arcade games"},
+				CreatedAt: time.Now().Add(-2 * time.Hour),
+			},
+		},
+		notes: []model.Note{
+			{
+				ID:             "note1",
+				AuthorID:       "1",
+				Content:        "flatline is not death, it is elsewhere\n\nremember to follow up on this thought.",
+				Topics:         []string{"philosophy"},
+				RevisionNumber: 1,
+				Deleted:        false,
+				CreatedAt:      time.Now().Add(-2 * time.Hour),
+			},
+			{
+				ID:             "note2",
+				AuthorID:       "1",
+				Content:        "the matrix has its roots in primitive arcade games\n\nbut what are its roots in the human condition?",
+				Topics:         []string{"history", "cyberspace"},
+				RevisionNumber: 2,
+				Deleted:        false,
+				CreatedAt:      time.Now().Add(-24 * time.Hour),
+			},
+			{
+				ID:             "note3",
+				AuthorID:       "1",
+				Content:        "shopping list:\n- coffee\n- ice\n- a new deck",
+				Topics:         []string{},
+				RevisionNumber: 1,
+				Deleted:        false,
+				CreatedAt:      time.Now().Add(-72 * time.Hour),
+			},
+		},
+		settings: model.Settings{
+			Notifications:     model.NotificationPrefs{Bookmark: true, Reply: true, Poke: true},
+			ShowFollowerCount: true,
+			TimeDisplayFormat: "datetime",
+			ImagePixelSize:    "2",
+		},
+	}
 }
 
 var mockUsers = []model.User{
@@ -187,29 +242,12 @@ func (m *MockClient) GetPost(postID string) (model.Post, error) {
 	return model.Post{ID: postID, AuthorUsername: "unknown", Content: "[post not found]"}, nil
 }
 
-var mockBookmarks = []model.Bookmark{
-	{
-		ID:        "bm1",
-		Type:      "post",
-		PostID:    "p1",
-		Post:      &model.Post{ID: "p1", AuthorUsername: "neuromancer", Content: "flatline is not death, it is elsewhere"},
-		CreatedAt: time.Now().Add(-30 * time.Minute),
-	},
-	{
-		ID:        "bm2",
-		Type:      "post",
-		PostID:    "p2",
-		Post:      &model.Post{ID: "p2", AuthorUsername: "molly_millions", Content: "the matrix has its roots in primitive arcade games"},
-		CreatedAt: time.Now().Add(-2 * time.Hour),
-	},
-}
-
 func (m *MockClient) GetBookmarks(cursor string) ([]model.Bookmark, string, error) {
-	return mockBookmarks, "", nil
+	return m.bookmarks, "", nil
 }
 
 func (m *MockClient) CreateBookmark(postID, replyID string) (string, error) {
-	id := fmt.Sprintf("bm-new-%d", len(mockBookmarks)+1)
+	id := fmt.Sprintf("bm-new-%d", len(m.bookmarks)+1)
 	b := model.Bookmark{
 		ID:      id,
 		Type:    "post",
@@ -224,14 +262,14 @@ func (m *MockClient) CreateBookmark(postID, replyID string) (string, error) {
 			b.Post = &p
 		}
 	}
-	mockBookmarks = append(mockBookmarks, b)
+	m.bookmarks = append(m.bookmarks, b)
 	return id, nil
 }
 
 func (m *MockClient) DeleteBookmark(id string) error {
-	for i, b := range mockBookmarks {
+	for i, b := range m.bookmarks {
 		if b.ID == id {
-			mockBookmarks = append(mockBookmarks[:i], mockBookmarks[i+1:]...)
+			m.bookmarks = append(m.bookmarks[:i], m.bookmarks[i+1:]...)
 			return nil
 		}
 	}
@@ -314,19 +352,12 @@ var mockTopics = []model.Topic{
 	{Slug: "music", PostCount: 87},
 }
 
-var mockSettings = model.Settings{
-	Notifications:     model.NotificationPrefs{Bookmark: true, Reply: true, Poke: true},
-	ShowFollowerCount: true,
-	TimeDisplayFormat: "datetime",
-	ImagePixelSize:    "2",
-}
-
 func (m *MockClient) GetSettings() (model.Settings, error) {
-	return mockSettings, nil
+	return m.settings, nil
 }
 
 func (m *MockClient) UpdateSettings(update model.Settings) error {
-	mockSettings = update
+	m.settings = update
 	return nil
 }
 
@@ -427,43 +458,13 @@ func (m *MockClient) Unfollow(followID string) error {
 	return nil
 }
 
-var mockNotes = []model.Note{
-	{
-		ID:             "note1",
-		AuthorID:       "1",
-		Content:        "flatline is not death, it is elsewhere\n\nremember to follow up on this thought.",
-		Topics:         []string{"philosophy"},
-		RevisionNumber: 1,
-		Deleted:        false,
-		CreatedAt:      time.Now().Add(-2 * time.Hour),
-	},
-	{
-		ID:             "note2",
-		AuthorID:       "1",
-		Content:        "the matrix has its roots in primitive arcade games\n\nbut what are its roots in the human condition?",
-		Topics:         []string{"history", "cyberspace"},
-		RevisionNumber: 2,
-		Deleted:        false,
-		CreatedAt:      time.Now().Add(-24 * time.Hour),
-	},
-	{
-		ID:             "note3",
-		AuthorID:       "1",
-		Content:        "shopping list:\n- coffee\n- ice\n- a new deck",
-		Topics:         []string{},
-		RevisionNumber: 1,
-		Deleted:        false,
-		CreatedAt:      time.Now().Add(-72 * time.Hour),
-	},
-}
-
 func (m *MockClient) GetNotes(cursor string) ([]model.Note, string, error) {
-	return mockNotes, "", nil
+	return m.notes, "", nil
 }
 
 func (m *MockClient) CreateNote(content string, topics []string) (model.Note, error) {
 	note := model.Note{
-		ID:             fmt.Sprintf("note-new-%d", len(mockNotes)+1),
+		ID:             fmt.Sprintf("note-new-%d", len(m.notes)+1),
 		AuthorID:       mockUsers[0].ID,
 		Content:        content,
 		Topics:         topics,
@@ -471,16 +472,16 @@ func (m *MockClient) CreateNote(content string, topics []string) (model.Note, er
 		Deleted:        false,
 		CreatedAt:      time.Now(),
 	}
-	mockNotes = append([]model.Note{note}, mockNotes...)
+	m.notes = append([]model.Note{note}, m.notes...)
 	return note, nil
 }
 
 func (m *MockClient) UpdateNote(noteID, content string, topics []string) error {
-	for i, n := range mockNotes {
+	for i, n := range m.notes {
 		if n.ID == noteID {
-			mockNotes[i].Content = content
-			mockNotes[i].Topics = topics
-			mockNotes[i].RevisionNumber++
+			m.notes[i].Content = content
+			m.notes[i].Topics = topics
+			m.notes[i].RevisionNumber++
 			return nil
 		}
 	}
@@ -488,9 +489,9 @@ func (m *MockClient) UpdateNote(noteID, content string, topics []string) error {
 }
 
 func (m *MockClient) DeleteNote(noteID string) error {
-	for i, n := range mockNotes {
+	for i, n := range m.notes {
 		if n.ID == noteID {
-			mockNotes = append(mockNotes[:i], mockNotes[i+1:]...)
+			m.notes = append(m.notes[:i], m.notes[i+1:]...)
 			return nil
 		}
 	}
@@ -498,7 +499,7 @@ func (m *MockClient) DeleteNote(noteID string) error {
 }
 
 func (m *MockClient) GetNote(noteID string) (model.Note, error) {
-	for _, n := range mockNotes {
+	for _, n := range m.notes {
 		if n.ID == noteID {
 			return n, nil
 		}
@@ -507,7 +508,7 @@ func (m *MockClient) GetNote(noteID string) (model.Note, error) {
 }
 
 func (m *MockClient) GetNoteRevision(noteID string, revision int) (model.Note, error) {
-	for _, n := range mockNotes {
+	for _, n := range m.notes {
 		if n.ID == noteID {
 			// Return a copy with the requested revision number and modified content.
 			copy := n
@@ -533,7 +534,7 @@ func (m *MockClient) GetNoteRevisions(noteID, cursor string) ([]model.NoteRevisi
 		return revs, "", nil
 	}
 	// For notes without explicit revision history, synthesize one revision.
-	for _, n := range mockNotes {
+	for _, n := range m.notes {
 		if n.ID == noteID {
 			return []model.NoteRevision{
 				{RevisionNumber: n.RevisionNumber, Content: n.Content, Topics: n.Topics, CreatedAt: n.CreatedAt},
