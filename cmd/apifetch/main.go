@@ -59,8 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	pretty, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
+	if _, err := json.MarshalIndent(raw, "", "  "); err != nil {
 		fmt.Fprintln(os.Stdout, string(raw))
 		return
 	}
@@ -71,6 +70,6 @@ func main() {
 		fmt.Fprintln(os.Stdout, string(raw))
 		return
 	}
-	pretty, _ = json.MarshalIndent(v, "", "  ")
+	pretty, _ := json.MarshalIndent(v, "", "  ")
 	fmt.Fprintln(os.Stdout, string(pretty))
 }

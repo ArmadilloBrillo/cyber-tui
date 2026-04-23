@@ -683,9 +683,9 @@ func TestPostDetail_P_ReplySelected_EmitsShowUserProfileMsg(t *testing.T) {
 func TestProfile_ReadOnly_EscEmitsBackFromProfileMsg(t *testing.T) {
 	m := screens.NewProfileModel()
 	m = m.SetReadOnly(true)
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("esc")})
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("esc")})
 	// esc is a special key, use KeyEsc type
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
 		t.Fatal("expected a command on ESC in read-only profile")
 	}

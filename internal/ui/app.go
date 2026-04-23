@@ -1209,38 +1209,42 @@ func (a App) screenHints() []hint {
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			return []hint{{"Ctrl+S", "send"}, {"Tab", "topics"}, {"Esc", "cancel"}, more}
+			return []hint{{"tab", "cycle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "open post"}, {"r", "reply"}, {"n", "new post"}, {"b", "bookmark"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, more}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
-			return []hint{{"Ctrl+S", "send"}, {"Esc", "cancel"}, more}
+			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "scroll/navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"esc", "back"}, more}
+		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"esc", "back"}, more}
 	case screenProfile:
 		if a.profile.ComposeActive() {
-			return []hint{{"tab/shift+tab", "cycle fields"}, {"Ctrl+S", "save"}, {"Esc", "cancel"}, more}
+			return []hint{{"Ctrl+s", "save"}, {"Esc", "cancel"}, {"tab", "cycle"}}
 		}
 		if a.profile.IsReadOnly() {
-			return []hint{{"tab/shift+tab", "switch tab"}, {"j/k", "navigate"}, {"f", "follow/unfollow"}, {"esc", "back"}, more}
+			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"tab", "cycle"}, more}
 		}
-		return []hint{{"tab/shift+tab", "switch tab"}, {"j/k", "navigate"}, {"e", "edit profile"}, {"esc", "back"}, more}
+		return []hint{{"↑↓", "navigate"}, {"e", "edit"}, {"tab", "cycle"}, more}
 	case screenNotifications:
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle filter"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, more}
 	case screenJournal:
 		if a.journal.ComposeActive() {
-			return []hint{{"Ctrl+S", "save"}, {"Ctrl+P", "publish as post"}, {"Esc", "cancel"}, more}
+			return []hint{{"tab", "cycle"}, {"Ctrl+s", "save"}, {"Ctrl+p", "publish"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "edit note"}, {"n", "new note"}, {"d", "delete"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "edit"}, {"n", "new"}, {"d", "delete"}, more}
 	case screenBookmarks:
-		return []hint{{"↑↓", "navigate"}, {"enter", "open post"}, {"d", "delete"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"d", "delete"}, more}
 	case screenTopics:
-		return []hint{{"↑↓", "navigate"}, {"enter", "browse/open"}, {"esc", "back"}, more}
-	case screenSettings:
-		if a.settingsScreen.IsDirty() {
-			return []hint{{"Ctrl+S", "save"}, {"Esc", "revert"}, more}
+		if a.topics.IsBrowsingTopic() {
+			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
 		}
-		return []hint{{"↑↓", "navigate"}, {"space/enter", "toggle"}, {"tab/shift+tab", "cycle"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, {"esc", "back"}, more}
+	case screenSettings:
+		base := []hint{{"↑↓", "navigate"}, {"space", "toggle"}, {"tab", "cycle"}, more}
+		if a.settingsScreen.IsDirty() {
+			return append([]hint{{"Ctrl+s", "save"}, {"Esc", "revert"}}, base...)
+		}
+		return base
 	case screenCMail:
 		return []hint{{"← →", "switch pane"}, {"j/k", "navigate"}, {"enter", "send"}, more}
 	}
@@ -1269,6 +1273,23 @@ func renderHints(hints []hint) string {
 		}
 	}
 	return strings.Join(parts, "")
+}
+
+// hintRows converts hints to modal row strings using rowFn, skipping the "?" hint.
+// "↑↓" is expanded to "↑↓ / j/k" so the modal documents both navigation styles.
+func hintRows(hints []hint, rowFn func(string, string) string) []string {
+	rows := make([]string, 0, len(hints))
+	for _, h := range hints {
+		if h.key == "?" {
+			continue
+		}
+		key := h.key
+		if key == "↑↓" {
+			key = "↑↓ / j/k"
+		}
+		rows = append(rows, rowFn(key, h.desc))
+	}
+	return rows
 }
 
 func (a App) renderStatusBar() string {
@@ -1432,7 +1453,7 @@ func (a App) handleHelpModalKey(_ tea.KeyMsg) (tea.Model, tea.Cmd) {
 // for the global scope and the currently active screen.
 func (a App) renderHelpModal() string {
 	title := theme.Title.Render("shortcuts")
-	sectionStyle := theme.Subtle.Copy().Bold(true)
+	sectionStyle := theme.Subtle.Bold(true)
 	row := func(key, desc string) string {
 		k := theme.Highlight.Render(fmt.Sprintf("%-14s", key))
 		return lipgloss.JoinHorizontal(lipgloss.Top, k, theme.Subtle.Render(desc))
@@ -1448,141 +1469,73 @@ func (a App) renderHelpModal() string {
 		row("q", "quit"),
 	)
 
+	section := func(title string, extra ...string) string {
+		parts := append([]string{sectionStyle.Render(title)}, hintRows(a.screenHints(), row)...)
+		parts = append(parts, extra...)
+		return lipgloss.JoinVertical(lipgloss.Left, parts...)
+	}
+
 	var localSection string
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("feed (compose)"),
-				row("Ctrl+S", "send"),
-				row("Tab", "topics"),
-				row("Enter", "paragraph"),
-				row("Esc", "cancel"),
-			)
+			localSection = section("feed (compose)", row("Enter", "paragraph"))
 		} else {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("feed"),
-				row("↑↓ / jk", "navigate"),
-				row("enter", "open post"),
+			localSection = section("feed",
 				row("p", "view profile"),
-				row("b", "bookmark"),
-				row("n", "new post"),
-				row("r", "reply"),
 				row("d", "delete own"),
 			)
 		}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("post detail (compose)"),
-				row("Ctrl+S", "send"),
-				row("Enter", "paragraph"),
-				row("Esc", "cancel"),
-			)
+			localSection = section("post detail (compose)", row("Enter", "paragraph"))
 		} else {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("post detail"),
-				row("↑↓ / jk", "scroll / navigate"),
-				row("r", "reply"),
+			localSection = section("post detail",
 				row("d", "delete own"),
 				row("p", "view profile"),
-				row("b", "bookmark"),
-				row("esc", "back"),
 			)
 		}
 	case screenProfile:
 		if a.profile.ComposeActive() {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("profile (editing)"),
-				row("tab/shift+tab", "cycle fields"),
-				row("Ctrl+S", "save"),
-				row("Esc", "cancel"),
-			)
+			localSection = section("profile (editing)")
 		} else if a.profile.IsReadOnly() {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("profile"),
-				row("tab/shift+tab", "switch tab"),
-				row("j/k", "navigate"),
+			localSection = section("profile",
 				row("enter", "open"),
-				row("f", "follow / unfollow"),
-				row("esc", "back"),
 			)
 		} else {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("profile (own)"),
-				row("tab/shift+tab", "switch tab"),
-				row("j/k", "navigate"),
+			localSection = section("profile (own)",
 				row("enter", "open"),
-				row("e", "edit profile"),
-				row("esc", "back"),
 			)
 		}
 	case screenNotifications:
-		localSection = lipgloss.JoinVertical(lipgloss.Left,
-			sectionStyle.Render("notifications"),
-			row("↑↓ / jk", "navigate"),
-			row("enter", "open"),
-			row("m", "mark read"),
+		localSection = section("notifications",
 			row("M", "mark all read"),
-			row("u", "toggle unread filter"),
 			row("p", "view profile"),
 		)
 	case screenJournal:
 		if a.journal.ComposeActive() {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("journal (editing)"),
-				row("Ctrl+S", "save"),
-				row("Ctrl+P", "publish as post"),
-				row("Tab", "topics"),
-				row("Enter", "paragraph"),
-				row("Esc", "cancel"),
-			)
+			localSection = section("journal (editing)", row("Enter", "paragraph"))
 		} else {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("journal"),
-				row("↑↓ / jk", "navigate"),
-				row("enter", "edit note"),
-				row("n", "new note"),
-				row("d", "delete"),
+			localSection = section("journal",
 				row("h", "revision history"),
 			)
 		}
 	case screenBookmarks:
-		localSection = lipgloss.JoinVertical(lipgloss.Left,
-			sectionStyle.Render("bookmarks"),
-			row("↑↓ / jk", "navigate"),
-			row("enter", "open post"),
-			row("d", "delete"),
-		)
+		localSection = section("bookmarks")
 	case screenTopics:
-		localSection = lipgloss.JoinVertical(lipgloss.Left,
-			sectionStyle.Render("topics"),
-			row("↑↓ / jk", "navigate"),
-			row("enter", "browse / open"),
-			row("esc", "back"),
-		)
-	case screenSettings:
-		if a.settingsScreen.IsDirty() {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("settings (unsaved changes)"),
-				row("Ctrl+S", "save"),
-				row("Esc", "revert"),
-			)
+		if a.topics.IsBrowsingTopic() {
+			localSection = section("topics (browsing)")
 		} else {
-			localSection = lipgloss.JoinVertical(lipgloss.Left,
-				sectionStyle.Render("settings"),
-				row("↑↓ / jk", "navigate"),
-				row("space/enter", "toggle"),
-				row("tab/shift+tab", "cycle"),
-			)
+			localSection = section("topics")
 		}
+	case screenSettings:
+		title := "settings"
+		if a.settingsScreen.IsDirty() {
+			title = "settings (unsaved changes)"
+		}
+		localSection = section(title)
 	case screenCMail:
-		localSection = lipgloss.JoinVertical(lipgloss.Left,
-			sectionStyle.Render("c-mail"),
-			row("← →", "switch pane"),
-			row("j/k", "navigate"),
-			row("enter", "send"),
-		)
+		localSection = section("c-mail")
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
@@ -1592,7 +1545,7 @@ func (a App) renderHelpModal() string {
 		"",
 		localSection,
 		"",
-		theme.Subtle.Render("? or any key · close"),
+		theme.Subtle.Render("any key · close"),
 		renderedVersionLine,
 	)
 	return theme.ActiveBorder.Render(body)

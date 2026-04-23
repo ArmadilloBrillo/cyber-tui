@@ -30,10 +30,14 @@ This file defines workflow guardrails for Claude. It is not project documentatio
 - `chore/short-description` — non-functional changes (tooling, config, deps)
 
 ### PR workflow
-- All changes to `dev` and `main` go through a pull request — Claude Code included
-- Never push directly to `dev` or `main`
-- Open a PR against `dev` after pushing a feature branch; request maintainer review
-- CI must pass (`go test ./...`, `go vet ./...`, `staticcheck`) before merge
+**Contributors (fork and PR):**
+- Fork the repo, branch from `dev`, submit a PR targeting `dev`
+- CI must pass before the maintainer merges
+
+**Maintainer:**
+- Direct push to `dev` is allowed for trivial changes (docs, config); CI will not run
+- Open a PR when the change is significant enough to warrant CI validation
+- Releases (`dev` → `main`): always open a PR so CI runs before merge
 
 ### Commit messages — Conventional Commits
 - `feat:` new feature
@@ -55,7 +59,7 @@ This file defines workflow guardrails for Claude. It is not project documentatio
 - Current target: **v0.3.6** (see `docs/00-latest-api-reference.md`)
 - When the API ships a new version, open a new milestone on `dev` targeting that version
 - When the milestone is complete and the user approves, merge `dev` → `main` and tag with the API version
-- Patch releases (e.g. `v0.3.7`) are allowed for TUI-only fixes between API updates
+- Incremental TUI releases within an API version use a fourth segment: `v0.3.6.1`, `v0.3.6.2`, etc.
 - A milestone is a named set of features forming a coherent releasable version; the user defines scope and approves each release
 
 ---
@@ -65,7 +69,12 @@ This file defines workflow guardrails for Claude. It is not project documentatio
 - Always explain planned changes before making them
 - Always ask when unsure — do not guess
 - No monoliths: one responsibility per package, docs per feature
-- No linter warnings (`go vet`, `staticcheck` or equivalent must be clean)
+- No linter warnings — run all three before every commit:
+  ```
+  go test ./...
+  go vet ./...
+  staticcheck ./...
+  ```
 - Never commit secrets, tokens, credentials, or SSH keys
 - `.env` is gitignored; `.env.example` is committed with placeholder values only
 
