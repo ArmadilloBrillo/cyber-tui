@@ -286,6 +286,27 @@ func TestRender_AmbiguousRunesStripped(t *testing.T) {
 	}
 }
 
+func TestRender_TypographicPunctPreserved(t *testing.T) {
+	cases := []struct {
+		r    rune
+		name string
+	}{
+		{'‘', "LEFT SINGLE QUOTATION MARK"},
+		{'’', "RIGHT SINGLE QUOTATION MARK"},
+		{'“', "LEFT DOUBLE QUOTATION MARK"},
+		{'”', "RIGHT DOUBLE QUOTATION MARK"},
+		{'–', "EN DASH"},
+		{'—', "EM DASH"},
+		{'…', "HORIZONTAL ELLIPSIS"},
+	}
+	for _, tc := range cases {
+		raw := Render("Hello "+string(tc.r)+" world", 80)
+		if !strings.ContainsRune(strip(raw), tc.r) {
+			t.Errorf("%s (U+%04X) should be preserved: %q", tc.name, tc.r, strip(raw))
+		}
+	}
+}
+
 func TestRender_HalfwidthKatakanaModifierStripped(t *testing.T) {
 	// U+FF9F HALFWIDTH KATAKANA VOICED ITERATION MARK has GCB=Extend:
 	// go-runewidth says width=1 (not ambiguous), but rivo/uniseg (used by lipgloss)

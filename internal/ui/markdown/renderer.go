@@ -419,6 +419,19 @@ func (r *renderer) rawTextNode(node ast.Node) string {
 	return sb.String()
 }
 
+// typographicPunct is the set of EAW=A (ambiguous-width) characters that are
+// consistently measured as 1 column in modern Western terminals and must not
+// be replaced with spaces.
+var typographicPunct = map[rune]bool{
+	'\u2018': true, // ‘  LEFT SINGLE QUOTATION MARK
+	'\u2019': true, // ’  RIGHT SINGLE QUOTATION MARK / apostrophe
+	'\u201C': true, // “  LEFT DOUBLE QUOTATION MARK
+	'\u201D': true, // ”  RIGHT DOUBLE QUOTATION MARK
+	'\u2013': true, // –  EN DASH
+	'\u2014': true, // —  EM DASH
+	'\u2026': true, // …  HORIZONTAL ELLIPSIS
+}
+
 // stripAmbiguousRunes normalises Unicode characters whose display width cannot be
 // reliably determined so that rendered output does not overflow width-constrained
 // TUI boxes. Double-wide characters (CJK, fullwidth) are passed through unchanged
@@ -436,7 +449,11 @@ func stripAmbiguousRunes(s string) string {
 			// that runewidth.StringWidth treats as 0-width in context but the terminal
 			// renders as 1 column (wcwidth), causing layout overflow
 		case runewidth.IsAmbiguousWidth(r) && !unicode.IsLetter(r):
-			b.WriteRune(' ') // ambiguous EAW=A non-letter symbol — normalise to space to avoid CJK layout overflow
+			if typographicPunct[r] {
+				b.WriteRune(r) // common typographic punct — 1 column in Western terminals
+			} else {
+				b.WriteRune(' ') // ambiguous EAW=A non-letter symbol — normalise to space to avoid CJK layout overflow
+			}
 		default:
 			b.WriteRune(r)
 		}
