@@ -365,14 +365,7 @@ func (m CMailModel) renderMessages() string {
 	if m.activeConv == nil || len(m.activeConv.Messages) == 0 {
 		return theme.Subtle.Render("no messages")
 	}
-	var out string
-	for _, msg := range m.activeConv.Messages {
-		ts := theme.Subtle.Render(displayTime(msg.CreatedAt, m.location(), m.timeDisplayFormat, true))
-		author := theme.Highlight.Render("@" + msg.From.Username)
-		body := markdown.Render(msg.Body, m.viewport.Width)
-		out += lipgloss.JoinHorizontal(lipgloss.Top, ts, "  ", author, "  ", body) + "\n"
-	}
-	return out
+	return renderChatMessages(m.activeConv.Messages, m.location(), m.timeDisplayFormat, m.viewport.Width)
 }
 
 func (m CMailModel) location() *time.Location {

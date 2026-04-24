@@ -60,6 +60,15 @@ A PR is ready to merge when:
 5. `docs/00-api-backlog.md` is updated if you found API issues or landed a previously-tracked feature
 6. The PR checklist is complete and a maintainer has approved
 
+## Building from source
+
+```bash
+make build        # current platform → dist/cyber-tui
+make build-all    # all platforms   → dist/
+```
+
+Pre-built binaries for Linux (amd64/arm64) and Windows (amd64) are attached to each [GitHub Release](https://github.com/ArmadilloBrillo/cyber-tui/releases).
+
 ## Versioning
 
 Release tags mirror the cyberspace.online API version they target (e.g. `v0.3.6`). Patch releases (`v0.3.7`) are used for TUI-only fixes between API updates. The current target API version is always recorded in `docs/00-latest-api-reference.md`.

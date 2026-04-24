@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -431,9 +432,14 @@ func (c *HTTPClient) refresh() error {
 	}
 	defer resp.Body.Close()
 
-	raw, _ := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("refresh: read body: %w", err)
+	}
 	var env envelope
-	json.Unmarshal(raw, &env)
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return fmt.Errorf("refresh: decode response: %w", err)
+	}
 
 	if env.Error != nil || resp.StatusCode != 200 {
 		return ErrUnauthorized
@@ -449,6 +455,19 @@ func (c *HTTPClient) refresh() error {
 }
 
 // --- conversion helpers ---
+
+// parseTime parses an RFC3339 timestamp and logs a warning if the value is
+// non-empty but unparseable (indicates a server-side format change).
+func parseTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		log.Printf("api: parseTime %q: %v", s, err)
+	}
+	return t
+}
 
 func wireAttachmentsToModel(ws []wireAttachment) []model.Attachment {
 	if len(ws) == 0 {
@@ -471,7 +490,7 @@ func wireAttachmentsToModel(ws []wireAttachment) []model.Attachment {
 }
 
 func wirePostToModel(w wirePost) model.Post {
-	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	t := parseTime(w.CreatedAt)
 	return model.Post{
 		ID:             w.PostID,
 		AuthorID:       w.AuthorID,
@@ -489,7 +508,7 @@ func wirePostToModel(w wirePost) model.Post {
 }
 
 func wireReplyToModel(w wireReply) model.Reply {
-	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	t := parseTime(w.CreatedAt)
 	return model.Reply{
 		ID:             w.ReplyID,
 		PostID:         w.PostID,
@@ -523,7 +542,7 @@ func wireUserToModel(w wireUser) model.User {
 }
 
 func wireFollowToModel(w wireFollow) model.Follow {
-	t, _ := time.Parse(time.RFC3339, w.CreatedAt)
+	t := parseTime(w.CreatedAt)
 	return model.Follow{
 		ID:               w.FollowID,
 		FollowerID:       w.FollowerID,
@@ -535,7 +554,7 @@ func wireFollowToModel(w wireFollow) model.Follow {
 }
 
 func wireNoteRevisionToModel(w wireNoteRevision) model.NoteRevision {
-	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	t := parseTime(w.CreatedAt)
 	topics := w.Topics
 	if topics == nil {
 		topics = []string{}
@@ -571,7 +590,7 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 }
 
 func wireBookmarkToModel(w wireBookmark) model.Bookmark {
-	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	t := parseTime(w.CreatedAt)
 	b := model.Bookmark{
 		ID:        w.BookmarkID,
 		Type:      w.Type,
@@ -591,7 +610,7 @@ func wireBookmarkToModel(w wireBookmark) model.Bookmark {
 }
 
 func wireNotificationToModel(w wireNotification) model.Notification {
-	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	t := parseTime(w.CreatedAt)
 	return model.Notification{
 		ID:         w.ID,
 		Type:       w.Type,
@@ -614,7 +633,7 @@ func wireTopicToModel(w wireTopic) model.Topic {
 }
 
 func wireNoteToModel(w wireNote) model.Note {
-	t, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	t := parseTime(w.CreatedAt)
 	topics := w.Topics
 	if topics == nil {
 		topics = []string{}
@@ -677,24 +696,31 @@ func (c *HTTPClient) RawRequest(method, path string, body []byte) (json.RawMessa
 	return env.Data, nil
 }
 
+// fetchPage is a generic helper for all paginated GET endpoints that return a
+// JSON array. It unmarshals the wire slice, converts each element, and returns
+// the model slice together with the next-page cursor from the envelope.
+func fetchPage[W, M any](c *HTTPClient, path string, convert func(W) M) ([]M, string, error) {
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	var wire []W
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, "", err
+	}
+	out := make([]M, len(wire))
+	for i, w := range wire {
+		out[i] = convert(w)
+	}
+	return out, env.Cursor, nil
+}
+
 func (c *HTTPClient) GetFeed(cursor string) ([]model.Post, string, error) {
 	path := "/v1/posts?limit=20"
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wirePost
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	posts := make([]model.Post, len(wire))
-	for i, w := range wire {
-		posts[i] = wirePostToModel(w)
-	}
-	return posts, env.Cursor, nil
+	return fetchPage(c, path, wirePostToModel)
 }
 
 func (c *HTTPClient) GetPostReplies(postID string) ([]model.Reply, error) {
@@ -872,19 +898,7 @@ func (c *HTTPClient) GetNotifications(cursor string, unreadOnly bool) ([]model.N
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wireNotification
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	notifs := make([]model.Notification, len(wire))
-	for i, w := range wire {
-		notifs[i] = wireNotificationToModel(w)
-	}
-	return notifs, env.Cursor, nil
+	return fetchPage(c, path, wireNotificationToModel)
 }
 
 func (c *HTTPClient) MarkNotificationRead(id string) error {
@@ -918,19 +932,7 @@ func (c *HTTPClient) GetBookmarks(cursor string) ([]model.Bookmark, string, erro
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wireBookmark
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	bookmarks := make([]model.Bookmark, len(wire))
-	for i, w := range wire {
-		bookmarks[i] = wireBookmarkToModel(w)
-	}
-	return bookmarks, env.Cursor, nil
+	return fetchPage(c, path, wireBookmarkToModel)
 }
 
 func (c *HTTPClient) CreateBookmark(postID, replyID string) (string, error) {
@@ -965,19 +967,7 @@ func (c *HTTPClient) GetTopics(cursor string) ([]model.Topic, string, error) {
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wireTopic
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	topics := make([]model.Topic, len(wire))
-	for i, w := range wire {
-		topics[i] = wireTopicToModel(w)
-	}
-	return topics, env.Cursor, nil
+	return fetchPage(c, path, wireTopicToModel)
 }
 
 func (c *HTTPClient) GetTopicPosts(slug string, cursor string) ([]model.Post, string, error) {
@@ -985,19 +975,7 @@ func (c *HTTPClient) GetTopicPosts(slug string, cursor string) ([]model.Post, st
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wirePost
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	posts := make([]model.Post, len(wire))
-	for i, w := range wire {
-		posts[i] = wirePostToModel(w)
-	}
-	return posts, env.Cursor, nil
+	return fetchPage(c, path, wirePostToModel)
 }
 
 // --- Chatrooms (RTDB stubs — pending feature/rtdb-chatrooms) ---
@@ -1048,19 +1026,7 @@ func (c *HTTPClient) GetFollowing(cursor string) ([]model.Follow, string, error)
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wireFollow
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	follows := make([]model.Follow, len(wire))
-	for i, w := range wire {
-		follows[i] = wireFollowToModel(w)
-	}
-	return follows, env.Cursor, nil
+	return fetchPage(c, path, wireFollowToModel)
 }
 
 func (c *HTTPClient) GetFollowers(cursor string) ([]model.Follow, string, error) {
@@ -1068,19 +1034,7 @@ func (c *HTTPClient) GetFollowers(cursor string) ([]model.Follow, string, error)
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wireFollow
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	follows := make([]model.Follow, len(wire))
-	for i, w := range wire {
-		follows[i] = wireFollowToModel(w)
-	}
-	return follows, env.Cursor, nil
+	return fetchPage(c, path, wireFollowToModel)
 }
 
 func (c *HTTPClient) GetUserFollows(userID, followType, cursor string) ([]model.Follow, string, error) {
@@ -1088,19 +1042,7 @@ func (c *HTTPClient) GetUserFollows(userID, followType, cursor string) ([]model.
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wireFollow
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	follows := make([]model.Follow, len(wire))
-	for i, w := range wire {
-		follows[i] = wireFollowToModel(w)
-	}
-	return follows, env.Cursor, nil
+	return fetchPage(c, path, wireFollowToModel)
 }
 
 func (c *HTTPClient) Follow(followedID string) (string, error) {
@@ -1129,19 +1071,7 @@ func (c *HTTPClient) GetNotes(cursor string) ([]model.Note, string, error) {
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wireNote
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	notes := make([]model.Note, len(wire))
-	for i, w := range wire {
-		notes[i] = wireNoteToModel(w)
-	}
-	return notes, env.Cursor, nil
+	return fetchPage(c, path, wireNoteToModel)
 }
 
 func (c *HTTPClient) CreateNote(content string, topics []string) (model.Note, error) {
@@ -1196,19 +1126,7 @@ func (c *HTTPClient) GetNoteRevisions(noteID, cursor string) ([]model.NoteRevisi
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wireNoteRevision
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	revisions := make([]model.NoteRevision, len(wire))
-	for i, w := range wire {
-		revisions[i] = wireNoteRevisionToModel(w)
-	}
-	return revisions, env.Cursor, nil
+	return fetchPage(c, path, wireNoteRevisionToModel)
 }
 
 // --- User posts and replies ---
@@ -1218,19 +1136,7 @@ func (c *HTTPClient) GetUserPosts(username, cursor string) ([]model.Post, string
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wirePost
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	posts := make([]model.Post, len(wire))
-	for i, w := range wire {
-		posts[i] = wirePostToModel(w)
-	}
-	return posts, env.Cursor, nil
+	return fetchPage(c, path, wirePostToModel)
 }
 
 func (c *HTTPClient) GetUserReplies(username, cursor string) ([]model.Reply, string, error) {
@@ -1238,19 +1144,7 @@ func (c *HTTPClient) GetUserReplies(username, cursor string) ([]model.Reply, str
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
-	env, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	var wire []wireReply
-	if err := json.Unmarshal(env.Data, &wire); err != nil {
-		return nil, "", err
-	}
-	replies := make([]model.Reply, len(wire))
-	for i, w := range wire {
-		replies[i] = wireReplyToModel(w)
-	}
-	return replies, env.Cursor, nil
+	return fetchPage(c, path, wireReplyToModel)
 }
 
 // WithDebug enables or disables verbose RTDB debug output.

@@ -263,17 +263,11 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	case ComposeSubmitMsg:
 		content := msg.Content
 		topics := ParseTopics(m.topicsInput.Value())
-		m.compose = m.compose.Close()
-		m.topicsFocused = false
-		m.topicsInput.Blur()
-		m.viewport.Height = m.viewportHeight()
+		m = m.closeCompose()
 		return m, func() tea.Msg { return SubmitNewPostMsg{Content: content, Topics: topics} }
 
 	case ComposeCancelMsg:
-		m.compose = m.compose.Close()
-		m.topicsFocused = false
-		m.topicsInput.Blur()
-		m.viewport.Height = m.viewportHeight()
+		m = m.closeCompose()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -396,12 +390,12 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				m.selectedIndex++
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()
-			} else if !m.loading && !m.exhausted && m.nextCursor != "" {
-				m.loading = true
-				cursor := m.nextCursor
-				m = m.refreshContent()
-				m.viewport.ScrollDown(1)
-				return m, func() tea.Msg { return LoadMoreFeedMsg{Cursor: cursor} }
+			} else {
+				var loadCmd tea.Cmd
+				m, loadCmd = m.triggerLoadMore()
+				if loadCmd != nil {
+					return m, loadCmd
+				}
 			}
 			return m, nil
 		}
@@ -410,14 +404,12 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 
-	if m.ready && !m.loading && !m.exhausted && m.viewport.AtBottom() && m.nextCursor != "" {
-		m.loading = true
-		cursor := m.nextCursor // capture before closure
-		m = m.refreshContent()
-		m.viewport.ScrollDown(1)
-		return m, tea.Batch(cmd, func() tea.Msg {
-			return LoadMoreFeedMsg{Cursor: cursor}
-		})
+	if m.ready && m.viewport.AtBottom() {
+		var loadCmd tea.Cmd
+		m, loadCmd = m.triggerLoadMore()
+		if loadCmd != nil {
+			return m, tea.Batch(cmd, loadCmd)
+		}
 	}
 
 	return m, cmd
@@ -438,6 +430,25 @@ func (m FeedModel) viewportHeight() int {
 		h = 1
 	}
 	return h
+}
+
+func (m FeedModel) closeCompose() FeedModel {
+	m.compose = m.compose.Close()
+	m.topicsFocused = false
+	m.topicsInput.Blur()
+	m.viewport.Height = m.viewportHeight()
+	return m
+}
+
+func (m FeedModel) triggerLoadMore() (FeedModel, tea.Cmd) {
+	if m.loading || m.exhausted || m.nextCursor == "" {
+		return m, nil
+	}
+	m.loading = true
+	cursor := m.nextCursor
+	m = m.refreshContent()
+	m.viewport.ScrollDown(1)
+	return m, func() tea.Msg { return LoadMoreFeedMsg{Cursor: cursor} }
 }
 
 // buildContent renders all posts into a single string for the viewport and

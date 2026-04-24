@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -9,12 +10,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
-	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 // localChrome accounts for the header row and bordered input box below the viewport.
 const chatroomLocalChrome = 3
+
+const chatroomSidebarWidth = 20 // includes border
 
 type ChatroomsModel struct {
 	rooms              []model.Room
@@ -22,6 +24,7 @@ type ChatroomsModel struct {
 	messages           []model.Message
 	viewport           viewport.Model
 	input              textinput.Model
+	width              int
 	ready              bool
 	err                error
 	loc                *time.Location // timezone for timestamp display; nil = UTC
@@ -36,8 +39,6 @@ type SendRoomMessageMsg struct {
 func NewChatroomsModel() ChatroomsModel {
 	input := textinput.New()
 	input.Placeholder = "type a message..."
-	input.Width = 60
-
 	return ChatroomsModel{input: input}
 }
 
@@ -89,12 +90,16 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		return m, nil
 
 	case tea.WindowSizeMsg:
+		m.width = msg.Width
 		h := msg.Height - theme.ChromeHeight - chatroomLocalChrome
+		// sidebarTotal = chatroomSidebarWidth + 2 (border) + 2 (gap "  ")
+		chatW := max(10, msg.Width-chatroomSidebarWidth-4)
+		m.input.Width = max(1, chatW-2) // -2 for input border
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width-24, h)
+			m.viewport = viewport.New(chatW, h)
 			m.ready = true
 		} else {
-			m.viewport.Width = msg.Width - 24
+			m.viewport.Width = chatW
 			m.viewport.Height = h
 		}
 		if m.activeRoom != nil {
@@ -129,30 +134,24 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 }
 
 func (m ChatroomsModel) renderRoomList() string {
-	out := theme.Title.Render("rooms") + "\n\n"
+	var sb strings.Builder
+	sb.WriteString(theme.Title.Render("rooms") + "\n\n")
 	for _, r := range m.rooms {
 		style := theme.Subtle
 		if m.activeRoom != nil && r.ID == m.activeRoom.ID {
 			style = theme.Highlight
 		}
-		out += style.Render(r.Name) + "\n"
-		out += theme.Subtle.Render(fmt.Sprintf("  %d online", r.Members)) + "\n\n"
+		sb.WriteString(style.Render(r.Name) + "\n")
+		sb.WriteString(theme.Subtle.Render(fmt.Sprintf("  %d online", r.Members)) + "\n\n")
 	}
-	return out
+	return sb.String()
 }
 
 func (m ChatroomsModel) renderMessages() string {
 	if len(m.messages) == 0 {
 		return theme.Subtle.Render("no messages yet")
 	}
-	var out string
-	for _, msg := range m.messages {
-		ts := theme.Subtle.Render(displayTime(msg.CreatedAt, m.location(), m.timeDisplayFormat, true))
-		author := theme.Highlight.Render("@" + msg.From.Username)
-		body := markdown.Render(msg.Body, m.viewport.Width)
-		out += lipgloss.JoinHorizontal(lipgloss.Top, ts, "  ", author, "  ", body) + "\n"
-	}
-	return out
+	return renderChatMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width)
 }
 
 func (m ChatroomsModel) View() string {
@@ -160,7 +159,7 @@ func (m ChatroomsModel) View() string {
 		return theme.Error.Render(fmt.Sprintf("chatroom error: %s", m.err))
 	}
 
-	roomList := theme.Border.Width(20).Render(m.renderRoomList())
+	roomList := theme.Border.Width(chatroomSidebarWidth).Render(m.renderRoomList())
 
 	var chatArea string
 	if m.activeRoom == nil {

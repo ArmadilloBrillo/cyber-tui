@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.3.6.1)"
+        required: true
+
+jobs:
+  release:
+    name: build and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve ref
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SHA=$(git rev-list -n1 "refs/tags/${{ github.event.inputs.tag }}" 2>/dev/null \
+              || git rev-list -n1 "${{ github.event.inputs.tag }}")
+            echo "sha=$SHA" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "tag=$(git describe --tags --exact-match)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify tag is on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor ${{ steps.ref.outputs.sha }} origin/main \
+            || { echo "Tag is not on main — release aborted."; exit 1; }
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set build variables
+        id: vars
+        run: |
+          echo "version=${{ steps.ref.outputs.tag }}" >> $GITHUB_OUTPUT
+          echo "commit=$(git rev-parse --short ${{ steps.ref.outputs.sha }})" >> $GITHUB_OUTPUT
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
+      - name: Build binaries
+        env:
+          LDFLAGS: >-
+            -X github.com/ragnar/cyber-tui/internal/version.Version=${{ steps.vars.outputs.version }}
+            -X github.com/ragnar/cyber-tui/internal/version.Commit=${{ steps.vars.outputs.commit }}
+            -X github.com/ragnar/cyber-tui/internal/version.Date=${{ steps.vars.outputs.date }}
+        run: |
+          mkdir -p dist
+          GOOS=linux  GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/cyber-tui-linux-amd64   ./cmd/cyber-tui
+          GOOS=linux  GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/cyber-tui-linux-arm64   ./cmd/cyber-tui
+          GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/cyber-tui-windows-amd64.exe ./cmd/cyber-tui
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ref.outputs.tag }}
+          files: dist/*

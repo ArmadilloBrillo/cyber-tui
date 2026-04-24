@@ -107,6 +107,7 @@ type PostDetailModel struct {
 	flatTree      []replyNode   // DFS-ordered tree walk; len always == len(replies)
 	replyOffsets  []int         // start line of each reply within the viewport content
 	replyHeights  []int         // rendered height of each reply (matches offsets; set by buildContent)
+	postHeight    int           // rendered height of the full post block; set by refreshContent
 	selectedReply int
 	viewport      viewport.Model
 	width         int
@@ -312,9 +313,10 @@ func (m PostDetailModel) viewportHeight() int {
 }
 
 func (m PostDetailModel) refreshContent() PostDetailModel {
-	content, offsets, heights := m.buildContent()
+	content, offsets, heights, postH := m.buildContent()
 	m.replyOffsets = offsets
 	m.replyHeights = heights
+	m.postHeight = postH
 	m.viewport.SetContent(content)
 	return m
 }
@@ -519,9 +521,8 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		case "down", "j":
 			if m.selectedReply == -1 {
 				// Post is selected — scroll through it first, then advance to replies.
-				postH := lipgloss.Height(m.renderFullPost(true))
 				viewBottom := m.viewport.YOffset + m.viewport.Height - 1
-				if viewBottom >= postH-1 && len(m.replies) > 0 {
+				if viewBottom >= m.postHeight-1 && len(m.replies) > 0 {
 					// Post bottom is visible — jump to first reply.
 					m.selectedReply = 0
 					m = m.refreshContent()
@@ -559,10 +560,10 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 
 // buildContent renders the full post and all replies into a single string for
 // the viewport. It returns the string, the start-line offset of each reply,
-// and the rendered height of each reply. Heights are measured here once so
-// that ensureSelectedVisible and the pager always use the same values that
-// were used to lay out the content.
-func (m PostDetailModel) buildContent() (string, []int, []int) {
+// the rendered height of each reply, and the rendered height of the post block.
+// Heights are measured here once so that ensureSelectedVisible and the pager
+// always use the same values that were used to lay out the content.
+func (m PostDetailModel) buildContent() (string, []int, []int, int) {
 	postContent := m.renderFullPost(m.selectedReply == -1)
 	var repliesHeaderText string
 	total := m.post.RepliesCount
@@ -592,15 +593,17 @@ func (m PostDetailModel) buildContent() (string, []int, []int) {
 	sb.WriteString(repliesHeader)
 	sb.WriteString(sep)
 
+	postH := lipgloss.Height(postContent)
+
 	if m.loading {
 		sb.WriteString(theme.Subtle.Render("  loading replies…"))
 		sb.WriteString("\n")
-		return sb.String(), nil, nil
+		return sb.String(), nil, nil, postH
 	}
 	if len(m.replies) == 0 {
 		sb.WriteString(theme.Subtle.Render("  no replies yet"))
 		sb.WriteString("\n")
-		return sb.String(), nil, nil
+		return sb.String(), nil, nil, postH
 	}
 
 	// Base line where first reply starts.
@@ -608,9 +611,9 @@ func (m PostDetailModel) buildContent() (string, []int, []int) {
 	// Dense:   post + header (no blank lines) = H_post+H_header
 	var baseLines int
 	if m.relaxed {
-		baseLines = lipgloss.Height(postContent) + 1 + lipgloss.Height(repliesHeader) + 1
+		baseLines = postH + 1 + lipgloss.Height(repliesHeader) + 1
 	} else {
-		baseLines = lipgloss.Height(postContent) + lipgloss.Height(repliesHeader)
+		baseLines = postH + lipgloss.Height(repliesHeader)
 	}
 	offsets := make([]int, len(m.flatTree))
 	heights := make([]int, len(m.flatTree))
@@ -630,7 +633,7 @@ func (m PostDetailModel) buildContent() (string, []int, []int) {
 		}
 	}
 
-	return sb.String(), offsets, heights
+	return sb.String(), offsets, heights, postH
 }
 
 func (m PostDetailModel) renderFullPost(selected bool) string {

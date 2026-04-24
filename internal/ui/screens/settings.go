@@ -12,10 +12,18 @@ import (
 )
 
 // settingsItem describes one editable row.
+// Each item carries its own typed accessors so that ordering in settingsGroups
+// has no impact on correctness — no flat-index arithmetic needed.
 type settingsItem struct {
 	label   string
 	kind    string   // "bool" or "enum"
 	options []string // populated for kind=="enum"
+	// Bool items: getBool reads, toggle flips.
+	getBool func(m SettingsModel) bool
+	toggle  func(m SettingsModel) SettingsModel
+	// Enum items: getEnum reads, cycle advances by delta (wraps).
+	getEnum func(m SettingsModel) string
+	cycle   func(m SettingsModel, delta int) SettingsModel
 }
 
 // settingsGroup is a named section of related rows.
@@ -24,58 +32,129 @@ type settingsGroup struct {
 	items []settingsItem
 }
 
-// settingsGroups is the ordered, static definition of all editable fields.
-// Index position is used by get/set helpers — do not reorder.
 var settingsGroups = []settingsGroup{
 	{
 		title: "notifications",
 		items: []settingsItem{
-			{label: "bookmark alerts", kind: "bool"},
-			{label: "reply alerts", kind: "bool"},
-			{label: "poke alerts", kind: "bool"},
+			{
+				label: "bookmark alerts", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.Notifications.Bookmark },
+				toggle:  func(m SettingsModel) SettingsModel { m.settings.Notifications.Bookmark = !m.settings.Notifications.Bookmark; return m },
+			},
+			{
+				label: "reply alerts", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.Notifications.Reply },
+				toggle:  func(m SettingsModel) SettingsModel { m.settings.Notifications.Reply = !m.settings.Notifications.Reply; return m },
+			},
+			{
+				label: "poke alerts", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.Notifications.Poke },
+				toggle:  func(m SettingsModel) SettingsModel { m.settings.Notifications.Poke = !m.settings.Notifications.Poke; return m },
+			},
 		},
 	},
 	{
 		title: "content",
 		items: []settingsItem{
-			{label: "filter nsfw", kind: "bool"},
-			{label: "hide images in feed", kind: "bool"},
-			{label: "hide audio in feed", kind: "bool"},
+			{
+				label: "filter nsfw", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.FilterNSFW },
+				toggle:  func(m SettingsModel) SettingsModel { m.settings.FilterNSFW = !m.settings.FilterNSFW; return m },
+			},
+			{
+				label: "hide images in feed", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.HideImagesInFeed },
+				toggle:  func(m SettingsModel) SettingsModel { m.settings.HideImagesInFeed = !m.settings.HideImagesInFeed; return m },
+			},
+			{
+				label: "hide audio in feed", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.HideAudioInFeed },
+				toggle:  func(m SettingsModel) SettingsModel { m.settings.HideAudioInFeed = !m.settings.HideAudioInFeed; return m },
+			},
 		},
 	},
 	{
 		title: "social",
 		items: []settingsItem{
-			{label: "show follower count", kind: "bool"},
-			{label: "auto-watch on reply", kind: "bool"},
-			{label: "default public post", kind: "bool"},
+			{
+				label: "show follower count", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.ShowFollowerCount },
+				toggle:  func(m SettingsModel) SettingsModel { m.settings.ShowFollowerCount = !m.settings.ShowFollowerCount; return m },
+			},
+			{
+				label: "auto-watch on reply", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.AutoWatchOnReply },
+				toggle:  func(m SettingsModel) SettingsModel { m.settings.AutoWatchOnReply = !m.settings.AutoWatchOnReply; return m },
+			},
+			{
+				label: "default public post", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.DefaultPublicPost },
+				toggle:  func(m SettingsModel) SettingsModel { m.settings.DefaultPublicPost = !m.settings.DefaultPublicPost; return m },
+			},
 		},
 	},
 	{
 		title: "display",
 		items: []settingsItem{
 			{
-				label:   "time format",
-				kind:    "enum",
+				label: "time format", kind: "enum",
 				options: []string{"datetime", "relative", "unix", "swatch"},
+				getEnum: func(m SettingsModel) string { return m.settings.TimeDisplayFormat },
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					m.settings.TimeDisplayFormat = cycleStringEnum(m.settings.TimeDisplayFormat, []string{"datetime", "relative", "unix", "swatch"}, delta)
+					return m
+				},
 			},
-			{label: "legacy menu order", kind: "bool"},
 			{
-				label:   "thread depth",
-				kind:    "enum",
+				label: "legacy menu order", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.UseLegacyMenuOrder },
+				toggle:  func(m SettingsModel) SettingsModel { m.settings.UseLegacyMenuOrder = !m.settings.UseLegacyMenuOrder; return m },
+			},
+			{
+				label: "thread depth", kind: "enum",
 				options: []string{"1", "2", "3", "4", "5"},
+				getEnum: func(m SettingsModel) string {
+					if m.maxThreadDepth == 0 {
+						return "3"
+					}
+					return fmt.Sprintf("%d", m.maxThreadDepth)
+				},
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					if m.maxThreadDepth == 0 {
+						m.maxThreadDepth = 3
+					}
+					m.maxThreadDepth = cycleIntEnum(m.maxThreadDepth, []string{"1", "2", "3", "4", "5"}, delta)
+					return m
+				},
 			},
 			{
-				label:   "timezone",
-				kind:    "enum",
+				label: "timezone", kind: "enum",
 				options: config.AvailableTimezones,
+				getEnum: func(m SettingsModel) string {
+					if m.timezone == "" {
+						return "UTC"
+					}
+					return m.timezone
+				},
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					tz := m.timezone
+					if tz == "" {
+						tz = "UTC"
+					}
+					m.timezone = cycleStringEnum(tz, config.AvailableTimezones, delta)
+					return m
+				},
 			},
 		},
 	},
 	{
 		title: "wander",
 		items: []settingsItem{
-			{label: "wander mode", kind: "bool"},
+			{
+				label: "wander mode", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.wanderLust },
+				toggle:  func(m SettingsModel) SettingsModel { m.wanderLust = !m.wanderLust; return m },
+			},
 		},
 	},
 }
@@ -161,76 +240,6 @@ func flatItems() []settingsItem {
 	return out
 }
 
-// getBool returns the bool field value for a given flat index.
-func getBool(s model.Settings, idx int) bool {
-	switch idx {
-	case 0:
-		return s.Notifications.Bookmark
-	case 1:
-		return s.Notifications.Reply
-	case 2:
-		return s.Notifications.Poke
-	case 3:
-		return s.FilterNSFW
-	case 4:
-		return s.HideImagesInFeed
-	case 5:
-		return s.HideAudioInFeed
-	case 6:
-		return s.ShowFollowerCount
-	case 7:
-		return s.AutoWatchOnReply
-	case 8:
-		return s.DefaultPublicPost
-	case 10:
-		return s.UseLegacyMenuOrder
-	}
-	return false
-}
-
-// setBool sets a bool field for a given flat index.
-func setBool(s model.Settings, idx int, v bool) model.Settings {
-	switch idx {
-	case 0:
-		s.Notifications.Bookmark = v
-	case 1:
-		s.Notifications.Reply = v
-	case 2:
-		s.Notifications.Poke = v
-	case 3:
-		s.FilterNSFW = v
-	case 4:
-		s.HideImagesInFeed = v
-	case 5:
-		s.HideAudioInFeed = v
-	case 6:
-		s.ShowFollowerCount = v
-	case 7:
-		s.AutoWatchOnReply = v
-	case 8:
-		s.DefaultPublicPost = v
-	case 10:
-		s.UseLegacyMenuOrder = v
-	}
-	return s
-}
-
-// getEnum returns the enum field value for a given flat index.
-func getEnum(s model.Settings, idx int) string {
-	if idx == 9 {
-		return s.TimeDisplayFormat
-	}
-	return ""
-}
-
-// setEnum sets an enum field for a given flat index.
-func setEnum(s model.Settings, idx int, v string) model.Settings {
-	if idx == 9 {
-		s.TimeDisplayFormat = v
-	}
-	return s
-}
-
 // cycleIntEnum cycles a plain int value through a set of string options.
 // The current value is matched by its string representation; 0 defaults to options[0].
 func cycleIntEnum(cur int, options []string, delta int) int {
@@ -259,20 +268,6 @@ func cycleStringEnum(cur string, options []string, delta int) string {
 	}
 	pos = (pos + delta + len(options)) % len(options)
 	return options[pos]
-}
-
-// cycleEnum cycles an enum option by delta (wraps around).
-func cycleEnum(s model.Settings, idx int, options []string, delta int) model.Settings {
-	cur := getEnum(s, idx)
-	pos := 0
-	for i, o := range options {
-		if o == cur {
-			pos = i
-			break
-		}
-	}
-	pos = (pos + delta + len(options)) % len(options)
-	return setEnum(s, idx, options[pos])
 }
 
 // Init initializes the model.
@@ -324,37 +319,21 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 
 		case " ", "enter": // space (bubbletea KeySpace.String() == " ") or enter
 			if m.cursor < total && items[m.cursor].kind == "bool" {
-				if m.cursor == 13 {
-					m.wanderLust = !m.wanderLust
-				} else {
-					m.settings = setBool(m.settings, m.cursor, !getBool(m.settings, m.cursor))
-				}
+				m = items[m.cursor].toggle(m)
 				m.saved = false
 			}
 			return m, nil
 
 		case "tab":
 			if m.cursor < total && items[m.cursor].kind == "enum" {
-				if m.cursor == 11 {
-					m.maxThreadDepth = cycleIntEnum(m.maxThreadDepth, items[m.cursor].options, +1)
-				} else if m.cursor == 12 {
-					m.timezone = cycleStringEnum(m.timezone, items[m.cursor].options, +1)
-				} else {
-					m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, +1)
-				}
+				m = items[m.cursor].cycle(m, +1)
 				m.saved = false
 			}
 			return m, nil
 
 		case "shift+tab":
 			if m.cursor < total && items[m.cursor].kind == "enum" {
-				if m.cursor == 11 {
-					m.maxThreadDepth = cycleIntEnum(m.maxThreadDepth, items[m.cursor].options, -1)
-				} else if m.cursor == 12 {
-					m.timezone = cycleStringEnum(m.timezone, items[m.cursor].options, -1)
-				} else {
-					m.settings = cycleEnum(m.settings, m.cursor, items[m.cursor].options, -1)
-				}
+				m = items[m.cursor].cycle(m, -1)
 				m.saved = false
 			}
 			return m, nil
@@ -418,13 +397,7 @@ func (m SettingsModel) View() string {
 			// don't inherit an outer background style).
 			var rawValue string
 			if item.kind == "bool" {
-				var boolVal bool
-				if flatIdx == 13 {
-					boolVal = m.wanderLust
-				} else {
-					boolVal = getBool(m.settings, flatIdx)
-				}
-				if boolVal {
+				if item.getBool(m) {
 					rawValue = "[x]"
 					value = theme.Highlight.Render("[x]")
 				} else {
@@ -432,20 +405,7 @@ func (m SettingsModel) View() string {
 					value = theme.Subtle.Render("[ ]")
 				}
 			} else {
-				var cur string
-				if flatIdx == 11 {
-					cur = fmt.Sprintf("%d", m.maxThreadDepth)
-					if cur == "0" {
-						cur = "3"
-					}
-				} else if flatIdx == 12 {
-					cur = m.timezone
-					if cur == "" {
-						cur = "UTC"
-					}
-				} else {
-					cur = getEnum(m.settings, flatIdx)
-				}
+				cur := item.getEnum(m)
 				rawValue = "< " + cur + " >"
 				value = theme.Highlight.Render(rawValue)
 			}
