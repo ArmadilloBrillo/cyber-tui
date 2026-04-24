@@ -761,7 +761,7 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.bookmarkedReplyIDs = newReplyIDs
 				delete(a.replyBookmarkIDs, replyID)
 				a.broadcastBookmarkedIDs()
-				return a, a.deleteBookmarkCmd(bookmarkID), true
+				return a, a.deleteBookmarkCmd(bookmarkID, false), true
 			}
 			// Toggle on: optimistic add.
 			newReplyIDs := make(map[string]struct{}, len(a.bookmarkedReplyIDs)+1)
@@ -786,7 +786,7 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.bookmarkedPostIDs = newPostIDs
 			delete(a.postBookmarkIDs, postID)
 			a.broadcastBookmarkedIDs()
-			return a, a.deleteBookmarkCmd(bookmarkID), true
+			return a, a.deleteBookmarkCmd(bookmarkID, false), true
 		}
 		// Toggle on: optimistic add.
 		newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs)+1)
@@ -845,8 +845,12 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 			delete(a.replyBookmarkIDs, msg.ReplyID)
 		}
 		a.broadcastBookmarkedIDs()
-		return a, a.deleteBookmarkCmd(msg.BookmarkID), true
+		return a, a.deleteBookmarkCmd(msg.BookmarkID, true), true
 	case bookmarkDeletedMsg:
+		if !msg.fromBookmarksScreen {
+			a.bookmarks = a.bookmarks.SetFetching()
+			return a, a.loadBookmarksCmd(""), true
+		}
 		return a, nil, true
 	}
 	return a, nil, false
@@ -1839,7 +1843,10 @@ type bookmarkCreatedMsg struct {
 	replyID    string
 	err        error
 }
-type bookmarkDeletedMsg struct{ bookmarkID string }
+type bookmarkDeletedMsg struct {
+	bookmarkID          string
+	fromBookmarksScreen bool
+}
 type bookmarkPostLoadedMsg struct{ post model.Post }
 type bookmarkReplyLoadedMsg struct {
 	post    model.Post
@@ -2375,10 +2382,10 @@ func (a *App) createBookmarkCmd(postID, replyID string) tea.Cmd {
 	}
 }
 
-func (a *App) deleteBookmarkCmd(id string) tea.Cmd {
+func (a *App) deleteBookmarkCmd(id string, fromBookmarksScreen bool) tea.Cmd {
 	return func() tea.Msg {
 		_ = a.client.DeleteBookmark(id) // fire-and-forget; UI already updated
-		return bookmarkDeletedMsg{bookmarkID: id}
+		return bookmarkDeletedMsg{bookmarkID: id, fromBookmarksScreen: fromBookmarksScreen}
 	}
 }
 
