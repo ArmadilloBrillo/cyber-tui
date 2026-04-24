@@ -847,8 +847,7 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.broadcastBookmarkedIDs()
 		return a, a.deleteBookmarkCmd(msg.BookmarkID), true
 	case bookmarkDeletedMsg:
-		a.bookmarks = a.bookmarks.SetFetching()
-		return a, a.loadBookmarksCmd(""), true
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -1775,10 +1774,12 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	a.profile = a.profile.SetUser(a.currentUser)
 	a.feed = a.feed.SetCurrentUsername(a.currentUser.Username)
 	a.feed = a.feed.SetFetching()
+	a.bookmarks = a.bookmarks.SetFetching()
 	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username)
 	a.broadcastConfig()
 	return tea.Batch(
 		a.loadFeedCmd(),
+		a.loadBookmarksCmd(""),
 		a.loadProfileCmd(),
 		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
