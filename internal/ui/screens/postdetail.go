@@ -511,7 +511,28 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 					// Reply top is visible — move to previous item.
 					m.selectedReply--
 					m = m.refreshContent()
-					m = m.ensureSelectedVisible()
+					// Mirror the down-scroll behaviour: snap the previous item
+					// fully into view if it fits the viewport; otherwise leave
+					// the viewport in place and let the user scroll through it
+					// line-by-line.
+					var prevStart, prevHeight int
+					if m.selectedReply == -1 {
+						prevStart = 0
+						prevHeight = m.postHeight
+					} else {
+						prevStart = m.replyOffsets[m.selectedReply]
+						prevHeight = m.replyHeights[m.selectedReply]
+					}
+					if prevHeight <= m.viewport.Height {
+						// Item fits — snap it fully into view (mirrors down behaviour).
+						m = m.ensureSelectedVisible()
+					} else {
+						// Item is taller than the viewport — align its bottom to the
+						// viewport bottom so the selection highlight is visible and
+						// the user can scroll up through it line-by-line.
+						itemEnd := prevStart + prevHeight - 1
+						m.viewport.SetYOffset(itemEnd - m.viewport.Height + 1)
+					}
 				}
 			} else {
 				// Post is selected — scroll viewport up (pager behaviour).
