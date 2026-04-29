@@ -135,11 +135,12 @@ func renderAttachments(attachments []model.Attachment) string {
 			label := a.Src
 			if a.Artist != "" || a.Title != "" {
 				label = a.Artist + " – " + a.Title
-				if a.Genre != "" {
-					label += " (" + a.Genre + ")"
-				}
 			}
-			lines = append(lines, theme.Subtle.Render("[AUDIO]")+"  "+linkStyle.Render(label))
+			line := theme.Subtle.Render("[AUDIO]") + "  " + linkStyle.Render(label)
+			if a.Genre != "" {
+				line += theme.Subtle.Render(" ("+a.Genre+")")
+			}
+			lines = append(lines, line)
 		default:
 			lines = append(lines, theme.Subtle.Render("[attachment]")+"  "+linkStyle.Render(a.Src))
 		}
