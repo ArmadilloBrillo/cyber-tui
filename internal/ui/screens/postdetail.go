@@ -713,12 +713,11 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 	cardWidth := m.width - 2 - indentW
 	innerWidth := cardWidth - 2
 
-	var headerParts []string
+	headerParts := []string{theme.Highlight.Render("@" + node.Reply.AuthorUsername)}
 	if node.ParentUsername != "" {
-		headerParts = append(headerParts, theme.Subtle.Render("↩ @"+node.ParentUsername+"  "))
+		headerParts = append(headerParts, theme.Subtle.Render("  ↩ @"+node.ParentUsername))
 	}
 	headerParts = append(headerParts,
-		theme.Highlight.Render("@"+node.Reply.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
 	_, replyBookmarked := m.bookmarkedReplyIDs[node.Reply.ID]
