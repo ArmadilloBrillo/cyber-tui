@@ -96,6 +96,11 @@ func (m FeedModel) SetFetching() FeedModel {
 }
 
 func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
+	var prevID string
+	if m.selectedIndex < len(m.posts) {
+		prevID = m.posts[m.selectedIndex].ID
+	}
+
 	m.posts = posts
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
@@ -103,9 +108,21 @@ func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
 	m.fetching = false
 	m.refreshing = false
 	m.selectedIndex = 0
+	if prevID != "" {
+		for i, p := range m.posts {
+			if p.ID == prevID {
+				m.selectedIndex = i
+				break
+			}
+		}
+	}
 	if m.ready {
 		m = m.refreshContent()
-		m.viewport.GotoTop()
+		if m.selectedIndex == 0 {
+			m.viewport.GotoTop()
+		} else {
+			m = m.ensureSelectedVisible()
+		}
 	}
 	return m
 }
