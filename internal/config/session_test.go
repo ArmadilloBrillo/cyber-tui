@@ -103,7 +103,7 @@ func TestIsWanderEnabled_False(t *testing.T) {
 	}
 }
 
-func TestLoad_WanderLustDefaultsTrue(t *testing.T) {
+func TestLoad_WanderLustDefaultsFalse(t *testing.T) {
 	home := withTempHome(t)
 	// Write a config that has no wanderLust key.
 	path := filepath.Join(home, ".cyber-tui.json")
@@ -114,8 +114,8 @@ func TestLoad_WanderLustDefaultsTrue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !cfg.WanderLust {
-		t.Error("expected WanderLust to default to true when absent from JSON")
+	if cfg.WanderLust {
+		t.Error("expected WanderLust to default to false when absent from JSON")
 	}
 }
 

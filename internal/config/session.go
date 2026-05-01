@@ -92,17 +92,9 @@ func Load() (Config, error) {
 		}
 		return Config{}, err
 	}
-	// Detect absent keys before unmarshaling so we can apply defaults.
-	var raw map[string]json.RawMessage
-	_ = json.Unmarshal(data, &raw)
-	_, hasWanderLust := raw["wanderLust"]
-
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Config{}, err
-	}
-	if !hasWanderLust {
-		c.WanderLust = true
 	}
 	return c, nil
 }
