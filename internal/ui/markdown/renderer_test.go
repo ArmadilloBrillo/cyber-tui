@@ -422,3 +422,23 @@ func TestFirstLine_NoANSI(t *testing.T) {
 		t.Errorf("FirstLine must not contain ANSI codes: %q", got)
 	}
 }
+
+func TestFirstLine_MentionOnly(t *testing.T) {
+	got := FirstLine("@alice")
+	if got != "@alice" {
+		t.Errorf("FirstLine(%q) = %q, want %q", "@alice", got, "@alice")
+	}
+	if strings.Contains(got, "\x1b") {
+		t.Errorf("FirstLine must not contain ANSI codes: %q", got)
+	}
+}
+
+func TestFirstLine_MentionAtStart(t *testing.T) {
+	got := FirstLine("@alice: hello world")
+	if got != "@alice: hello world" {
+		t.Errorf("FirstLine(%q) = %q, want %q", "@alice: hello world", got, "@alice: hello world")
+	}
+	if strings.Contains(got, "\x1b") {
+		t.Errorf("FirstLine must not contain ANSI codes: %q", got)
+	}
+}

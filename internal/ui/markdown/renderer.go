@@ -412,6 +412,9 @@ func (r *renderer) rawTextNode(node ast.Node) string {
 			}
 		case *ast.String:
 			sb.Write(n.Value)
+		case *MentionNode:
+			sb.WriteByte('@')
+			sb.Write(n.Username)
 		default:
 			sb.WriteString(r.rawTextNode(child))
 		}
