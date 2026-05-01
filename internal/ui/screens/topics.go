@@ -54,6 +54,7 @@ type TopicsModel struct {
 	loading      bool
 	fetching     bool // true while the initial (or tab-switch) load is in flight
 	refreshing   bool
+	loaded       bool
 
 	// Shared
 	viewport         viewport.Model
@@ -73,6 +74,8 @@ func NewTopicsModel() TopicsModel {
 	return TopicsModel{}
 }
 
+func (m TopicsModel) IsLoaded() bool { return m.loaded }
+
 func (m TopicsModel) SetFetching() TopicsModel {
 	m.fetching = true
 	if m.ready {
@@ -89,6 +92,7 @@ func (m TopicsModel) SetTopics(items []model.Topic, cursor string) TopicsModel {
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	m.loaded = true
 	if m.ready {
 		m = m.refreshContent()
 		m.viewport.GotoTop()
@@ -188,20 +192,12 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					m.topicIndex--
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-				} else if !m.loading && !m.refreshing {
-					m.refreshing = true
-					m = m.refreshContent()
-					return m, func() tea.Msg { return RefreshTopicsMsg{} }
 				}
 			} else {
 				if m.postIndex > 0 {
 					m.postIndex--
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-				} else if !m.loading && !m.refreshing {
-					m.refreshing = true
-					m = m.refreshContent()
-					return m, func() tea.Msg { return RefreshTopicPostsMsg{Slug: m.activeTopic} }
 				}
 			}
 			return m, nil

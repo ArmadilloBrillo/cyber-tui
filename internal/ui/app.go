@@ -391,8 +391,11 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenTopics
-			a.topics = a.topics.SetFetching()
-			return a, a.loadTopicsCmd(), true
+			if !a.topics.IsLoaded() {
+				a.topics = a.topics.SetFetching()
+				return a, a.loadTopicsCmd(), true
+			}
+			return a, nil, true
 		}
 	case "6":
 		if a.active != screenLogin {
@@ -1080,8 +1083,11 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 		}
 		return nil
 	case screenTopics:
-		a.topics = a.topics.SetFetching()
-		return a.loadTopicsCmd()
+		if !a.topics.IsLoaded() {
+			a.topics = a.topics.SetFetching()
+			return a.loadTopicsCmd()
+		}
+		return nil
 	case screenJournal:
 		a.journal = a.journal.SetFetching()
 		return a.loadJournalCmd()
@@ -1779,11 +1785,13 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	a.feed = a.feed.SetCurrentUsername(a.currentUser.Username)
 	a.feed = a.feed.SetFetching()
 	a.bookmarks = a.bookmarks.SetFetching()
+	a.topics = a.topics.SetFetching()
 	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username)
 	a.broadcastConfig()
 	return tea.Batch(
 		a.loadFeedCmd(),
 		a.loadBookmarksCmd(""),
+		a.loadTopicsCmd(),
 		a.loadProfileCmd(),
 		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
