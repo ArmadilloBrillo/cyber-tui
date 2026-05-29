@@ -489,6 +489,14 @@ func (m PostComposePanel) View() string {
 	m.textarea.BlurredStyle.CursorLine = theme.Base
 	m.textarea.FocusedStyle.Placeholder = theme.Subtle
 	m.textarea.BlurredStyle.Placeholder = theme.Subtle
+	// textarea holds an internal *Style pointer set by Focus/Blur pointing at
+	// the original stored model's field. Reset it on the local copy so it sees
+	// the style changes above.
+	if m.textarea.Focused() {
+		_ = (&m.textarea).Focus()
+	} else {
+		(&m.textarea).Blur()
+	}
 
 	innerW := m.width - 4
 	if innerW < 1 {
