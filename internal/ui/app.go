@@ -1212,7 +1212,7 @@ func (a App) screenHints() []hint {
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			return []hint{{"tab", "cycle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
+			return []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, more}
 	case screenPostDetail:

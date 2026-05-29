@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -39,30 +38,24 @@ type SubmitNewPostMsg struct {
 }
 
 type FeedModel struct {
-	posts              []model.Post
-	postOffsets        []int // start line of each post within the viewport content
-	viewport           viewport.Model
-	compose            ComposeModel
-	topicsInput        textinput.Model
-	topicsFocused      bool
-	titleInput         textinput.Model
-	titleFocused       bool
-	composePublic      bool
-	composeNSFW        bool
-	defaultPublicPost  bool // mirrored from settings; initialises composePublic on each open
-	width              int
-	height             int
-	selectedIndex      int
-	ready              bool
-	err                error
-	nextCursor         string
-	loading            bool
-	fetching           bool // true while the initial (or tab-switch) load is in flight
-	refreshing         bool // true while re-fetching newest posts (up at top)
-	exhausted          bool // true once API returned an empty cursor
-	relaxed            bool           // true = blank line between posts (relaxed density)
-	loc                *time.Location // timezone for timestamp display; nil = UTC
-	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
+	posts         []model.Post
+	postOffsets   []int // start line of each post within the viewport content
+	viewport      viewport.Model
+	panel         PostComposePanel
+	defaultPublicPost bool // mirrored from settings; initialises panel.isPublic on each open
+	width         int
+	height        int
+	selectedIndex int
+	ready         bool
+	err           error
+	nextCursor    string
+	loading       bool
+	fetching      bool // true while the initial (or tab-switch) load is in flight
+	refreshing    bool // true while re-fetching newest posts (up at top)
+	exhausted     bool // true once API returned an empty cursor
+	relaxed       bool           // true = blank line between posts (relaxed density)
+	loc           *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat string     // API setting: "datetime", "relative", "unix", "swatch"
 
 	currentUsername  string // set after login; used to guard the delete key
 	confirmingDelete bool   // true while the delete-post confirmation overlay is shown
@@ -71,14 +64,8 @@ type FeedModel struct {
 }
 
 func NewFeedModel() FeedModel {
-	ti := textinput.New()
-	ti.Placeholder = "add topics  (go, my topic, …  max 3)"
-	titleTI := textinput.New()
-	titleTI.Placeholder = "title (optional)"
 	return FeedModel{
-		compose:     NewComposeModel(0),
-		topicsInput: ti,
-		titleInput:  titleTI,
+		panel: NewPostComposePanel(0),
 	}
 }
 
@@ -248,8 +235,8 @@ func (m FeedModel) ensureSelectedVisible() FeedModel {
 	return m
 }
 
-// ComposeActive reports whether the new-post compose box is open.
-func (m FeedModel) ComposeActive() bool { return m.compose.IsActive() }
+// ComposeActive reports whether the new-post compose panel is open.
+func (m FeedModel) ComposeActive() bool { return m.panel.IsActive() }
 
 func (m FeedModel) Init() tea.Cmd { return nil }
 
@@ -272,13 +259,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.compose = m.compose.SetWidth(msg.Width)
-		innerW := msg.Width - 4
-		if innerW < 1 {
-			innerW = 1
-		}
-		m.topicsInput.Width = innerW
-		m.titleInput.Width = innerW
+		m.panel = m.panel.SetWidth(msg.Width)
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, m.viewportHeight())
 			m = m.refreshContent()
@@ -292,10 +273,10 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 
 	case ComposeSubmitMsg:
 		content := msg.Content
-		title := strings.TrimSpace(m.titleInput.Value())
-		topics := ParseTopics(m.topicsInput.Value())
-		isPublic := m.composePublic
-		isNSFW := m.composeNSFW
+		title := m.panel.TitleValue()
+		topics := ParseTopics(m.panel.TopicsRaw())
+		isPublic := m.panel.IsPublic()
+		isNSFW := m.panel.IsNSFW()
 		m = m.closeCompose()
 		return m, func() tea.Msg {
 			return SubmitNewPostMsg{Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
@@ -325,72 +306,13 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.compose.IsActive() {
-			switch msg.String() {
-			case "alt+p":
-				m.composePublic = !m.composePublic
-				return m, nil
-			case "alt+s":
-				m.composeNSFW = !m.composeNSFW
-				return m, nil
-			case "tab":
-				switch {
-				case m.topicsFocused:
-					m.topicsFocused = false
-					m.topicsInput.Blur()
-					var cmd tea.Cmd
-					m.compose, cmd = m.compose.SetFocused(true)
-					return m, cmd
-				case m.titleFocused:
-					m.titleFocused = false
-					m.titleInput.Blur()
-					m.topicsFocused = true
-					cmd := m.topicsInput.Focus()
-					return m, cmd
-				default:
-					m.compose, _ = m.compose.SetFocused(false)
-					m.titleFocused = true
-					cmd := m.titleInput.Focus()
-					return m, cmd
-				}
-			case "ctrl+s":
-				if m.topicsFocused || m.titleFocused {
-					content := m.compose.Content()
-					title := strings.TrimSpace(m.titleInput.Value())
-					topics := ParseTopics(m.topicsInput.Value())
-					isPublic := m.composePublic
-					isNSFW := m.composeNSFW
-					m = m.closeCompose()
-					return m, func() tea.Msg {
-						return SubmitNewPostMsg{Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
-					}
-				}
-			case "esc":
-				if m.topicsFocused || m.titleFocused {
-					m = m.closeCompose()
-					return m, nil
-				}
-			}
-			if m.topicsFocused {
-				var cmd tea.Cmd
-				filtered, ok := filterAmbiguousKeyMsg(msg)
-				if !ok {
-					return m, nil
-				}
-				m.topicsInput, cmd = m.topicsInput.Update(filtered)
-				return m, cmd
-			}
-			if m.titleFocused {
-				var cmd tea.Cmd
-				filtered, ok := filterAmbiguousKeyMsg(msg)
-				if !ok {
-					return m, nil
-				}
-				m.titleInput, cmd = m.titleInput.Update(filtered)
-				return m, cmd
-			}
+		if m.panel.IsActive() {
+			oldH := m.panel.PanelHeight()
 			var cmd tea.Cmd
-			m.compose, cmd = m.compose.Update(msg)
+			m.panel, cmd = m.panel.Update(msg)
+			if m.panel.PanelHeight() != oldH {
+				m.viewport.Height = m.viewportHeight()
+			}
 			return m, cmd
 		}
 		switch msg.String() {
@@ -435,16 +357,8 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			}
 			return m, nil
 		case "n":
-			m.titleInput.SetValue("")
-			m.titleFocused = false
-			m.titleInput.Blur()
-			m.topicsInput.SetValue("tui")
-			m.topicsFocused = false
-			m.topicsInput.Blur()
-			m.composePublic = m.defaultPublicPost
-			m.composeNSFW = false
 			var cmd tea.Cmd
-			m.compose, cmd = m.compose.Open("new post", "what's on your mind…")
+			m.panel, cmd = m.panel.Open(m.defaultPublicPost)
 			m.viewport.Height = m.viewportHeight()
 			return m, cmd
 		case "down", "j":
@@ -477,15 +391,12 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	return m, cmd
 }
 
-// viewportHeight returns the viewport height in rows, shrinking to make room for
-// the compose box, tags input, and the delete-confirmation overlay when active.
+// viewportHeight returns the viewport height in rows, shrinking to make room
+// for the compose panel and the delete-confirmation overlay when active.
 func (m FeedModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight
-	if m.compose.IsActive() {
-		h -= m.compose.BoxHeight()
-		h -= 3 // title input: border top + content + border bottom
-		h -= 3 // topics input: border top + content + border bottom
-		h -= 1 // toggle line (public/nsfw)
+	if m.panel.IsActive() {
+		h -= m.panel.PanelHeight()
 	}
 	if m.confirmingDelete {
 		h -= confirmBoxHeight
@@ -497,13 +408,7 @@ func (m FeedModel) viewportHeight() int {
 }
 
 func (m FeedModel) closeCompose() FeedModel {
-	m.compose = m.compose.Close()
-	m.titleFocused = false
-	m.titleInput.SetValue("")
-	m.titleInput.Blur()
-	m.topicsFocused = false
-	m.topicsInput.Blur()
-	m.composeNSFW = false
+	m.panel = m.panel.Close()
 	m.viewport.Height = m.viewportHeight()
 	return m
 }
@@ -581,36 +486,10 @@ func (m FeedModel) View() string {
 		)
 	}
 
-	if m.compose.IsActive() {
-		titleStyle := theme.Border
-		if m.titleFocused {
-			titleStyle = theme.ActiveBorder
-		}
-		topicsStyle := theme.Border
-		if m.topicsFocused {
-			topicsStyle = theme.ActiveBorder
-		}
-		if m.width > 2 {
-			titleStyle = titleStyle.Width(m.width - 2)
-			topicsStyle = topicsStyle.Width(m.width - 2)
-		}
-		titleBox := titleStyle.Render(m.titleInput.View())
-		topicsBox := topicsStyle.Render(m.topicsInput.View())
-		pubMark := "[ ]"
-		if m.composePublic {
-			pubMark = "[x]"
-		}
-		nsfwMark := "[ ]"
-		if m.composeNSFW {
-			nsfwMark = "[x]"
-		}
-		toggleLine := theme.Subtle.Render("  " + pubMark + " public  " + nsfwMark + " nsfw  (alt+p / alt+s)")
+	if m.panel.IsActive() {
 		return lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
-			m.compose.View(),
-			titleBox,
-			topicsBox,
-			toggleLine,
+			m.panel.View(),
 		)
 	}
 	return m.viewport.View()
