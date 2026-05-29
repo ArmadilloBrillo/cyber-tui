@@ -274,17 +274,6 @@ func NewPostComposePanel(width int) PostComposePanel {
 	top.Placeholder = "go, my topic, …  max 3"
 	top.Prompt = "" // the row label acts as the prompt
 
-	ti.TextStyle = theme.Base
-	ti.PlaceholderStyle = theme.Subtle
-	top.TextStyle = theme.Base
-	top.PlaceholderStyle = theme.Subtle
-	ta.FocusedStyle.Text = theme.Base
-	ta.FocusedStyle.CursorLine = theme.Base
-	ta.BlurredStyle.Text = theme.Base
-	ta.BlurredStyle.CursorLine = theme.Base
-	ta.FocusedStyle.Placeholder = theme.Subtle
-	ta.BlurredStyle.Placeholder = theme.Subtle
-
 	m := PostComposePanel{
 		titleInput:  ti,
 		textarea:    ta,
@@ -488,6 +477,19 @@ func (m PostComposePanel) View() string {
 	if !m.active {
 		return ""
 	}
+	// Re-apply theme styles on the local copy so theme changes are reflected
+	// without having to reconstruct the panel.
+	m.titleInput.TextStyle = theme.Base
+	m.titleInput.PlaceholderStyle = theme.Subtle
+	m.topicsInput.TextStyle = theme.Base
+	m.topicsInput.PlaceholderStyle = theme.Subtle
+	m.textarea.FocusedStyle.Text = theme.Base
+	m.textarea.FocusedStyle.CursorLine = theme.Base
+	m.textarea.BlurredStyle.Text = theme.Base
+	m.textarea.BlurredStyle.CursorLine = theme.Base
+	m.textarea.FocusedStyle.Placeholder = theme.Subtle
+	m.textarea.BlurredStyle.Placeholder = theme.Subtle
+
 	innerW := m.width - 4
 	if innerW < 1 {
 		innerW = 1
