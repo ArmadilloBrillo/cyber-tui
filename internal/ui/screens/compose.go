@@ -274,6 +274,17 @@ func NewPostComposePanel(width int) PostComposePanel {
 	top.Placeholder = "go, my topic, …  max 3"
 	top.Prompt = "" // the row label acts as the prompt
 
+	ti.TextStyle = theme.Base
+	ti.PlaceholderStyle = theme.Subtle
+	top.TextStyle = theme.Base
+	top.PlaceholderStyle = theme.Subtle
+	ta.FocusedStyle.Text = theme.Base
+	ta.FocusedStyle.CursorLine = theme.Base
+	ta.BlurredStyle.Text = theme.Base
+	ta.BlurredStyle.CursorLine = theme.Base
+	ta.FocusedStyle.Placeholder = theme.Subtle
+	ta.BlurredStyle.Placeholder = theme.Subtle
+
 	m := PostComposePanel{
 		titleInput:  ti,
 		textarea:    ta,
@@ -350,7 +361,7 @@ func (m PostComposePanel) SetWidth(w int) PostComposePanel {
 	return m
 }
 
-func (m PostComposePanel) advanceFocus() (PostComposePanel, tea.Cmd) {
+func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
 	switch m.focus {
 	case postFieldTitle:
 		m.titleInput.Blur()
@@ -359,7 +370,7 @@ func (m PostComposePanel) advanceFocus() (PostComposePanel, tea.Cmd) {
 	case postFieldTopics:
 		m.topicsInput.Blur()
 	}
-	m.focus = (m.focus + 1) % postFieldCount
+	m.focus = postField((int(m.focus) + delta + int(postFieldCount)) % int(postFieldCount))
 	switch m.focus {
 	case postFieldTitle:
 		return m, m.titleInput.Focus()
@@ -408,7 +419,9 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 		case "esc":
 			return m, func() tea.Msg { return ComposeCancelMsg{} }
 		case "tab":
-			return m.advanceFocus()
+			return m.moveFocus(1)
+		case "shift+tab":
+			return m.moveFocus(-1)
 		case " ":
 			switch m.focus {
 			case postFieldPublic:
