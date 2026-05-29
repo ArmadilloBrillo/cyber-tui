@@ -98,7 +98,7 @@ _(No unimplemented reply endpoints remaining at medium/high priority)_
 | Profile         | View and edit all fields              | —                                                                    |
 | Settings        | Most fields editable                  | `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom` not exposed |
 | Follows         | Follow, unfollow, list following      | Followers list not fetched                                           |
-| Notifications   | All v0.4 types received and displayed (unknown types fall back to raw type string + `·` icon) | 13 new v0.4 types need dedicated text and icons in `notifSummary`/`notifIcon` (`internal/ui/screens/notifications.go`): `unfollowed`, `post_mention`, `chat_mention`, `dm_message`, `supporter_granted`, `supporter_removed`, `hacker_granted`, `hacker_removed`, `image_permission_granted`, `image_permission_removed`, `attachment_permission_granted`, `attachment_permission_removed`, `system_ban`. The `Type` comment in `model.Notification` (`internal/model/types.go`) also needs updating. `post_mention` is navigable (TargetID = postId). |
+| Notifications   | All v0.4 types received and displayed with dedicated text and icons | — |
 
 ---
 
