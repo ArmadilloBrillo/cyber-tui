@@ -351,11 +351,16 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 		line1 = left1
 	}
 
-	// Line 2: content preview truncated to align under the gap before the timestamp.
+	// Line 2: title (if set) or content preview, truncated to align under the timestamp.
 	rightWidth := lipgloss.Width(right1)
 	previewMax := max(innerWidth-rightWidth-1, 1)
-	preview := strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
-	line2 := theme.Base.Render(markdown.TruncateToWidth(preview, previewMax))
+	var previewText string
+	if b.Post != nil && b.Post.Title != "" {
+		previewText = b.Post.Title
+	} else {
+		previewText = strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
+	}
+	line2 := theme.Base.Render(markdown.TruncateToWidth(previewText, previewMax))
 
 	// Line 3: topics or "no topics" — always rendered so card height is fixed.
 	// Topics are truncated to innerWidth to prevent wrapping (which would break the 5-line guarantee).

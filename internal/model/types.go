@@ -58,6 +58,11 @@ type Post struct {
 	AuthorID       string
 	AuthorUsername string
 	Content        string
+	Title          string
+	Slug           string
+	GuildID        string
+	GuildSlug      string
+	IsGuildThread  bool
 	Topics         []string
 	RepliesCount   int
 	BookmarksCount int

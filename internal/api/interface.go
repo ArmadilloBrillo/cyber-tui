@@ -19,7 +19,7 @@ type Client interface {
 	// Feed — pass empty cursor for first page; use returned cursor for next page.
 	// Returns empty next-cursor when there are no more pages.
 	GetFeed(cursor string) ([]model.Post, string, error)
-	CreatePost(content string, topics []string) (model.Post, error)
+	CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error)
 	// GetPost fetches a single post by ID (used when jumping from a notification).
 	GetPost(postID string) (model.Post, error)
 

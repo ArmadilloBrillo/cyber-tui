@@ -119,7 +119,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 |---|---|
 | `Tokens` | IDToken, RefreshToken, RTDBToken returned from login |
 | `User` | Profile (ID, username, displayName, email, bio, websiteUrl, websiteName, websiteImageUrl, pinnedPostID, locationName, locationLatitude, locationLongitude) |
-| `Post` | Feed item (ID, authorID, authorUsername, content, topics, repliesCount, bookmarksCount, isPublic, isNSFW, deleted, createdAt) |
+| `Post` | Feed item (ID, authorID, authorUsername, content, title, slug, guildID, guildSlug, isGuildThread, topics, repliesCount, bookmarksCount, isPublic, isNSFW, deleted, createdAt) |
 | `Reply` | Comment on a post (ID, postID, authorID, authorUsername, content, parentReplyID, createdAt) |
 | `ProfileUpdate` | Optional fields for PATCH /v1/users/me (all pointer types, includes new website/location fields) |
 | `Message` | DM/chat message (ID, from, body, createdAt) |
@@ -149,7 +149,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Group | Methods |
 |---|---|
 | Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()` |
-| Feed | `GetFeed(cursor)`, `CreatePost(content, topics)`, `GetPost(postID)`, `DeletePost(postID)` |
+| Feed | `GetFeed(cursor)`, `CreatePost(content, title, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)` |
 | Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)` |
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
 | User History | `GetUserPosts(username, cursor)`, `GetUserReplies(username, cursor)` |
@@ -357,7 +357,7 @@ Home feed of posts from followed users.
 - Dense/relaxed display modes; post content truncated to 4 lines in list view
 - Timezone-aware timestamps via `displayTime()`
 
-Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg`, `DeletePostMsg`  
+Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg` (Content, Title, Topics, IsPublic, IsNSFW), `DeletePostMsg`  
 Key function: `ParseTopics(s string) []string` — splits comma-separated string, caps at 3  
 Key methods: `SetCurrentUsername(username)`, `RemovePost(postID)`
 
@@ -485,7 +485,7 @@ Private notes (Journal), cursor-paginated. Notes are visible only to the author.
 - Confirmation overlay (y/n) for publish and delete actions
 - Viewport height dynamically adjusts when compose box grows or confirmation overlay appears
 
-**Note creation (`n`), editing (`enter`), and revision history (`h`) are currently disabled** via `noteWriteDisabled: true` in `NewJournalModel`. Flip to `false` once `PATCH /v1/notes/:id` is fixed server-side. All code paths remain in place.
+Note creation (`n`), editing (`enter`), deletion (`d`), and revision history (`h`) are all active. `PATCH /v1/notes/:id` was fixed server-side in API v0.4.
 
 Key types: `JournalModel`, `SubmitSaveNoteMsg`, `SubmitPublishNoteMsg`, `SubmitDeleteNoteMsg`, `LoadMoreJournalMsg`, `LoadNoteRevisionsMsg`, `LoadNoteRevisionMsg`  
 Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNoteContent(noteID, content, topics)`, `DeleteNote(noteID)`, `SetRevisions(noteID, revisions, cursor)`, `SetRevisionPreview(note)`
@@ -684,7 +684,10 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | Key | Action |
 |---|---|
 | `enter` | Insert paragraph break |
+| `tab` | Cycle focus: compose → title → topics → compose (Feed only) |
 | `alt+enter` / `ctrl+s` | Submit |
+| `alt+p` | Toggle public flag (Feed compose only) |
+| `alt+s` | Toggle NSFW flag (Feed compose only) |
 | `esc` | Cancel |
 
 ### Notifications
@@ -770,7 +773,7 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 | **C-Mail REST** | Conversation list + history loaded from mock; RTDB subscribe wired; full path confirmed post-beta |
 | **HTTPClient thread safety** | Tokens field mutated by Login/refresh with no mutex; acceptable under Bubble Tea's single-update loop, but may need `sync.Mutex` if command goroutines become truly concurrent |
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized |
-| **Journal write operations** | `PATCH /v1/notes/:id` returns 500 server-side. Note creation, editing, and revision history are disabled client-side (`noteWriteDisabled: true` in `NewJournalModel`). Only list and delete remain active. Flip the flag once the API is fixed. See `docs/00-api-backlog.md`. |
+| **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |
 | **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |
 | **Attachments** | Image and YouTube audio attachments on posts/replies are not supported in the TUI |
 | **Note revision pagination** | `GetNoteRevisions` cursor is implemented in the API client but the UI loads only the first page |

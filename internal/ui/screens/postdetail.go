@@ -682,15 +682,29 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 		header = left
 	}
 
+	// Badges line: guild indicator, nsfw, public — omitted when none apply.
+	var badgeParts []string
+	if m.post.IsGuildThread && m.post.GuildSlug != "" {
+		badgeParts = append(badgeParts, theme.Subtle.Render("[#"+m.post.GuildSlug+"]"))
+	}
+	if m.post.IsNSFW {
+		badgeParts = append(badgeParts, theme.Error.Render("[nsfw]"))
+	}
+	if m.post.IsPublic {
+		badgeParts = append(badgeParts, theme.Subtle.Render("[public]"))
+	}
+	badges := strings.Join(badgeParts, "  ")
+
 	body := markdown.Render(m.post.Content, innerWidth)
 	if att := renderAttachments(m.post.Attachments); att != "" {
 		body = body + "\n" + att
 	}
 
-	topics := ""
+	var topicsSB strings.Builder
 	for _, t := range m.post.Topics {
-		topics += theme.Subtle.Render("#"+t) + " "
+		topicsSB.WriteString(theme.Subtle.Render("#"+t) + " ")
 	}
+	topics := topicsSB.String()
 
 	boxStyle := theme.Border
 	if selected {
@@ -699,13 +713,16 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 	if innerWidth > 0 {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}
-	return boxStyle.Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			body,
-			fmt.Sprintf("\n%s", topics),
-		),
-	)
+
+	rows := []string{header}
+	if badges != "" {
+		rows = append(rows, badges)
+	}
+	if m.post.Title != "" {
+		rows = append(rows, theme.Title.Render(m.post.Title))
+	}
+	rows = append(rows, body, fmt.Sprintf("\n%s", topics))
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
 func (m PostDetailModel) renderReply(node replyNode, selected bool) string {

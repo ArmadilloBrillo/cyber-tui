@@ -70,18 +70,23 @@ type wireAttachment struct {
 }
 
 type wirePost struct {
-	PostID         string            `json:"postId"`
-	AuthorID       string            `json:"authorId"`
-	AuthorUsername string            `json:"authorUsername"`
-	Content        string            `json:"content"`
-	Topics         []string          `json:"topics"`
-	RepliesCount   int               `json:"repliesCount"`
-	BookmarksCount int               `json:"bookmarksCount"`
-	IsPublic       bool              `json:"isPublic"`
-	IsNSFW         bool              `json:"isNSFW"`
-	Deleted        bool              `json:"deleted"`
-	CreatedAt      string            `json:"createdAt"`
-	Attachments    []wireAttachment  `json:"attachments"`
+	PostID         string           `json:"postId"`
+	AuthorID       string           `json:"authorId"`
+	AuthorUsername string           `json:"authorUsername"`
+	Content        string           `json:"content"`
+	Title          string           `json:"title"`
+	Slug           string           `json:"slug"`
+	GuildID        string           `json:"guildId"`
+	GuildSlug      string           `json:"guildSlug"`
+	IsGuildThread  bool             `json:"isGuildThread"`
+	Topics         []string         `json:"topics"`
+	RepliesCount   int              `json:"repliesCount"`
+	BookmarksCount int              `json:"bookmarksCount"`
+	IsPublic       bool             `json:"isPublic"`
+	IsNSFW         bool             `json:"isNSFW"`
+	Deleted        bool             `json:"deleted"`
+	CreatedAt      string           `json:"createdAt"`
+	Attachments    []wireAttachment `json:"attachments"`
 }
 
 type wireUser struct {
@@ -181,6 +186,7 @@ type createBookmarkResponseData struct {
 
 type createPostRequest struct {
 	Content  string   `json:"content"`
+	Title    string   `json:"title,omitempty"`
 	Topics   []string `json:"topics"`
 	IsPublic bool     `json:"isPublic"`
 	IsNSFW   bool     `json:"isNSFW"`
@@ -188,6 +194,8 @@ type createPostRequest struct {
 
 type createPostResponseData struct {
 	PostID string `json:"postId"`
+	Slug   string `json:"slug"`
+	Title  string `json:"title"`
 }
 
 type createReplyRequest struct {
@@ -496,6 +504,11 @@ func wirePostToModel(w wirePost) model.Post {
 		AuthorID:       w.AuthorID,
 		AuthorUsername: w.AuthorUsername,
 		Content:        w.Content,
+		Title:          w.Title,
+		Slug:           w.Slug,
+		GuildID:        w.GuildID,
+		GuildSlug:      w.GuildSlug,
+		IsGuildThread:  w.IsGuildThread,
 		Topics:         w.Topics,
 		RepliesCount:   w.RepliesCount,
 		BookmarksCount: w.BookmarksCount,
@@ -750,10 +763,13 @@ func (c *HTTPClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	return all, nil
 }
 
-func (c *HTTPClient) CreatePost(content string, topics []string) (model.Post, error) {
+func (c *HTTPClient) CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
 	env, err := c.doJSON("POST", "/v1/posts", createPostRequest{
-		Content: content,
-		Topics:  topics,
+		Content:  content,
+		Title:    title,
+		Topics:   topics,
+		IsPublic: isPublic,
+		IsNSFW:   isNSFW,
 	})
 	if err != nil {
 		return model.Post{}, err
@@ -762,8 +778,15 @@ func (c *HTTPClient) CreatePost(content string, topics []string) (model.Post, er
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return model.Post{}, err
 	}
-	// API returns only postId on creation; return a minimal Post.
-	return model.Post{ID: data.PostID, Content: content, Topics: topics}, nil
+	return model.Post{
+		ID:       data.PostID,
+		Title:    data.Title,
+		Slug:     data.Slug,
+		Content:  content,
+		Topics:   topics,
+		IsPublic: isPublic,
+		IsNSFW:   isNSFW,
+	}, nil
 }
 
 func (c *HTTPClient) DeletePost(postID string) error {

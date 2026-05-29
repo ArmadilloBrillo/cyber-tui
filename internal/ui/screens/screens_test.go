@@ -628,6 +628,10 @@ func TestFeed_ComposeSubmit_EmitsSubmitNewPostMsg(t *testing.T) {
 	if len(snp.Topics) != 1 || snp.Topics[0] != "tui" {
 		t.Errorf("expected topics=[tui] from pre-filled input, got %v", snp.Topics)
 	}
+	// No title entered — should be empty.
+	if snp.Title != "" {
+		t.Errorf("expected empty Title, got %q", snp.Title)
+	}
 }
 
 func TestFeed_P_EmitsShowUserProfileMsg(t *testing.T) {

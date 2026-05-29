@@ -31,8 +31,11 @@ type ShowPostForReplyMsg struct{ Post model.Post }
 
 // SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
 type SubmitNewPostMsg struct {
-	Content string
-	Topics  []string
+	Content  string
+	Title    string // empty = no title
+	Topics   []string
+	IsPublic bool
+	IsNSFW   bool
 }
 
 type FeedModel struct {
@@ -42,6 +45,11 @@ type FeedModel struct {
 	compose            ComposeModel
 	topicsInput        textinput.Model
 	topicsFocused      bool
+	titleInput         textinput.Model
+	titleFocused       bool
+	composePublic      bool
+	composeNSFW        bool
+	defaultPublicPost  bool // mirrored from settings; initialises composePublic on each open
 	width              int
 	height             int
 	selectedIndex      int
@@ -65,9 +73,12 @@ type FeedModel struct {
 func NewFeedModel() FeedModel {
 	ti := textinput.New()
 	ti.Placeholder = "add topics  (go, my topic, …  max 3)"
+	titleTI := textinput.New()
+	titleTI.Placeholder = "title (optional)"
 	return FeedModel{
 		compose:     NewComposeModel(0),
 		topicsInput: ti,
+		titleInput:  titleTI,
 	}
 }
 
@@ -246,6 +257,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		m.defaultPublicPost = msg.Settings.DefaultPublicPost
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
 		return m, nil
@@ -266,6 +278,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			innerW = 1
 		}
 		m.topicsInput.Width = innerW
+		m.titleInput.Width = innerW
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, m.viewportHeight())
 			m = m.refreshContent()
@@ -279,9 +292,14 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 
 	case ComposeSubmitMsg:
 		content := msg.Content
+		title := strings.TrimSpace(m.titleInput.Value())
 		topics := ParseTopics(m.topicsInput.Value())
+		isPublic := m.composePublic
+		isNSFW := m.composeNSFW
 		m = m.closeCompose()
-		return m, func() tea.Msg { return SubmitNewPostMsg{Content: content, Topics: topics} }
+		return m, func() tea.Msg {
+			return SubmitNewPostMsg{Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
+		}
 
 	case ComposeCancelMsg:
 		m = m.closeCompose()
@@ -309,34 +327,47 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 
 		if m.compose.IsActive() {
 			switch msg.String() {
+			case "alt+p":
+				m.composePublic = !m.composePublic
+				return m, nil
+			case "alt+s":
+				m.composeNSFW = !m.composeNSFW
+				return m, nil
 			case "tab":
-				if m.topicsFocused {
+				switch {
+				case m.topicsFocused:
 					m.topicsFocused = false
 					m.topicsInput.Blur()
 					var cmd tea.Cmd
 					m.compose, cmd = m.compose.SetFocused(true)
 					return m, cmd
+				case m.titleFocused:
+					m.titleFocused = false
+					m.titleInput.Blur()
+					m.topicsFocused = true
+					cmd := m.topicsInput.Focus()
+					return m, cmd
+				default:
+					m.compose, _ = m.compose.SetFocused(false)
+					m.titleFocused = true
+					cmd := m.titleInput.Focus()
+					return m, cmd
 				}
-				m.topicsFocused = true
-				m.compose, _ = m.compose.SetFocused(false)
-				cmd := m.topicsInput.Focus()
-				return m, cmd
 			case "ctrl+s":
-				if m.topicsFocused {
+				if m.topicsFocused || m.titleFocused {
 					content := m.compose.Content()
+					title := strings.TrimSpace(m.titleInput.Value())
 					topics := ParseTopics(m.topicsInput.Value())
-					m.compose = m.compose.Close()
-					m.topicsFocused = false
-					m.topicsInput.Blur()
-					m.viewport.Height = m.viewportHeight()
-					return m, func() tea.Msg { return SubmitNewPostMsg{Content: content, Topics: topics} }
+					isPublic := m.composePublic
+					isNSFW := m.composeNSFW
+					m = m.closeCompose()
+					return m, func() tea.Msg {
+						return SubmitNewPostMsg{Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
+					}
 				}
 			case "esc":
-				if m.topicsFocused {
-					m.topicsFocused = false
-					m.topicsInput.Blur()
-					m.compose = m.compose.Close()
-					m.viewport.Height = m.viewportHeight()
+				if m.topicsFocused || m.titleFocused {
+					m = m.closeCompose()
 					return m, nil
 				}
 			}
@@ -347,6 +378,15 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 					return m, nil
 				}
 				m.topicsInput, cmd = m.topicsInput.Update(filtered)
+				return m, cmd
+			}
+			if m.titleFocused {
+				var cmd tea.Cmd
+				filtered, ok := filterAmbiguousKeyMsg(msg)
+				if !ok {
+					return m, nil
+				}
+				m.titleInput, cmd = m.titleInput.Update(filtered)
 				return m, cmd
 			}
 			var cmd tea.Cmd
@@ -395,9 +435,14 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			}
 			return m, nil
 		case "n":
+			m.titleInput.SetValue("")
+			m.titleFocused = false
+			m.titleInput.Blur()
 			m.topicsInput.SetValue("tui")
 			m.topicsFocused = false
 			m.topicsInput.Blur()
+			m.composePublic = m.defaultPublicPost
+			m.composeNSFW = false
 			var cmd tea.Cmd
 			m.compose, cmd = m.compose.Open("new post", "what's on your mind…")
 			m.viewport.Height = m.viewportHeight()
@@ -438,7 +483,9 @@ func (m FeedModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight
 	if m.compose.IsActive() {
 		h -= m.compose.BoxHeight()
-		h -= 3 // tags input row: border top + content + border bottom
+		h -= 3 // title input: border top + content + border bottom
+		h -= 3 // topics input: border top + content + border bottom
+		h -= 1 // toggle line (public/nsfw)
 	}
 	if m.confirmingDelete {
 		h -= confirmBoxHeight
@@ -451,8 +498,12 @@ func (m FeedModel) viewportHeight() int {
 
 func (m FeedModel) closeCompose() FeedModel {
 	m.compose = m.compose.Close()
+	m.titleFocused = false
+	m.titleInput.SetValue("")
+	m.titleInput.Blur()
 	m.topicsFocused = false
 	m.topicsInput.Blur()
+	m.composeNSFW = false
 	m.viewport.Height = m.viewportHeight()
 	return m
 }
@@ -531,18 +582,35 @@ func (m FeedModel) View() string {
 	}
 
 	if m.compose.IsActive() {
+		titleStyle := theme.Border
+		if m.titleFocused {
+			titleStyle = theme.ActiveBorder
+		}
 		topicsStyle := theme.Border
 		if m.topicsFocused {
 			topicsStyle = theme.ActiveBorder
 		}
 		if m.width > 2 {
+			titleStyle = titleStyle.Width(m.width - 2)
 			topicsStyle = topicsStyle.Width(m.width - 2)
 		}
+		titleBox := titleStyle.Render(m.titleInput.View())
 		topicsBox := topicsStyle.Render(m.topicsInput.View())
+		pubMark := "[ ]"
+		if m.composePublic {
+			pubMark = "[x]"
+		}
+		nsfwMark := "[ ]"
+		if m.composeNSFW {
+			nsfwMark = "[x]"
+		}
+		toggleLine := theme.Subtle.Render("  " + pubMark + " public  " + nsfwMark + " nsfw  (alt+p / alt+s)")
 		return lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
 			m.compose.View(),
+			titleBox,
 			topicsBox,
+			toggleLine,
 		)
 	}
 	return m.viewport.View()

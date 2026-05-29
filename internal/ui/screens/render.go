@@ -49,6 +49,19 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, width int, loc *ti
 		header = left
 	}
 
+	// Badges line: guild indicator, nsfw, public — omitted when none apply.
+	var badgeParts []string
+	if p.IsGuildThread && p.GuildSlug != "" {
+		badgeParts = append(badgeParts, theme.Subtle.Render("[#"+p.GuildSlug+"]"))
+	}
+	if p.IsNSFW {
+		badgeParts = append(badgeParts, theme.Error.Render("[nsfw]"))
+	}
+	if p.IsPublic {
+		badgeParts = append(badgeParts, theme.Subtle.Render("[public]"))
+	}
+	badges := strings.Join(badgeParts, "  ")
+
 	var body string
 	if innerWidth > 0 {
 		rendered := markdown.Render(p.Content, innerWidth)
@@ -81,13 +94,16 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, width int, loc *ti
 	if innerWidth > 0 {
 		boxStyle = boxStyle.Width(width - 2)
 	}
-	return boxStyle.Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			body,
-			fmt.Sprintf("\n%s", topics),
-		),
-	)
+
+	rows := []string{header}
+	if badges != "" {
+		rows = append(rows, badges)
+	}
+	if p.Title != "" {
+		rows = append(rows, theme.Highlight.Render(p.Title))
+	}
+	rows = append(rows, body, fmt.Sprintf("\n%s", topics))
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
 // attachmentIndicator returns a compact header badge for any attachments present,

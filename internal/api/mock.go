@@ -159,7 +159,9 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 			ID:             "p1",
 			AuthorID:       "1",
 			AuthorUsername: "neuromancer",
+			Title:          "On Flatline",
 			Content:        "flatline is not death, it is elsewhere",
+			Slug:           "on-flatline",
 			CreatedAt:      time.Now().Add(-10 * time.Minute),
 			Topics:         []string{"cyberspace", "philosophy"},
 		},
@@ -170,6 +172,7 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 			Content:        "the matrix has its roots in primitive arcade games",
 			CreatedAt:      time.Now().Add(-1 * time.Hour),
 			Topics:         []string{"history"},
+			IsNSFW:         true,
 		},
 		{
 			ID:             "p3",
@@ -178,6 +181,7 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 			Content:        "i need you to plug in and find what's waiting on the other side",
 			CreatedAt:      time.Now().Add(-3 * time.Hour),
 			Topics:         []string{"mission"},
+			IsPublic:       true,
 		},
 	}, "", nil
 }
@@ -213,14 +217,17 @@ func (m *MockClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	}, nil
 }
 
-func (m *MockClient) CreatePost(content string, topics []string) (model.Post, error) {
+func (m *MockClient) CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
 	return model.Post{
 		ID:             "new-1",
 		AuthorID:       mockUsers[0].ID,
 		AuthorUsername: mockUsers[0].Username,
 		Content:        content,
+		Title:          title,
 		CreatedAt:      time.Now(),
 		Topics:         topics,
+		IsPublic:       isPublic,
+		IsNSFW:         isNSFW,
 	}, nil
 }
 

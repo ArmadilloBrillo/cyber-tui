@@ -498,7 +498,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Topics), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
 	case screens.SubmitReplyMsg:
@@ -2149,9 +2149,9 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	}
 }
 
-func (a *App) createPostCmd(content string, topics []string) tea.Cmd {
+func (a *App) createPostCmd(content, title string, topics []string, isPublic, isNSFW bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, topics)
+		_, err := a.client.CreatePost(content, title, topics, isPublic, isNSFW)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -2509,9 +2509,10 @@ func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 }
 
 // publishNoteCmd creates a post from the note's content and topics.
+// Published notes have no title, are private, and not marked NSFW.
 func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, topics)
+		_, err := a.client.CreatePost(content, "", topics, false, false)
 		if err != nil {
 			return errMsg{err}
 		}

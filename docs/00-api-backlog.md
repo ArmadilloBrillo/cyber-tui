@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.3.2) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.4) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -11,14 +11,14 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 
 | Endpoint | Method | Status | Description | Discovered |
 |---|---|---|---|---|
-| `/v1/notes/:id` | PATCH | **Open** | Returns 500 Internal Server Error for all note update requests, even with a minimal valid body (`{"content":"..."}`). CREATE works fine. Confirmed via curl with a fresh token — not a client bug. Client-side: note creation, editing, and revision history are all disabled via `noteWriteDisabled: true` in `JournalModel` until this is resolved. | 2026-04-16 |
-| `/v1/follows` | GET | **Open** | Response does not include `followerUsername` or `followedUsername`. The profile Following/Followers tabs fall back to showing a truncated user ID; profile navigation from those tabs is disabled until the API returns usernames. | 2026-04-17 |
+| `/v1/follows` | GET | **Open** | Response does not include `followerUsername` or `followedUsername`. Confirmed still missing in v0.4 (re-tested 2026-05-29). The profile Following/Followers tabs fall back to showing a truncated user ID; profile navigation from those tabs is disabled until the API returns usernames. | 2026-04-17 |
+| Rate limits (spec) | — | **Open** | Inline per-endpoint docs and the consolidated Rate Limits table contradict each other. Entries: 15/day inline vs 10/day in table. Replies: 15/day vs 10/day. Notes: 30/day vs 20/day. Bookmarks: 75/day vs 50/day. Profile/Settings updates: 15/day vs 10/day. Unknown which is authoritative — report to API maintainer. | 2026-05-29 |
 
 ---
 
 ## Unimplemented API Features
 
-Features present in the v0.3.2 API spec that are not yet implemented in this client.
+Features present in the v0.4 API spec that are not yet implemented in this client.
 Ordered roughly by implementation effort / priority.
 
 ### Auth
@@ -35,6 +35,32 @@ Ordered roughly by implementation effort / priority.
 |---|---|---|---|
 | `/v1/users/:username/posts` | GET | Paginated post history for a user | **Done** — profile Posts tab |
 | `/v1/users/:username/replies` | GET | Paginated reply history for a user | **Done** — profile Replies tab |
+
+### Posts (extended — v0.4)
+
+| Endpoint / Area | Description | Priority |
+|---|---|---|
+| `model.Post` fields | `Title`, `Slug`, `GuildID`, `GuildSlug`, `IsGuildThread` | **Done** — feature 28 |
+| `POST /v1/posts` signature | Extended: `CreatePost(content, title, topics, isPublic, isNSFW)` | **Done** — feature 28 |
+| `GET /v1/users/:username/posts/:slug` | Slug-based post lookup not in Client interface. Useful for deep-linking; not needed for core navigation. | Low |
+
+### Guilds (new in v0.4)
+
+Guilds are member groups with their own forum of threads. A user can belong to one guild at a time. All 7 endpoints are entirely unimplemented; two new model types (`Guild`, `GuildMembership`) are needed.
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/guilds` | GET | List guilds (paginated, most-populated first) | Medium |
+| `/v1/guilds/:slug` | GET | Get guild detail + caller's `isMember` / `role` | Medium |
+| `/v1/guilds/:slug/members` | GET | List guild members (paginated, oldest-joined first) | Medium |
+| `/v1/guilds/:slug/posts` | GET | List guild threads (most recently active first) | Medium |
+| `/v1/guilds/:slug/posts` | POST | Create guild thread (must be a member; accepts `content`, `title`, `slug`, `topics`) | Medium |
+| `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | Medium |
+| `/v1/guilds/:slug/leave` | POST | Leave a guild (founders blocked — web only; 403 via API) | Medium |
+
+Notes:
+- Guild threads are ordinary posts with `guildId`, `guildSlug`, `isGuildThread: true`; replying uses `POST /v1/replies` as normal.
+- `guild_new_thread` notifications are already display-ready (`notifSummary`/`notifIcon` have explicit cases) and navigation is wired via `TargetID` → `ShowNotificationPostMsg`.
 
 ### Replies
 
@@ -58,9 +84,9 @@ _(No unimplemented reply endpoints remaining at medium/high priority)_
 
 | Endpoint | Method | Description | Priority | Blocker |
 |---|---|---|---|---|
-| `/v1/notes/:id` | GET | Fetch a single note (optionally a specific revision) | **Done** — used by revision preview; disabled client-side while `noteWriteDisabled` is set |
-| `/v1/notes/:id/revisions` | GET | List all revisions for a note | **Done** — journal `h` key; disabled client-side alongside write operations |
-| `/v1/notes/:id` | PATCH | Update note (already wired client-side) | High | **Server-side 500 bug — blocked until fixed** |
+| `/v1/notes/:id` | GET | Fetch a single note (optionally a specific revision) | **Done** — used by revision preview |
+| `/v1/notes/:id/revisions` | GET | List all revisions for a note | **Done** — journal `h` key |
+| `/v1/notes/:id` | PATCH | Update note | **Done** | Fixed in v0.4; re-tested 2026-05-29 |
 
 ---
 
@@ -68,10 +94,11 @@ _(No unimplemented reply endpoints remaining at medium/high priority)_
 
 | Feature         | What's Done                           | What's Missing                                                       |
 | --------------- | ------------------------------------- | -------------------------------------------------------------------- |
-| Notes (Journal) | List, delete | Create, edit, revision history disabled client-side (`noteWriteDisabled: true`) pending PATCH server fix |
+| Notes (Journal) | List, create, edit, delete, revision history | — |
 | Profile         | View and edit all fields              | —                                                                    |
 | Settings        | Most fields editable                  | `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom` not exposed |
 | Follows         | Follow, unfollow, list following      | Followers list not fetched                                           |
+| Notifications   | All v0.4 types received and displayed (unknown types fall back to raw type string + `·` icon) | 13 new v0.4 types need dedicated text and icons in `notifSummary`/`notifIcon` (`internal/ui/screens/notifications.go`): `unfollowed`, `post_mention`, `chat_mention`, `dm_message`, `supporter_granted`, `supporter_removed`, `hacker_granted`, `hacker_removed`, `image_permission_granted`, `image_permission_removed`, `attachment_permission_granted`, `attachment_permission_removed`, `system_ban`. The `Type` comment in `model.Notification` (`internal/model/types.go`) also needs updating. `post_mention` is navigable (TargetID = postId). |
 
 ---
 
@@ -88,3 +115,5 @@ _(No unimplemented reply endpoints remaining at medium/high priority)_
 | `GET /v1/follows?userId=…` | Any user's follows — profile Following/Followers sub-tabs; feature 24 | 2026-04-17 |
 | `GET /v1/notes/:id` | Single note fetch — used for revision preview; feature 25 | 2026-04-17 |
 | `GET /v1/notes/:id/revisions` | Note revision history — journal `h` key; feature 25 | 2026-04-17 |
+| `PATCH /v1/notes/:id` | Server-side 500 bug resolved in API v0.4. Note editing and revision history fully operational. | 2026-05-29 |
+| `POST /v1/posts` (extended) | `CreatePost` now accepts `title`, `isPublic`, `isNSFW`. `Post` model gained `Title`, `Slug`, `GuildID`, `GuildSlug`, `IsGuildThread`. Title rendered in feed/detail/profile/bookmarks. Feature 28. | 2026-05-29 |
