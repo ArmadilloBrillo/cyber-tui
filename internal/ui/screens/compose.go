@@ -218,6 +218,17 @@ func (m ComposeModel) View() string {
 	if !m.active {
 		return ""
 	}
+	m.textarea.FocusedStyle.Text = theme.Base
+	m.textarea.FocusedStyle.CursorLine = theme.Base
+	m.textarea.BlurredStyle.Text = theme.Base
+	m.textarea.BlurredStyle.CursorLine = theme.Base
+	m.textarea.FocusedStyle.Placeholder = theme.Subtle
+	m.textarea.BlurredStyle.Placeholder = theme.Subtle
+	if m.textarea.Focused() {
+		_ = (&m.textarea).Focus()
+	} else {
+		(&m.textarea).Blur()
+	}
 	inner := lipgloss.JoinVertical(lipgloss.Left,
 		theme.Subtle.Render(m.context),
 		m.textarea.View(),
