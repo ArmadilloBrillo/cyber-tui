@@ -292,7 +292,8 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 				return m, nil
 			}
 			n := visible[m.selectedIndex]
-			if n.Type == "poke" || n.Type == "new_follower" {
+			if n.Type == "poke" || n.Type == "new_follower" || n.Type == "unfollowed" ||
+				n.Type == "chat_mention" || n.Type == "dm_message" {
 				// No post to open — navigate to actor's profile and mark read.
 				m = m.MarkRead(n.ID)
 				notifID, username := n.ID, n.Actor.Username
@@ -408,10 +409,18 @@ func notifSummary(n model.Notification) string {
 		return "saved your entry."
 	case "new_follower":
 		return "started following you."
+	case "unfollowed":
+		return "unfollowed you."
 	case "reply":
 		return "replied to your post."
 	case "reply_mention":
 		return "mentioned you in a reply."
+	case "post_mention":
+		return "mentioned you in a post."
+	case "chat_mention":
+		return "mentioned you in chat."
+	case "dm_message":
+		return "sent you a message."
 	case "thread_reply":
 		if n.ThreadAuthorUsername != "" {
 			return "replied in @" + n.ThreadAuthorUsername + "'s thread."
@@ -424,6 +433,24 @@ func notifSummary(n model.Notification) string {
 		return "posted a new thread."
 	case "poke":
 		return `poked you ¯\_(ツ)_/¯`
+	case "supporter_granted":
+		return "granted you Supporter status."
+	case "supporter_removed":
+		return "removed your Supporter status."
+	case "hacker_granted":
+		return "granted you Hacker status."
+	case "hacker_removed":
+		return "removed your Hacker status."
+	case "image_permission_granted":
+		return "granted you image permissions."
+	case "image_permission_removed":
+		return "removed your image permissions."
+	case "attachment_permission_granted":
+		return "granted you attachment permissions."
+	case "attachment_permission_removed":
+		return "removed your attachment permissions."
+	case "system_ban":
+		return "your account has been banned."
 	default:
 		return n.Type
 	}
@@ -436,7 +463,7 @@ func notifIcon(n model.Notification) string {
 	switch n.Type {
 	case "reply", "thread_reply":
 		sym = "↩"
-	case "reply_mention":
+	case "reply_mention", "post_mention":
 		sym = "@"
 	case "new_post_friend", "new_post_following":
 		sym = "★"
@@ -444,10 +471,25 @@ func notifIcon(n model.Notification) string {
 		sym = "♥"
 	case "new_follower":
 		sym = "+"
+	case "unfollowed":
+		sym = "☹"
 	case "guild_new_thread":
 		sym = "#"
 	case "poke":
 		sym = "~"
+	case "chat_mention":
+		sym = "»"
+	case "dm_message":
+		sym = "✉"
+	case "supporter_granted", "supporter_removed":
+		sym = "$"
+	case "hacker_granted", "hacker_removed":
+		sym = "^"
+	case "image_permission_granted", "image_permission_removed",
+		"attachment_permission_granted", "attachment_permission_removed":
+		sym = "%"
+	case "system_ban":
+		sym = "☠"
 	default:
 		sym = "·"
 	}

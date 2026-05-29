@@ -454,6 +454,211 @@ func TestNotifIcon_GuildNewThread(t *testing.T) {
 	}
 }
 
+func TestNotifSummary_Unfollowed(t *testing.T) {
+	n := model.Notification{Type: "unfollowed"}
+	if notifSummary(n) != "unfollowed you." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_Unfollowed(t *testing.T) {
+	n := model.Notification{Type: "unfollowed", Read: false}
+	if !strings.Contains(notifIcon(n), "☹") {
+		t.Errorf("expected ☹ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_PostMention(t *testing.T) {
+	n := model.Notification{Type: "post_mention"}
+	if notifSummary(n) != "mentioned you in a post." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_PostMention(t *testing.T) {
+	n := model.Notification{Type: "post_mention", Read: false}
+	if !strings.Contains(notifIcon(n), "@") {
+		t.Errorf("expected @ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_ChatMention(t *testing.T) {
+	n := model.Notification{Type: "chat_mention"}
+	if notifSummary(n) != "mentioned you in chat." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_ChatMention(t *testing.T) {
+	n := model.Notification{Type: "chat_mention", Read: false}
+	if !strings.Contains(notifIcon(n), "»") {
+		t.Errorf("expected » in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_DmMessage(t *testing.T) {
+	n := model.Notification{Type: "dm_message"}
+	if notifSummary(n) != "sent you a message." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_DmMessage(t *testing.T) {
+	n := model.Notification{Type: "dm_message", Read: false}
+	if !strings.Contains(notifIcon(n), "✉") {
+		t.Errorf("expected ✉ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_SupporterGranted(t *testing.T) {
+	n := model.Notification{Type: "supporter_granted"}
+	if notifSummary(n) != "granted you Supporter status." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifSummary_SupporterRemoved(t *testing.T) {
+	n := model.Notification{Type: "supporter_removed"}
+	if notifSummary(n) != "removed your Supporter status." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_Supporter(t *testing.T) {
+	n := model.Notification{Type: "supporter_granted", Read: false}
+	if !strings.Contains(notifIcon(n), "$") {
+		t.Errorf("expected $ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_HackerGranted(t *testing.T) {
+	n := model.Notification{Type: "hacker_granted"}
+	if notifSummary(n) != "granted you Hacker status." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifSummary_HackerRemoved(t *testing.T) {
+	n := model.Notification{Type: "hacker_removed"}
+	if notifSummary(n) != "removed your Hacker status." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_Hacker(t *testing.T) {
+	n := model.Notification{Type: "hacker_granted", Read: false}
+	if !strings.Contains(notifIcon(n), "^") {
+		t.Errorf("expected ^ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_ImagePermissionGranted(t *testing.T) {
+	n := model.Notification{Type: "image_permission_granted"}
+	if notifSummary(n) != "granted you image permissions." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifSummary_ImagePermissionRemoved(t *testing.T) {
+	n := model.Notification{Type: "image_permission_removed"}
+	if notifSummary(n) != "removed your image permissions." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifSummary_AttachmentPermissionGranted(t *testing.T) {
+	n := model.Notification{Type: "attachment_permission_granted"}
+	if notifSummary(n) != "granted you attachment permissions." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifSummary_AttachmentPermissionRemoved(t *testing.T) {
+	n := model.Notification{Type: "attachment_permission_removed"}
+	if notifSummary(n) != "removed your attachment permissions." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_Permission(t *testing.T) {
+	n := model.Notification{Type: "image_permission_granted", Read: false}
+	if !strings.Contains(notifIcon(n), "%") {
+		t.Errorf("expected %% in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_SystemBan(t *testing.T) {
+	n := model.Notification{Type: "system_ban"}
+	if notifSummary(n) != "your account has been banned." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_SystemBan(t *testing.T) {
+	n := model.Notification{Type: "system_ban", Read: false}
+	if !strings.Contains(notifIcon(n), "☠") {
+		t.Errorf("expected ☠ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifs_Enter_Unfollowed_EmitsShowUserProfileMsg(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "unfollowed", "", false)}
+	m := initNotifs(notifs)
+	_, msgs := runKeyAll(m, "enter")
+	var gotProfile bool
+	for _, msg := range msgs {
+		if _, ok := msg.(ShowUserProfileMsg); ok {
+			gotProfile = true
+		}
+	}
+	if !gotProfile {
+		t.Error("expected ShowUserProfileMsg for unfollowed enter")
+	}
+}
+
+func TestNotifs_Enter_DmMessage_EmitsShowUserProfileMsg(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "dm_message", "", false)}
+	m := initNotifs(notifs)
+	_, msgs := runKeyAll(m, "enter")
+	var gotProfile bool
+	for _, msg := range msgs {
+		if _, ok := msg.(ShowUserProfileMsg); ok {
+			gotProfile = true
+		}
+	}
+	if !gotProfile {
+		t.Error("expected ShowUserProfileMsg for dm_message enter")
+	}
+}
+
+func TestNotifs_Enter_ChatMention_EmitsShowUserProfileMsg(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "chat_mention", "", false)}
+	m := initNotifs(notifs)
+	_, msgs := runKeyAll(m, "enter")
+	var gotProfile bool
+	for _, msg := range msgs {
+		if _, ok := msg.(ShowUserProfileMsg); ok {
+			gotProfile = true
+		}
+	}
+	if !gotProfile {
+		t.Error("expected ShowUserProfileMsg for chat_mention enter")
+	}
+}
+
+func TestNotifs_Enter_PostMention_EmitsShowPost(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "post_mention", "p5", false)}
+	m := initNotifs(notifs)
+	_, msg := runKey(m, "enter")
+	sp, ok := msg.(ShowNotificationPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowNotificationPostMsg, got %T", msg)
+	}
+	if sp.PostID != "p5" {
+		t.Errorf("expected PostID p5, got %s", sp.PostID)
+	}
+}
+
 // --- unread filter ---
 
 func TestNotifs_UnreadFilter_Toggle(t *testing.T) {
