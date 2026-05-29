@@ -298,7 +298,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 | `WithAutoLogin(email, password)` | method | Pre-fills credentials for programmatic login |
 | `WithSavedEmail(email)` | method | Pre-fills email field on login screen |
 
-**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenTopics`, `screenJournal`, `screenSettings`
+**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenGuilds`, `screenTopics`, `screenJournal`, `screenSettings`
 
 **Responsibilities:**
 
@@ -464,6 +464,17 @@ Saved posts and replies, cursor-paginated.
 
 Key types: `BookmarksModel`, `DeleteBookmarkMsg`, `ToggleBookmarkMsg`  
 Key methods: `SetBookmarks(items, cursor)`, `AppendBookmarks(items, cursor)`, `RemoveBookmark(id)`
+
+#### `guilds.go`
+
+Browse the guild directory and drill into threads for a selected guild.
+
+- Two-mode screen: guild list → guild thread feed
+- Guild list sorted by member count, cursor-paginated; `enter` opens the thread feed
+- Thread feed is a standard paginated post list; `esc` returns to the guild list
+
+Key types: `GuildsModel`, `LoadMoreGuildsMsg`, `LoadGuildPostsMsg`, `LoadMoreGuildPostsMsg`  
+Key methods: `SetGuilds(guilds, cursor)`, `AppendGuilds(guilds, cursor)`, `SetGuildPosts(posts, cursor)`, `AppendGuildPosts(posts, cursor)`
 
 #### `topics.go`
 

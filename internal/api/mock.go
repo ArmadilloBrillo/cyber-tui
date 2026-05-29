@@ -302,6 +302,22 @@ func (m *MockClient) GetTopicPosts(slug string, cursor string) ([]model.Post, st
 	return topicPosts, "", nil
 }
 
+func (m *MockClient) GetGuilds(cursor string) ([]model.Guild, string, error) {
+	return nil, "", nil
+}
+
+func (m *MockClient) GetGuild(slug string) (model.Guild, error) {
+	return model.Guild{}, nil
+}
+
+func (m *MockClient) GetGuildPosts(slug string, cursor string) ([]model.Post, string, error) {
+	return nil, "", nil
+}
+
+func (m *MockClient) CreateGuildPost(slug, content, title string, topics []string) (model.Post, error) {
+	return model.Post{}, nil
+}
+
 func (m *MockClient) GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error) {
 	if !unreadOnly {
 		return mockNotifications, "", nil

@@ -34,6 +34,7 @@ const (
 	screenNotifications
 	screenSettings
 	screenBookmarks
+	screenGuilds
 	screenTopics
 	screenJournal
 )
@@ -60,6 +61,7 @@ var menuTabs = []struct {
 	{"notifications", screenNotifications},
 	{"journal", screenJournal},
 	{"bookmarks", screenBookmarks},
+	{"guilds", screenGuilds},
 	{"topics", screenTopics},
 	{"profile", screenProfile},
 	{"settings", screenSettings},
@@ -113,6 +115,7 @@ type App struct {
 	notifications  screens.NotificationsModel
 	settingsScreen screens.SettingsModel
 	bookmarks      screens.BookmarksModel
+	guilds         screens.GuildsModel
 	topics         screens.TopicsModel
 	journal        screens.JournalModel
 
@@ -165,6 +168,7 @@ func NewApp(client api.Client) App {
 		notifications:  screens.NewNotificationsModel(),
 		settingsScreen: screens.NewSettingsModel(),
 		bookmarks:      screens.NewBookmarksModel(),
+		guilds:         screens.NewGuildsModel(),
 		topics:         screens.NewTopicsModel(),
 		journal:        screens.NewJournalModel(0),
 		bookmarkedPostIDs:  make(map[string]struct{}),
@@ -237,6 +241,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleNotifications(msg); ok { return a2, cmd }
 	if a2, cmd, ok := a.handleSettings(msg);       ok { return a2, cmd }
 	if a2, cmd, ok := a.handleBookmarks(msg);      ok { return a2, cmd }
+	if a2, cmd, ok := a.handleGuilds(msg);         ok { return a2, cmd }
 	if a2, cmd, ok := a.handleTopics(msg);         ok { return a2, cmd }
 	if a2, cmd, ok := a.handleJournal(msg);        ok { return a2, cmd }
 	if a2, cmd, ok := a.handleErr(msg);            ok { return a2, cmd }
@@ -254,6 +259,7 @@ func (a App) updateAll(msg tea.Msg) App {
 	a.notifications, _ = a.notifications.Update(msg)
 	a.settingsScreen, _ = a.settingsScreen.Update(msg)
 	a.bookmarks, _ = a.bookmarks.Update(msg)
+	a.guilds, _ = a.guilds.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
 	a.journal, _ = a.journal.Update(msg)
 	return a
@@ -277,6 +283,7 @@ func (a *App) broadcastBookmarkedIDs() {
 	}
 	a.feed, _ = a.feed.Update(msg)
 	a.postDetail, _ = a.postDetail.Update(msg)
+	a.guilds, _ = a.guilds.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
 }
 
@@ -909,6 +916,59 @@ func mergeBookmarkIDSets(postIDs, replyIDs map[string]struct{}, postBookmarks, r
 	return newPostIDs, newReplyIDs, newPostBookmarks, newReplyBookmarks
 }
 
+// handleGuilds processes guild list, guild posts, pagination, and post selection messages.
+func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case screens.RefreshGuildsMsg:
+		return a, a.loadGuildsCmd(""), true
+
+	case guildsLoadedMsg:
+		a.guilds = a.guilds.SetGuilds(msg.guilds, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadMoreGuildsMsg:
+		return a, a.loadMoreGuildsCmd(msg.Cursor), true
+
+	case guildsPageMsg:
+		a.guilds = a.guilds.AppendGuilds(msg.guilds, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadGuildPostsMsg:
+		return a, tea.Batch(a.loadGuildDetailCmd(msg.Slug), a.loadGuildPostsCmd(msg.Slug)), true
+
+	case guildDetailMsg:
+		a.guilds = a.guilds.SetIsMember(msg.isMember)
+		return a, nil, true
+
+	case guildPostsLoadedMsg:
+		a.guilds = a.guilds.SetGuildPosts(msg.posts, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadMoreGuildPostsMsg:
+		return a, a.loadGuildPostsPageCmd(msg.Slug, msg.Cursor), true
+
+	case guildPostsPageMsg:
+		a.guilds = a.guilds.AppendGuildPosts(msg.posts, msg.cursor)
+		return a, nil, true
+
+	case screens.RefreshGuildPostsMsg:
+		return a, tea.Batch(a.loadGuildDetailCmd(msg.Slug), a.loadGuildPostsCmd(msg.Slug)), true
+
+	case screens.ShowGuildPostMsg:
+		a.postDetailReturn = screenGuilds
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.Post)
+		return a, a.loadRepliesCmd(msg.Post.ID), true
+
+	case screens.SubmitGuildPostMsg:
+		return a, a.createGuildPostCmd(msg.Slug, msg.Content, msg.Title, msg.Topics), true
+
+	case guildPostCreatedMsg:
+		return a, tea.Batch(a.loadGuildDetailCmd(msg.slug), a.loadGuildPostsCmd(msg.slug)), true
+	}
+	return a, nil, false
+}
+
 // handleTopics processes topic list, topic posts, pagination, and post selection messages.
 func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
@@ -1015,6 +1075,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.settingsScreen = a.settingsScreen.SetError(m.err)
 	case screenBookmarks:
 		a.bookmarks = a.bookmarks.SetError(m.err)
+	case screenGuilds:
+		a.guilds = a.guilds.SetError(m.err)
 	case screenTopics:
 		a.topics = a.topics.SetError(m.err)
 	case screenJournal:
@@ -1036,6 +1098,8 @@ func (a App) activeScreenHasFocusedInput() bool {
 		return a.postDetail.ComposeActive()
 	case screenFeed:
 		return a.feed.ComposeActive()
+	case screenGuilds:
+		return a.guilds.ComposeActive()
 	case screenProfile:
 		return a.profile.ComposeActive()
 	case screenJournal:
@@ -1082,6 +1146,12 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 			return a.loadBookmarksCmd("")
 		}
 		return nil
+	case screenGuilds:
+		if !a.guilds.IsLoaded() {
+			a.guilds = a.guilds.SetFetching()
+			return a.loadGuildsCmd("")
+		}
+		return nil
 	case screenTopics:
 		if !a.topics.IsLoaded() {
 			a.topics = a.topics.SetFetching()
@@ -1116,6 +1186,8 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 		a.settingsScreen, cmd = a.settingsScreen.Update(msg)
 	case screenBookmarks:
 		a.bookmarks, cmd = a.bookmarks.Update(msg)
+	case screenGuilds:
+		a.guilds, cmd = a.guilds.Update(msg)
 	case screenTopics:
 		a.topics, cmd = a.topics.Update(msg)
 	case screenJournal:
@@ -1193,6 +1265,8 @@ func (a App) renderActiveScreen() string {
 		return a.settingsScreen.View()
 	case screenBookmarks:
 		return a.bookmarks.View()
+	case screenGuilds:
+		return a.guilds.View()
 	case screenTopics:
 		return a.topics.View()
 	case screenJournal:
@@ -1237,6 +1311,14 @@ func (a App) screenHints() []hint {
 		return []hint{{"↑↓", "navigate"}, {"enter", "edit"}, {"n", "new"}, {"d", "delete"}, more}
 	case screenBookmarks:
 		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"d", "delete"}, more}
+	case screenGuilds:
+		if a.guilds.ComposeActive() {
+			return []hint{{"tab", "cycle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
+		}
+		if a.guilds.IsBrowsingGuild() {
+			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"n", "new thread"}, {"esc", "back"}, more}
+		}
+		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, more}
 	case screenTopics:
 		if a.topics.IsBrowsingTopic() {
 			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
@@ -1525,6 +1607,14 @@ func (a App) renderHelpModal() string {
 		}
 	case screenBookmarks:
 		localSection = section("bookmarks")
+	case screenGuilds:
+		if a.guilds.ComposeActive() {
+			localSection = section("guilds (compose)", row("Enter", "paragraph"))
+		} else if a.guilds.IsBrowsingGuild() {
+			localSection = section("guilds (browsing)", row("n", "new thread"))
+		} else {
+			localSection = section("guilds")
+		}
 	case screenTopics:
 		if a.topics.IsBrowsingTopic() {
 			localSection = section("topics (browsing)")
@@ -1566,6 +1656,8 @@ func (a App) getFocusedURLs() []string {
 		p = a.profile
 	case screenBookmarks:
 		p = a.bookmarks
+	case screenGuilds:
+		p = a.guilds
 	case screenTopics:
 		p = a.topics
 	case screenJournal:
@@ -1938,6 +2030,25 @@ type topicPostsPageMsg struct {
 	posts  []model.Post
 	cursor string
 }
+
+type guildsLoadedMsg struct {
+	guilds []model.Guild
+	cursor string
+}
+type guildsPageMsg struct {
+	guilds []model.Guild
+	cursor string
+}
+type guildDetailMsg struct{ isMember bool }
+type guildPostsLoadedMsg struct {
+	posts  []model.Post
+	cursor string
+}
+type guildPostsPageMsg struct {
+	posts  []model.Post
+	cursor string
+}
+type guildPostCreatedMsg struct{ slug string }
 
 type notifsLoadedMsg struct {
 	notifs []model.Notification
@@ -2436,6 +2547,68 @@ func (a *App) loadTopicPostsPageCmd(slug, cursor string) tea.Cmd {
 			return errMsg{err}
 		}
 		return topicPostsPageMsg{posts: posts, cursor: nextCursor}
+	}
+}
+
+// --- Guilds commands ---
+
+func (a *App) loadGuildsCmd(cursor string) tea.Cmd {
+	return func() tea.Msg {
+		guilds, nextCursor, err := a.client.GetGuilds(cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return guildsLoadedMsg{guilds: guilds, cursor: nextCursor}
+	}
+}
+
+func (a *App) loadMoreGuildsCmd(cursor string) tea.Cmd {
+	return func() tea.Msg {
+		guilds, nextCursor, err := a.client.GetGuilds(cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return guildsPageMsg{guilds: guilds, cursor: nextCursor}
+	}
+}
+
+func (a *App) loadGuildPostsCmd(slug string) tea.Cmd {
+	return func() tea.Msg {
+		posts, cursor, err := a.client.GetGuildPosts(slug, "")
+		if err != nil {
+			return errMsg{err}
+		}
+		return guildPostsLoadedMsg{posts: posts, cursor: cursor}
+	}
+}
+
+func (a *App) loadGuildPostsPageCmd(slug, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		posts, nextCursor, err := a.client.GetGuildPosts(slug, cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return guildPostsPageMsg{posts: posts, cursor: nextCursor}
+	}
+}
+
+func (a *App) loadGuildDetailCmd(slug string) tea.Cmd {
+	return func() tea.Msg {
+		user, err := a.client.GetOwnProfile()
+		if err != nil {
+			return errMsg{err}
+		}
+		return guildDetailMsg{isMember: user.GuildSlug == slug}
+	}
+}
+
+func (a *App) createGuildPostCmd(slug, content, title string, topics []string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := a.client.CreateGuildPost(slug, content, title, topics)
+		if err != nil {
+			return errMsg{err}
+		}
+		return guildPostCreatedMsg{slug: slug}
 	}
 }
 

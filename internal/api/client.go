@@ -105,6 +105,7 @@ type wireUser struct {
 	FollowersCount    int     `json:"followersCount"`
 	FollowingCount    int     `json:"followingCount"`
 	PostsCount        int     `json:"postsCount"`
+	GuildSlug         string  `json:"guildSlug"`
 }
 
 type wireFollow struct {
@@ -148,6 +149,25 @@ type wireTopic struct {
 	TopicID   string `json:"topicId"`
 	Name      string `json:"name"`
 	PostCount int    `json:"postsCount"`
+}
+
+type wireGuild struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Slug            string `json:"slug"`
+	Icon            string `json:"icon"`
+	Bio             string `json:"bio"`
+	MemberCount     int    `json:"memberCount"`
+	FounderUsername string `json:"founderUsername"`
+	CreatedAt       string `json:"createdAt"`
+	IsMember        bool   `json:"isMember"`
+	Role            string `json:"role"`
+}
+
+type createGuildPostRequest struct {
+	Content string   `json:"content"`
+	Title   string   `json:"title,omitempty"`
+	Topics  []string `json:"topics"`
 }
 
 type createBookmarkRequest struct {
@@ -551,6 +571,7 @@ func wireUserToModel(w wireUser) model.User {
 		FollowersCount:    w.FollowersCount,
 		FollowingCount:    w.FollowingCount,
 		PostsCount:        w.PostsCount,
+		GuildSlug:         w.GuildSlug,
 	}
 }
 
@@ -642,6 +663,21 @@ func wireTopicToModel(w wireTopic) model.Topic {
 	return model.Topic{
 		Slug:      w.TopicID,
 		PostCount: w.PostCount,
+	}
+}
+
+func wireGuildToModel(w wireGuild) model.Guild {
+	return model.Guild{
+		ID:              w.ID,
+		Name:            w.Name,
+		Slug:            w.Slug,
+		Icon:            w.Icon,
+		Bio:             w.Bio,
+		MemberCount:     w.MemberCount,
+		FounderUsername: w.FounderUsername,
+		CreatedAt:       parseTime(w.CreatedAt),
+		IsMember:        w.IsMember,
+		Role:            w.Role,
 	}
 }
 
@@ -999,6 +1035,59 @@ func (c *HTTPClient) GetTopicPosts(slug string, cursor string) ([]model.Post, st
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
 	return fetchPage(c, path, wirePostToModel)
+}
+
+// --- Guilds ---
+
+func (c *HTTPClient) GetGuilds(cursor string) ([]model.Guild, string, error) {
+	path := "/v1/guilds?limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	return fetchPage(c, path, wireGuildToModel)
+}
+
+func (c *HTTPClient) GetGuild(slug string) (model.Guild, error) {
+	env, err := c.doRequest("GET", "/v1/guilds/"+url.PathEscape(slug), nil)
+	if err != nil {
+		return model.Guild{}, err
+	}
+	var wire wireGuild
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return model.Guild{}, err
+	}
+	return wireGuildToModel(wire), nil
+}
+
+func (c *HTTPClient) GetGuildPosts(slug string, cursor string) ([]model.Post, string, error) {
+	path := "/v1/guilds/" + url.PathEscape(slug) + "/posts?limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	return fetchPage(c, path, wirePostToModel)
+}
+
+func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []string) (model.Post, error) {
+	env, err := c.doJSON("POST", "/v1/guilds/"+url.PathEscape(slug)+"/posts", createGuildPostRequest{
+		Content: content,
+		Title:   title,
+		Topics:  topics,
+	})
+	if err != nil {
+		return model.Post{}, err
+	}
+	var data createPostResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return model.Post{}, err
+	}
+	return model.Post{
+		ID:            data.PostID,
+		Title:         data.Title,
+		Slug:          data.Slug,
+		Content:       content,
+		GuildSlug:     slug,
+		IsGuildThread: true,
+	}, nil
 }
 
 // --- Chatrooms (RTDB stubs — pending feature/rtdb-chatrooms) ---

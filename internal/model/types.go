@@ -25,6 +25,7 @@ type User struct {
 	FollowersCount   int
 	FollowingCount   int
 	PostsCount       int
+	GuildSlug        string // empty when not a guild member
 }
 
 // Follow maps to a record returned by GET /v1/follows.
@@ -163,6 +164,21 @@ type Bookmark struct {
 type Topic struct {
 	Slug      string
 	PostCount int
+}
+
+// Guild maps to the shape returned by GET /v1/guilds and GET /v1/guilds/:slug.
+// IsMember and Role are only populated by the single-guild endpoint.
+type Guild struct {
+	ID              string
+	Name            string
+	Slug            string
+	Icon            string
+	Bio             string
+	MemberCount     int
+	FounderUsername string
+	CreatedAt       time.Time
+	IsMember        bool
+	Role            string // "founder", "member", or ""
 }
 
 // Note is a private note visible only to the author.

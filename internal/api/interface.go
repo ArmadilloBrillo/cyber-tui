@@ -83,6 +83,18 @@ type Client interface {
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetTopicPosts(slug string, cursor string) ([]model.Post, string, error)
 
+	// Guilds — browse guilds and threads within them.
+	// GetGuilds returns guilds with at least one member, most populated first.
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetGuilds(cursor string) ([]model.Guild, string, error)
+	// GetGuild fetches a single guild by slug including the caller's IsMember and Role.
+	GetGuild(slug string) (model.Guild, error)
+	// GetGuildPosts returns paginated threads for a guild, most recently active first.
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetGuildPosts(slug string, cursor string) ([]model.Post, string, error)
+	// CreateGuildPost creates a new thread in a guild. Caller must be a member.
+	CreateGuildPost(slug, content, title string, topics []string) (model.Post, error)
+
 	// Posts — deletion.
 	// DeletePost soft-deletes a post owned by the authenticated user.
 	DeletePost(postID string) error

@@ -45,8 +45,8 @@ func TestTabIndex_Notifs(t *testing.T) {
 func TestTabIndex_Profile(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenProfile
-	if got := a.tabIndex(); got != 5 {
-		t.Errorf("expected 5, got %d", got)
+	if got := a.tabIndex(); got != 6 {
+		t.Errorf("expected 6, got %d", got)
 	}
 }
 
@@ -70,9 +70,18 @@ func TestNavigateTab_LeftFromFeed_Wraps(t *testing.T) {
 	}
 }
 
-func TestNavigateTab_RightFromBookmarks_GoesToTopics(t *testing.T) {
+func TestNavigateTab_RightFromBookmarks_GoesToGuilds(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenBookmarks
+	a.navigateTab(+1)
+	if a.active != screenGuilds {
+		t.Errorf("expected screenGuilds, got %v", a.active)
+	}
+}
+
+func TestNavigateTab_RightFromGuilds_GoesToTopics(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
 	a.navigateTab(+1)
 	if a.active != screenTopics {
 		t.Errorf("expected screenTopics, got %v", a.active)
@@ -82,8 +91,8 @@ func TestNavigateTab_RightFromBookmarks_GoesToTopics(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// menuTabs order: feed, notifications, journal, bookmarks, topics, profile, settings
-	expected := []screen{screenNotifications, screenJournal, screenBookmarks, screenTopics, screenProfile, screenSettings, screenFeed}
+	// menuTabs order: feed, notifications, journal, bookmarks, guilds, topics, profile, settings
+	expected := []screen{screenNotifications, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(+1)
 		if a.active != want {
@@ -95,8 +104,8 @@ func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// menuTabs order: feed, notifications, journal, bookmarks, topics, profile, settings
-	expected := []screen{screenSettings, screenProfile, screenTopics, screenBookmarks, screenJournal, screenNotifications, screenFeed}
+	// menuTabs order: feed, notifications, journal, bookmarks, guilds, topics, profile, settings
+	expected := []screen{screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenNotifications, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(-1)
 		if a.active != want {

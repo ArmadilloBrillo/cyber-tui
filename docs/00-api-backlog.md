@@ -11,6 +11,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 
 | Endpoint | Method | Status | Description | Discovered |
 |---|---|---|---|---|
+| `/v1/guilds/:slug` | GET | **Open** | `isMember` field always returns `false`, even for authenticated members. `role` is always `null`. The `/v1/users/me` profile response correctly includes `guildSlug` and should be used instead to derive membership. The TUI works around this by calling `GetOwnProfile` and comparing `guildSlug`. | 2026-05-29 |
 | `/v1/follows` | GET | **Open** | Response does not include `followerUsername` or `followedUsername`. Confirmed still missing in v0.4 (re-tested 2026-05-29). The profile Following/Followers tabs fall back to showing a truncated user ID; profile navigation from those tabs is disabled until the API returns usernames. | 2026-04-17 |
 | Rate limits (spec) | — | **Open** | Inline per-endpoint docs and the consolidated Rate Limits table contradict each other. Entries: 15/day inline vs 10/day in table. Replies: 15/day vs 10/day. Notes: 30/day vs 20/day. Bookmarks: 75/day vs 50/day. Profile/Settings updates: 15/day vs 10/day. Unknown which is authoritative — report to API maintainer. | 2026-05-29 |
 
@@ -46,21 +47,23 @@ Ordered roughly by implementation effort / priority.
 
 ### Guilds (new in v0.4)
 
-Guilds are member groups with their own forum of threads. A user can belong to one guild at a time. All 7 endpoints are entirely unimplemented; two new model types (`Guild`, `GuildMembership`) are needed.
+Guilds are member groups with their own forum of threads. A user can belong to one guild at a time. `Guild` model type added; read-only browsing implemented in feature 29.
 
-| Endpoint | Method | Description | Priority |
+| Endpoint | Method | Description | Status |
 |---|---|---|---|
-| `/v1/guilds` | GET | List guilds (paginated, most-populated first) | Medium |
-| `/v1/guilds/:slug` | GET | Get guild detail + caller's `isMember` / `role` | Medium |
-| `/v1/guilds/:slug/members` | GET | List guild members (paginated, oldest-joined first) | Medium |
-| `/v1/guilds/:slug/posts` | GET | List guild threads (most recently active first) | Medium |
-| `/v1/guilds/:slug/posts` | POST | Create guild thread (must be a member; accepts `content`, `title`, `slug`, `topics`) | Medium |
-| `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | Medium |
-| `/v1/guilds/:slug/leave` | POST | Leave a guild (founders blocked — web only; 403 via API) | Medium |
+| `/v1/guilds` | GET | List guilds (paginated, most-populated first) | **Done** — feature 29 |
+| `/v1/guilds/:slug` | GET | Get guild detail + caller's `isMember` / `role` | **Done** — feature 29 |
+| `/v1/guilds/:slug/members` | GET | List guild members (paginated, oldest-joined first) | Not implemented |
+| `/v1/guilds/:slug/posts` | GET | List guild threads (most recently active first) | **Done** — feature 29 |
+| `/v1/guilds/:slug/posts` | POST | Create guild thread (members only; title + topics supported) | **Done** — feature 29 |
+| `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | Not implemented |
+| `/v1/guilds/:slug/leave` | POST | Leave a guild (founders blocked — web only; 403 via API) | Not implemented |
 
 Notes:
 - Guild threads are ordinary posts with `guildId`, `guildSlug`, `isGuildThread: true`; replying uses `POST /v1/replies` as normal.
 - `guild_new_thread` notifications are already display-ready (`notifSummary`/`notifIcon` have explicit cases) and navigation is wired via `TargetID` → `ShowNotificationPostMsg`.
+- Membership is fetched on entering a guild (parallel with thread list); compose panel only shown when `isMember` is true.
+- Join/leave require use of the web interface.
 
 ### Replies
 

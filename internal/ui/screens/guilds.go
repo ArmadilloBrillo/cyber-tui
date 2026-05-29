@@ -1,0 +1,559 @@
+package screens
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
+)
+
+// Message types emitted by Guilds screen to App.
+type RefreshGuildsMsg struct{}
+
+type LoadMoreGuildsMsg struct{ Cursor string }
+
+type LoadGuildPostsMsg struct{ Slug string }
+
+type LoadMoreGuildPostsMsg struct {
+	Slug   string
+	Cursor string
+}
+
+type RefreshGuildPostsMsg struct{ Slug string }
+
+type ShowGuildPostMsg struct{ Post model.Post }
+
+// SubmitGuildPostMsg is emitted when the user submits a new thread from the guild posts view.
+type SubmitGuildPostMsg struct {
+	Slug    string
+	Content string
+	Title   string
+	Topics  []string
+}
+
+// Internal view state for the Guilds screen.
+type guildsView int
+
+const (
+	viewGuildList  guildsView = iota
+	viewGuildPosts
+)
+
+// GuildsModel is the Bubble Tea model for the guilds browser.
+type GuildsModel struct {
+	view guildsView
+
+	// Guild list state
+	guilds           []model.Guild
+	guildIndex       int
+	guildsNextCursor string
+	guildsExhausted  bool
+
+	// Guild posts state
+	activeGuild string
+	posts       []model.Post
+	postIndex   int
+	nextCursor  string
+	exhausted   bool
+	loading     bool
+	fetching    bool
+	refreshing  bool
+	loaded      bool
+
+	// Membership (populated by GetGuild after entering a guild)
+	isMember bool
+
+	// Compose panel for new guild threads (visible only in posts view when isMember)
+	panel PostComposePanel
+
+	// Shared
+	viewport          viewport.Model
+	itemOffsets       []int
+	width             int
+	bookmarkedPostIDs map[string]struct{}
+	height            int
+	ready             bool
+	err               error
+	loc               *time.Location
+	relaxed           bool
+	timeDisplayFormat string
+}
+
+// NewGuildsModel returns a zero-value GuildsModel ready for first use.
+func NewGuildsModel() GuildsModel {
+	return GuildsModel{
+		panel: NewPostComposePanel(0),
+	}
+}
+
+// SetIsMember updates the membership state for the active guild.
+func (m GuildsModel) SetIsMember(v bool) GuildsModel {
+	m.isMember = v
+	return m
+}
+
+// ComposeActive reports whether the new-thread compose panel is open.
+func (m GuildsModel) ComposeActive() bool { return m.panel.IsActive() }
+
+// IsMember reports whether the authenticated user is a member of the active guild.
+func (m GuildsModel) IsMember() bool { return m.isMember }
+
+// IsLoaded reports whether the guild list has been fetched at least once.
+func (m GuildsModel) IsLoaded() bool { return m.loaded }
+
+// SetFetching marks the model as loading and refreshes the loading indicator.
+func (m GuildsModel) SetFetching() GuildsModel {
+	m.fetching = true
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
+// SetGuilds replaces the guild list with a fresh page.
+func (m GuildsModel) SetGuilds(items []model.Guild, cursor string) GuildsModel {
+	m.guilds = items
+	m.guildIndex = 0
+	m.guildsNextCursor = cursor
+	m.guildsExhausted = cursor == ""
+	m.loading = false
+	m.fetching = false
+	m.refreshing = false
+	m.loaded = true
+	if m.ready {
+		m = m.refreshContent()
+		m.viewport.GotoTop()
+	}
+	return m
+}
+
+// AppendGuilds adds a pagination page to the guild list.
+func (m GuildsModel) AppendGuilds(items []model.Guild, cursor string) GuildsModel {
+	m.guilds = append(m.guilds, items...)
+	m.guildsNextCursor = cursor
+	m.guildsExhausted = cursor == ""
+	m.loading = false
+	m.fetching = false
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
+// SetGuildPosts replaces the post list for a guild and switches to posts view.
+func (m GuildsModel) SetGuildPosts(posts []model.Post, cursor string) GuildsModel {
+	m.posts = posts
+	m.postIndex = 0
+	m.nextCursor = cursor
+	m.exhausted = cursor == ""
+	m.loading = false
+	m.fetching = false
+	m.refreshing = false
+	m.panel = m.panel.Close()
+	m.view = viewGuildPosts
+	if m.ready {
+		m = m.refreshContent()
+		m.viewport.GotoTop()
+	}
+	return m
+}
+
+// AppendGuildPosts adds a pagination page to the guild post list.
+func (m GuildsModel) AppendGuildPosts(posts []model.Post, cursor string) GuildsModel {
+	m.posts = append(m.posts, posts...)
+	m.nextCursor = cursor
+	m.exhausted = cursor == ""
+	m.loading = false
+	m.fetching = false
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
+// SetError stores an error and clears the loading state.
+func (m GuildsModel) SetError(err error) GuildsModel {
+	m.err = err
+	m.loading = false
+	m.fetching = false
+	m.refreshing = false
+	return m
+}
+
+// Init satisfies tea.Model.
+func (m GuildsModel) Init() tea.Cmd { return nil }
+
+// Update handles messages for the guilds screen.
+func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case SharedConfigMsg:
+		m.relaxed = msg.Relaxed
+		if msg.Loc != nil {
+			m.loc = msg.Loc
+		}
+		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		if m.ready {
+			m = m.refreshContent()
+		}
+		return m, nil
+
+	case BookmarkedIDsMsg:
+		m.bookmarkedPostIDs = msg.PostIDs
+		if m.ready {
+			m = m.refreshContent()
+		}
+		return m, nil
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.panel = m.panel.SetWidth(msg.Width)
+		if !m.ready {
+			m.viewport = viewport.New(msg.Width, m.viewportHeight())
+			m = m.refreshContent()
+			m.ready = true
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = m.viewportHeight()
+			m = m.refreshContent()
+		}
+		return m, nil
+
+	case ComposeSubmitMsg:
+		if !m.panel.IsActive() {
+			return m, nil
+		}
+		title := m.panel.TitleValue()
+		topics := ParseTopics(m.panel.TopicsRaw())
+		content := msg.Content
+		slug := m.activeGuild
+		m.panel = m.panel.Close()
+		m = m.refreshContent()
+		return m, func() tea.Msg {
+			return SubmitGuildPostMsg{Slug: slug, Content: content, Title: title, Topics: topics}
+		}
+
+	case ComposeCancelMsg:
+		m.panel = m.panel.Close()
+		m = m.refreshContent()
+		return m, nil
+
+	case tea.KeyMsg:
+		// Route to panel when compose is open.
+		if m.panel.IsActive() {
+			var cmd tea.Cmd
+			m.panel, cmd = m.panel.Update(msg)
+			return m, cmd
+		}
+		switch msg.String() {
+		case "up", "k":
+			if m.view == viewGuildList {
+				if m.guildIndex > 0 {
+					m.guildIndex--
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+				}
+			} else {
+				if m.postIndex > 0 {
+					m.postIndex--
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+				}
+			}
+			return m, nil
+
+		case "down", "j":
+			if m.view == viewGuildList {
+				if m.guildIndex < len(m.guilds)-1 {
+					m.guildIndex++
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+				} else if !m.guildsExhausted && !m.loading {
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreGuildsMsg{Cursor: m.guildsNextCursor}
+					}
+				}
+			} else {
+				if m.postIndex < len(m.posts)-1 {
+					m.postIndex++
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+				} else if !m.exhausted && !m.loading {
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreGuildPostsMsg{Slug: m.activeGuild, Cursor: m.nextCursor}
+					}
+				}
+			}
+			return m, nil
+
+		case "enter":
+			if m.view == viewGuildList {
+				if len(m.guilds) > 0 && m.guildIndex < len(m.guilds) {
+					slug := m.guilds[m.guildIndex].Slug
+					m.activeGuild = slug
+					return m, func() tea.Msg { return LoadGuildPostsMsg{Slug: slug} }
+				}
+			} else {
+				if len(m.posts) > 0 && m.postIndex < len(m.posts) {
+					post := m.posts[m.postIndex]
+					return m, func() tea.Msg { return ShowGuildPostMsg{Post: post} }
+				}
+			}
+			return m, nil
+
+		case "n":
+			if m.view == viewGuildPosts {
+				var cmd tea.Cmd
+				m.panel, cmd = m.panel.Open(false)
+				m = m.refreshContent()
+				return m, cmd
+			}
+			return m, nil
+
+		case "esc":
+			if m.panel.IsActive() {
+				m.panel = m.panel.Close()
+				m = m.refreshContent()
+				return m, nil
+			}
+			if m.view == viewGuildPosts {
+				m.view = viewGuildList
+				m.activeGuild = ""
+				m.isMember = false
+				m.panel = m.panel.Close()
+				m = m.refreshContent()
+				m.viewport.GotoTop()
+			}
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+
+	if m.view == viewGuildPosts && m.viewport.AtBottom() && !m.exhausted && !m.loading {
+		m.loading = true
+		m = m.refreshContent()
+		m.viewport.ScrollDown(1)
+		return m, func() tea.Msg {
+			return LoadMoreGuildPostsMsg{Slug: m.activeGuild, Cursor: m.nextCursor}
+		}
+	}
+
+	return m, cmd
+}
+
+// View renders the guilds screen.
+func (m GuildsModel) View() string {
+	if m.err != nil {
+		return theme.Error.Render(fmt.Sprintf("guilds error: %s", m.err))
+	}
+	if !m.ready {
+		return theme.Subtle.Render("loading guilds...")
+	}
+	if m.panel.IsActive() {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			m.panel.View(),
+		)
+	}
+	return m.viewport.View()
+}
+
+func (m GuildsModel) buildContent() (string, []int) {
+	if m.fetching {
+		return theme.Subtle.Render("  loading guilds…"), nil
+	}
+	sep := "\n"
+	lineInc := 1
+	if m.relaxed {
+		sep = "\n\n"
+		lineInc = 2
+	}
+
+	var prefix string
+	startLine := 0
+	if m.refreshing {
+		prefix = theme.Subtle.Render("  refreshing…") + "\n"
+		startLine++
+	}
+
+	if m.view == viewGuildList {
+		if len(m.guilds) == 0 {
+			return prefix + theme.Subtle.Render("  no guilds yet"), nil
+		}
+		offsets := make([]int, len(m.guilds))
+		currentLine := startLine
+		var out string
+		for i := range m.guilds {
+			offsets[i] = currentLine
+			rendered := m.renderGuildItem(i)
+			out += rendered + sep
+			currentLine += lipgloss.Height(rendered) + lineInc - 1
+		}
+		out += listFooter(m.loading, m.guildsExhausted && len(m.guilds) > 0)
+		return prefix + strings.TrimRight(out, "\n"), offsets
+	}
+
+	// viewGuildPosts
+	if len(m.posts) == 0 {
+		return prefix + theme.Subtle.Render("  no threads"), nil
+	}
+	offsets := make([]int, len(m.posts))
+	currentLine := startLine
+	var out string
+	for i := range m.posts {
+		offsets[i] = currentLine
+		rendered := m.renderPostItem(m.posts[i], i == m.postIndex)
+		out += rendered + sep
+		currentLine += lipgloss.Height(rendered) + lineInc - 1
+	}
+	out += listFooter(m.loading, m.exhausted)
+	return prefix + strings.TrimRight(out, "\n"), offsets
+}
+
+func (m GuildsModel) renderGuildItem(index int) string {
+	if index < 0 || index >= len(m.guilds) {
+		return ""
+	}
+
+	guild := m.guilds[index]
+	isSelected := index == m.guildIndex
+
+	innerWidth := m.width - 4
+
+	iconStr := guild.Icon
+	if iconStr == "" {
+		iconStr = "◆"
+	}
+	icon := theme.Subtle.Render(iconStr) + " "
+
+	nameStyle := theme.Base
+	if isSelected {
+		nameStyle = theme.Highlight
+	}
+	nameStr := nameStyle.Render(guild.Name)
+	countStr := theme.Subtle.Render(fmt.Sprintf("%d members", guild.MemberCount))
+
+	var line string
+	if innerWidth > 0 {
+		gap := innerWidth - lipgloss.Width(icon) - lipgloss.Width(nameStr) - lipgloss.Width(countStr)
+		if gap > 0 {
+			line = icon + nameStr + strings.Repeat(" ", gap) + countStr
+		} else {
+			line = icon + nameStr
+		}
+	} else {
+		line = icon + nameStr
+	}
+
+	boxStyle := theme.Border
+	if isSelected {
+		boxStyle = theme.ActiveBorder
+	}
+	if innerWidth > 0 {
+		boxStyle = boxStyle.Width(m.width - 2)
+	}
+	return boxStyle.Render(line)
+}
+
+func (m GuildsModel) renderPostItem(p model.Post, selected bool) string {
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	return RenderPost(p, selected, bookmarked, m.width, m.location(), m.timeDisplayFormat)
+}
+
+func (m GuildsModel) refreshContent() GuildsModel {
+	m.viewport.Height = m.viewportHeight()
+	content, offsets := m.buildContent()
+	m.itemOffsets = offsets
+	m.viewport.SetContent(content)
+	return m.ensureSelectedVisible()
+}
+
+func (m GuildsModel) ensureSelectedVisible() GuildsModel {
+	if !m.ready || len(m.itemOffsets) == 0 {
+		return m
+	}
+
+	var selectedIndex int
+	var itemHeight int
+	if m.view == viewGuildList {
+		selectedIndex = m.guildIndex
+		if selectedIndex >= len(m.guilds) {
+			return m
+		}
+		itemHeight = lipgloss.Height(m.renderGuildItem(selectedIndex))
+	} else {
+		selectedIndex = m.postIndex
+		if selectedIndex >= len(m.posts) {
+			return m
+		}
+		itemHeight = lipgloss.Height(m.renderPostItem(m.posts[selectedIndex], false))
+	}
+
+	if selectedIndex >= len(m.itemOffsets) {
+		return m
+	}
+
+	itemStart := m.itemOffsets[selectedIndex]
+	itemEnd := itemStart + itemHeight - 1
+
+	viewTop := m.viewport.YOffset
+	viewBottom := viewTop + m.viewport.Height - 1
+
+	if itemStart < viewTop {
+		m.viewport.SetYOffset(itemStart)
+	} else if itemEnd > viewBottom {
+		if itemHeight <= m.viewport.Height {
+			m.viewport.SetYOffset(itemEnd - m.viewport.Height + 1)
+		} else {
+			m.viewport.SetYOffset(itemStart)
+		}
+	}
+	return m
+}
+
+func (m GuildsModel) viewportHeight() int {
+	h := m.height - theme.ChromeHeight
+	if m.panel.IsActive() {
+		h -= m.panel.PanelHeight()
+	}
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+func (m GuildsModel) location() *time.Location {
+	if m.loc == nil {
+		return time.UTC
+	}
+	return m.loc
+}
+
+// IsBrowsingGuild reports whether the user is viewing a specific guild's threads.
+func (m GuildsModel) IsBrowsingGuild() bool { return m.activeGuild != "" }
+
+// GetFocusedURLs implements URLProvider. Returns URLs from the selected post when
+// in post-list view; returns nil when browsing the guild list.
+func (m GuildsModel) GetFocusedURLs() []string {
+	if m.view != viewGuildPosts || len(m.posts) == 0 {
+		return nil
+	}
+	if m.postIndex < 0 || m.postIndex >= len(m.posts) {
+		return nil
+	}
+	p := m.posts[m.postIndex]
+	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
+}
