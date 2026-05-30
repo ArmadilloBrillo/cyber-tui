@@ -69,13 +69,6 @@ Notes:
 
 _(No unimplemented reply endpoints remaining at medium/high priority)_
 
-### Attachments
-
-| Type | Description | Priority |
-|---|---|---|
-| Image (`type: "image"`) | Attach an image URL (max 640×640) to posts/replies | Low — TUI cannot display images natively; could show a clickable URL |
-| Audio (`type: "audio"`, YouTube) | Attach a YouTube link with artist/title/genre metadata | Low — display as metadata card in TUI |
-
 ### Follows
 
 | Endpoint | Method | Description | Priority |
@@ -120,3 +113,5 @@ _(No unimplemented reply endpoints remaining at medium/high priority)_
 | `GET /v1/notes/:id/revisions` | Note revision history — journal `h` key; feature 25 | 2026-04-17 |
 | `PATCH /v1/notes/:id` | Server-side 500 bug resolved in API v0.4. Note editing and revision history fully operational. | 2026-05-29 |
 | `POST /v1/posts` (extended) | `CreatePost` now accepts `title`, `isPublic`, `isNSFW`. `Post` model gained `Title`, `Slug`, `GuildID`, `GuildSlug`, `IsGuildThread`. Title rendered in feed/detail/profile/bookmarks. Feature 28. | 2026-05-29 |
+| `GET /v1/guilds/:slug/members` | Guild member list — paginated, oldest-joined first; `m` from guild posts view; `enter` navigates to profile. Feature 29. | 2026-05-30 |
+| Attachments (image/audio) | Attachment URLs surfaced via `GetFocusedURLs` and opened with `o`. Best-effort handling for a TUI — no further work needed. | 2026-05-30 |
