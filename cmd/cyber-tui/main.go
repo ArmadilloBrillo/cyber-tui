@@ -30,28 +30,33 @@ func main() {
 	}
 	theme.Set(cfg.Theme)
 
-	// Determine which client to use.
-	// Set useMock: true in ~/.cyber-tui.json to run against mock data.
-	var client api.Client
-	if cfg.UseMock {
-		fmt.Fprintln(os.Stderr, "useMock=true — running with mock data")
-		client = api.NewMockClient()
-	} else {
+	// newClient builds a fresh API client. Set useMock: true in ~/.cyber-tui.json
+	// to run against mock data. SSH server mode calls this once per connection so
+	// sessions never share authentication state.
+	newClient := func() api.Client {
+		if cfg.UseMock {
+			return api.NewMockClient()
+		}
 		baseURL := cfg.APIBaseURL
 		if baseURL == "" {
 			baseURL = "https://api.cyberspace.online"
 		}
-		client = api.NewHTTPClient(baseURL).WithDebug(cfg.Debug)
+		return api.NewHTTPClient(baseURL).WithDebug(cfg.Debug)
+	}
+	if cfg.UseMock {
+		fmt.Fprintln(os.Stderr, "useMock=true — running with mock data")
 	}
 
-	// SSH server mode
+	// SSH server mode (experimental)
 	if cfg.SSHListenAddr != "" {
 		keyPath := cfg.SSHHostKeyPath
 		if keyPath == "" {
 			keyPath = "./ssh_host_key"
 		}
+		fmt.Fprintf(os.Stderr, "WARNING: SSH server mode is experimental and unauthenticated; "+
+			"anyone who can reach %s gets a session. Restrict network exposure.\n", cfg.SSHListenAddr)
 		fmt.Fprintf(os.Stderr, "starting SSH server on %s\n", cfg.SSHListenAddr)
-		if err := internalssh.Serve(cfg.SSHListenAddr, keyPath, client); err != nil {
+		if err := internalssh.Serve(cfg.SSHListenAddr, keyPath, newClient); err != nil {
 			fmt.Fprintf(os.Stderr, "ssh server error: %v\n", err)
 			os.Exit(1)
 		}
@@ -59,7 +64,7 @@ func main() {
 	}
 
 	// Local TUI mode
-	app := ui.NewApp(client)
+	app := ui.NewApp(newClient())
 	// Prefer saved session (token-based) over autoEmail/autoPassword credentials.
 	if cfg.RefreshToken != "" {
 		app = app.WithSavedSession(cfg)

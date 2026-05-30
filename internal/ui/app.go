@@ -141,6 +141,10 @@ type App struct {
 	// maxThreadDepth is the local config value for reply nesting depth. Defaults to 3.
 	maxThreadDepth int
 
+	// ephemeral marks an SSH-hosted session whose state must never be read from
+	// or written to the host operator's config file.
+	ephemeral bool
+
 	// bookmarkedPostIDs and bookmarkedReplyIDs track which posts/replies the current
 	// user has bookmarked, populated from the bookmarks list and kept in sync on
 	// create/delete. Used to show [★] indicators in feed, postdetail, and topics.
@@ -206,6 +210,28 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.wanderLust = s.WanderLust
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	return a
+}
+
+// WithEphemeralSession marks the App as a remote SSH-hosted session. Such a
+// session must not persist or read session credentials and display preferences
+// from the host operator's config file.
+func (a App) WithEphemeralSession() App {
+	a.ephemeral = true
+	return a
+}
+
+// saveConfig loads the persisted config, applies mutate, and writes it back. It
+// is a no-op for ephemeral (SSH-hosted) sessions.
+func (a *App) saveConfig(mutate func(cfg *config.Config)) {
+	if a.ephemeral {
+		return
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return
+	}
+	mutate(&cfg)
+	_ = config.Save(cfg)
 }
 
 // --- init ---
@@ -338,14 +364,13 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.broadcastConfig()
 			relaxed := a.relaxed
 			return a, func() tea.Msg {
-				if sess, err := config.Load(); err == nil {
+				a.saveConfig(func(cfg *config.Config) {
 					if relaxed {
-						sess.Density = "relaxed"
+						cfg.Density = "relaxed"
 					} else {
-						sess.Density = ""
+						cfg.Density = ""
 					}
-					_ = config.Save(sess)
-				}
+				})
 				return nil
 			}, true
 		}
@@ -699,12 +724,11 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 			if err := a.client.UpdateSettings(s); err != nil {
 				return errMsg{err}
 			}
-			if cfg, err := config.Load(); err == nil {
+			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
-				_ = config.Save(cfg)
-			}
+			})
 			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz}
 		}, true
 
@@ -724,10 +748,9 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case wanderDoneMsg:
 		if !msg.at.IsZero() {
-			if cfg, err := config.Load(); err == nil {
+			a.saveConfig(func(cfg *config.Config) {
 				cfg.LastWandered = msg.at
-				_ = config.Save(cfg)
-			}
+			})
 		}
 		return a, nil, true
 	}
@@ -1509,10 +1532,9 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(
 			refreshCmd,
 			func() tea.Msg {
-				if cfg, err := config.Load(); err == nil {
+				a.saveConfig(func(cfg *config.Config) {
 					cfg.Theme = selected
-					_ = config.Save(cfg)
-				}
+				})
 				return nil
 			},
 		)
@@ -1862,14 +1884,13 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		if a.relaxed {
 			density = "relaxed"
 		}
-		if cfg, err := config.Load(); err == nil {
+		a.saveConfig(func(cfg *config.Config) {
 			cfg.RefreshToken = tokens.RefreshToken
 			cfg.Username = user.Username
 			cfg.Email = email
 			cfg.SavedAt = time.Now().UTC()
 			cfg.Density = density
-			_ = config.Save(cfg)
-		}
+		})
 		return loginSuccessMsg{tokens: tokens, user: user}
 	}
 }
@@ -1899,13 +1920,12 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		if a.relaxed {
 			density = "relaxed"
 		}
-		if cfg, err := config.Load(); err == nil {
+		a.saveConfig(func(cfg *config.Config) {
 			cfg.RefreshToken = tokens.RefreshToken
 			cfg.Username = user.Username
 			cfg.SavedAt = time.Now().UTC()
 			cfg.Density = density
-			_ = config.Save(cfg)
-		}
+		})
 		return loginSuccessMsg{tokens: tokens, user: user}
 	}
 }
@@ -2777,6 +2797,9 @@ func (a *App) scheduleWanderCmd() tea.Cmd {
 // silent — the user is never notified.
 func (a *App) checkAndWanderCmd() tea.Cmd {
 	return func() tea.Msg {
+		if a.ephemeral {
+			return wanderDoneMsg{}
+		}
 		cfg, err := config.Load()
 		if err != nil {
 			return wanderDoneMsg{}
