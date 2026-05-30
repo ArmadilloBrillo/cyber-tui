@@ -94,6 +94,9 @@ type Client interface {
 	GetGuildPosts(slug string, cursor string) ([]model.Post, string, error)
 	// CreateGuildPost creates a new thread in a guild. Caller must be a member.
 	CreateGuildPost(slug, content, title string, topics []string) (model.Post, error)
+	// GetGuildMembers returns paginated members for a guild, oldest-joined first.
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetGuildMembers(slug, cursor string) ([]model.GuildMember, string, error)
 
 	// Posts — deletion.
 	// DeletePost soft-deletes a post owned by the authenticated user.

@@ -36,12 +36,22 @@ type SubmitGuildPostMsg struct {
 	Topics  []string
 }
 
+// LoadGuildMembersMsg is emitted when the user requests the member list for a guild.
+type LoadGuildMembersMsg struct{ Slug string }
+
+// LoadMoreGuildMembersMsg is emitted when the user scrolls to the end of the member list.
+type LoadMoreGuildMembersMsg struct {
+	Slug   string
+	Cursor string
+}
+
 // Internal view state for the Guilds screen.
 type guildsView int
 
 const (
-	viewGuildList  guildsView = iota
+	viewGuildList    guildsView = iota
 	viewGuildPosts
+	viewGuildMembers
 )
 
 // GuildsModel is the Bubble Tea model for the guilds browser.
@@ -64,6 +74,12 @@ type GuildsModel struct {
 	fetching    bool
 	refreshing  bool
 	loaded      bool
+
+	// Guild members state
+	members           []model.GuildMember
+	memberIndex       int
+	membersNextCursor string
+	membersExhausted  bool
 
 	// Compose panel for new guild threads (visible in posts view).
 	panel PostComposePanel
@@ -169,6 +185,35 @@ func (m GuildsModel) AppendGuildPosts(posts []model.Post, cursor string) GuildsM
 	return m
 }
 
+// SetGuildMembers replaces the member list and switches to the members view.
+func (m GuildsModel) SetGuildMembers(members []model.GuildMember, cursor string) GuildsModel {
+	m.members = members
+	m.memberIndex = 0
+	m.membersNextCursor = cursor
+	m.membersExhausted = cursor == ""
+	m.loading = false
+	m.fetching = false
+	m.view = viewGuildMembers
+	if m.ready {
+		m = m.refreshContent()
+		m.viewport.GotoTop()
+	}
+	return m
+}
+
+// AppendGuildMembers adds a pagination page to the member list.
+func (m GuildsModel) AppendGuildMembers(members []model.GuildMember, cursor string) GuildsModel {
+	m.members = append(m.members, members...)
+	m.membersNextCursor = cursor
+	m.membersExhausted = cursor == ""
+	m.loading = false
+	m.fetching = false
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
 // SetError stores an error and clears the loading state.
 func (m GuildsModel) SetError(err error) GuildsModel {
 	m.err = err
@@ -250,9 +295,14 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 					m.guildIndex--
 					m = m.refreshContent()
 				}
-			} else {
+			} else if m.view == viewGuildPosts {
 				if m.postIndex > 0 {
 					m.postIndex--
+					m = m.refreshContent()
+				}
+			} else { // viewGuildMembers
+				if m.memberIndex > 0 {
+					m.memberIndex--
 					m = m.refreshContent()
 				}
 			}
@@ -272,7 +322,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 						return LoadMoreGuildsMsg{Cursor: cursor}
 					}
 				}
-			} else {
+			} else if m.view == viewGuildPosts {
 				if m.postIndex < len(m.posts)-1 {
 					m.postIndex++
 					m = m.refreshContent()
@@ -285,6 +335,19 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 						return LoadMoreGuildPostsMsg{Slug: slug, Cursor: cursor}
 					}
 				}
+			} else { // viewGuildMembers
+				if m.memberIndex < len(m.members)-1 {
+					m.memberIndex++
+					m = m.refreshContent()
+				} else if !m.membersExhausted && !m.loading {
+					slug, cursor := m.activeGuild, m.membersNextCursor
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreGuildMembersMsg{Slug: slug, Cursor: cursor}
+					}
+				}
 			}
 			return m, nil
 
@@ -295,11 +358,25 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 					m.activeGuild = slug
 					return m, func() tea.Msg { return LoadGuildPostsMsg{Slug: slug} }
 				}
-			} else {
+			} else if m.view == viewGuildPosts {
 				if len(m.posts) > 0 && m.postIndex < len(m.posts) {
 					post := m.posts[m.postIndex]
 					return m, func() tea.Msg { return ShowGuildPostMsg{Post: post} }
 				}
+			} else { // viewGuildMembers
+				if len(m.members) > 0 && m.memberIndex < len(m.members) {
+					username := m.members[m.memberIndex].Username
+					return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+				}
+			}
+			return m, nil
+
+		case "m":
+			if m.view == viewGuildPosts {
+				slug := m.activeGuild
+				m.loading = true
+				m = m.refreshContent()
+				return m, func() tea.Msg { return LoadGuildMembersMsg{Slug: slug} }
 			}
 			return m, nil
 
@@ -313,6 +390,13 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			return m, nil
 
 		case "esc":
+			if m.view == viewGuildMembers {
+				m.view = viewGuildPosts
+				m.loading = false
+				m.fetching = false
+				m = m.refreshContent()
+				return m, nil
+			}
 			if m.view == viewGuildPosts {
 				m.view = viewGuildList
 				m.activeGuild = ""
@@ -336,6 +420,16 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 		m.viewport.ScrollDown(1)
 		return m, func() tea.Msg {
 			return LoadMoreGuildPostsMsg{Slug: slug, Cursor: cursor}
+		}
+	}
+
+	if m.view == viewGuildMembers && m.viewport.AtBottom() && !m.membersExhausted && !m.loading {
+		slug, cursor := m.activeGuild, m.membersNextCursor
+		m.loading = true
+		m = m.refreshContent()
+		m.viewport.ScrollDown(1)
+		return m, func() tea.Msg {
+			return LoadMoreGuildMembersMsg{Slug: slug, Cursor: cursor}
 		}
 	}
 
@@ -391,6 +485,23 @@ func (m GuildsModel) buildContent() (string, []int) {
 			currentLine += lipgloss.Height(rendered) + lineInc - 1
 		}
 		out += listFooter(m.loading, m.guildsExhausted && len(m.guilds) > 0)
+		return prefix + strings.TrimRight(out, "\n"), offsets
+	}
+
+	if m.view == viewGuildMembers {
+		if len(m.members) == 0 {
+			return prefix + theme.Subtle.Render("  no members"), nil
+		}
+		offsets := make([]int, len(m.members))
+		currentLine := startLine
+		var out string
+		for i := range m.members {
+			offsets[i] = currentLine
+			rendered := m.renderMemberItem(m.members[i], i == m.memberIndex)
+			out += rendered + sep
+			currentLine += lipgloss.Height(rendered) + lineInc - 1
+		}
+		out += listFooter(m.loading, m.membersExhausted && len(m.members) > 0)
 		return prefix + strings.TrimRight(out, "\n"), offsets
 	}
 
@@ -456,6 +567,47 @@ func (m GuildsModel) renderGuildItem(index int) string {
 	return boxStyle.Render(line)
 }
 
+func (m GuildsModel) renderMemberItem(mem model.GuildMember, selected bool) string {
+	innerWidth := m.width - 4
+
+	iconStr := "•"
+	if mem.Role == "founder" {
+		iconStr = "◆"
+	}
+	icon := theme.Subtle.Render(iconStr) + " "
+
+	nameStyle := theme.Base
+	if selected {
+		nameStyle = theme.Highlight
+	}
+	nameStr := nameStyle.Render("@" + mem.Username)
+
+	roleStr := theme.Subtle.Render(mem.Role)
+	joinedStr := theme.Subtle.Render(displayTime(mem.JoinedAt, m.location(), m.timeDisplayFormat, true))
+	right := roleStr + "  " + joinedStr
+
+	var line string
+	if innerWidth > 0 {
+		gap := innerWidth - lipgloss.Width(icon) - lipgloss.Width(nameStr) - lipgloss.Width(right)
+		if gap > 0 {
+			line = icon + nameStr + strings.Repeat(" ", gap) + right
+		} else {
+			line = icon + nameStr
+		}
+	} else {
+		line = icon + nameStr
+	}
+
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if innerWidth > 0 {
+		boxStyle = boxStyle.Width(m.width - 2)
+	}
+	return boxStyle.Render(line)
+}
+
 func (m GuildsModel) renderPostItem(p model.Post, selected bool) string {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	return RenderPost(p, selected, bookmarked, m.width, m.location(), m.timeDisplayFormat)
@@ -482,6 +634,12 @@ func (m GuildsModel) ensureSelectedVisible() GuildsModel {
 			return m
 		}
 		itemHeight = lipgloss.Height(m.renderGuildItem(selectedIndex))
+	} else if m.view == viewGuildMembers {
+		selectedIndex = m.memberIndex
+		if selectedIndex >= len(m.members) {
+			return m
+		}
+		itemHeight = lipgloss.Height(m.renderMemberItem(m.members[selectedIndex], false))
 	} else {
 		selectedIndex = m.postIndex
 		if selectedIndex >= len(m.posts) {
@@ -530,8 +688,11 @@ func (m GuildsModel) location() *time.Location {
 	return m.loc
 }
 
-// IsBrowsingGuild reports whether the user is viewing a specific guild's threads.
+// IsBrowsingGuild reports whether the user is viewing a specific guild's threads or members.
 func (m GuildsModel) IsBrowsingGuild() bool { return m.activeGuild != "" }
+
+// IsBrowsingMembers reports whether the member list is the active view.
+func (m GuildsModel) IsBrowsingMembers() bool { return m.view == viewGuildMembers }
 
 // GetFocusedURLs implements URLProvider. Returns URLs from the selected post when
 // in post-list view; returns nil when browsing the guild list.

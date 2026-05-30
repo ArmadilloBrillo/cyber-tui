@@ -977,6 +977,24 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case guildPostCreatedMsg:
 		return a, a.loadGuildPostsCmd(msg.slug), true
+
+	case screens.ShowUserProfileMsg:
+		a.profileReturn = screenGuilds
+		return a, a.loadUserProfileCmd(msg.Username), true
+
+	case screens.LoadGuildMembersMsg:
+		return a, a.loadGuildMembersCmd(msg.Slug, ""), true
+
+	case guildMembersLoadedMsg:
+		a.guilds = a.guilds.SetGuildMembers(msg.members, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadMoreGuildMembersMsg:
+		return a, a.loadGuildMembersCmd(msg.Slug, msg.Cursor), true
+
+	case guildMembersPageMsg:
+		a.guilds = a.guilds.AppendGuildMembers(msg.members, msg.cursor)
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -1327,8 +1345,11 @@ func (a App) screenHints() []hint {
 		if a.guilds.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
+		if a.guilds.IsBrowsingMembers() {
+			return []hint{{"↑↓", "navigate"}, {"enter", "view profile"}, {"esc", "back"}, more}
+		}
 		if a.guilds.IsBrowsingGuild() {
-			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"n", "new thread"}, {"esc", "back"}, more}
+			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "members"}, {"n", "new thread"}, {"esc", "back"}, more}
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, more}
 	case screenTopics:
@@ -1622,8 +1643,10 @@ func (a App) renderHelpModal() string {
 	case screenGuilds:
 		if a.guilds.ComposeActive() {
 			localSection = section("guilds (compose)", row("Enter", "paragraph"))
+		} else if a.guilds.IsBrowsingMembers() {
+			localSection = section("guilds (members)", row("enter", "view profile"))
 		} else if a.guilds.IsBrowsingGuild() {
-			localSection = section("guilds (browsing)", row("n", "new thread"))
+			localSection = section("guilds (browsing)", row("n", "new thread"), row("m", "members"))
 		} else {
 			localSection = section("guilds")
 		}
@@ -2062,6 +2085,14 @@ type guildPostsPageMsg struct {
 	cursor string
 }
 type guildPostCreatedMsg struct{ slug string }
+type guildMembersLoadedMsg struct {
+	members []model.GuildMember
+	cursor  string
+}
+type guildMembersPageMsg struct {
+	members []model.GuildMember
+	cursor  string
+}
 
 type notifsLoadedMsg struct {
 	notifs []model.Notification
@@ -2612,6 +2643,19 @@ func (a *App) createGuildPostCmd(slug, content, title string, topics []string) t
 			return errMsg{err}
 		}
 		return guildPostCreatedMsg{slug: slug}
+	}
+}
+
+func (a *App) loadGuildMembersCmd(slug, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		members, nextCursor, err := a.client.GetGuildMembers(slug, cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		if cursor == "" {
+			return guildMembersLoadedMsg{members: members, cursor: nextCursor}
+		}
+		return guildMembersPageMsg{members: members, cursor: nextCursor}
 	}
 }
 

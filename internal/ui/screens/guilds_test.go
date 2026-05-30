@@ -188,3 +188,152 @@ func TestGuildsModel_GetFocusedURLs_ReturnsURLsInPostView(t *testing.T) {
 		t.Error("expected at least one URL from post content")
 	}
 }
+
+// --- Guild members ---
+
+func sampleGuildMembers() []model.GuildMember {
+	return []model.GuildMember{
+		{MembershipID: "g1_u1", UserID: "u1", Username: "alice", Role: "founder"},
+		{MembershipID: "g1_u2", UserID: "u2", Username: "bob", Role: "member"},
+	}
+}
+
+func TestGuildsModel_SetGuildMembers_SwitchesToMembersView(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts(sampleGuildPosts(), "")
+	m = m.SetGuildMembers(sampleGuildMembers(), "")
+	if !m.IsBrowsingMembers() {
+		t.Error("SetGuildMembers should switch to members view")
+	}
+}
+
+func TestGuildsModel_SetGuildMembers_ResetsIndex(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts(sampleGuildPosts(), "")
+	m = m.SetGuildMembers(sampleGuildMembers(), "cursor1")
+	// Navigate to second member
+	m, _ = m.Update(keyMsg_g("j"))
+	// Fresh load should reset index
+	m = m.SetGuildMembers(sampleGuildMembers(), "")
+	if !m.IsBrowsingMembers() {
+		t.Error("expected members view after SetGuildMembers")
+	}
+}
+
+func TestGuildsModel_AppendGuildMembers_AddsItems(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts(sampleGuildPosts(), "")
+	m = m.SetGuildMembers(sampleGuildMembers(), "cursor1")
+	extra := []model.GuildMember{{MembershipID: "g1_u3", UserID: "u3", Username: "carol", Role: "member"}}
+	m = m.AppendGuildMembers(extra, "")
+	if !m.IsBrowsingMembers() {
+		t.Error("expected members view after AppendGuildMembers")
+	}
+}
+
+func TestGuildsModel_MemberNavigation_UpDown(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts(sampleGuildPosts(), "")
+	m = m.SetGuildMembers(sampleGuildMembers(), "")
+	// Down from first item
+	m, _ = m.Update(keyMsg_g("j"))
+	// Up back to first
+	m, _ = m.Update(keyMsg_g("k"))
+	if !m.IsBrowsingMembers() {
+		t.Error("should remain in members view after navigation")
+	}
+}
+
+func TestGuildsModel_MemberNavigation_DownAtBottom_EmitsLoadMore(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts(sampleGuildPosts(), "")
+	// One member, cursor not exhausted
+	m = m.SetGuildMembers([]model.GuildMember{{MembershipID: "g1_u1", Username: "alice", Role: "founder"}}, "cursor1")
+	_, cmd := m.Update(keyMsg_g("j"))
+	if cmd == nil {
+		t.Fatal("expected a cmd when pressing down at bottom of non-exhausted members list")
+	}
+	msg := cmd()
+	lmm, ok := msg.(screens.LoadMoreGuildMembersMsg)
+	if !ok {
+		t.Fatalf("expected LoadMoreGuildMembersMsg, got %T", msg)
+	}
+	if lmm.Cursor != "cursor1" {
+		t.Errorf("expected cursor 'cursor1', got %q", lmm.Cursor)
+	}
+}
+
+func TestGuildsModel_MemberEsc_ReturnsToPostsView(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts(sampleGuildPosts(), "")
+	m = m.SetGuildMembers(sampleGuildMembers(), "")
+	if !m.IsBrowsingMembers() {
+		t.Fatal("expected members view before esc")
+	}
+	m, _ = m.Update(specialKey(tea.KeyEsc))
+	if m.IsBrowsingMembers() {
+		t.Error("esc should return from members view to posts view")
+	}
+	if !m.IsBrowsingGuild() {
+		t.Error("should still be browsing the guild after returning from members")
+	}
+}
+
+func TestGuildsModel_MemberEnter_EmitsShowUserProfileMsg(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts(sampleGuildPosts(), "")
+	m = m.SetGuildMembers(sampleGuildMembers(), "")
+	_, cmd := m.Update(specialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("expected a cmd after enter on a member")
+	}
+	msg := cmd()
+	spm, ok := msg.(screens.ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", msg)
+	}
+	if spm.Username != "alice" {
+		t.Errorf("expected username 'alice', got %q", spm.Username)
+	}
+}
+
+func TestGuildsModel_MKey_EmitsLoadGuildMembersMsg(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts(sampleGuildPosts(), "")
+	_, cmd := m.Update(keyMsg_g("m"))
+	if cmd == nil {
+		t.Fatal("expected a cmd after pressing m in guild posts view")
+	}
+	msg := cmd()
+	lgm, ok := msg.(screens.LoadGuildMembersMsg)
+	if !ok {
+		t.Fatalf("expected LoadGuildMembersMsg, got %T", msg)
+	}
+	if lgm.Slug != "alpha" {
+		t.Errorf("expected slug 'alpha', got %q", lgm.Slug)
+	}
+}

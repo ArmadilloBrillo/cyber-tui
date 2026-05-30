@@ -181,6 +181,18 @@ type Guild struct {
 	Role            string // "founder", "member", or ""
 }
 
+// GuildMember represents a single membership returned by GET /v1/guilds/:slug/members.
+type GuildMember struct {
+	MembershipID string
+	GuildID      string
+	GuildSlug    string
+	UserID       string
+	Username     string
+	Role         string // "founder" or "member"
+	JoinedAt     time.Time
+	DisplayName  string
+}
+
 // Note is a private note visible only to the author.
 // RevisionNumber increments each time the note is updated via PATCH /v1/notes/:id.
 type Note struct {

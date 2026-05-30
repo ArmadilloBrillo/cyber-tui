@@ -164,6 +164,18 @@ type wireGuild struct {
 	Role            string `json:"role"`
 }
 
+type wireGuildMember struct {
+	MembershipID      string `json:"membershipId"`
+	GuildID           string `json:"guildId"`
+	GuildSlug         string `json:"guildSlug"`
+	UserID            string `json:"userId"`
+	Username          string `json:"username"`
+	Role              string `json:"role"`
+	JoinedAt          string `json:"joinedAt"`
+	DisplayName       string `json:"displayName"`
+	ProfilePictureURL string `json:"profilePictureUrl"`
+}
+
 type createGuildPostRequest struct {
 	Content string   `json:"content"`
 	Title   string   `json:"title,omitempty"`
@@ -681,6 +693,19 @@ func wireGuildToModel(w wireGuild) model.Guild {
 	}
 }
 
+func wireGuildMemberToModel(w wireGuildMember) model.GuildMember {
+	return model.GuildMember{
+		MembershipID: w.MembershipID,
+		GuildID:      w.GuildID,
+		GuildSlug:    w.GuildSlug,
+		UserID:       w.UserID,
+		Username:     w.Username,
+		Role:         w.Role,
+		JoinedAt:     parseTime(w.JoinedAt),
+		DisplayName:  w.DisplayName,
+	}
+}
+
 func wireNoteToModel(w wireNote) model.Note {
 	t := parseTime(w.CreatedAt)
 	topics := w.Topics
@@ -1065,6 +1090,14 @@ func (c *HTTPClient) GetGuildPosts(slug string, cursor string) ([]model.Post, st
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
 	return fetchPage(c, path, wirePostToModel)
+}
+
+func (c *HTTPClient) GetGuildMembers(slug, cursor string) ([]model.GuildMember, string, error) {
+	path := "/v1/guilds/" + url.PathEscape(slug) + "/members?limit=20"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	return fetchPage(c, path, wireGuildMemberToModel)
 }
 
 func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []string) (model.Post, error) {
