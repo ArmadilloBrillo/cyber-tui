@@ -522,6 +522,17 @@ func (m GuildsModel) buildContent() (string, []int) {
 	return prefix + strings.TrimRight(out, "\n"), offsets
 }
 
+// guildIcon returns the icon string if it contains non-ASCII characters (i.e. an
+// emoji), or "◆" when the API has returned a plain icon name like "code-filled".
+func guildIcon(s string) string {
+	for _, r := range s {
+		if r > 127 {
+			return s
+		}
+	}
+	return "◆"
+}
+
 func (m GuildsModel) renderGuildItem(index int) string {
 	if index < 0 || index >= len(m.guilds) {
 		return ""
@@ -529,32 +540,44 @@ func (m GuildsModel) renderGuildItem(index int) string {
 
 	guild := m.guilds[index]
 	isSelected := index == m.guildIndex
-
 	innerWidth := m.width - 4
 
-	iconStr := guild.Icon
-	if iconStr == "" {
-		iconStr = "◆"
+	subtleStyle := theme.Subtle
+	if isSelected {
+		subtleStyle = theme.Base
 	}
-	icon := theme.Subtle.Render(iconStr) + " "
+
+	iconStr := guildIcon(guild.Icon)
+	icon := subtleStyle.Render(iconStr) + " "
+	iconW := lipgloss.Width(icon)
 
 	nameStyle := theme.Base
 	if isSelected {
 		nameStyle = theme.Highlight
 	}
 	nameStr := nameStyle.Render(guild.Name)
-	countStr := theme.Subtle.Render(fmt.Sprintf("%d members", guild.MemberCount))
+	countStr := subtleStyle.Render(fmt.Sprintf("%d members", guild.MemberCount))
+	countW := lipgloss.Width(countStr)
 
-	var line string
+	var line1 string
 	if innerWidth > 0 {
-		gap := innerWidth - lipgloss.Width(icon) - lipgloss.Width(nameStr) - lipgloss.Width(countStr)
+		gap := innerWidth - iconW - lipgloss.Width(nameStr) - countW
 		if gap > 0 {
-			line = icon + nameStr + strings.Repeat(" ", gap) + countStr
+			line1 = icon + nameStr + strings.Repeat(" ", gap) + countStr
 		} else {
-			line = icon + nameStr
+			line1 = icon + nameStr
 		}
 	} else {
-		line = icon + nameStr
+		line1 = icon + nameStr
+	}
+
+	content := line1
+	if guild.Bio != "" && innerWidth > 0 {
+		bioW := innerWidth - iconW - countW - 2
+		if bioW > 0 {
+			indent := strings.Repeat(" ", iconW)
+			content += "\n" + indent + subtleStyle.Render(truncateStr(guild.Bio, bioW))
+		}
 	}
 
 	boxStyle := theme.Border
@@ -564,7 +587,7 @@ func (m GuildsModel) renderGuildItem(index int) string {
 	if innerWidth > 0 {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}
-	return boxStyle.Render(line)
+	return boxStyle.Render(content)
 }
 
 func (m GuildsModel) renderMemberItem(mem model.GuildMember, selected bool) string {
@@ -694,9 +717,15 @@ func (m GuildsModel) IsBrowsingGuild() bool { return m.activeGuild != "" }
 // IsBrowsingMembers reports whether the member list is the active view.
 func (m GuildsModel) IsBrowsingMembers() bool { return m.view == viewGuildMembers }
 
-// GetFocusedURLs implements URLProvider. Returns URLs from the selected post when
-// in post-list view; returns nil when browsing the guild list.
+// GetFocusedURLs implements URLProvider. Returns the guild link when browsing
+// the guild list, URLs from the selected post when in post-list view.
 func (m GuildsModel) GetFocusedURLs() []string {
+	if m.view == viewGuildList && len(m.guilds) > 0 && m.guildIndex < len(m.guilds) {
+		if link := m.guilds[m.guildIndex].Link; link != "" {
+			return []string{link}
+		}
+		return nil
+	}
 	if m.view != viewGuildPosts || len(m.posts) == 0 {
 		return nil
 	}

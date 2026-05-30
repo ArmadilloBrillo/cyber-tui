@@ -179,6 +179,8 @@ type Guild struct {
 	CreatedAt       time.Time
 	IsMember        bool
 	Role            string // "founder", "member", or ""
+	Link            string
+	LinkText        string
 }
 
 // GuildMember represents a single membership returned by GET /v1/guilds/:slug/members.

@@ -162,6 +162,8 @@ type wireGuild struct {
 	CreatedAt       string `json:"createdAt"`
 	IsMember        bool   `json:"isMember"`
 	Role            string `json:"role"`
+	Link            string `json:"link"`
+	LinkText        string `json:"linkText"`
 }
 
 type wireGuildMember struct {
@@ -690,6 +692,8 @@ func wireGuildToModel(w wireGuild) model.Guild {
 		CreatedAt:       parseTime(w.CreatedAt),
 		IsMember:        w.IsMember,
 		Role:            w.Role,
+		Link:            w.Link,
+		LinkText:        w.LinkText,
 	}
 }
 
