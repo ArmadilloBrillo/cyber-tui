@@ -397,6 +397,16 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	case "5":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenGuilds
+			if !a.guilds.IsLoaded() {
+				a.guilds = a.guilds.SetFetching()
+				return a, a.loadGuildsCmd(""), true
+			}
+			return a, nil, true
+		}
+	case "6":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenTopics
 			if !a.topics.IsLoaded() {
 				a.topics = a.topics.SetFetching()
@@ -404,13 +414,13 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			}
 			return a, nil, true
 		}
-	case "6":
+	case "7":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenProfile
 			return a, a.loadProfileCmd(), true
 		}
-	case "7":
+	case "8":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenSettings
@@ -934,13 +944,12 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 
 	case screens.LoadGuildPostsMsg:
-		return a, tea.Batch(a.loadGuildDetailCmd(msg.Slug), a.loadGuildPostsCmd(msg.Slug)), true
-
-	case guildDetailMsg:
-		a.guilds = a.guilds.SetIsMember(msg.isMember)
-		return a, nil, true
+		return a, a.loadGuildPostsCmd(msg.Slug), true
 
 	case guildPostsLoadedMsg:
+		if msg.slug != a.guilds.ActiveGuild() {
+			return a, nil, true
+		}
 		a.guilds = a.guilds.SetGuildPosts(msg.posts, msg.cursor)
 		return a, nil, true
 
@@ -948,11 +957,14 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadGuildPostsPageCmd(msg.Slug, msg.Cursor), true
 
 	case guildPostsPageMsg:
+		if msg.slug != a.guilds.ActiveGuild() {
+			return a, nil, true
+		}
 		a.guilds = a.guilds.AppendGuildPosts(msg.posts, msg.cursor)
 		return a, nil, true
 
 	case screens.RefreshGuildPostsMsg:
-		return a, tea.Batch(a.loadGuildDetailCmd(msg.Slug), a.loadGuildPostsCmd(msg.Slug)), true
+		return a, a.loadGuildPostsCmd(msg.Slug), true
 
 	case screens.ShowGuildPostMsg:
 		a.postDetailReturn = screenGuilds
@@ -964,7 +976,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.createGuildPostCmd(msg.Slug, msg.Content, msg.Title, msg.Topics), true
 
 	case guildPostCreatedMsg:
-		return a, tea.Batch(a.loadGuildDetailCmd(msg.slug), a.loadGuildPostsCmd(msg.slug)), true
+		return a, a.loadGuildPostsCmd(msg.slug), true
 	}
 	return a, nil, false
 }
@@ -2039,12 +2051,13 @@ type guildsPageMsg struct {
 	guilds []model.Guild
 	cursor string
 }
-type guildDetailMsg struct{ isMember bool }
 type guildPostsLoadedMsg struct {
+	slug   string
 	posts  []model.Post
 	cursor string
 }
 type guildPostsPageMsg struct {
+	slug   string
 	posts  []model.Post
 	cursor string
 }
@@ -2578,7 +2591,7 @@ func (a *App) loadGuildPostsCmd(slug string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		return guildPostsLoadedMsg{posts: posts, cursor: cursor}
+		return guildPostsLoadedMsg{slug: slug, posts: posts, cursor: cursor}
 	}
 }
 
@@ -2588,17 +2601,7 @@ func (a *App) loadGuildPostsPageCmd(slug, cursor string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		return guildPostsPageMsg{posts: posts, cursor: nextCursor}
-	}
-}
-
-func (a *App) loadGuildDetailCmd(slug string) tea.Cmd {
-	return func() tea.Msg {
-		user, err := a.client.GetOwnProfile()
-		if err != nil {
-			return errMsg{err}
-		}
-		return guildDetailMsg{isMember: user.GuildSlug == slug}
+		return guildPostsPageMsg{slug: slug, posts: posts, cursor: nextCursor}
 	}
 }
 

@@ -65,10 +65,7 @@ type GuildsModel struct {
 	refreshing  bool
 	loaded      bool
 
-	// Membership (populated by GetGuild after entering a guild)
-	isMember bool
-
-	// Compose panel for new guild threads (visible only in posts view when isMember)
+	// Compose panel for new guild threads (visible in posts view).
 	panel PostComposePanel
 
 	// Shared
@@ -91,17 +88,11 @@ func NewGuildsModel() GuildsModel {
 	}
 }
 
-// SetIsMember updates the membership state for the active guild.
-func (m GuildsModel) SetIsMember(v bool) GuildsModel {
-	m.isMember = v
-	return m
-}
-
 // ComposeActive reports whether the new-thread compose panel is open.
 func (m GuildsModel) ComposeActive() bool { return m.panel.IsActive() }
 
-// IsMember reports whether the authenticated user is a member of the active guild.
-func (m GuildsModel) IsMember() bool { return m.isMember }
+// ActiveGuild returns the slug of the guild whose posts are currently displayed, or "" when in list view.
+func (m GuildsModel) ActiveGuild() string { return m.activeGuild }
 
 // IsLoaded reports whether the guild list has been fetched at least once.
 func (m GuildsModel) IsLoaded() bool { return m.loaded }
@@ -154,7 +145,9 @@ func (m GuildsModel) SetGuildPosts(posts []model.Post, cursor string) GuildsMode
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
-	m.panel = m.panel.Close()
+	if !m.panel.IsActive() {
+		m.panel = m.panel.Close()
+	}
 	m.view = viewGuildPosts
 	if m.ready {
 		m = m.refreshContent()
@@ -256,13 +249,11 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 				if m.guildIndex > 0 {
 					m.guildIndex--
 					m = m.refreshContent()
-					m = m.ensureSelectedVisible()
 				}
 			} else {
 				if m.postIndex > 0 {
 					m.postIndex--
 					m = m.refreshContent()
-					m = m.ensureSelectedVisible()
 				}
 			}
 			return m, nil
@@ -272,26 +263,26 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 				if m.guildIndex < len(m.guilds)-1 {
 					m.guildIndex++
 					m = m.refreshContent()
-					m = m.ensureSelectedVisible()
 				} else if !m.guildsExhausted && !m.loading {
+					cursor := m.guildsNextCursor
 					m.loading = true
 					m = m.refreshContent()
 					m.viewport.ScrollDown(1)
 					return m, func() tea.Msg {
-						return LoadMoreGuildsMsg{Cursor: m.guildsNextCursor}
+						return LoadMoreGuildsMsg{Cursor: cursor}
 					}
 				}
 			} else {
 				if m.postIndex < len(m.posts)-1 {
 					m.postIndex++
 					m = m.refreshContent()
-					m = m.ensureSelectedVisible()
 				} else if !m.exhausted && !m.loading {
+					slug, cursor := m.activeGuild, m.nextCursor
 					m.loading = true
 					m = m.refreshContent()
 					m.viewport.ScrollDown(1)
 					return m, func() tea.Msg {
-						return LoadMoreGuildPostsMsg{Slug: m.activeGuild, Cursor: m.nextCursor}
+						return LoadMoreGuildPostsMsg{Slug: slug, Cursor: cursor}
 					}
 				}
 			}
@@ -322,15 +313,11 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			return m, nil
 
 		case "esc":
-			if m.panel.IsActive() {
-				m.panel = m.panel.Close()
-				m = m.refreshContent()
-				return m, nil
-			}
 			if m.view == viewGuildPosts {
 				m.view = viewGuildList
 				m.activeGuild = ""
-				m.isMember = false
+				m.loading = false
+				m.fetching = false
 				m.panel = m.panel.Close()
 				m = m.refreshContent()
 				m.viewport.GotoTop()
@@ -343,11 +330,12 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 	m.viewport, cmd = m.viewport.Update(msg)
 
 	if m.view == viewGuildPosts && m.viewport.AtBottom() && !m.exhausted && !m.loading {
+		slug, cursor := m.activeGuild, m.nextCursor
 		m.loading = true
 		m = m.refreshContent()
 		m.viewport.ScrollDown(1)
 		return m, func() tea.Msg {
-			return LoadMoreGuildPostsMsg{Slug: m.activeGuild, Cursor: m.nextCursor}
+			return LoadMoreGuildPostsMsg{Slug: slug, Cursor: cursor}
 		}
 	}
 

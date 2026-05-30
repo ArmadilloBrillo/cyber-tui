@@ -52,17 +52,17 @@ Guilds are member groups with their own forum of threads. A user can belong to o
 | Endpoint | Method | Description | Status |
 |---|---|---|---|
 | `/v1/guilds` | GET | List guilds (paginated, most-populated first) | **Done** — feature 29 |
-| `/v1/guilds/:slug` | GET | Get guild detail + caller's `isMember` / `role` | **Done** — feature 29 |
+| `/v1/guilds/:slug` | GET | Get guild detail + caller's `isMember` / `role` | Not called — server `isMember` bug; membership delegated to server on post |
 | `/v1/guilds/:slug/members` | GET | List guild members (paginated, oldest-joined first) | Not implemented |
 | `/v1/guilds/:slug/posts` | GET | List guild threads (most recently active first) | **Done** — feature 29 |
-| `/v1/guilds/:slug/posts` | POST | Create guild thread (members only; title + topics supported) | **Done** — feature 29 |
+| `/v1/guilds/:slug/posts` | POST | Create guild thread (title + topics supported) | **Done** — feature 29 |
 | `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | Not implemented |
 | `/v1/guilds/:slug/leave` | POST | Leave a guild (founders blocked — web only; 403 via API) | Not implemented |
 
 Notes:
 - Guild threads are ordinary posts with `guildId`, `guildSlug`, `isGuildThread: true`; replying uses `POST /v1/replies` as normal.
 - `guild_new_thread` notifications are already display-ready (`notifSummary`/`notifIcon` have explicit cases) and navigation is wired via `TargetID` → `ShowNotificationPostMsg`.
-- Membership is fetched on entering a guild (parallel with thread list); compose panel only shown when `isMember` is true.
+- The `isMember` field on `GET /v1/guilds/:slug` always returns `false` (server bug); membership enforcement is left to the server — the TUI does not gate compose.
 - Join/leave require use of the web interface.
 
 ### Replies
