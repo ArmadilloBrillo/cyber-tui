@@ -130,7 +130,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName) |
 | `Bookmark` | Saved post or reply (ID, type, postID/replyID, content snapshot, author, createdAt) |
 | `Topic` | Tag with post count (slug, postCount) |
-| `Guild` | Guild community (ID, name, slug, icon, bio, memberCount, founderUsername, createdAt, isMember, role) |
+| `Guild` | Guild community (ID, name, slug, icon, bio, memberCount, founderUsername, createdAt, isMember, role, link, linkText) |
 | `GuildMember` | Guild membership record (membershipID, guildID, guildSlug, userID, username, role, joinedAt, displayName) |
 | `Follow` | Follow relationship (ID, followerID, followedID, followerUsername, followedUsername, createdAt) |
 | `Note` | Private journal note (ID, authorID, content, topics, revisionNumber, deleted, createdAt) |

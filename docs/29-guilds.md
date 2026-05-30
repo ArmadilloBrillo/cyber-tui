@@ -20,14 +20,18 @@ feed | notifications | journal | bookmarks | guilds | topics | profile | setting
 
 Displays all guilds that have at least one member, sorted by member count (most populated first). Each row shows:
 
-- Guild icon (emoji, falls back to `◆` if absent)
+- Guild icon (emoji; plain-text icon names from the API fall back to `◆`)
 - Guild name (highlighted when selected)
 - Member count (right-aligned)
+- Bio (second line, truncated to stay clear of the member count; omitted when empty)
+
+When a guild is selected all text steps up to normal brightness for readability.
 
 Navigation:
 - `j` / `down` — move down; triggers next-page load when at the bottom of a non-exhausted list
 - `k` / `up` — move up
 - `enter` — open the selected guild's thread list
+- `o` — open the guild's website link in a browser (if the guild has one)
 
 ### Guild threads (posts view)
 
