@@ -14,6 +14,7 @@ import (
 
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/rtdb"
+	"github.com/ragnar/cyber-tui/internal/sanitize"
 )
 
 // --- typed errors ---
@@ -249,15 +250,15 @@ type wireNotificationMetadata struct {
 }
 
 type wireNotification struct {
-	ID            string                     `json:"id"`
-	Type          string                     `json:"type"`
-	Read          bool                       `json:"read"`
-	CreatedAt     string                     `json:"createdAt"`
-	ActorID       string                     `json:"actorId"`
-	ActorUsername string                     `json:"actorUsername"`
-	TargetID      string                     `json:"targetId"`
-	TargetType    string                     `json:"targetType"`
-	Metadata      wireNotificationMetadata   `json:"metadata"`
+	ID            string                   `json:"id"`
+	Type          string                   `json:"type"`
+	Read          bool                     `json:"read"`
+	CreatedAt     string                   `json:"createdAt"`
+	ActorID       string                   `json:"actorId"`
+	ActorUsername string                   `json:"actorUsername"`
+	TargetID      string                   `json:"targetId"`
+	TargetType    string                   `json:"targetType"`
+	Metadata      wireNotificationMetadata `json:"metadata"`
 }
 
 type updateProfileRequest struct {
@@ -532,6 +533,7 @@ func wireAttachmentsToModel(ws []wireAttachment) []model.Attachment {
 }
 
 func wirePostToModel(w wirePost) model.Post {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	return model.Post{
 		ID:             w.PostID,
@@ -555,6 +557,7 @@ func wirePostToModel(w wirePost) model.Post {
 }
 
 func wireReplyToModel(w wireReply) model.Reply {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	return model.Reply{
 		ID:             w.ReplyID,
@@ -569,6 +572,7 @@ func wireReplyToModel(w wireReply) model.Reply {
 }
 
 func wireUserToModel(w wireUser) model.User {
+	sanitize.Strings(&w)
 	return model.User{
 		ID:                w.UserID,
 		Username:          w.Username,
@@ -590,6 +594,7 @@ func wireUserToModel(w wireUser) model.User {
 }
 
 func wireFollowToModel(w wireFollow) model.Follow {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	return model.Follow{
 		ID:               w.FollowID,
@@ -602,6 +607,7 @@ func wireFollowToModel(w wireFollow) model.Follow {
 }
 
 func wireNoteRevisionToModel(w wireNoteRevision) model.NoteRevision {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	topics := w.Topics
 	if topics == nil {
@@ -616,6 +622,7 @@ func wireNoteRevisionToModel(w wireNoteRevision) model.NoteRevision {
 }
 
 func wireSettingsToModel(w wireSettings) model.Settings {
+	sanitize.Strings(&w)
 	return model.Settings{
 		Notifications: model.NotificationPrefs{
 			Bookmark: w.Notifications.Bookmark,
@@ -638,6 +645,7 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 }
 
 func wireBookmarkToModel(w wireBookmark) model.Bookmark {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	b := model.Bookmark{
 		ID:        w.BookmarkID,
@@ -658,15 +666,16 @@ func wireBookmarkToModel(w wireBookmark) model.Bookmark {
 }
 
 func wireNotificationToModel(w wireNotification) model.Notification {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	return model.Notification{
-		ID:         w.ID,
-		Type:       w.Type,
-		Read:       w.Read,
-		CreatedAt:  t,
-		Actor:      model.NotificationActor{ID: w.ActorID, Username: w.ActorUsername},
-		TargetID:   w.TargetID,
-		TargetType: w.TargetType,
+		ID:                   w.ID,
+		Type:                 w.Type,
+		Read:                 w.Read,
+		CreatedAt:            t,
+		Actor:                model.NotificationActor{ID: w.ActorID, Username: w.ActorUsername},
+		TargetID:             w.TargetID,
+		TargetType:           w.TargetType,
 		ReplyID:              w.Metadata.ReplyID,
 		ThreadAuthorUsername: w.Metadata.AuthorUsername,
 		GuildName:            w.Metadata.GuildName,
@@ -674,6 +683,7 @@ func wireNotificationToModel(w wireNotification) model.Notification {
 }
 
 func wireTopicToModel(w wireTopic) model.Topic {
+	sanitize.Strings(&w)
 	return model.Topic{
 		Slug:      w.TopicID,
 		PostCount: w.PostCount,
@@ -681,6 +691,7 @@ func wireTopicToModel(w wireTopic) model.Topic {
 }
 
 func wireGuildToModel(w wireGuild) model.Guild {
+	sanitize.Strings(&w)
 	return model.Guild{
 		ID:              w.ID,
 		Name:            w.Name,
@@ -698,6 +709,7 @@ func wireGuildToModel(w wireGuild) model.Guild {
 }
 
 func wireGuildMemberToModel(w wireGuildMember) model.GuildMember {
+	sanitize.Strings(&w)
 	return model.GuildMember{
 		MembershipID: w.MembershipID,
 		GuildID:      w.GuildID,
@@ -711,6 +723,7 @@ func wireGuildMemberToModel(w wireGuildMember) model.GuildMember {
 }
 
 func wireNoteToModel(w wireNote) model.Note {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	topics := w.Topics
 	if topics == nil {
@@ -843,6 +856,7 @@ func (c *HTTPClient) CreatePost(content, title string, topics []string, isPublic
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return model.Post{}, err
 	}
+	sanitize.Strings(&data)
 	return model.Post{
 		ID:       data.PostID,
 		Title:    data.Title,
@@ -1120,6 +1134,7 @@ func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []strin
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return model.Post{}, err
 	}
+	sanitize.Strings(&data)
 	return model.Post{
 		ID:            data.PostID,
 		Title:         data.Title,
