@@ -26,9 +26,9 @@ Ordered roughly by implementation effort / priority.
 
 | Endpoint | Method | Description | Priority |
 |---|---|---|---|
-| `/v1/auth/register` | POST | User registration (email, password, username) | Low — existing users don't need this; useful for onboarding new users |
-| `/v1/auth/resend-verification` | POST | Resend email verification link | Low |
-| `/v1/auth/check-username` | POST | Check if a username is available (no auth required) | Low — only needed if registration is added |
+| `/v1/auth/register` | POST | User registration (email, password, username) | Out of scope — registration and account management are web-only flows |
+| `/v1/auth/resend-verification` | POST | Resend email verification link | Out of scope — same as above |
+| `/v1/auth/check-username` | POST | Check if a username is available (no auth required) | Out of scope — only relevant alongside registration |
 
 ### Posts
 
@@ -56,8 +56,8 @@ Guilds are member groups with their own forum of threads. A user can belong to o
 | `/v1/guilds/:slug/members` | GET | List guild members (paginated, oldest-joined first) | **Done** — feature 29 |
 | `/v1/guilds/:slug/posts` | GET | List guild threads (most recently active first) | **Done** — feature 29 |
 | `/v1/guilds/:slug/posts` | POST | Create guild thread (title + topics supported) | **Done** — feature 29 |
-| `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | Not implemented |
-| `/v1/guilds/:slug/leave` | POST | Leave a guild (founders blocked — web only; 403 via API) | Not implemented |
+| `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | Out of scope — founding and membership management are web-only by design |
+| `/v1/guilds/:slug/leave` | POST | Leave a guild (founders blocked — web only; 403 via API) | Out of scope — same as above |
 
 Notes:
 - Guild threads are ordinary posts with `guildId`, `guildSlug`, `isGuildThread: true`; replying uses `POST /v1/replies` as normal.
@@ -94,8 +94,8 @@ Notes:
 | --------------- | ------------------------------------- | -------------------------------------------------------------------- |
 | Notes (Journal) | List, create, edit, delete, revision history | — |
 | Profile         | View and edit all fields              | —                                                                    |
-| Settings        | Most fields editable                  | `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom` not exposed |
-| Follows         | Follow, unfollow, list following      | Followers list not fetched                                           |
+| Settings        | All TUI-relevant fields editable      | `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom` — web UI concepts with no TUI equivalent; intentionally omitted |
+| Follows         | Follow, unfollow, list following and followers | — |
 | Notifications   | All v0.4 types received and displayed with dedicated text and icons | — |
 
 ---
