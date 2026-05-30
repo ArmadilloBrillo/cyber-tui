@@ -33,15 +33,15 @@ Navigation:
 
 Shows threads for the selected guild, most recently active first. Each thread renders identically to a post in the feed, including the `[#guild-slug]` badge.
 
-Entering a guild fetches both the guild detail (`GET /v1/guilds/:slug`) and the thread list in parallel. The detail response determines membership, which gates the compose panel.
+Entering a guild fetches the thread list (`GET /v1/guilds/:slug/posts`). The server enforces membership on post creation.
 
 Navigation:
 - `j` / `down`, `k` / `up` — navigate threads; pagination loads at the bottom
 - `enter` — open thread in PostDetail; ESC from PostDetail returns here
-- `n` — open compose panel (only visible when the user is a member of the guild)
+- `n` — open compose panel
 - `esc` — cancel compose if open, otherwise return to the guild list
 
-### Compose panel (members only)
+### Compose panel
 
 Uses `PostComposePanel` (same as feed) with title, body, and topics fields. Public/NSFW toggles are visible but not sent to the API — guild threads have no visibility or NSFW flag in the API.
 
@@ -56,9 +56,8 @@ After a successful post the thread list reloads.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/v1/guilds?limit=20&cursor=<id>` | Paginated guild list |
-| GET | `/v1/guilds/:slug` | Guild detail + `isMember` / `role` for the caller |
 | GET | `/v1/guilds/:slug/posts?limit=20&cursor=<id>` | Paginated thread list for a guild |
-| POST | `/v1/guilds/:slug/posts` | Create a guild thread (members only) |
+| POST | `/v1/guilds/:slug/posts` | Create a guild thread (server enforces membership) |
 
 ## Implementation
 

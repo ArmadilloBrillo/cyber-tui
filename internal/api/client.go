@@ -1068,6 +1068,9 @@ func (c *HTTPClient) GetGuildPosts(slug string, cursor string) ([]model.Post, st
 }
 
 func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []string) (model.Post, error) {
+	if topics == nil {
+		topics = []string{}
+	}
 	env, err := c.doJSON("POST", "/v1/guilds/"+url.PathEscape(slug)+"/posts", createGuildPostRequest{
 		Content: content,
 		Title:   title,
@@ -1085,6 +1088,7 @@ func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []strin
 		Title:         data.Title,
 		Slug:          data.Slug,
 		Content:       content,
+		Topics:        topics,
 		GuildSlug:     slug,
 		IsGuildThread: true,
 	}, nil

@@ -26,6 +26,10 @@ func keyMsg_g(key string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 }
 
+func specialKey(t tea.KeyType) tea.KeyMsg {
+	return tea.KeyMsg{Type: t}
+}
+
 // --- Initial state ---
 
 func TestGuildsModel_InitialState(t *testing.T) {
@@ -92,7 +96,7 @@ func TestGuildsModel_EnterKey_SetsBrowsingState(t *testing.T) {
 		t.Error("should not be browsing a guild before entering one")
 	}
 	// enter sets activeGuild immediately; app later calls SetGuildPosts
-	m, _ = m.Update(keyMsg_g("enter"))
+	m, _ = m.Update(specialKey(tea.KeyEnter))
 	if !m.IsBrowsingGuild() {
 		t.Error("should be browsing guild after pressing enter on a guild")
 	}
@@ -111,7 +115,7 @@ func TestGuildsModel_EnterKey_EmitsLoadGuildPostsMsg(t *testing.T) {
 	t.Helper()
 	m := screens.NewGuildsModel()
 	m = m.SetGuilds(sampleGuilds(), "")
-	_, cmd := m.Update(keyMsg_g("enter"))
+	_, cmd := m.Update(specialKey(tea.KeyEnter))
 	if cmd == nil {
 		t.Fatal("expected a cmd after enter on a guild")
 	}
@@ -130,12 +134,12 @@ func TestGuildsModel_EscKey_ReturnToGuildList(t *testing.T) {
 	m := screens.NewGuildsModel()
 	m = m.SetGuilds(sampleGuilds(), "")
 	// Enter a guild (sets activeGuild), then simulate app delivering posts
-	m, _ = m.Update(keyMsg_g("enter"))
+	m, _ = m.Update(specialKey(tea.KeyEnter))
 	m = m.SetGuildPosts(sampleGuildPosts(), "")
 	if !m.IsBrowsingGuild() {
 		t.Fatal("expected to be browsing guild before esc")
 	}
-	m, _ = m.Update(keyMsg_g("esc"))
+	m, _ = m.Update(specialKey(tea.KeyEsc))
 	if m.IsBrowsingGuild() {
 		t.Error("esc should clear activeGuild and return to guild list")
 	}
