@@ -130,6 +130,8 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName) |
 | `Bookmark` | Saved post or reply (ID, type, postID/replyID, content snapshot, author, createdAt) |
 | `Topic` | Tag with post count (slug, postCount) |
+| `Guild` | Guild community (ID, name, slug, icon, bio, memberCount, founderUsername, createdAt, isMember, role) |
+| `GuildMember` | Guild membership record (membershipID, guildID, guildSlug, userID, username, role, joinedAt, displayName) |
 | `Follow` | Follow relationship (ID, followerID, followedID, followerUsername, followedUsername, createdAt) |
 | `Note` | Private journal note (ID, authorID, content, topics, revisionNumber, deleted, createdAt) |
 | `NoteRevision` | Single historical revision of a note (revisionNumber, content, topics, createdAt) |
@@ -467,14 +469,16 @@ Key methods: `SetBookmarks(items, cursor)`, `AppendBookmarks(items, cursor)`, `R
 
 #### `guilds.go`
 
-Browse the guild directory and drill into threads for a selected guild.
+Browse the guild directory, drill into threads, and view guild members.
 
-- Two-mode screen: guild list → guild thread feed
+- Three-mode screen: guild list → guild thread feed → member list
 - Guild list sorted by member count, cursor-paginated; `enter` opens the thread feed
-- Thread feed is a standard paginated post list; `esc` returns to the guild list
+- Thread feed is a standard paginated post list; `m` opens the member list, `esc` returns to the guild list
+- Member list is cursor-paginated oldest-joined first; `enter` navigates to the member's profile, `esc` returns to the thread feed
 
-Key types: `GuildsModel`, `LoadMoreGuildsMsg`, `LoadGuildPostsMsg`, `LoadMoreGuildPostsMsg`  
-Key methods: `SetGuilds(guilds, cursor)`, `AppendGuilds(guilds, cursor)`, `SetGuildPosts(posts, cursor)`, `AppendGuildPosts(posts, cursor)`
+Key types: `GuildsModel`, `LoadMoreGuildsMsg`, `LoadGuildPostsMsg`, `LoadMoreGuildPostsMsg`, `LoadGuildMembersMsg`, `LoadMoreGuildMembersMsg`  
+Key methods: `SetGuilds`, `AppendGuilds`, `SetGuildPosts`, `AppendGuildPosts`, `SetGuildMembers`, `AppendGuildMembers`  
+Key accessors: `IsBrowsingGuild()`, `IsBrowsingMembers()`
 
 #### `topics.go`
 

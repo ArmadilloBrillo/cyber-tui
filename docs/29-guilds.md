@@ -2,7 +2,7 @@
 
 ## Overview
 
-Guilds are member communities on cyberspace.online, each with their own thread forum. The guilds screen lets users browse the guild directory and read guild threads.
+Guilds are member communities on cyberspace.online, each with their own thread forum. The guilds screen lets users browse the guild directory, read guild threads, and view the member list.
 
 A user can belong to one guild at a time. Joining and leaving guilds is done on the web; the TUI is read-only for guild membership.
 
@@ -38,8 +38,24 @@ Entering a guild fetches the thread list (`GET /v1/guilds/:slug/posts`). The ser
 Navigation:
 - `j` / `down`, `k` / `up` — navigate threads; pagination loads at the bottom
 - `enter` — open thread in PostDetail; ESC from PostDetail returns here
+- `m` — open the member list for this guild
 - `n` — open compose panel
 - `esc` — cancel compose if open, otherwise return to the guild list
+
+### Guild members (members view)
+
+Shows all members of the selected guild, oldest-joined first. Each row shows:
+
+- Role icon (`◆` for founder, `•` for member)
+- Username (highlighted when selected)
+- Role label and join date (right-aligned)
+
+Fetched from `GET /v1/guilds/:slug/members` with cursor pagination. Banned and shadow-banned members are omitted by the server.
+
+Navigation:
+- `j` / `down`, `k` / `up` — navigate members; pagination loads at the bottom
+- `enter` — open the member's profile; ESC from the profile returns here
+- `esc` — return to the guild thread list
 
 ### Compose panel
 
@@ -57,19 +73,19 @@ After a successful post the thread list reloads.
 |--------|------|---------|
 | GET | `/v1/guilds?limit=20&cursor=<id>` | Paginated guild list |
 | GET | `/v1/guilds/:slug/posts?limit=20&cursor=<id>` | Paginated thread list for a guild |
+| GET | `/v1/guilds/:slug/members?limit=20&cursor=<membershipId>` | Paginated member list for a guild |
 | POST | `/v1/guilds/:slug/posts` | Create a guild thread (server enforces membership) |
 
 ## Implementation
 
-- `internal/model/types.go` — `Guild` struct (includes `IsMember`, `Role`)
-- `internal/api/interface.go` — `GetGuilds`, `GetGuild`, `GetGuildPosts`, `CreateGuildPost`
+- `internal/model/types.go` — `Guild` struct (includes `IsMember`, `Role`); `GuildMember` struct
+- `internal/api/interface.go` — `GetGuilds`, `GetGuild`, `GetGuildPosts`, `CreateGuildPost`, `GetGuildMembers`
 - `internal/api/client.go` — wire types and HTTP implementations
-- `internal/ui/screens/guilds.go` — `GuildsModel` (two-view screen + embedded `PostComposePanel`)
+- `internal/ui/screens/guilds.go` — `GuildsModel` (three-view screen + embedded `PostComposePanel`)
 - `internal/ui/app.go` — `screenGuilds` enum, `handleGuilds`, load/create commands, menu wiring
 
 ## Known limitations / out of scope
 
 - Join and leave guild (`POST /v1/guilds/:slug/join`, `/leave`) are not implemented; use the web interface
-- Guild member list (`GET /v1/guilds/:slug/members`) is not implemented
 - Public/NSFW toggles are shown in the compose panel but have no effect on guild posts
 - The API may not surface title or topics in the thread list on the website

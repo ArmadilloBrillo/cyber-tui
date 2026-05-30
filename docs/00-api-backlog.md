@@ -53,7 +53,7 @@ Guilds are member groups with their own forum of threads. A user can belong to o
 |---|---|---|---|
 | `/v1/guilds` | GET | List guilds (paginated, most-populated first) | **Done** — feature 29 |
 | `/v1/guilds/:slug` | GET | Get guild detail + caller's `isMember` / `role` | Not called — server `isMember` bug; membership delegated to server on post |
-| `/v1/guilds/:slug/members` | GET | List guild members (paginated, oldest-joined first) | Not implemented |
+| `/v1/guilds/:slug/members` | GET | List guild members (paginated, oldest-joined first) | **Done** — feature 29 |
 | `/v1/guilds/:slug/posts` | GET | List guild threads (most recently active first) | **Done** — feature 29 |
 | `/v1/guilds/:slug/posts` | POST | Create guild thread (title + topics supported) | **Done** — feature 29 |
 | `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | Not implemented |
