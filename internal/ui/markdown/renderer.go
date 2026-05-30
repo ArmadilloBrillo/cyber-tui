@@ -11,7 +11,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
-	"golang.org/x/text/unicode/norm"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -20,6 +19,7 @@ import (
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
+	"golang.org/x/text/unicode/norm"
 )
 
 // --- @mention extension ---

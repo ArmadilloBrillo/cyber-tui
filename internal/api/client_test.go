@@ -258,20 +258,20 @@ func TestHTTPGetFeed_ParsesExtendedPostFields(t *testing.T) {
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeOK(t, w, []map[string]any{
 			{
-				"postId":        "p1",
-				"authorId":      "u1",
+				"postId":         "p1",
+				"authorId":       "u1",
 				"authorUsername": "neuromancer",
-				"content":       "hello",
-				"title":         "A Title",
-				"slug":          "a-title",
-				"guildId":       "g1",
-				"guildSlug":     "night-owls",
-				"isGuildThread": true,
-				"topics":        []string{},
-				"isPublic":      false,
-				"isNSFW":        true,
-				"deleted":       false,
-				"createdAt":     "2025-01-01T12:00:00.000Z",
+				"content":        "hello",
+				"title":          "A Title",
+				"slug":           "a-title",
+				"guildId":        "g1",
+				"guildSlug":      "night-owls",
+				"isGuildThread":  true,
+				"topics":         []string{},
+				"isPublic":       false,
+				"isNSFW":         true,
+				"deleted":        false,
+				"createdAt":      "2025-01-01T12:00:00.000Z",
 			},
 		})
 	}))

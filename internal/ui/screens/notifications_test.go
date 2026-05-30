@@ -722,8 +722,8 @@ func TestNotifs_UnreadFilter_ResetsIndex(t *testing.T) {
 
 func TestNotifs_UnreadFilter_HidesRead(t *testing.T) {
 	notifs := []model.Notification{
-		makeNotif("n1", "reply", "p1", true),  // read
-		makeNotif("n2", "poke", "", false),     // unread
+		makeNotif("n1", "reply", "p1", true),    // read
+		makeNotif("n2", "poke", "", false),      // unread
 		makeNotif("n3", "bookmark", "p3", true), // read
 	}
 	m := initNotifs(notifs)

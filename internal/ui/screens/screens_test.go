@@ -838,8 +838,8 @@ func TestProfile_SetUserFollowing_LazyLoadNotFiredAgain(t *testing.T) {
 		{ID: "fw1", FollowedUsername: "molly_millions"},
 	}, "")
 	// Tab 3 times to reach Following tab.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Posts
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Replies
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})    // Posts
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})    // Replies
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Following
 	// Already loaded — should emit no lazy-load command.
 	if cmd != nil {
@@ -930,8 +930,8 @@ func TestParseTopics(t *testing.T) {
 		{"", nil},
 		{"go, tui, programming", []string{"go", "tui", "programming"}},
 		{"my cool topic, other", []string{"my cool topic", "other"}},
-		{"a, b, c, d", []string{"a", "b", "c"}},   // capped at 3
-		{"a,  ,  , b", []string{"a", "b"}},          // empty parts filtered
+		{"a, b, c, d", []string{"a", "b", "c"}},                   // capped at 3
+		{"a,  ,  , b", []string{"a", "b"}},                        // empty parts filtered
 		{"  trimmed  ,  spaces  ", []string{"trimmed", "spaces"}}, // whitespace trimmed
 	}
 	for _, tc := range cases {
@@ -1347,4 +1347,3 @@ func TestJournal_SetFetching_ClearedBySetNotes(t *testing.T) {
 		t.Errorf("expected loading message to be gone after SetNotes, got: %q", view)
 	}
 }
-

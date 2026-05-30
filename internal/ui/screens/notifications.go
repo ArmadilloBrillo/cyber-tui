@@ -35,22 +35,22 @@ type ShowNotificationPostMsg struct {
 }
 
 type NotificationsModel struct {
-	notifs        []model.Notification
-	notifOffsets  []int // start line of each notification within the viewport content
-	viewport      viewport.Model
-	width         int
-	height        int
-	selectedIndex int
-	ready         bool
-	loading       bool
-	fetching      bool // true while the initial (or tab-switch) load is in flight
-	refreshing    bool
-	exhausted     bool
-	nextCursor    string
+	notifs         []model.Notification
+	notifOffsets   []int // start line of each notification within the viewport content
+	viewport       viewport.Model
+	width          int
+	height         int
+	selectedIndex  int
+	ready          bool
+	loading        bool
+	fetching       bool // true while the initial (or tab-switch) load is in flight
+	refreshing     bool
+	exhausted      bool
+	nextCursor     string
 	showUnreadOnly bool
-	err           error
-	relaxed       bool
-	loc           *time.Location
+	err            error
+	relaxed        bool
+	loc            *time.Location
 }
 
 func NewNotificationsModel() NotificationsModel {

@@ -44,11 +44,11 @@ func TestDisplayTime(t *testing.T) {
 	loc := time.UTC
 
 	tests := []struct {
-		name     string
-		t        time.Time
-		setting  string
-		compact  bool
-		testFn   func(t *testing.T, got string)
+		name    string
+		t       time.Time
+		setting string
+		compact bool
+		testFn  func(t *testing.T, got string)
 	}{
 		{
 			name:    "datetime full",

@@ -104,10 +104,10 @@ type SubmitReplyMsg struct {
 type PostDetailModel struct {
 	post          model.Post
 	replies       []model.Reply
-	flatTree      []replyNode   // DFS-ordered tree walk; len always == len(replies)
-	replyOffsets  []int         // start line of each reply within the viewport content
-	replyHeights  []int         // rendered height of each reply (matches offsets; set by buildContent)
-	postHeight    int           // rendered height of the full post block; set by refreshContent
+	flatTree      []replyNode // DFS-ordered tree walk; len always == len(replies)
+	replyOffsets  []int       // start line of each reply within the viewport content
+	replyHeights  []int       // rendered height of each reply (matches offsets; set by buildContent)
+	postHeight    int         // rendered height of the full post block; set by refreshContent
 	selectedReply int
 	viewport      viewport.Model
 	width         int
@@ -116,12 +116,12 @@ type PostDetailModel struct {
 	loading       bool
 	err           error
 
-	compose            ComposeModel
-	replyPostID        string         // postID set when compose opens
-	replyParentID      string         // parentReplyID set when compose opens (empty = top-level)
-	relaxed            bool           // true = blank lines between post, header, and replies
-	loc                *time.Location // timezone for timestamp display; nil = UTC
-	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
+	compose           ComposeModel
+	replyPostID       string         // postID set when compose opens
+	replyParentID     string         // parentReplyID set when compose opens (empty = top-level)
+	relaxed           bool           // true = blank lines between post, header, and replies
+	loc               *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
 
 	currentUsername string        // set after login; guards the delete key to own content
 	confirming      pdConfirmKind // pending delete confirmation

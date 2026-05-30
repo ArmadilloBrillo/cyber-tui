@@ -52,7 +52,7 @@ type Config struct {
 
 	// WanderLust controls the wander mode easter egg, which silently updates
 	// the profile location to a random position twice per day.
-	// Defaults to true when absent from the JSON file.
+	// Defaults to false (off) when absent from the JSON file.
 	WanderLust bool `json:"wanderLust"`
 	// LastWandered records when wander mode last fired.
 	// Zero value means it has never run, which triggers an immediate update.

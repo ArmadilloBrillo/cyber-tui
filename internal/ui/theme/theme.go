@@ -7,7 +7,7 @@ import "github.com/charmbracelet/lipgloss"
 const (
 	TabBarHeight    = 1 // single text row, no border
 	StatusBarHeight = 1
-	SeparatorHeight = 1 // blank row between tab bar and screen content
+	SeparatorHeight = 1                                                // blank row between tab bar and screen content
 	ChromeHeight    = TabBarHeight + StatusBarHeight + SeparatorHeight // = 3
 )
 
@@ -43,8 +43,8 @@ var (
 		Foreground(ColorMuted)
 
 	Highlight = lipgloss.NewStyle().
-		Foreground(ColorYellow).
-		Bold(true)
+			Foreground(ColorYellow).
+			Bold(true)
 
 	Error = lipgloss.NewStyle().
 		Foreground(ColorRed).
@@ -56,29 +56,29 @@ var (
 		Padding(0, 1)
 
 	ActiveBorder = lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(ColorCyan).
-		Padding(0, 1)
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(ColorCyan).
+			Padding(0, 1)
 
 	StatusBar = lipgloss.NewStyle().
-		Background(ColorDimGreen).
-		Foreground(ColorBackground).
-		Padding(0, 1)
+			Background(ColorDimGreen).
+			Foreground(ColorBackground).
+			Padding(0, 1)
 
 	Tab = lipgloss.NewStyle().
 		Foreground(ColorDimGreen).
 		Padding(0, 2)
 
 	ActiveTab = lipgloss.NewStyle().
-		Background(ColorDimGreen).
-		Foreground(ColorGreen).
-		Bold(true).
-		Padding(0, 2)
+			Background(ColorDimGreen).
+			Foreground(ColorGreen).
+			Bold(true).
+			Padding(0, 2)
 
 	SelectedRow = lipgloss.NewStyle().
-		Background(ColorDimGreen).
-		Foreground(ColorGreen).
-		Bold(true)
+			Background(ColorDimGreen).
+			Foreground(ColorGreen).
+			Bold(true)
 )
 
 // Set applies the named theme by reassigning all color and style vars.

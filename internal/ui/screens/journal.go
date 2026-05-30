@@ -35,11 +35,11 @@ type JournalModel struct {
 	loading    bool
 	fetching   bool // true while the initial (or tab-switch) load is in flight
 
-	selectedIdx  int
-	noteOffsets  []int // start line of each note within viewport content
-	editMode     bool  // true while compose is open
-	isNewNote    bool  // true = create, false = update existing
-	editingID    string
+	selectedIdx int
+	noteOffsets []int // start line of each note within viewport content
+	editMode    bool  // true while compose is open
+	isNewNote   bool  // true = create, false = update existing
+	editingID   string
 
 	compose       ComposeModel
 	topicsInput   textinput.Model
@@ -48,7 +48,7 @@ type JournalModel struct {
 	confirming confirmKind
 
 	// Revision history state.
-	revisionsMode   bool                // true when viewing revision history
+	revisionsMode   bool // true when viewing revision history
 	revisions       []model.NoteRevision
 	revisionsCursor string
 	revisionsNoteID string
@@ -784,7 +784,6 @@ func (m JournalModel) renderNote(note model.Note, selected bool) string {
 	}
 	return boxStyle.Render(content)
 }
-
 
 func (m JournalModel) View() string {
 	if m.err != nil {

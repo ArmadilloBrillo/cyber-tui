@@ -154,7 +154,7 @@ func renderAttachments(attachments []model.Attachment) string {
 			}
 			line := theme.Subtle.Render("[AUDIO]") + "  " + linkStyle.Render(label)
 			if a.Genre != "" {
-				line += theme.Subtle.Render(" ("+a.Genre+")")
+				line += theme.Subtle.Render(" (" + a.Genre + ")")
 			}
 			lines = append(lines, line)
 		default:

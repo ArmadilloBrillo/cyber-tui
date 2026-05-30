@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/x/ansi"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -158,23 +158,23 @@ type App struct {
 
 func NewApp(client api.Client) App {
 	return App{
-		client:     client,
-		active:     screenLogin,
-		focus:      focusMenu,
-		loc:        time.UTC,
-		wanderLust: true,
-		login:          screens.NewLoginModel(""),
-		feed:           screens.NewFeedModel(),
-		chatrooms:      screens.NewChatroomsModel(),
-		cmail:          screens.NewCMailModel("", client),
-		profile:        screens.NewProfileModel(),
-		postDetail:     screens.NewPostDetailModel(),
-		notifications:  screens.NewNotificationsModel(),
-		settingsScreen: screens.NewSettingsModel(),
-		bookmarks:      screens.NewBookmarksModel(),
-		guilds:         screens.NewGuildsModel(),
-		topics:         screens.NewTopicsModel(),
-		journal:        screens.NewJournalModel(0),
+		client:             client,
+		active:             screenLogin,
+		focus:              focusMenu,
+		loc:                time.UTC,
+		wanderLust:         true,
+		login:              screens.NewLoginModel(""),
+		feed:               screens.NewFeedModel(),
+		chatrooms:          screens.NewChatroomsModel(),
+		cmail:              screens.NewCMailModel("", client),
+		profile:            screens.NewProfileModel(),
+		postDetail:         screens.NewPostDetailModel(),
+		notifications:      screens.NewNotificationsModel(),
+		settingsScreen:     screens.NewSettingsModel(),
+		bookmarks:          screens.NewBookmarksModel(),
+		guilds:             screens.NewGuildsModel(),
+		topics:             screens.NewTopicsModel(),
+		journal:            screens.NewJournalModel(0),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -257,20 +257,48 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a = a.applyWindowSize(m)
 		return a, a.delegateUpdate(msg)
 	}
-	if a2, cmd, ok := a.handleKeys(msg);       ok { return a2, cmd }
-	if a2, cmd, ok := a.handleAuth(msg);       ok { return a2, cmd }
-	if a2, cmd, ok := a.handleFeed(msg);       ok { return a2, cmd }
-	if a2, cmd, ok := a.handlePostDetail(msg); ok { return a2, cmd }
-	if a2, cmd, ok := a.handleChatrooms(msg);  ok { return a2, cmd }
-	if a2, cmd, ok := a.handleCMail(msg);      ok { return a2, cmd }
-	if a2, cmd, ok := a.handleProfile(msg);        ok { return a2, cmd }
-	if a2, cmd, ok := a.handleNotifications(msg); ok { return a2, cmd }
-	if a2, cmd, ok := a.handleSettings(msg);       ok { return a2, cmd }
-	if a2, cmd, ok := a.handleBookmarks(msg);      ok { return a2, cmd }
-	if a2, cmd, ok := a.handleGuilds(msg);         ok { return a2, cmd }
-	if a2, cmd, ok := a.handleTopics(msg);         ok { return a2, cmd }
-	if a2, cmd, ok := a.handleJournal(msg);        ok { return a2, cmd }
-	if a2, cmd, ok := a.handleErr(msg);            ok { return a2, cmd }
+	if a2, cmd, ok := a.handleKeys(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleAuth(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleFeed(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handlePostDetail(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleChatrooms(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleCMail(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleProfile(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleNotifications(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleSettings(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleBookmarks(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleGuilds(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleTopics(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleJournal(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleErr(msg); ok {
+		return a2, cmd
+	}
 	return a, a.delegateUpdate(msg)
 }
 
