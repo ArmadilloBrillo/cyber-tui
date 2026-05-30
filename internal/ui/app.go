@@ -443,7 +443,10 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.SubmitLoginMsg:
 		return a, a.loginCmd(msg.Email, msg.Password), true
-	case screens.LoginMsg:
+	case loginSuccessMsg:
+		a.tokens = msg.tokens
+		a.currentUser = msg.user
+		a.cmail = screens.NewCMailModel(msg.user.Username, a.client)
 		return a, a.afterLoginCmd(), true
 	case screens.LoginErrMsg:
 		var cmd tea.Cmd
@@ -1828,13 +1831,19 @@ func overlayCenter(bg, fg string, bgW, bgH int) string {
 
 // --- commands ---
 
+// loginSuccessMsg carries the authenticated session back to the update loop so
+// App fields are set there rather than mutated from the command goroutine.
+type loginSuccessMsg struct {
+	tokens model.Tokens
+	user   model.User
+}
+
 func (a *App) loginCmd(email, password string) tea.Cmd {
 	return func() tea.Msg {
 		tokens, err := a.client.Login(email, password)
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		a.tokens = tokens
 		// Initialise the RTDB client from the rtdbToken (best effort).
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			_ = hc.InitRTDB(tokens.RTDBToken)
@@ -1843,12 +1852,10 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		a.currentUser = user
 		// Wire the user ID into the HTTP client for RTDB path construction.
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			hc.SetCurrentUID(user.ID)
 		}
-		a.cmail = screens.NewCMailModel(user.Username, a.client)
 		// Persist the refresh token so subsequent launches auto-login.
 		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
@@ -1863,7 +1870,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 			cfg.Density = density
 			_ = config.Save(cfg)
 		}
-		return screens.LoginMsg{}
+		return loginSuccessMsg{tokens: tokens, user: user}
 	}
 }
 
@@ -1876,7 +1883,6 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		a.tokens = tokens
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			_ = hc.InitRTDB(tokens.RTDBToken)
 		}
@@ -1884,11 +1890,9 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		a.currentUser = user
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			hc.SetCurrentUID(user.ID)
 		}
-		a.cmail = screens.NewCMailModel(user.Username, a.client)
 		// Update savedAt so we know when the session was last used.
 		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
@@ -1902,7 +1906,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 			cfg.Density = density
 			_ = config.Save(cfg)
 		}
-		return screens.LoginMsg{}
+		return loginSuccessMsg{tokens: tokens, user: user}
 	}
 }
 

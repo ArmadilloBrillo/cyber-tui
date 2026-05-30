@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -326,17 +327,51 @@ type apiError struct {
 
 // HTTPClient implements Client against the cyberspace.online REST API.
 //
-// NOTE: HTTPClient is not safe for concurrent use. The tokens field is mutated
-// by Login and the internal refresh logic. In the current app, all API calls
-// originate from Bubble Tea command goroutines which may run concurrently.
-// A sync.Mutex should be added if concurrent access becomes a problem.
+// Bubble Tea runs each command in its own goroutine, so API calls (and the 401
+// refresh they may trigger) can execute concurrently. The tokens field is read
+// by doRequest and written by Login/refresh/Logout; mu guards every access to it
+// via the accessor methods below so reads and writes never race.
 type HTTPClient struct {
 	baseURL    string
 	httpClient *http.Client
+	mu         sync.Mutex
 	tokens     model.Tokens
 	rtdbClient *rtdb.Client // nil until InitRTDB is called
 	currentUID string       // set from GetOwnProfile after login, used for RTDB paths
 	debug      bool
+}
+
+// --- concurrency-safe token access ---
+
+func (c *HTTPClient) idToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tokens.IDToken
+}
+
+func (c *HTTPClient) currentRefreshToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tokens.RefreshToken
+}
+
+func (c *HTTPClient) setTokens(t model.Tokens) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tokens = t
+}
+
+func (c *HTTPClient) snapshotTokens() model.Tokens {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tokens
+}
+
+func (c *HTTPClient) applyRefresh(idToken, rtdbToken string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tokens.IDToken = idToken
+	c.tokens.RTDBToken = rtdbToken
 }
 
 // NewHTTPClient creates a production HTTPClient with a 15-second timeout.
@@ -405,8 +440,8 @@ func (c *HTTPClient) doRequest(method, path string, bodyBytes []byte) (*envelope
 		if len(bodyBytes) > 0 {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		if c.tokens.IDToken != "" {
-			req.Header.Set("Authorization", "Bearer "+c.tokens.IDToken)
+		if tok := c.idToken(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
 		}
 
 		resp, err := c.httpClient.Do(req)
@@ -462,7 +497,10 @@ func (c *HTTPClient) doJSON(method, path string, body any) (*envelope, error) {
 // refresh calls POST /v1/auth/refresh directly (bypasses doRequest to avoid recursion).
 // On success it updates c.tokens.IDToken and c.tokens.RTDBToken.
 func (c *HTTPClient) refresh() error {
-	b, _ := json.Marshal(refreshRequest{RefreshToken: c.tokens.RefreshToken})
+	b, err := json.Marshal(refreshRequest{RefreshToken: c.currentRefreshToken()})
+	if err != nil {
+		return err
+	}
 	req, err := http.NewRequest("POST", c.baseURL+"/v1/auth/refresh", bytes.NewReader(b))
 	if err != nil {
 		return err
@@ -492,8 +530,7 @@ func (c *HTTPClient) refresh() error {
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return err
 	}
-	c.tokens.IDToken = data.IDToken
-	c.tokens.RTDBToken = data.RTDBToken
+	c.applyRefresh(data.IDToken, data.RTDBToken)
 	return nil
 }
 
@@ -751,28 +788,29 @@ func (c *HTTPClient) Login(email, password string) (model.Tokens, error) {
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return model.Tokens{}, err
 	}
-	c.tokens = model.Tokens{
+	t := model.Tokens{
 		IDToken:      data.IDToken,
 		RefreshToken: data.RefreshToken,
 		RTDBToken:    data.RTDBToken,
 	}
-	return c.tokens, nil
+	c.setTokens(t)
+	return t, nil
 }
 
 // LoginWithRefreshToken exchanges a saved refresh token for a fresh IDToken and
 // RTDBToken without requiring the user's password. On success the new tokens are
 // stored in the client and returned. On failure ErrUnauthorized is returned.
 func (c *HTTPClient) LoginWithRefreshToken(refreshToken string) (model.Tokens, error) {
-	c.tokens.RefreshToken = refreshToken
+	c.setTokens(model.Tokens{RefreshToken: refreshToken})
 	if err := c.refresh(); err != nil {
 		return model.Tokens{}, err
 	}
-	return c.tokens, nil
+	return c.snapshotTokens(), nil
 }
 
 // Logout clears the in-memory tokens. The v0.2 API has no server-side logout endpoint.
 func (c *HTTPClient) Logout() error {
-	c.tokens = model.Tokens{}
+	c.setTokens(model.Tokens{})
 	return nil
 }
 
