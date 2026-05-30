@@ -75,6 +75,7 @@ This file defines workflow guardrails for Claude. It is not project documentatio
   go vet ./...
   staticcheck ./...
   ```
+- Run `govulncheck ./...` before releases and in CI to catch vulnerable dependencies
 - Never commit secrets, tokens, credentials, or SSH keys
 - `.env` is gitignored; `.env.example` is committed with placeholder values only
 
