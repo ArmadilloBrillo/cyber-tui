@@ -1,5 +1,6 @@
 .env
 /cyber-tui
+/apifetch
 /dist/
 *.exe
 *.test
