@@ -9,14 +9,14 @@ import (
 
 func defaultSettings() model.Settings {
 	return model.Settings{
-		Notifications:     model.NotificationPrefs{Bookmark: true, Reply: true, Poke: false},
-		FilterNSFW:        false,
-		HideImagesInFeed:  false,
-		HideAudioInFeed:   false,
-		ShowFollowerCount: true,
-		AutoWatchOnReply:  false,
-		DefaultPublicPost: true,
-		TimeDisplayFormat: "relative",
+		Notifications:      model.NotificationPrefs{Bookmark: true, Reply: true, Poke: false},
+		FilterNSFW:         false,
+		HideImagesInFeed:   false,
+		HideAudioInFeed:    false,
+		ShowFollowerCount:  true,
+		AutoWatchOnReply:   false,
+		DefaultPublicPost:  true,
+		TimeDisplayFormat:  "relative",
 		UseLegacyMenuOrder: false,
 	}
 }

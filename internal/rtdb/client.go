@@ -16,6 +16,10 @@ import (
 	"time"
 )
 
+// maxResponseBytes caps how much of a one-shot REST response body is read into
+// memory, guarding against an oversized body from a compromised endpoint.
+const maxResponseBytes = 10 << 20 // 10 MiB
+
 // SSEEvent is a single Server-Sent Event received from the RTDB stream.
 type SSEEvent struct {
 	Event string // "put", "patch", "cancel", "auth_revoked"
@@ -67,7 +71,7 @@ func (c *Client) Get(ctx context.Context, path string, params url.Values) ([]byt
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("rtdb: read GET response: %w", err)
 	}

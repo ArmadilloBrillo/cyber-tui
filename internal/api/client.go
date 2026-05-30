@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/rtdb"
+	"github.com/ragnar/cyber-tui/internal/sanitize"
 )
 
 // --- typed errors ---
@@ -35,6 +37,10 @@ var ErrUnauthorized = &APIError{Code: "UNAUTHORIZED", Status: 401, Message: "ses
 
 // ErrRateLimited is returned when the server responds with 429.
 var ErrRateLimited = &APIError{Code: "RATE_LIMITED", Status: 429, Message: "rate limit exceeded"}
+
+// maxResponseBytes caps how much of a response body is read into memory, guarding
+// against a malicious or compromised endpoint returning an enormous body.
+const maxResponseBytes = 10 << 20 // 10 MiB
 
 // --- wire types (unexported JSON shapes matching the API) ---
 
@@ -249,15 +255,15 @@ type wireNotificationMetadata struct {
 }
 
 type wireNotification struct {
-	ID            string                     `json:"id"`
-	Type          string                     `json:"type"`
-	Read          bool                       `json:"read"`
-	CreatedAt     string                     `json:"createdAt"`
-	ActorID       string                     `json:"actorId"`
-	ActorUsername string                     `json:"actorUsername"`
-	TargetID      string                     `json:"targetId"`
-	TargetType    string                     `json:"targetType"`
-	Metadata      wireNotificationMetadata   `json:"metadata"`
+	ID            string                   `json:"id"`
+	Type          string                   `json:"type"`
+	Read          bool                     `json:"read"`
+	CreatedAt     string                   `json:"createdAt"`
+	ActorID       string                   `json:"actorId"`
+	ActorUsername string                   `json:"actorUsername"`
+	TargetID      string                   `json:"targetId"`
+	TargetType    string                   `json:"targetType"`
+	Metadata      wireNotificationMetadata `json:"metadata"`
 }
 
 type updateProfileRequest struct {
@@ -325,17 +331,51 @@ type apiError struct {
 
 // HTTPClient implements Client against the cyberspace.online REST API.
 //
-// NOTE: HTTPClient is not safe for concurrent use. The tokens field is mutated
-// by Login and the internal refresh logic. In the current app, all API calls
-// originate from Bubble Tea command goroutines which may run concurrently.
-// A sync.Mutex should be added if concurrent access becomes a problem.
+// Bubble Tea runs each command in its own goroutine, so API calls (and the 401
+// refresh they may trigger) can execute concurrently. The tokens field is read
+// by doRequest and written by Login/refresh/Logout; mu guards every access to it
+// via the accessor methods below so reads and writes never race.
 type HTTPClient struct {
 	baseURL    string
 	httpClient *http.Client
+	mu         sync.Mutex
 	tokens     model.Tokens
 	rtdbClient *rtdb.Client // nil until InitRTDB is called
 	currentUID string       // set from GetOwnProfile after login, used for RTDB paths
 	debug      bool
+}
+
+// --- concurrency-safe token access ---
+
+func (c *HTTPClient) idToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tokens.IDToken
+}
+
+func (c *HTTPClient) currentRefreshToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tokens.RefreshToken
+}
+
+func (c *HTTPClient) setTokens(t model.Tokens) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tokens = t
+}
+
+func (c *HTTPClient) snapshotTokens() model.Tokens {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.tokens
+}
+
+func (c *HTTPClient) applyRefresh(idToken, rtdbToken string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tokens.IDToken = idToken
+	c.tokens.RTDBToken = rtdbToken
 }
 
 // NewHTTPClient creates a production HTTPClient with a 15-second timeout.
@@ -358,13 +398,8 @@ func (c *HTTPClient) InitRTDB(rtdbToken string) error {
 	projectID, err := rtdb.ParseRTDBToken(rtdbToken)
 	if err != nil {
 		if c.isDebug() {
-			fmt.Printf("[rtdb debug] InitRTDB: ParseRTDBToken failed: %v\n", err)
-			// Print first 100 chars of token to help diagnose format.
-			preview := rtdbToken
-			if len(preview) > 100 {
-				preview = preview[:100] + "..."
-			}
-			fmt.Printf("[rtdb debug] rtdbToken preview: %s\n", preview)
+			// Never log token material; the parse error alone is enough to diagnose.
+			fmt.Printf("[rtdb debug] InitRTDB: parse rtdb token failed: %v\n", err)
 		}
 		return fmt.Errorf("api: parse rtdb token: %w", err)
 	}
@@ -404,8 +439,8 @@ func (c *HTTPClient) doRequest(method, path string, bodyBytes []byte) (*envelope
 		if len(bodyBytes) > 0 {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		if c.tokens.IDToken != "" {
-			req.Header.Set("Authorization", "Bearer "+c.tokens.IDToken)
+		if tok := c.idToken(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
 		}
 
 		resp, err := c.httpClient.Do(req)
@@ -414,7 +449,7 @@ func (c *HTTPClient) doRequest(method, path string, bodyBytes []byte) (*envelope
 		}
 		defer resp.Body.Close()
 
-		raw, err := io.ReadAll(resp.Body)
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 		if err != nil {
 			return nil, resp.StatusCode, err
 		}
@@ -461,7 +496,10 @@ func (c *HTTPClient) doJSON(method, path string, body any) (*envelope, error) {
 // refresh calls POST /v1/auth/refresh directly (bypasses doRequest to avoid recursion).
 // On success it updates c.tokens.IDToken and c.tokens.RTDBToken.
 func (c *HTTPClient) refresh() error {
-	b, _ := json.Marshal(refreshRequest{RefreshToken: c.tokens.RefreshToken})
+	b, err := json.Marshal(refreshRequest{RefreshToken: c.currentRefreshToken()})
+	if err != nil {
+		return err
+	}
 	req, err := http.NewRequest("POST", c.baseURL+"/v1/auth/refresh", bytes.NewReader(b))
 	if err != nil {
 		return err
@@ -474,7 +512,7 @@ func (c *HTTPClient) refresh() error {
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return fmt.Errorf("refresh: read body: %w", err)
 	}
@@ -491,8 +529,7 @@ func (c *HTTPClient) refresh() error {
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return err
 	}
-	c.tokens.IDToken = data.IDToken
-	c.tokens.RTDBToken = data.RTDBToken
+	c.applyRefresh(data.IDToken, data.RTDBToken)
 	return nil
 }
 
@@ -532,6 +569,7 @@ func wireAttachmentsToModel(ws []wireAttachment) []model.Attachment {
 }
 
 func wirePostToModel(w wirePost) model.Post {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	return model.Post{
 		ID:             w.PostID,
@@ -555,6 +593,7 @@ func wirePostToModel(w wirePost) model.Post {
 }
 
 func wireReplyToModel(w wireReply) model.Reply {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	return model.Reply{
 		ID:             w.ReplyID,
@@ -569,6 +608,7 @@ func wireReplyToModel(w wireReply) model.Reply {
 }
 
 func wireUserToModel(w wireUser) model.User {
+	sanitize.Strings(&w)
 	return model.User{
 		ID:                w.UserID,
 		Username:          w.Username,
@@ -590,6 +630,7 @@ func wireUserToModel(w wireUser) model.User {
 }
 
 func wireFollowToModel(w wireFollow) model.Follow {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	return model.Follow{
 		ID:               w.FollowID,
@@ -602,6 +643,7 @@ func wireFollowToModel(w wireFollow) model.Follow {
 }
 
 func wireNoteRevisionToModel(w wireNoteRevision) model.NoteRevision {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	topics := w.Topics
 	if topics == nil {
@@ -616,6 +658,7 @@ func wireNoteRevisionToModel(w wireNoteRevision) model.NoteRevision {
 }
 
 func wireSettingsToModel(w wireSettings) model.Settings {
+	sanitize.Strings(&w)
 	return model.Settings{
 		Notifications: model.NotificationPrefs{
 			Bookmark: w.Notifications.Bookmark,
@@ -638,6 +681,7 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 }
 
 func wireBookmarkToModel(w wireBookmark) model.Bookmark {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	b := model.Bookmark{
 		ID:        w.BookmarkID,
@@ -658,15 +702,16 @@ func wireBookmarkToModel(w wireBookmark) model.Bookmark {
 }
 
 func wireNotificationToModel(w wireNotification) model.Notification {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	return model.Notification{
-		ID:         w.ID,
-		Type:       w.Type,
-		Read:       w.Read,
-		CreatedAt:  t,
-		Actor:      model.NotificationActor{ID: w.ActorID, Username: w.ActorUsername},
-		TargetID:   w.TargetID,
-		TargetType: w.TargetType,
+		ID:                   w.ID,
+		Type:                 w.Type,
+		Read:                 w.Read,
+		CreatedAt:            t,
+		Actor:                model.NotificationActor{ID: w.ActorID, Username: w.ActorUsername},
+		TargetID:             w.TargetID,
+		TargetType:           w.TargetType,
 		ReplyID:              w.Metadata.ReplyID,
 		ThreadAuthorUsername: w.Metadata.AuthorUsername,
 		GuildName:            w.Metadata.GuildName,
@@ -674,6 +719,7 @@ func wireNotificationToModel(w wireNotification) model.Notification {
 }
 
 func wireTopicToModel(w wireTopic) model.Topic {
+	sanitize.Strings(&w)
 	return model.Topic{
 		Slug:      w.TopicID,
 		PostCount: w.PostCount,
@@ -681,6 +727,7 @@ func wireTopicToModel(w wireTopic) model.Topic {
 }
 
 func wireGuildToModel(w wireGuild) model.Guild {
+	sanitize.Strings(&w)
 	return model.Guild{
 		ID:              w.ID,
 		Name:            w.Name,
@@ -698,6 +745,7 @@ func wireGuildToModel(w wireGuild) model.Guild {
 }
 
 func wireGuildMemberToModel(w wireGuildMember) model.GuildMember {
+	sanitize.Strings(&w)
 	return model.GuildMember{
 		MembershipID: w.MembershipID,
 		GuildID:      w.GuildID,
@@ -711,6 +759,7 @@ func wireGuildMemberToModel(w wireGuildMember) model.GuildMember {
 }
 
 func wireNoteToModel(w wireNote) model.Note {
+	sanitize.Strings(&w)
 	t := parseTime(w.CreatedAt)
 	topics := w.Topics
 	if topics == nil {
@@ -738,28 +787,29 @@ func (c *HTTPClient) Login(email, password string) (model.Tokens, error) {
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return model.Tokens{}, err
 	}
-	c.tokens = model.Tokens{
+	t := model.Tokens{
 		IDToken:      data.IDToken,
 		RefreshToken: data.RefreshToken,
 		RTDBToken:    data.RTDBToken,
 	}
-	return c.tokens, nil
+	c.setTokens(t)
+	return t, nil
 }
 
 // LoginWithRefreshToken exchanges a saved refresh token for a fresh IDToken and
 // RTDBToken without requiring the user's password. On success the new tokens are
 // stored in the client and returned. On failure ErrUnauthorized is returned.
 func (c *HTTPClient) LoginWithRefreshToken(refreshToken string) (model.Tokens, error) {
-	c.tokens.RefreshToken = refreshToken
+	c.setTokens(model.Tokens{RefreshToken: refreshToken})
 	if err := c.refresh(); err != nil {
 		return model.Tokens{}, err
 	}
-	return c.tokens, nil
+	return c.snapshotTokens(), nil
 }
 
 // Logout clears the in-memory tokens. The v0.2 API has no server-side logout endpoint.
 func (c *HTTPClient) Logout() error {
-	c.tokens = model.Tokens{}
+	c.setTokens(model.Tokens{})
 	return nil
 }
 
@@ -843,6 +893,7 @@ func (c *HTTPClient) CreatePost(content, title string, topics []string, isPublic
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return model.Post{}, err
 	}
+	sanitize.Strings(&data)
 	return model.Post{
 		ID:       data.PostID,
 		Title:    data.Title,
@@ -1120,6 +1171,7 @@ func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []strin
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return model.Post{}, err
 	}
+	sanitize.Strings(&data)
 	return model.Post{
 		ID:            data.PostID,
 		Title:         data.Title,

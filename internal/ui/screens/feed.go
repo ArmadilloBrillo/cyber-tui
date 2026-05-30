@@ -12,7 +12,6 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-
 // LoadMoreFeedMsg is emitted by FeedModel when the viewport reaches the bottom
 // and a next-page cursor is available. App intercepts this and fires the API call.
 type LoadMoreFeedMsg struct{ Cursor string }
@@ -38,24 +37,24 @@ type SubmitNewPostMsg struct {
 }
 
 type FeedModel struct {
-	posts         []model.Post
-	postOffsets   []int // start line of each post within the viewport content
-	viewport      viewport.Model
-	panel         PostComposePanel
+	posts             []model.Post
+	postOffsets       []int // start line of each post within the viewport content
+	viewport          viewport.Model
+	panel             PostComposePanel
 	defaultPublicPost bool // mirrored from settings; initialises panel.isPublic on each open
-	width         int
-	height        int
-	selectedIndex int
-	ready         bool
-	err           error
-	nextCursor    string
-	loading       bool
-	fetching      bool // true while the initial (or tab-switch) load is in flight
-	refreshing    bool // true while re-fetching newest posts (up at top)
-	exhausted     bool // true once API returned an empty cursor
-	relaxed       bool           // true = blank line between posts (relaxed density)
-	loc           *time.Location // timezone for timestamp display; nil = UTC
-	timeDisplayFormat string     // API setting: "datetime", "relative", "unix", "swatch"
+	width             int
+	height            int
+	selectedIndex     int
+	ready             bool
+	err               error
+	nextCursor        string
+	loading           bool
+	fetching          bool           // true while the initial (or tab-switch) load is in flight
+	refreshing        bool           // true while re-fetching newest posts (up at top)
+	exhausted         bool           // true once API returned an empty cursor
+	relaxed           bool           // true = blank line between posts (relaxed density)
+	loc               *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
 
 	currentUsername  string // set after login; used to guard the delete key
 	confirmingDelete bool   // true while the delete-post confirmation overlay is shown

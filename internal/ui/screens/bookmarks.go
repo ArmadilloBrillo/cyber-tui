@@ -2,14 +2,14 @@ package screens
 
 import (
 	"fmt"
-	"strings"
-	"time"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
+	"strings"
+	"time"
 )
 
 // LoadMoreBookmarksMsg is emitted when the user scrolls to the last item
@@ -228,7 +228,6 @@ func (m BookmarksModel) location() *time.Location {
 	}
 	return m.loc
 }
-
 
 func (m BookmarksModel) refreshContent() BookmarksModel {
 	content, offsets := m.buildContent()

@@ -8,7 +8,7 @@ Comprehensive map of every module, file, and artifact in this repository. Use th
 
 **cyber-tui** is a terminal user interface (TUI) client for [cyberspace.online](https://cyberspace.online) — a retro text-only social network. It is written in Go, using [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI event loop, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling, and [Wish](https://github.com/charmbracelet/wish) to optionally host the client over SSH.
 
-The client talks to the cyberspace.online REST API (v0.2) and to Firebase Realtime Database (RTDB) for live direct messages. See `docs/03-api-reference.md` for the baseline API spec.
+The client talks to the cyberspace.online REST API (current target v0.3.6; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages. See `docs/00-latest-api-reference.md` for the current API spec snapshot.
 
 ---
 
@@ -32,6 +32,9 @@ cyber-tui/
 │   │   └── timezone_test.go     # Timezone parsing tests
 │   ├── model/
 │   │   └── types.go             # Shared domain types
+│   ├── sanitize/
+│   │   ├── sanitize.go          # Strip control chars from untrusted server strings
+│   │   └── sanitize_test.go     # Sanitizer tests
 │   ├── rtdb/
 │   │   ├── client.go            # Firebase RTDB REST + SSE client
 │   │   ├── jwt.go               # JWT decode for RTDB project ID
@@ -189,7 +192,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 
 **Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow` — match the JSON envelope shapes returned by the API.
 
-**Note:** `HTTPClient` is not goroutine-safe. The `tokens` field is mutated by `Login` and `refresh`. Bubble Tea's single-update-loop model largely prevents concurrent mutation, but this may need a `sync.Mutex` if command goroutines become truly parallel.
+**Note:** `HTTPClient.tokens` is guarded by a `sync.Mutex`. Bubble Tea runs commands in concurrent goroutines, so reads in `doRequest` and writes in `Login`/`refresh` go through the token accessor methods (`idToken`, `setTokens`, `snapshotTokens`, `applyRefresh`). See `docs/30-security-hardening.md`.
 
 #### `mock.go`
 
@@ -274,13 +277,13 @@ Tests for RTDB REST operations, SSE parsing, and JWT decoding.
 
 SSH server hosting via Wish (Charmbracelet).
 
-`Serve(addr, hostKeyPath, client api.Client)`:
+`Serve(addr, hostKeyPath, newClient func() api.Client)`:
 
 1. Creates a Wish server with Bubble Tea middleware
-2. Each SSH connection gets a fresh `ui.App` instance — identical to the local TUI
-3. Listens for SIGTERM/Interrupt and shuts down gracefully with a 5-second timeout
+2. Each SSH connection gets a fresh `ui.App` built with its own `api.Client` from `newClient`, marked ephemeral via `WithEphemeralSession` so it never reads or writes the host config
+3. Listens for SIGTERM/Interrupt and shuts down gracefully with a 5-second timeout; `ListenAndServe` errors are surfaced
 
-The SSH and local modes share all TUI code; no conditional logic in `ui/`.
+SSH mode is experimental and unauthenticated; startup warns accordingly. The SSH and local modes otherwise share all TUI code. See `docs/30-security-hardening.md`.
 
 ---
 
@@ -587,6 +590,7 @@ Permissions: `0600` (owner read/write only)
 | `timezone` | string | `"UTC"` | UTC offset label (e.g. "UTC+5:30") |
 | `theme` | string | `"cyber"` | `"cyber"`, `"c64"`, or `"vt320"` |
 | `apiBaseURL` | string | `"https://api.cyberspace.online"` | Override for development |
+| `allowInsecureApi` | bool | `false` | Permit a plain `http://` `apiBaseURL` to a non-loopback host |
 | `useMock` | bool | `false` | Use `MockClient` instead of real API |
 | `debug` | bool | `false` | Verbose RTDB / HTTP output |
 | `autoEmail` | string | — | Pre-fill email on login screen |
@@ -786,7 +790,7 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 |---|---|
 | **Chatrooms API** | UI fully built; REST integration deferred (server paths not finalized) |
 | **C-Mail REST** | Conversation list + history loaded from mock; RTDB subscribe wired; full path confirmed post-beta |
-| **HTTPClient thread safety** | Tokens field mutated by Login/refresh with no mutex; acceptable under Bubble Tea's single-update loop, but may need `sync.Mutex` if command goroutines become truly concurrent |
+| **HTTPClient thread safety** | Resolved: `tokens` is guarded by a `sync.Mutex` (see `docs/30-security-hardening.md`) |
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized |
 | **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |
 | **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |

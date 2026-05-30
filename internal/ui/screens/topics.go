@@ -32,7 +32,7 @@ type LoadMoreTopicsMsg struct{ Cursor string }
 type topicsView int
 
 const (
-	viewTopicList  topicsView = iota
+	viewTopicList topicsView = iota
 	viewTopicPosts
 )
 
@@ -46,27 +46,27 @@ type TopicsModel struct {
 	topicsExhausted  bool
 
 	// Topic posts state
-	activeTopic  string
-	posts        []model.Post
-	postIndex    int
-	nextCursor   string
-	exhausted    bool
-	loading      bool
-	fetching     bool // true while the initial (or tab-switch) load is in flight
-	refreshing   bool
-	loaded       bool
+	activeTopic string
+	posts       []model.Post
+	postIndex   int
+	nextCursor  string
+	exhausted   bool
+	loading     bool
+	fetching    bool // true while the initial (or tab-switch) load is in flight
+	refreshing  bool
+	loaded      bool
 
 	// Shared
-	viewport         viewport.Model
-	itemOffsets      []int
-	width            int
+	viewport    viewport.Model
+	itemOffsets []int
+	width       int
 
 	bookmarkedPostIDs map[string]struct{}
-	height           int
-	ready            bool
-	err              error
-	loc              *time.Location
-	relaxed          bool
+	height            int
+	ready             bool
+	err               error
+	loc               *time.Location
+	relaxed           bool
 	timeDisplayFormat string
 }
 

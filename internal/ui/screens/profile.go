@@ -48,7 +48,7 @@ var profileFieldLabels = [numProfileFields]string{
 type profileTab int
 
 const (
-	tabInfo      profileTab = iota
+	tabInfo profileTab = iota
 	tabPosts
 	tabReplies
 	tabFollowing
@@ -987,4 +987,3 @@ func (m ProfileModel) GetFocusedURLs() []string {
 	}
 	return urls
 }
-

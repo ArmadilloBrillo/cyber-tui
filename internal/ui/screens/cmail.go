@@ -66,12 +66,12 @@ type CMailModel struct {
 	err           error
 	currentUser   string
 
-	focusPane          CMailFocus
-	selectedConv       int            // index into conversations
-	sidebarWidth       int            // inner content width, computed on WindowSizeMsg
-	width              int            // terminal width, stored for View()
-	loc                *time.Location // timezone for timestamp display; nil = UTC
-	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
+	focusPane         CMailFocus
+	selectedConv      int            // index into conversations
+	sidebarWidth      int            // inner content width, computed on WindowSizeMsg
+	width             int            // terminal width, stored for View()
+	loc               *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
 
 	// DM subscription state — managed entirely within CMailModel.
 	client       api.Client

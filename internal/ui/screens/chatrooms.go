@@ -19,16 +19,16 @@ const chatroomLocalChrome = 3
 const chatroomSidebarWidth = 20 // includes border
 
 type ChatroomsModel struct {
-	rooms              []model.Room
-	activeRoom         *model.Room
-	messages           []model.Message
-	viewport           viewport.Model
-	input              textinput.Model
-	width              int
-	ready              bool
-	err                error
-	loc                *time.Location // timezone for timestamp display; nil = UTC
-	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
+	rooms             []model.Room
+	activeRoom        *model.Room
+	messages          []model.Message
+	viewport          viewport.Model
+	input             textinput.Model
+	width             int
+	ready             bool
+	err               error
+	loc               *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
 }
 
 type SendRoomMessageMsg struct {

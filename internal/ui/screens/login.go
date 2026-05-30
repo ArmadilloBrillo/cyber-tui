@@ -9,7 +9,6 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-type LoginMsg struct{}
 type LoginErrMsg struct{ Err error }
 
 type LoginModel struct {

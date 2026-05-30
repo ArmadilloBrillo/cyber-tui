@@ -59,6 +59,22 @@ func TestParseRTDBToken_MissingAud(t *testing.T) {
 	}
 }
 
+func TestParseRTDBToken_RejectsHostInjectingAud(t *testing.T) {
+	for _, aud := range []string{
+		"evil.com/",
+		"proj.firebaseio.com",
+		"a@b",
+		"proj id",
+		"proj:8080",
+		"../proj",
+	} {
+		token := makeJWT(map[string]any{"aud": aud, "sub": "uid1"})
+		if _, err := rtdb.ParseRTDBToken(token); err == nil {
+			t.Errorf("expected error for aud %q, got nil", aud)
+		}
+	}
+}
+
 func TestBaseURL(t *testing.T) {
 	got := rtdb.BaseURL("my-project")
 	want := "https://my-project-default-rtdb.firebaseio.com"

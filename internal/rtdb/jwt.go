@@ -48,10 +48,32 @@ func ParseRTDBToken(token string) (string, error) {
 		if v == "" {
 			return "", fmt.Errorf("rtdb: 'aud' claim is empty")
 		}
+		// The project ID is interpolated into the RTDB hostname, so reject any
+		// value outside the Firebase project-ID charset to prevent a crafted
+		// token from redirecting RTDB traffic to another host.
+		if !validProjectID(v) {
+			return "", fmt.Errorf("rtdb: 'aud' claim %q is not a valid project id", v)
+		}
 		return v, nil
 	default:
 		return "", fmt.Errorf("rtdb: 'aud' claim has unexpected type %T", aud)
 	}
+}
+
+// validProjectID reports whether s contains only the characters allowed in a
+// Firebase project ID (ASCII letters, digits, and hyphen).
+func validProjectID(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-':
+		default:
+			return false
+		}
+	}
+	return s != ""
 }
 
 // BaseURL derives the Firebase RTDB base URL from a project ID.

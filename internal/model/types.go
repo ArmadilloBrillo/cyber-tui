@@ -10,22 +10,22 @@ type Tokens struct {
 }
 
 type User struct {
-	ID               string
-	Username         string
-	DisplayName      string
-	Email            string
-	Bio              string
-	WebsiteUrl       string
-	WebsiteName      string
-	WebsiteImageUrl  string
-	PinnedPostID     string
-	LocationName     string
+	ID                string
+	Username          string
+	DisplayName       string
+	Email             string
+	Bio               string
+	WebsiteUrl        string
+	WebsiteName       string
+	WebsiteImageUrl   string
+	PinnedPostID      string
+	LocationName      string
 	LocationLatitude  float64
 	LocationLongitude float64
-	FollowersCount   int
-	FollowingCount   int
-	PostsCount       int
-	GuildSlug        string // empty when not a guild member
+	FollowersCount    int
+	FollowingCount    int
+	PostsCount        int
+	GuildSlug         string // empty when not a guild member
 }
 
 // Follow maps to a record returned by GET /v1/follows.
@@ -201,7 +201,7 @@ type Note struct {
 	ID             string
 	AuthorID       string
 	Content        string
-	Topics         []string  // max 3; sent on create/update but not returned by the list API
+	Topics         []string // max 3; sent on create/update but not returned by the list API
 	RevisionNumber int
 	Deleted        bool
 	CreatedAt      time.Time
@@ -228,13 +228,13 @@ type NotificationActor struct {
 // ReplyID is set from metadata.replyId for reply/thread_reply notifications and identifies
 // the specific reply to scroll to in PostDetail.
 type Notification struct {
-	ID         string
-	Type       string // "reply", "reply_mention", "post_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "unfollowed", "bookmark", "poke", "guild_new_thread", "chat_mention", "dm_message", "supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed", "image_permission_granted", "image_permission_removed", "attachment_permission_granted", "attachment_permission_removed", "system_ban"
-	Read       bool
-	CreatedAt  time.Time
-	Actor      NotificationActor
-	TargetID   string
-	TargetType string // "post", "reply", or ""
+	ID                   string
+	Type                 string // "reply", "reply_mention", "post_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "unfollowed", "bookmark", "poke", "guild_new_thread", "chat_mention", "dm_message", "supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed", "image_permission_granted", "image_permission_removed", "attachment_permission_granted", "attachment_permission_removed", "system_ban"
+	Read                 bool
+	CreatedAt            time.Time
+	Actor                NotificationActor
+	TargetID             string
+	TargetType           string // "post", "reply", or ""
 	ReplyID              string // populated for reply/thread_reply; the specific reply to highlight
 	ThreadAuthorUsername string // set for thread_reply; the original thread's author
 	GuildName            string // set for guild_new_thread; the guild display name

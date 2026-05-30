@@ -247,7 +247,7 @@ func (m ComposeModel) View() string {
 type postField int
 
 const (
-	postFieldTitle  postField = iota
+	postFieldTitle postField = iota
 	postFieldBody
 	postFieldTopics
 	postFieldPublic

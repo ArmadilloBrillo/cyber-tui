@@ -107,7 +107,6 @@ func TestProfileUpdate_FKey_EmitsUnfollowMsg_WhenFollowing(t *testing.T) {
 	}
 }
 
-
 // --- IncrementFollowersCount ---
 
 func TestProfileIncrementFollowersCount(t *testing.T) {

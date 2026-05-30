@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,11 +18,16 @@ import (
 
 // Serve starts the Wish SSH server so remote users can connect with
 // `ssh <host> -p <port>` and get a full TUI session.
-func Serve(addr, hostKeyPath string, client api.Client) error {
+//
+// newClient is called once per connection so each session gets its own API
+// client and authentication state; sessions never share a client. Sessions are
+// marked ephemeral so a remote login is never written to the host's config file.
+//
+// The server is experimental and performs no SSH authentication: any client that
+// can reach the address gets a session. Restrict network exposure accordingly.
+func Serve(addr, hostKeyPath string, newClient func() api.Client) error {
 	handler := bubbletea.Middleware(func(s ssh.Session) (tea.Model, []tea.ProgramOption) {
-		pty, _, _ := s.Pty()
-		_ = pty
-		return ui.NewApp(client), []tea.ProgramOption{
+		return ui.NewApp(newClient()).WithEphemeralSession(), []tea.ProgramOption{
 			tea.WithAltScreen(),
 		}
 	})
@@ -38,13 +44,18 @@ func Serve(addr, hostKeyPath string, client api.Client) error {
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
+	serveErr := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil {
-			// server closed
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
+			serveErr <- err
 		}
 	}()
 
-	<-done
+	select {
+	case err := <-serveErr:
+		return err
+	case <-done:
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -188,13 +188,13 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 
 func (m *MockClient) CreateReply(postID, content, parentReplyID string) (model.Reply, error) {
 	return model.Reply{
-		ID:            "reply-new-1",
-		PostID:        postID,
-		AuthorID:      mockUsers[0].ID,
+		ID:             "reply-new-1",
+		PostID:         postID,
+		AuthorID:       mockUsers[0].ID,
 		AuthorUsername: mockUsers[0].Username,
-		Content:       content,
-		ParentReplyID: parentReplyID,
-		CreatedAt:     time.Now(),
+		Content:        content,
+		ParentReplyID:  parentReplyID,
+		CreatedAt:      time.Now(),
 	}, nil
 }
 

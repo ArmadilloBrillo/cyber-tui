@@ -49,7 +49,7 @@ type LoadMoreGuildMembersMsg struct {
 type guildsView int
 
 const (
-	viewGuildList    guildsView = iota
+	viewGuildList guildsView = iota
 	viewGuildPosts
 	viewGuildMembers
 )
