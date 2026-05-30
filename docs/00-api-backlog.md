@@ -67,7 +67,9 @@ Notes:
 
 ### Replies
 
-_(No unimplemented reply endpoints remaining at medium/high priority)_
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/posts/:postId/replies` | GET | Cursor-paginated replies (oldest-first by reply ID) | Deferred — replies are rendered as a tree grouped by `parentReplyId`; paginated loads arrive interleaved across parent/child, requiring tree re-parenting and a full re-render on each page. Cost outweighs benefit at current network scale. |
 
 ### Follows
 
