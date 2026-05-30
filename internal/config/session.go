@@ -34,6 +34,9 @@ type Config struct {
 	Theme string `json:"theme,omitempty"`
 	// APIBaseURL overrides the default API endpoint (https://api.cyberspace.online).
 	APIBaseURL string `json:"apiBaseURL,omitempty"`
+	// AllowInsecureAPI permits a plain http:// APIBaseURL to a non-loopback host.
+	// Off by default so bearer tokens are never sent in cleartext by accident.
+	AllowInsecureAPI bool `json:"allowInsecureApi,omitempty"`
 	// UseMock runs the app against mock data (no credentials needed).
 	UseMock bool `json:"useMock,omitempty"`
 	// Debug enables verbose RTDB debug output.

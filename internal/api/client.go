@@ -38,6 +38,10 @@ var ErrUnauthorized = &APIError{Code: "UNAUTHORIZED", Status: 401, Message: "ses
 // ErrRateLimited is returned when the server responds with 429.
 var ErrRateLimited = &APIError{Code: "RATE_LIMITED", Status: 429, Message: "rate limit exceeded"}
 
+// maxResponseBytes caps how much of a response body is read into memory, guarding
+// against a malicious or compromised endpoint returning an enormous body.
+const maxResponseBytes = 10 << 20 // 10 MiB
+
 // --- wire types (unexported JSON shapes matching the API) ---
 
 type loginRequest struct {
@@ -394,13 +398,8 @@ func (c *HTTPClient) InitRTDB(rtdbToken string) error {
 	projectID, err := rtdb.ParseRTDBToken(rtdbToken)
 	if err != nil {
 		if c.isDebug() {
-			fmt.Printf("[rtdb debug] InitRTDB: ParseRTDBToken failed: %v\n", err)
-			// Print first 100 chars of token to help diagnose format.
-			preview := rtdbToken
-			if len(preview) > 100 {
-				preview = preview[:100] + "..."
-			}
-			fmt.Printf("[rtdb debug] rtdbToken preview: %s\n", preview)
+			// Never log token material; the parse error alone is enough to diagnose.
+			fmt.Printf("[rtdb debug] InitRTDB: parse rtdb token failed: %v\n", err)
 		}
 		return fmt.Errorf("api: parse rtdb token: %w", err)
 	}
@@ -450,7 +449,7 @@ func (c *HTTPClient) doRequest(method, path string, bodyBytes []byte) (*envelope
 		}
 		defer resp.Body.Close()
 
-		raw, err := io.ReadAll(resp.Body)
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 		if err != nil {
 			return nil, resp.StatusCode, err
 		}
@@ -513,7 +512,7 @@ func (c *HTTPClient) refresh() error {
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return fmt.Errorf("refresh: read body: %w", err)
 	}
