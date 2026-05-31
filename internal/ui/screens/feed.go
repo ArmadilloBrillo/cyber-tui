@@ -93,6 +93,7 @@ func (m FeedModel) SetFetching() FeedModel {
 }
 
 func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
+	m.err = nil
 	var prevID string
 	if m.selectedIndex < len(m.posts) {
 		prevID = m.posts[m.selectedIndex].ID

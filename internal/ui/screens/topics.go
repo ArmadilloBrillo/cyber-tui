@@ -85,6 +85,7 @@ func (m TopicsModel) SetFetching() TopicsModel {
 }
 
 func (m TopicsModel) SetTopics(items []model.Topic, cursor string) TopicsModel {
+	m.err = nil
 	m.topics = items
 	m.topicIndex = 0
 	m.topicsNextCursor = cursor
@@ -101,6 +102,7 @@ func (m TopicsModel) SetTopics(items []model.Topic, cursor string) TopicsModel {
 }
 
 func (m TopicsModel) AppendTopics(items []model.Topic, cursor string) TopicsModel {
+	m.err = nil
 	m.topics = append(m.topics, items...)
 	m.topicsNextCursor = cursor
 	m.topicsExhausted = cursor == ""
@@ -113,6 +115,7 @@ func (m TopicsModel) AppendTopics(items []model.Topic, cursor string) TopicsMode
 }
 
 func (m TopicsModel) SetTopicPosts(posts []model.Post, cursor string) TopicsModel {
+	m.err = nil
 	m.posts = posts
 	m.postIndex = 0
 	m.nextCursor = cursor
