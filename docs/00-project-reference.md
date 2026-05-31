@@ -314,7 +314,13 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 - Renders tab bar, active screen, and status bar
 - Manages global shortcuts (`1`–`4` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `o` URL opener, `q`/`ctrl+c` quit)
 - Handles automatic token refresh on `ErrUnauthorized` responses
+- Surfaces transient errors via a **global notification banner** that replaces the status-bar row, colored by severity, and auto-dismisses after 4 s or on the next keypress (which still performs its normal action)
 - Runs background tick jobs: `schedulePollCmd` (60 s unread count), `scheduleWanderCmd` (1 h wander check)
+
+**Error handling — two paths:**
+
+- **Load failures** (a fetch that populates a screen returns an error) wrap the error in `errMsg`; `handleErr` routes it to the active screen's `SetError`, which renders a full-screen message explaining the empty screen. Screen success setters (`SetGuilds`, `SetPosts`, `SetTopics`, …) clear `err` so a stale load error never persists.
+- **Action failures** (create/reply/delete/follow/save/submit) wrap the error in `actionErrMsg`; `handleNotify` shows it as the transient global banner without blanking the screen, so the tab stays usable. The banner is driven by `notifyText`/`notifyLevel`/`notifyGen` on `App`; `notifyExpireMsg` carries a generation id so a stale auto-dismiss tick cannot clear a newer notification. `notifyMsg` and the `notify(level, text)` helper allow surfacing info/warning messages directly.
 
 #### `app_test.go`
 

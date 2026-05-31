@@ -154,6 +154,13 @@ type App struct {
 	// Required to call deleteBookmarkCmd when the user toggles off a bookmark with 'b'.
 	postBookmarkIDs  map[string]string // postID  → bookmark UUID
 	replyBookmarkIDs map[string]string // replyID → bookmark UUID
+
+	// notifyText is the transient global notification shown in place of the status
+	// bar. Empty means no notification is visible. notifyGen is bumped on every new
+	// notification and on dismissal so a stale expire tick can never clear a newer one.
+	notifyText  string
+	notifyLevel notifyLevel
+	notifyGen   int
 }
 
 func NewApp(client api.Client) App {
@@ -257,6 +264,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a = a.applyWindowSize(m)
 		return a, a.delegateUpdate(msg)
 	}
+	// Any keypress dismisses a visible notification early. We do NOT return here,
+	// so the key still flows on to do its normal job; bumping notifyGen neutralizes
+	// the pending expire tick.
+	if _, ok := msg.(tea.KeyMsg); ok && a.notifyText != "" {
+		a.notifyText = ""
+		a.notifyGen++
+	}
 	if a2, cmd, ok := a.handleKeys(msg); ok {
 		return a2, cmd
 	}
@@ -294,6 +308,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a2, cmd
 	}
 	if a2, cmd, ok := a.handleJournal(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleNotify(msg); ok {
 		return a2, cmd
 	}
 	if a2, cmd, ok := a.handleErr(msg); ok {
@@ -750,7 +767,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		tz := msg.Timezone
 		return a, func() tea.Msg {
 			if err := a.client.UpdateSettings(s); err != nil {
-				return errMsg{err}
+				return actionErrMsg{err}
 			}
 			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
@@ -892,7 +909,8 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.bookmarkedPostIDs = newPostIDs
 			}
 			a.broadcastBookmarkedIDs()
-			return a, nil, true
+			a, cmd := a.notify(notifyError, msg.err.Error())
+			return a, cmd, true
 		}
 		a.bookmarks = a.bookmarks.SetFetching()
 		return a, a.loadBookmarksCmd(""), true
@@ -1139,6 +1157,39 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleErr routes API error messages to the active screen's error display.
+// notifyTTL is how long a global notification banner stays before auto-dismissing.
+const notifyTTL = 4 * time.Second
+
+// notify sets the global banner and returns the timed-expire command. Each call
+// bumps notifyGen and captures it in the tick closure, so only the newest
+// notification's expire can clear the banner.
+func (a App) notify(level notifyLevel, text string) (App, tea.Cmd) {
+	a.notifyGen++
+	a.notifyText = text
+	a.notifyLevel = level
+	gen := a.notifyGen
+	return a, tea.Tick(notifyTTL, func(time.Time) tea.Msg {
+		return notifyExpireMsg{gen: gen}
+	})
+}
+
+func (a App) handleNotify(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch m := msg.(type) {
+	case actionErrMsg:
+		a, cmd := a.notify(notifyError, m.err.Error())
+		return a, cmd, true
+	case notifyMsg:
+		a, cmd := a.notify(m.level, m.text)
+		return a, cmd, true
+	case notifyExpireMsg:
+		if m.gen == a.notifyGen {
+			a.notifyText = ""
+		}
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
 func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 	m, ok := msg.(errMsg)
 	if !ok {
@@ -1294,7 +1345,7 @@ func (a App) View() string {
 		a.renderTabBar(),
 		"", // separator row
 		content,
-		a.renderStatusBar(),
+		a.renderBottomBar(),
 	)
 	if a.themePickerOpen {
 		return overlayCenter(base, a.renderThemePicker(), a.width, a.height)
@@ -1462,6 +1513,39 @@ func hintRows(hints []hint, rowFn func(string, string) string) []string {
 		rows = append(rows, rowFn(key, h.desc))
 	}
 	return rows
+}
+
+// renderBottomBar renders the notification banner when one is active, otherwise
+// the status bar. Both occupy exactly one row, so ChromeHeight is unaffected.
+func (a App) renderBottomBar() string {
+	if a.notifyText == "" {
+		return a.renderStatusBar()
+	}
+	return a.renderNotification()
+}
+
+func (a App) renderNotification() string {
+	color := theme.ColorGreen
+	prefix := "✓ "
+	switch a.notifyLevel {
+	case notifyWarn:
+		color = theme.ColorYellow
+		prefix = "! "
+	case notifyError:
+		color = theme.ColorRed
+		prefix = "✕ "
+	}
+	const suffix = "  (any key to dismiss)"
+	// Reserve room for prefix, suffix, and the 1-char padding on each side.
+	budget := a.width - lipgloss.Width(prefix) - lipgloss.Width(suffix) - 2
+	text := ansi.Truncate(a.notifyText, max(0, budget), "…")
+	return lipgloss.NewStyle().
+		Foreground(theme.ColorBackground).
+		Background(color).
+		Bold(true).
+		Width(a.width).
+		Padding(0, 1).
+		Render(prefix + text + suffix)
 }
 
 func (a App) renderStatusBar() string {
@@ -2016,6 +2100,29 @@ type settingsSavedMsg struct {
 type wanderTickMsg struct{}
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
 type errMsg struct{ err error }
+
+// notifyLevel selects the color of a global notification banner.
+type notifyLevel int
+
+const (
+	notifyInfo notifyLevel = iota
+	notifyWarn
+	notifyError
+)
+
+// actionErrMsg is a non-fatal failure from a user-initiated action (post, reply,
+// delete, follow, …). Unlike errMsg — which blanks a screen via SetError —
+// it surfaces as a transient global banner and never blocks a tab.
+type actionErrMsg struct{ err error }
+
+// notifyMsg sets the global banner directly; used for success/info surfacing.
+type notifyMsg struct {
+	text  string
+	level notifyLevel
+}
+
+// notifyExpireMsg clears the banner iff gen still matches a.notifyGen.
+type notifyExpireMsg struct{ gen int }
 type bookmarksLoadedMsg struct {
 	items  []model.Bookmark
 	cursor string
@@ -2251,7 +2358,7 @@ func (a *App) followUserCmd(userID string) tea.Cmd {
 	return func() tea.Msg {
 		followID, err := a.client.Follow(userID)
 		if err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return followResultMsg{followID: followID}
 	}
@@ -2260,7 +2367,7 @@ func (a *App) followUserCmd(userID string) tea.Cmd {
 func (a *App) unfollowUserCmd(followID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.Unfollow(followID); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return unfollowResultMsg{}
 	}
@@ -2321,7 +2428,7 @@ func (a *App) loadUserFollowersCmd(userID, cursor string) tea.Cmd {
 func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.SendRoomMessage(roomID, body); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return nil
 	}
@@ -2330,7 +2437,7 @@ func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.SendMessage(convID, body); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return nil
 	}
@@ -2350,7 +2457,7 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := a.client.CreateReply(postID, content, parentReplyID)
 		if err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return replyCreatedMsg{postID: postID}
 	}
@@ -2360,7 +2467,7 @@ func (a *App) createPostCmd(content, title string, topics []string, isPublic, is
 	return func() tea.Msg {
 		_, err := a.client.CreatePost(content, title, topics, isPublic, isNSFW)
 		if err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return postCreatedMsg{}
 	}
@@ -2392,7 +2499,7 @@ func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
 			}
 		}
 		if err := a.client.UpdateProfile(update); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		a.currentUser.Bio = msg.Bio
 		a.currentUser.WebsiteName = msg.WebsiteName
@@ -2692,7 +2799,7 @@ func (a *App) createGuildPostCmd(slug, content, title string, topics []string) t
 	return func() tea.Msg {
 		_, err := a.client.CreateGuildPost(slug, content, title, topics)
 		if err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return guildPostCreatedMsg{slug: slug}
 	}
@@ -2739,7 +2846,7 @@ func (a *App) saveNoteCmd(noteID, content string, topics []string) tea.Cmd {
 		return func() tea.Msg {
 			note, err := a.client.CreateNote(content, topics)
 			if err != nil {
-				return errMsg{err}
+				return actionErrMsg{err}
 			}
 			return noteCreatedMsg{note: note}
 		}
@@ -2747,7 +2854,7 @@ func (a *App) saveNoteCmd(noteID, content string, topics []string) tea.Cmd {
 	id := noteID // capture for closure
 	return func() tea.Msg {
 		if err := a.client.UpdateNote(id, content, topics); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return noteUpdatedMsg{noteID: id, content: content, topics: topics}
 	}
@@ -2756,7 +2863,7 @@ func (a *App) saveNoteCmd(noteID, content string, topics []string) tea.Cmd {
 func (a *App) deleteNoteCmd(noteID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.DeleteNote(noteID); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return noteDeletedMsg{noteID: noteID}
 	}
@@ -2765,7 +2872,7 @@ func (a *App) deleteNoteCmd(noteID string) tea.Cmd {
 func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.DeletePost(postID); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return postDeletedMsg{postID: postID, fromFeed: fromFeed}
 	}
@@ -2774,7 +2881,7 @@ func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.DeleteReply(replyID); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return replyDeletedMsg{replyID: replyID}
 	}
@@ -2786,7 +2893,7 @@ func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := a.client.CreatePost(content, "", topics, false, false)
 		if err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return notePublishedMsg{}
 	}

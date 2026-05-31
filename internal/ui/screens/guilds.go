@@ -124,6 +124,7 @@ func (m GuildsModel) SetFetching() GuildsModel {
 
 // SetGuilds replaces the guild list with a fresh page.
 func (m GuildsModel) SetGuilds(items []model.Guild, cursor string) GuildsModel {
+	m.err = nil
 	m.guilds = items
 	m.guildIndex = 0
 	m.guildsNextCursor = cursor
@@ -141,6 +142,7 @@ func (m GuildsModel) SetGuilds(items []model.Guild, cursor string) GuildsModel {
 
 // AppendGuilds adds a pagination page to the guild list.
 func (m GuildsModel) AppendGuilds(items []model.Guild, cursor string) GuildsModel {
+	m.err = nil
 	m.guilds = append(m.guilds, items...)
 	m.guildsNextCursor = cursor
 	m.guildsExhausted = cursor == ""
@@ -154,6 +156,7 @@ func (m GuildsModel) AppendGuilds(items []model.Guild, cursor string) GuildsMode
 
 // SetGuildPosts replaces the post list for a guild and switches to posts view.
 func (m GuildsModel) SetGuildPosts(posts []model.Post, cursor string) GuildsModel {
+	m.err = nil
 	m.posts = posts
 	m.postIndex = 0
 	m.nextCursor = cursor
@@ -174,6 +177,7 @@ func (m GuildsModel) SetGuildPosts(posts []model.Post, cursor string) GuildsMode
 
 // AppendGuildPosts adds a pagination page to the guild post list.
 func (m GuildsModel) AppendGuildPosts(posts []model.Post, cursor string) GuildsModel {
+	m.err = nil
 	m.posts = append(m.posts, posts...)
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
@@ -187,6 +191,7 @@ func (m GuildsModel) AppendGuildPosts(posts []model.Post, cursor string) GuildsM
 
 // SetGuildMembers replaces the member list and switches to the members view.
 func (m GuildsModel) SetGuildMembers(members []model.GuildMember, cursor string) GuildsModel {
+	m.err = nil
 	m.members = members
 	m.memberIndex = 0
 	m.membersNextCursor = cursor
@@ -203,6 +208,7 @@ func (m GuildsModel) SetGuildMembers(members []model.GuildMember, cursor string)
 
 // AppendGuildMembers adds a pagination page to the member list.
 func (m GuildsModel) AppendGuildMembers(members []model.GuildMember, cursor string) GuildsModel {
+	m.err = nil
 	m.members = append(m.members, members...)
 	m.membersNextCursor = cursor
 	m.membersExhausted = cursor == ""
