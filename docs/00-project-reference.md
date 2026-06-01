@@ -430,9 +430,9 @@ Settings are organised into static `settingsGroups`, each containing `settingsIt
 | Group | Field |
 |---|---|
 | Notifications | bookmark, reply, poke |
-| Content | filterNSFW, hideImagesInFeed, hideAudioInFeed |
+| Content | filterNSFW |
 | Social | showFollowerCount, autoWatchOnReply, defaultPublicPost |
-| Display | timeDisplayFormat (enum), useLegacyMenuOrder |
+| Display | timeDisplayFormat (enum) |
 
 **Deferred fields** (read from API, never patched): `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics`
 

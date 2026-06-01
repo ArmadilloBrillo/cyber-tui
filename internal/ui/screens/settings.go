@@ -70,22 +70,6 @@ var settingsGroups = []settingsGroup{
 				getBool: func(m SettingsModel) bool { return m.settings.FilterNSFW },
 				toggle:  func(m SettingsModel) SettingsModel { m.settings.FilterNSFW = !m.settings.FilterNSFW; return m },
 			},
-			{
-				label: "hide images in feed", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.settings.HideImagesInFeed },
-				toggle: func(m SettingsModel) SettingsModel {
-					m.settings.HideImagesInFeed = !m.settings.HideImagesInFeed
-					return m
-				},
-			},
-			{
-				label: "hide audio in feed", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.settings.HideAudioInFeed },
-				toggle: func(m SettingsModel) SettingsModel {
-					m.settings.HideAudioInFeed = !m.settings.HideAudioInFeed
-					return m
-				},
-			},
 		},
 	},
 	{
@@ -126,14 +110,6 @@ var settingsGroups = []settingsGroup{
 				getEnum: func(m SettingsModel) string { return m.settings.TimeDisplayFormat },
 				cycle: func(m SettingsModel, delta int) SettingsModel {
 					m.settings.TimeDisplayFormat = cycleStringEnum(m.settings.TimeDisplayFormat, []string{"datetime", "relative", "unix", "swatch"}, delta)
-					return m
-				},
-			},
-			{
-				label: "legacy menu order", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.settings.UseLegacyMenuOrder },
-				toggle: func(m SettingsModel) SettingsModel {
-					m.settings.UseLegacyMenuOrder = !m.settings.UseLegacyMenuOrder
 					return m
 				},
 			},
@@ -249,13 +225,10 @@ func (m SettingsModel) IsDirty() bool {
 func settingsEqual(a, b model.Settings) bool {
 	return a.Notifications == b.Notifications &&
 		a.FilterNSFW == b.FilterNSFW &&
-		a.HideImagesInFeed == b.HideImagesInFeed &&
-		a.HideAudioInFeed == b.HideAudioInFeed &&
 		a.ShowFollowerCount == b.ShowFollowerCount &&
 		a.AutoWatchOnReply == b.AutoWatchOnReply &&
 		a.DefaultPublicPost == b.DefaultPublicPost &&
-		a.TimeDisplayFormat == b.TimeDisplayFormat &&
-		a.UseLegacyMenuOrder == b.UseLegacyMenuOrder
+		a.TimeDisplayFormat == b.TimeDisplayFormat
 }
 
 // flatItems returns the flat ordered list of all items across all groups.

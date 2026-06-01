@@ -289,31 +289,25 @@ type wireSettings struct {
 	Notifications      wireNotificationPrefs `json:"notifications"`
 	FilterNSFW         bool                  `json:"filterNSFW"`
 	ShowFollowerCount  bool                  `json:"showFollowerCount"`
-	HideImagesInFeed   bool                  `json:"hideImagesInFeed"`
-	HideAudioInFeed    bool                  `json:"hideAudioInFeed"`
 	AutoWatchOnReply   bool                  `json:"autoWatchOnReply"`
 	IconTheme          string                `json:"iconTheme"`
 	FollowedTopics     []string              `json:"followedTopics"`
 	MutedTopics        []string              `json:"mutedTopics"`
 	ImagePixelSize     string                `json:"imagePixelSize"`
 	TimeDisplayFormat  string                `json:"timeDisplayFormat"`
-	UseLegacyMenuOrder bool                  `json:"useLegacyMenuOrder"`
 	DefaultPublicPost  bool                  `json:"defaultPublicPost"`
 }
 
-// wirePatchSettings is the PATCH /v1/settings payload — only the 9 fields the
+// wirePatchSettings is the PATCH /v1/settings payload — only the fields the
 // UI manages. Deferred fields (iconTheme, imagePixelSize, followedTopics,
 // mutedTopics) are intentionally excluded so the API never receives them.
 type wirePatchSettings struct {
-	Notifications      wireNotificationPrefs `json:"notifications"`
-	FilterNSFW         bool                  `json:"filterNSFW"`
-	ShowFollowerCount  bool                  `json:"showFollowerCount"`
-	HideImagesInFeed   bool                  `json:"hideImagesInFeed"`
-	HideAudioInFeed    bool                  `json:"hideAudioInFeed"`
-	AutoWatchOnReply   bool                  `json:"autoWatchOnReply"`
-	TimeDisplayFormat  string                `json:"timeDisplayFormat"`
-	UseLegacyMenuOrder bool                  `json:"useLegacyMenuOrder"`
-	DefaultPublicPost  bool                  `json:"defaultPublicPost"`
+	Notifications     wireNotificationPrefs `json:"notifications"`
+	FilterNSFW        bool                  `json:"filterNSFW"`
+	ShowFollowerCount bool                  `json:"showFollowerCount"`
+	AutoWatchOnReply  bool                  `json:"autoWatchOnReply"`
+	TimeDisplayFormat string                `json:"timeDisplayFormat"`
+	DefaultPublicPost bool                  `json:"defaultPublicPost"`
 }
 
 type envelope struct {
@@ -667,16 +661,13 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 		},
 		FilterNSFW:         w.FilterNSFW,
 		ShowFollowerCount:  w.ShowFollowerCount,
-		HideImagesInFeed:   w.HideImagesInFeed,
-		HideAudioInFeed:    w.HideAudioInFeed,
 		AutoWatchOnReply:   w.AutoWatchOnReply,
 		IconTheme:          w.IconTheme,
 		FollowedTopics:     w.FollowedTopics,
 		MutedTopics:        w.MutedTopics,
 		ImagePixelSize:     w.ImagePixelSize,
-		TimeDisplayFormat:  w.TimeDisplayFormat,
-		UseLegacyMenuOrder: w.UseLegacyMenuOrder,
-		DefaultPublicPost:  w.DefaultPublicPost,
+		TimeDisplayFormat: w.TimeDisplayFormat,
+		DefaultPublicPost: w.DefaultPublicPost,
 	}
 }
 
@@ -1017,12 +1008,9 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 		},
 		FilterNSFW:         update.FilterNSFW,
 		ShowFollowerCount:  update.ShowFollowerCount,
-		HideImagesInFeed:   update.HideImagesInFeed,
-		HideAudioInFeed:    update.HideAudioInFeed,
 		AutoWatchOnReply:   update.AutoWatchOnReply,
-		TimeDisplayFormat:  update.TimeDisplayFormat,
-		UseLegacyMenuOrder: update.UseLegacyMenuOrder,
-		DefaultPublicPost:  update.DefaultPublicPost,
+		TimeDisplayFormat: update.TimeDisplayFormat,
+		DefaultPublicPost: update.DefaultPublicPost,
 	})
 	return err
 }

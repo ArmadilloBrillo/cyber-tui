@@ -136,16 +136,13 @@ type Settings struct {
 	Notifications      NotificationPrefs
 	FilterNSFW         bool
 	ShowFollowerCount  bool
-	HideImagesInFeed   bool
-	HideAudioInFeed    bool
 	AutoWatchOnReply   bool
 	IconTheme          string
 	FollowedTopics     []string
 	MutedTopics        []string
 	ImagePixelSize     string // named preset or pixel multiplier, e.g. "sharp", "2"
-	TimeDisplayFormat  string // "datetime", "relative", "unix", or "swatch"
-	UseLegacyMenuOrder bool
-	DefaultPublicPost  bool
+	TimeDisplayFormat string // "datetime", "relative", "unix", or "swatch"
+	DefaultPublicPost bool
 }
 
 // Bookmark maps to the shape returned by GET /v1/bookmarks.
