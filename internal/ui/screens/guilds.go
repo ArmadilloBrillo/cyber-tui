@@ -84,6 +84,7 @@ type GuildsModel struct {
 	activeGuildDetail model.Guild
 	guildDetailLoaded bool
 	confirming        guildsConfirm
+	ownGuildSlug      string // logged-in user's current guild membership (empty = no guild)
 	posts             []model.Post
 	postIndex         int
 	nextCursor        string
@@ -269,6 +270,14 @@ func (m GuildsModel) GuildDetail() model.Guild { return m.activeGuildDetail }
 // IsDetailLoaded reports whether guild detail has been fetched for the active guild.
 func (m GuildsModel) IsDetailLoaded() bool { return m.guildDetailLoaded }
 
+// SetOwnGuildSlug updates the logged-in user's guild membership slug. Called by
+// app.go after a successful join or leave so the J key guard stays current without
+// requiring a full SharedConfigMsg broadcast.
+func (m GuildsModel) SetOwnGuildSlug(slug string) GuildsModel {
+	m.ownGuildSlug = slug
+	return m
+}
+
 // IsConfirmingJoin reports whether the join confirmation prompt is active.
 func (m GuildsModel) IsConfirmingJoin() bool { return m.confirming == confirmJoinG }
 
@@ -300,6 +309,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			m.filterNSFW = msg.Settings.FilterNSFW
 			m.postIndex = 0
 		}
+		m.ownGuildSlug = msg.OwnGuildSlug
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -455,7 +465,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			return m, nil
 
 		case "J":
-			if m.view == viewGuildPosts && m.guildDetailLoaded && !m.activeGuildDetail.IsMember {
+			if m.view == viewGuildPosts && m.guildDetailLoaded && !m.activeGuildDetail.IsMember && m.ownGuildSlug == "" {
 				m.confirming = confirmJoinG
 				m = m.refreshContent()
 			}

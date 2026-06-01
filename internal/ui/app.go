@@ -340,7 +340,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone}
+	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, OwnGuildSlug: a.currentUser.GuildSlug}
 	*a = a.updateAll(msg)
 }
 
@@ -1084,6 +1084,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		detail.Role = "member"
 		a.guilds = a.guilds.SetGuildDetail(detail)
 		a.currentUser.GuildSlug = msg.slug
+		a.guilds = a.guilds.SetOwnGuildSlug(msg.slug)
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "✓ Joined #"+msg.name)
 		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
@@ -1091,6 +1092,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 	case guildLeftMsg:
 		a.guilds = a.guilds.BackToGuildList()
 		a.currentUser.GuildSlug = ""
+		a.guilds = a.guilds.SetOwnGuildSlug("")
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "✓ Left #"+msg.name)
 		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
