@@ -1016,7 +1016,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 
 	case screens.LoadGuildPostsMsg:
-		return a, a.loadGuildPostsCmd(msg.Slug), true
+		return a, tea.Batch(a.loadGuildPostsCmd(msg.Slug), a.loadGuildDetailCmd(msg.Slug)), true
 
 	case guildPostsLoadedMsg:
 		if msg.slug != a.guilds.ActiveGuild() {
@@ -1067,6 +1067,33 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 	case guildMembersPageMsg:
 		a.guilds = a.guilds.AppendGuildMembers(msg.members, msg.cursor)
 		return a, nil, true
+
+	case guildDetailLoadedMsg:
+		a.guilds = a.guilds.SetGuildDetail(msg.guild)
+		return a, nil, true
+
+	case screens.JoinGuildMsg:
+		return a, a.joinGuildCmd(msg.Slug, a.guilds.GuildDetail().Name), true
+
+	case screens.LeaveGuildMsg:
+		return a, a.leaveGuildCmd(msg.Slug, a.guilds.GuildDetail().Name), true
+
+	case guildJoinedMsg:
+		detail := a.guilds.GuildDetail()
+		detail.IsMember = true
+		detail.Role = "member"
+		a.guilds = a.guilds.SetGuildDetail(detail)
+		a.currentUser.GuildSlug = msg.slug
+		var notifyCmd tea.Cmd
+		a, notifyCmd = a.notify(notifyInfo, "✓ Joined #"+msg.name)
+		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
+
+	case guildLeftMsg:
+		a.guilds = a.guilds.BackToGuildList()
+		a.currentUser.GuildSlug = ""
+		var notifyCmd tea.Cmd
+		a, notifyCmd = a.notify(notifyInfo, "✓ Left #"+msg.name)
+		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
 	}
 	return a, nil, false
 }
@@ -1454,7 +1481,17 @@ func (a App) screenHints() []hint {
 			return []hint{{"↑↓", "navigate"}, {"enter", "view profile"}, {"esc", "back"}, more}
 		}
 		if a.guilds.IsBrowsingGuild() {
-			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "members"}, {"n", "new thread"}, {"esc", "back"}, more}
+			if a.guilds.IsConfirmingJoin() || a.guilds.IsConfirmingLeave() {
+				return []hint{{"y", "confirm"}, {"n/esc", "cancel"}}
+			}
+			hints := []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "members"}, {"n", "new thread"}, {"esc", "back"}}
+			d := a.guilds.GuildDetail()
+			if a.guilds.IsDetailLoaded() && !d.IsMember && a.currentUser.GuildSlug == "" {
+				hints = append(hints, hint{"J", "join"})
+			} else if a.guilds.IsDetailLoaded() && d.IsMember && d.Role != "founder" {
+				hints = append(hints, hint{"L", "leave"})
+			}
+			return append(hints, more)
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, more}
 	case screenTopics:
@@ -2252,6 +2289,9 @@ type guildMembersPageMsg struct {
 	members []model.GuildMember
 	cursor  string
 }
+type guildDetailLoadedMsg struct{ guild model.Guild }
+type guildJoinedMsg       struct{ slug, name string }
+type guildLeftMsg         struct{ slug, name string }
 
 type notifsLoadedMsg struct {
 	notifs []model.Notification
@@ -2802,6 +2842,34 @@ func (a *App) createGuildPostCmd(slug, content, title string, topics []string) t
 			return actionErrMsg{err}
 		}
 		return guildPostCreatedMsg{slug: slug}
+	}
+}
+
+func (a *App) loadGuildDetailCmd(slug string) tea.Cmd {
+	return func() tea.Msg {
+		g, err := a.client.GetGuild(slug)
+		if err != nil {
+			return actionErrMsg{err}
+		}
+		return guildDetailLoadedMsg{guild: g}
+	}
+}
+
+func (a *App) joinGuildCmd(slug, name string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.JoinGuild(slug); err != nil {
+			return actionErrMsg{err}
+		}
+		return guildJoinedMsg{slug: slug, name: name}
+	}
+}
+
+func (a *App) leaveGuildCmd(slug, name string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.LeaveGuild(slug); err != nil {
+			return actionErrMsg{err}
+		}
+		return guildLeftMsg{slug: slug, name: name}
 	}
 }
 

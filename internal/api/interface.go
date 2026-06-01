@@ -97,6 +97,12 @@ type Client interface {
 	// GetGuildMembers returns paginated members for a guild, oldest-joined first.
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetGuildMembers(slug, cursor string) ([]model.GuildMember, string, error)
+	// JoinGuild joins the guild identified by slug. Returns an error if the user is
+	// already a member of another guild (409) or if the slug does not exist (404).
+	JoinGuild(slug string) error
+	// LeaveGuild leaves the guild identified by slug. Returns an error if the user
+	// is the founder (403) or is not a member.
+	LeaveGuild(slug string) error
 
 	// Posts — deletion.
 	// DeletePost soft-deletes a post owned by the authenticated user.

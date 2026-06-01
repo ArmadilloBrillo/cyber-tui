@@ -4,7 +4,7 @@
 
 Guilds are member communities on cyberspace.online, each with their own thread forum. The guilds screen lets users browse the guild directory, read guild threads, and view the member list.
 
-A user can belong to one guild at a time. Joining and leaving guilds is done on the web; the TUI is read-only for guild membership.
+A user can belong to one guild at a time. Joining and leaving guilds can be done from the guild threads view using `J` and `l`.
 
 ## Menu placement
 
@@ -44,7 +44,15 @@ Navigation:
 - `enter` — open thread in PostDetail; ESC from PostDetail returns here
 - `m` — open the member list for this guild
 - `n` — open compose panel
-- `esc` — cancel compose if open, otherwise return to the guild list
+- `J` (shift+j) — join this guild (available when not a member)
+- `L` (shift+l) — leave this guild (available when a member; blocked for founders)
+- `esc` — cancel compose or confirm prompt if open, otherwise return to the guild list
+
+The status bar shows contextual hints: `J join` when the user is not a member (once detail loads), `l leave` when a member and not the founder. Pressing `J` or `l` opens a confirmation prompt at the bottom of the screen. Confirm with `y` or cancel with `n` / `esc`.
+
+**API constraints:**
+- A user can only be in one guild at a time. Attempting to join while already a member of another guild returns a 409 error from the server.
+- Founders cannot leave via the API (403). The `l` key is hidden for founders.
 
 ### Guild members (members view)
 
@@ -76,20 +84,22 @@ After a successful post the thread list reloads.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/v1/guilds?limit=20&cursor=<id>` | Paginated guild list |
+| GET | `/v1/guilds/:slug` | Guild detail including `isMember` and `role` |
 | GET | `/v1/guilds/:slug/posts?limit=20&cursor=<id>` | Paginated thread list for a guild |
 | GET | `/v1/guilds/:slug/members?limit=20&cursor=<membershipId>` | Paginated member list for a guild |
 | POST | `/v1/guilds/:slug/posts` | Create a guild thread (server enforces membership) |
+| POST | `/v1/guilds/:slug/join` | Join this guild |
+| POST | `/v1/guilds/:slug/leave` | Leave this guild (founders get 403) |
 
 ## Implementation
 
 - `internal/model/types.go` — `Guild` struct (includes `IsMember`, `Role`); `GuildMember` struct
-- `internal/api/interface.go` — `GetGuilds`, `GetGuild`, `GetGuildPosts`, `CreateGuildPost`, `GetGuildMembers`
+- `internal/api/interface.go` — `GetGuilds`, `GetGuild`, `GetGuildPosts`, `CreateGuildPost`, `GetGuildMembers`, `JoinGuild`, `LeaveGuild`
 - `internal/api/client.go` — wire types and HTTP implementations
 - `internal/ui/screens/guilds.go` — `GuildsModel` (three-view screen + embedded `PostComposePanel`)
 - `internal/ui/app.go` — `screenGuilds` enum, `handleGuilds`, load/create commands, menu wiring
 
 ## Known limitations / out of scope
 
-- Join and leave guild (`POST /v1/guilds/:slug/join`, `/leave`) are not implemented; use the web interface
 - Public/NSFW toggles are shown in the compose panel but have no effect on guild posts
 - The API may not surface title or topics in the thread list on the website

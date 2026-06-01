@@ -322,6 +322,9 @@ func (m *MockClient) GetGuildMembers(slug, cursor string) ([]model.GuildMember, 
 	return nil, "", nil
 }
 
+func (m *MockClient) JoinGuild(slug string) error  { return nil }
+func (m *MockClient) LeaveGuild(slug string) error { return nil }
+
 func (m *MockClient) GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error) {
 	if !unreadOnly {
 		return mockNotifications, "", nil

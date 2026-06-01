@@ -45,6 +45,21 @@ type LoadMoreGuildMembersMsg struct {
 	Cursor string
 }
 
+// JoinGuildMsg is emitted when the user confirms joining the active guild.
+type JoinGuildMsg struct{ Slug string }
+
+// LeaveGuildMsg is emitted when the user confirms leaving the active guild.
+type LeaveGuildMsg struct{ Slug string }
+
+// guildsConfirm tracks whether a join/leave confirmation prompt is active.
+type guildsConfirm int
+
+const (
+	confirmNoneG  guildsConfirm = iota
+	confirmJoinG
+	confirmLeaveG
+)
+
 // Internal view state for the Guilds screen.
 type guildsView int
 
@@ -65,15 +80,18 @@ type GuildsModel struct {
 	guildsExhausted  bool
 
 	// Guild posts state
-	activeGuild string
-	posts       []model.Post
-	postIndex   int
-	nextCursor  string
-	exhausted   bool
-	loading     bool
-	fetching    bool
-	refreshing  bool
-	loaded      bool
+	activeGuild       string
+	activeGuildDetail model.Guild
+	guildDetailLoaded bool
+	confirming        guildsConfirm
+	posts             []model.Post
+	postIndex         int
+	nextCursor        string
+	exhausted         bool
+	loading           bool
+	fetching          bool
+	refreshing        bool
+	loaded            bool
 
 	// Guild members state
 	members           []model.GuildMember
@@ -234,6 +252,29 @@ func (m GuildsModel) AppendGuildMembers(members []model.GuildMember, cursor stri
 	return m
 }
 
+// SetGuildDetail stores the guild detail (including IsMember and Role) fetched from
+// the single-guild endpoint and marks the detail as loaded.
+func (m GuildsModel) SetGuildDetail(g model.Guild) GuildsModel {
+	m.activeGuildDetail = g
+	m.guildDetailLoaded = true
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
+// GuildDetail returns the most recently fetched guild detail.
+func (m GuildsModel) GuildDetail() model.Guild { return m.activeGuildDetail }
+
+// IsDetailLoaded reports whether guild detail has been fetched for the active guild.
+func (m GuildsModel) IsDetailLoaded() bool { return m.guildDetailLoaded }
+
+// IsConfirmingJoin reports whether the join confirmation prompt is active.
+func (m GuildsModel) IsConfirmingJoin() bool { return m.confirming == confirmJoinG }
+
+// IsConfirmingLeave reports whether the leave confirmation prompt is active.
+func (m GuildsModel) IsConfirmingLeave() bool { return m.confirming == confirmLeaveG }
+
 // SetError stores an error and clears the loading state.
 func (m GuildsModel) SetError(err error) GuildsModel {
 	m.err = err
@@ -311,6 +352,10 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			var cmd tea.Cmd
 			m.panel, cmd = m.panel.Update(msg)
 			return m, cmd
+		}
+		// Route to confirm handler when a join/leave prompt is active.
+		if m.confirming != confirmNoneG {
+			return m.handleConfirmKey(msg)
 		}
 		switch msg.String() {
 		case "up", "k":
@@ -409,6 +454,20 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			}
 			return m, nil
 
+		case "J":
+			if m.view == viewGuildPosts && m.guildDetailLoaded && !m.activeGuildDetail.IsMember {
+				m.confirming = confirmJoinG
+				m = m.refreshContent()
+			}
+			return m, nil
+
+		case "L":
+			if m.view == viewGuildPosts && m.guildDetailLoaded && m.activeGuildDetail.IsMember && m.activeGuildDetail.Role != "founder" {
+				m.confirming = confirmLeaveG
+				m = m.refreshContent()
+			}
+			return m, nil
+
 		case "n":
 			if m.view == viewGuildPosts {
 				var cmd tea.Cmd
@@ -429,6 +488,9 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			if m.view == viewGuildPosts {
 				m.view = viewGuildList
 				m.activeGuild = ""
+				m.activeGuildDetail = model.Guild{}
+				m.guildDetailLoaded = false
+				m.confirming = confirmNoneG
 				m.loading = false
 				m.fetching = false
 				m.panel = m.panel.Close()
@@ -479,7 +541,67 @@ func (m GuildsModel) View() string {
 			m.panel.View(),
 		)
 	}
+	if m.confirming != confirmNoneG {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			m.renderConfirmBar(),
+		)
+	}
 	return m.viewport.View()
+}
+
+// BackToGuildList resets state and returns to the guild list view. Used by app.go
+// after a successful leave so the screen navigates back without a keypress.
+func (m GuildsModel) BackToGuildList() GuildsModel {
+	m.view = viewGuildList
+	m.activeGuild = ""
+	m.activeGuildDetail = model.Guild{}
+	m.guildDetailLoaded = false
+	m.confirming = confirmNoneG
+	m.loading = false
+	m.fetching = false
+	m.panel = m.panel.Close()
+	if m.ready {
+		m = m.refreshContent()
+		m.viewport.GotoTop()
+	}
+	return m
+}
+
+func (m GuildsModel) renderConfirmBar() string {
+	var content string
+	if m.confirming == confirmJoinG {
+		content = theme.Highlight.Render("Join "+m.activeGuildDetail.Name+"?") + "  " +
+			theme.Base.Render("[y]es") + "  " +
+			theme.Subtle.Render("[n]o / esc")
+	} else {
+		content = theme.Error.Render("Leave "+m.activeGuildDetail.Name+"?") + "  " +
+			theme.Base.Render("[y]es") + "  " +
+			theme.Subtle.Render("[n]o / esc")
+	}
+	style := theme.ActiveBorder
+	if m.width > 2 {
+		style = style.Width(m.width - 2)
+	}
+	return style.Render(content)
+}
+
+func (m GuildsModel) handleConfirmKey(msg tea.KeyMsg) (GuildsModel, tea.Cmd) {
+	switch msg.String() {
+	case "y":
+		kind := m.confirming
+		m.confirming = confirmNoneG
+		m = m.refreshContent()
+		slug := m.activeGuild
+		if kind == confirmJoinG {
+			return m, func() tea.Msg { return JoinGuildMsg{Slug: slug} }
+		}
+		return m, func() tea.Msg { return LeaveGuildMsg{Slug: slug} }
+	case "n", "esc":
+		m.confirming = confirmNoneG
+		m = m.refreshContent()
+	}
+	return m, nil
 }
 
 func (m GuildsModel) buildContent() (string, []int) {
@@ -727,6 +849,8 @@ func (m GuildsModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight
 	if m.panel.IsActive() {
 		h -= m.panel.PanelHeight()
+	} else if m.confirming != confirmNoneG {
+		h -= 3 // confirm prompt: border-top + content + border-bottom
 	}
 	if h < 1 {
 		h = 1
