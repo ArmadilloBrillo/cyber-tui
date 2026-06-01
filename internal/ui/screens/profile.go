@@ -99,6 +99,7 @@ type ProfileModel struct {
 	// Display settings (from SharedConfigMsg).
 	timeDisplayFormat string
 	loc               *time.Location
+	filterNSFW        bool
 
 	// Sub-tab state (view mode only).
 	activeTab   profileTab
@@ -120,6 +121,19 @@ type SaveProfileMsg struct {
 	LocationName    string
 	Latitude        string // empty or numeric string; parsed in app.go
 	Longitude       string
+}
+
+func (m ProfileModel) visibleProfilePosts() []model.Post {
+	if !m.filterNSFW {
+		return m.posts
+	}
+	out := m.posts[:0:0]
+	for _, p := range m.posts {
+		if !p.IsNSFW {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func newProfileInputs() []textinput.Model {
@@ -407,7 +421,7 @@ func (m ProfileModel) switchTab(delta int) (ProfileModel, tea.Cmd) {
 func (m ProfileModel) activeTabLen() int {
 	switch m.activeTab {
 	case tabPosts:
-		return len(m.posts)
+		return len(m.visibleProfilePosts())
 	case tabReplies:
 		return len(m.replies)
 	case tabFollowing:
@@ -498,7 +512,7 @@ func (m ProfileModel) handleTabEnter() (ProfileModel, tea.Cmd) {
 	}
 	switch m.activeTab {
 	case tabPosts:
-		post := m.posts[m.tabSelected]
+		post := m.visibleProfilePosts()[m.tabSelected]
 		return m, func() tea.Msg { return ShowProfilePostMsg{Post: post} }
 	case tabReplies:
 		reply := m.replies[m.tabSelected]
@@ -532,6 +546,12 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		if msg.Loc != nil {
 			m.loc = msg.Loc
+		}
+		if msg.Settings.FilterNSFW != m.filterNSFW {
+			m.filterNSFW = msg.Settings.FilterNSFW
+			if m.activeTab == tabPosts {
+				m.tabSelected = 0
+			}
 		}
 		w := msg.Width
 		if w > 80 {
@@ -774,13 +794,14 @@ func (m ProfileModel) postsTabView() string {
 	if !m.tabMeta[tabPosts].loaded {
 		return theme.Subtle.Render("loading…")
 	}
-	if len(m.posts) == 0 {
+	visible := m.visibleProfilePosts()
+	if len(visible) == 0 {
 		return theme.Subtle.Render("no posts.")
 	}
-	top, end := m.tabSliceRange(len(m.posts))
+	top, end := m.tabSliceRange(len(visible))
 	lines := make([]string, 0, end-top)
 	for i := top; i < end; i++ {
-		lines = append(lines, m.renderPostItem(m.posts[i], i == m.tabSelected))
+		lines = append(lines, m.renderPostItem(visible[i], i == m.tabSelected))
 	}
 	return strings.Join(lines, "\n")
 }

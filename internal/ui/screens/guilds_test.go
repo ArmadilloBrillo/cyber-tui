@@ -373,3 +373,62 @@ func TestGuildsModel_UpAtTop_GuildListEmitsNoCmd(t *testing.T) {
 		t.Errorf("expected no cmd in guild list, got message %T", msg)
 	}
 }
+
+// --- FilterNSFW ---
+
+func TestGuildsModel_FilterNSFW_HidesNSFWPost(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts([]model.Post{
+		{ID: "g1", AuthorUsername: "alice", Content: "safe"},
+		{ID: "g2", AuthorUsername: "bob", Content: "nsfw", IsNSFW: true},
+		{ID: "g3", AuthorUsername: "carol", Content: "also safe"},
+	}, "")
+	m, _ = m.Update(nsfwFilterMsg(true))
+
+	// Navigate to end of visible list (2 visible, max index 1)
+	m, _ = m.Update(keyMsg_g("j"))
+	m, _ = m.Update(keyMsg_g("j"))
+
+	// Enter should return g3, not g2
+	_, cmd := m.Update(specialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	msg := cmd()
+	sp, ok := msg.(screens.ShowGuildPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowGuildPostMsg, got %T", msg)
+	}
+	if sp.Post.ID != "g3" {
+		t.Errorf("expected g3 (safe), got %s", sp.Post.ID)
+	}
+}
+
+func TestGuildsModel_FilterNSFW_Off_ShowsAll(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts([]model.Post{
+		{ID: "g1", AuthorUsername: "alice", Content: "safe"},
+		{ID: "g2", AuthorUsername: "bob", Content: "nsfw", IsNSFW: true},
+	}, "")
+	m, _ = m.Update(nsfwFilterMsg(false))
+
+	m, _ = m.Update(keyMsg_g("j"))
+	_, cmd := m.Update(specialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	msg := cmd()
+	sp, ok := msg.(screens.ShowGuildPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowGuildPostMsg, got %T", msg)
+	}
+	if sp.Post.ID != "g2" {
+		t.Errorf("expected g2 (nsfw), got %s", sp.Post.ID)
+	}
+}

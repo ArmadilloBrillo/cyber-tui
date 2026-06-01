@@ -15,7 +15,7 @@ This feature aligns the codebase with API v0.3.2, which supports 13 preference f
 | `Notifications.Bookmark` | bool | Alert on bookmarks | Device-roaming |
 | `Notifications.Reply` | bool | Alert on replies | Device-roaming |
 | `Notifications.Poke` | bool | Alert on pokes | Device-roaming |
-| `FilterNSFW` | bool | Hide NSFW content | Device-roaming |
+| `FilterNSFW` | bool | Hide posts where `isNSFW == true` in Feed, Topics, Guilds (posts view), and Profile (Posts tab). Bookmarks and PostDetail are unaffected. | Device-roaming |
 | `ShowFollowerCount` | bool | Public follower visibility | Device-roaming |
 | `AutoWatchOnReply` | bool | Auto-subscribe to thread on reply | Device-roaming |
 | `IconTheme` | string | Icon set (not yet modelled) | Device-roaming |

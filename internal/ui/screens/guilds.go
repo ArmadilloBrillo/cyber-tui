@@ -95,6 +95,7 @@ type GuildsModel struct {
 	loc               *time.Location
 	relaxed           bool
 	timeDisplayFormat string
+	filterNSFW        bool
 }
 
 // NewGuildsModel returns a zero-value GuildsModel ready for first use.
@@ -102,6 +103,19 @@ func NewGuildsModel() GuildsModel {
 	return GuildsModel{
 		panel: NewPostComposePanel(0),
 	}
+}
+
+func (m GuildsModel) visiblePosts() []model.Post {
+	if !m.filterNSFW {
+		return m.posts
+	}
+	out := m.posts[:0:0]
+	for _, p := range m.posts {
+		if !p.IsNSFW {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ComposeActive reports whether the new-thread compose panel is open.
@@ -241,6 +255,10 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			m.loc = msg.Loc
 		}
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		if msg.Settings.FilterNSFW != m.filterNSFW {
+			m.filterNSFW = msg.Settings.FilterNSFW
+			m.postIndex = 0
+		}
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -334,7 +352,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 					}
 				}
 			} else if m.view == viewGuildPosts {
-				if m.postIndex < len(m.posts)-1 {
+				if m.postIndex < len(m.visiblePosts())-1 {
 					m.postIndex++
 					m = m.refreshContent()
 				} else if !m.exhausted && !m.loading {
@@ -370,8 +388,8 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 					return m, func() tea.Msg { return LoadGuildPostsMsg{Slug: slug} }
 				}
 			} else if m.view == viewGuildPosts {
-				if len(m.posts) > 0 && m.postIndex < len(m.posts) {
-					post := m.posts[m.postIndex]
+				if visible := m.visiblePosts(); len(visible) > 0 && m.postIndex < len(visible) {
+					post := visible[m.postIndex]
 					return m, func() tea.Msg { return ShowGuildPostMsg{Post: post} }
 				}
 			} else { // viewGuildMembers
@@ -520,12 +538,13 @@ func (m GuildsModel) buildContent() (string, []int) {
 	if len(m.posts) == 0 {
 		return prefix + theme.Subtle.Render("  no threads"), nil
 	}
-	offsets := make([]int, len(m.posts))
+	visible := m.visiblePosts()
+	offsets := make([]int, len(visible))
 	currentLine := startLine
 	var out string
-	for i := range m.posts {
+	for i, p := range visible {
 		offsets[i] = currentLine
-		rendered := m.renderPostItem(m.posts[i], i == m.postIndex)
+		rendered := m.renderPostItem(p, i == m.postIndex)
 		out += rendered + sep
 		currentLine += lipgloss.Height(rendered) + lineInc - 1
 	}

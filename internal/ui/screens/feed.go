@@ -60,6 +60,7 @@ type FeedModel struct {
 	confirmingDelete bool   // true while the delete-post confirmation overlay is shown
 
 	bookmarkedPostIDs map[string]struct{}
+	filterNSFW        bool
 }
 
 func NewFeedModel() FeedModel {
@@ -169,6 +170,19 @@ func (m FeedModel) RemovePost(postID string) FeedModel {
 	return m
 }
 
+func (m FeedModel) visiblePosts() []model.Post {
+	if !m.filterNSFW {
+		return m.posts
+	}
+	out := m.posts[:0:0]
+	for _, p := range m.posts {
+		if !p.IsNSFW {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (m FeedModel) SetRelaxed(relaxed bool) FeedModel {
 	m.relaxed = relaxed
 	if m.ready {
@@ -247,6 +261,13 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		m.defaultPublicPost = msg.Settings.DefaultPublicPost
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
+		if msg.Settings.FilterNSFW != m.filterNSFW {
+			m.filterNSFW = msg.Settings.FilterNSFW
+			m.selectedIndex = 0
+			if m.ready {
+				m = m.refreshContent()
+			}
+		}
 		return m, nil
 
 	case BookmarkedIDsMsg:
@@ -291,8 +312,8 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		if m.confirmingDelete {
 			switch msg.String() {
 			case "y":
-				if m.selectedIndex < len(m.posts) {
-					postID := m.posts[m.selectedIndex].ID
+				if visible := m.visiblePosts(); m.selectedIndex < len(visible) {
+					postID := visible[m.selectedIndex].ID
 					m.confirmingDelete = false
 					m.viewport.Height = m.viewportHeight()
 					return m, func() tea.Msg { return DeletePostMsg{PostID: postID} }
@@ -328,30 +349,30 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) {
-				post := m.posts[m.selectedIndex]
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				post := visible[m.selectedIndex]
 				return m, func() tea.Msg { return ShowPostMsg{Post: post} }
 			}
 		case "r":
-			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) {
-				post := m.posts[m.selectedIndex]
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				post := visible[m.selectedIndex]
 				return m, func() tea.Msg { return ShowPostForReplyMsg{Post: post} }
 			}
 		case "p":
-			if len(m.posts) > 0 {
-				username := m.posts[m.selectedIndex].AuthorUsername
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				username := visible[m.selectedIndex].AuthorUsername
 				return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 			}
 			return m, nil
 		case "b":
-			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) {
-				postID := m.posts[m.selectedIndex].ID
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				postID := visible[m.selectedIndex].ID
 				return m, func() tea.Msg { return BookmarkPostMsg{PostID: postID} }
 			}
 			return m, nil
 		case "d":
-			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) &&
-				m.posts[m.selectedIndex].AuthorUsername == m.currentUsername {
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) &&
+				visible[m.selectedIndex].AuthorUsername == m.currentUsername {
 				m.confirmingDelete = true
 				m.viewport.Height = m.viewportHeight()
 			}
@@ -362,7 +383,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			m.viewport.Height = m.viewportHeight()
 			return m, cmd
 		case "down", "j":
-			if m.selectedIndex < len(m.posts)-1 {
+			if m.selectedIndex < len(m.visiblePosts())-1 {
 				m.selectedIndex++
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()
@@ -445,10 +466,11 @@ func (m FeedModel) buildContent() (string, []int) {
 		sep = "\n\n"
 		lineInc = 1
 	}
-	offsets := make([]int, len(m.posts))
+	visible := m.visiblePosts()
+	offsets := make([]int, len(visible))
 	var out string
 	currentLine := startLine
-	for i, p := range m.posts {
+	for i, p := range visible {
 		offsets[i] = currentLine
 		rendered := m.renderPost(p, i == m.selectedIndex)
 		out += rendered + sep

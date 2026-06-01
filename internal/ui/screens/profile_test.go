@@ -312,3 +312,65 @@ func TestProfileEditForm_ComposeCancel_ClosesForm(t *testing.T) {
 		t.Error("expected ComposeActive to be false after ComposeCancelMsg")
 	}
 }
+
+// --- FilterNSFW ---
+
+func profileWithPosts(posts []model.Post) screens.ProfileModel {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetUserPosts(posts, "")
+	// Switch to Posts tab (Info→Posts is one Tab press in view mode)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	return m
+}
+
+func TestProfile_FilterNSFW_HidesNSFWPost(t *testing.T) {
+	posts := []model.Post{
+		{ID: "pp1", AuthorUsername: "ragnar", Content: "safe"},
+		{ID: "pp2", AuthorUsername: "ragnar", Content: "nsfw", IsNSFW: true},
+		{ID: "pp3", AuthorUsername: "ragnar", Content: "also safe"},
+	}
+	m := profileWithPosts(posts)
+	m, _ = m.Update(nsfwFilterMsg(true))
+
+	// Navigate to end of visible list (2 visible, max index 1)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	// Enter should return pp3, not pp2
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	msg := cmd()
+	sp, ok := msg.(screens.ShowProfilePostMsg)
+	if !ok {
+		t.Fatalf("expected ShowProfilePostMsg, got %T", msg)
+	}
+	if sp.Post.ID != "pp3" {
+		t.Errorf("expected pp3 (safe), got %s", sp.Post.ID)
+	}
+}
+
+func TestProfile_FilterNSFW_Off_ShowsAll(t *testing.T) {
+	posts := []model.Post{
+		{ID: "pp1", AuthorUsername: "ragnar", Content: "safe"},
+		{ID: "pp2", AuthorUsername: "ragnar", Content: "nsfw", IsNSFW: true},
+	}
+	m := profileWithPosts(posts)
+	m, _ = m.Update(nsfwFilterMsg(false))
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	msg := cmd()
+	sp, ok := msg.(screens.ShowProfilePostMsg)
+	if !ok {
+		t.Fatalf("expected ShowProfilePostMsg, got %T", msg)
+	}
+	if sp.Post.ID != "pp2" {
+		t.Errorf("expected pp2 (nsfw), got %s", sp.Post.ID)
+	}
+}

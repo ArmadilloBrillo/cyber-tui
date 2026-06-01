@@ -68,10 +68,24 @@ type TopicsModel struct {
 	loc               *time.Location
 	relaxed           bool
 	timeDisplayFormat string
+	filterNSFW        bool
 }
 
 func NewTopicsModel() TopicsModel {
 	return TopicsModel{}
+}
+
+func (m TopicsModel) visiblePosts() []model.Post {
+	if !m.filterNSFW {
+		return m.posts
+	}
+	out := m.posts[:0:0]
+	for _, p := range m.posts {
+		if !p.IsNSFW {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (m TopicsModel) IsLoaded() bool { return m.loaded }
@@ -161,6 +175,10 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			m.loc = msg.Loc
 		}
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		if msg.Settings.FilterNSFW != m.filterNSFW {
+			m.filterNSFW = msg.Settings.FilterNSFW
+			m.postIndex = 0
+		}
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -220,7 +238,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					}
 				}
 			} else {
-				if m.postIndex < len(m.posts)-1 {
+				if m.postIndex < len(m.visiblePosts())-1 {
 					m.postIndex++
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
@@ -243,8 +261,8 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					return m, func() tea.Msg { return LoadTopicPostsMsg{Slug: slug} }
 				}
 			} else {
-				if len(m.posts) > 0 && m.postIndex < len(m.posts) {
-					post := m.posts[m.postIndex]
+				if visible := m.visiblePosts(); len(visible) > 0 && m.postIndex < len(visible) {
+					post := visible[m.postIndex]
 					return m, func() tea.Msg { return ShowTopicPostMsg{Post: post} }
 				}
 			}
@@ -327,12 +345,13 @@ func (m TopicsModel) buildContent() (string, []int) {
 	if len(m.posts) == 0 {
 		return prefix + theme.Subtle.Render("  no posts"), nil
 	}
-	offsets := make([]int, len(m.posts))
+	visible := m.visiblePosts()
+	offsets := make([]int, len(visible))
 	currentLine := startLine
 	var out string
-	for i := range m.posts {
+	for i, p := range visible {
 		offsets[i] = currentLine
-		rendered := m.renderPostItem(m.posts[i], i == m.postIndex)
+		rendered := m.renderPostItem(p, i == m.postIndex)
 		out += rendered + sep
 		currentLine += lipgloss.Height(rendered) + lineInc - 1
 	}
