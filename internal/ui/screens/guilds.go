@@ -305,6 +305,11 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 				if m.postIndex > 0 {
 					m.postIndex--
 					m = m.refreshContent()
+				} else if !m.loading && !m.refreshing {
+					slug := m.activeGuild
+					m.refreshing = true
+					m = m.refreshContent()
+					return m, func() tea.Msg { return RefreshGuildPostsMsg{Slug: slug} }
 				}
 			} else { // viewGuildMembers
 				if m.memberIndex > 0 {

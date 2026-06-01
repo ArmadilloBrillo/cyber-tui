@@ -337,3 +337,39 @@ func TestGuildsModel_MKey_EmitsLoadGuildMembersMsg(t *testing.T) {
 		t.Errorf("expected slug 'alpha', got %q", lgm.Slug)
 	}
 }
+
+// --- Refresh on up at top ---
+
+func TestGuildsModel_UpAtTop_ForumEmitsRefreshGuildPostsMsg(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts(sampleGuildPosts(), "")
+	// postIndex is 0 (top) — up should trigger refresh
+	m2, cmd := m.Update(specialKey(tea.KeyUp))
+	if cmd == nil {
+		t.Fatal("expected a cmd when pressing up at top of guild forum")
+	}
+	msg := cmd()
+	rgp, ok := msg.(screens.RefreshGuildPostsMsg)
+	if !ok {
+		t.Fatalf("expected RefreshGuildPostsMsg, got %T", msg)
+	}
+	if rgp.Slug != "alpha" {
+		t.Errorf("expected slug 'alpha', got %q", rgp.Slug)
+	}
+	_ = m2
+}
+
+func TestGuildsModel_UpAtTop_GuildListEmitsNoCmd(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	// guildIndex is 0 (top of list) — up should do nothing
+	_, cmd := m.Update(specialKey(tea.KeyUp))
+	if cmd != nil {
+		msg := cmd()
+		t.Errorf("expected no cmd in guild list, got message %T", msg)
+	}
+}
