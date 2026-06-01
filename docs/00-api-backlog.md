@@ -78,7 +78,6 @@ Notes:
 | Area | Description | Priority |
 |---|---|---|
 | `type` filter on `GET /v1/notifications` | `?type=reply,reply_mention` — comma-separated list of notification types to fetch. Not currently used; could power a future "filter by type" UX. | Low |
-| New notification types | v0.4.1 adds: `supporter_granted`, `supporter_removed`, `hacker_granted`, `hacker_removed`, `image_permission_granted`, `image_permission_removed`, `attachment_permission_granted`, `attachment_permission_removed`, `system_ban`. Current notification renderer has a fallback for unknown types; these will display but without dedicated icon/text. | Low |
 
 ### Replies
 
@@ -120,6 +119,7 @@ Notes:
 | Endpoint | Description | Resolved |
 |---|---|---|
 | `GET /v1/guilds/:slug` — `isMember`/`role` | Server-side bug: always returned `false`/`null` in v0.4. Fixed in v0.4.1 — verified 2026-06-01: `isMember: true`, `role: "member"` returned correctly for authenticated member of `technica`. TUI `GetOwnProfile`→`guildSlug` workaround stays as belt-and-braces. | 2026-06-01 |
+| v0.4.1 notification types | All 9 new types (`supporter_granted/removed`, `hacker_granted/removed`, `image_permission_granted/removed`, `attachment_permission_granted/removed`, `system_ban`) have dedicated text (`notifSummary`) and icons (`notifIcon`) in `notifications.go`. Implemented prior to v0.4.1 doc update. | — |
 | `DELETE /v1/posts/:id` | Delete own post — wired in client, feed, and post detail; `d` key with y/n confirmation | 2026-04-16 |
 | `DELETE /v1/replies/:id` | Delete own reply — wired in client and post detail; `d` key with y/n confirmation | 2026-04-16 |
 | `PATCH /v1/users/me` (extended) | `websiteName`, `websiteImageUrl`, `locationLatitude`, `locationLongitude` added to model, wire layer, and profile edit form (`e` key) | 2026-04-16 |
