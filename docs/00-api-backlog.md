@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.4) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.4.1) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -11,9 +11,8 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 
 | Endpoint | Method | Status | Description | Discovered |
 |---|---|---|---|---|
-| `/v1/guilds/:slug` | GET | **Open** | `isMember` field always returns `false`, even for authenticated members. `role` is always `null`. Re-confirmed 2026-05-31 against guild `technica`: `GET /v1/guilds/technica` returned `isMember: false`/`role: null` while both `/v1/users/me` (`guildSlug: "technica"`) and `/v1/guilds/technica/members` (caller present on the roster) confirmed membership. The `/v1/users/me` profile response correctly includes `guildSlug` and should be used instead to derive membership. The TUI works around this by calling `GetOwnProfile` and comparing `guildSlug`. | 2026-05-29 |
 | `/v1/follows` | GET | **Open** | Response does not include `followerUsername` or `followedUsername`. Confirmed still missing in v0.4 (re-tested 2026-05-29). The profile Following/Followers tabs fall back to showing a truncated user ID; profile navigation from those tabs is disabled until the API returns usernames. | 2026-04-17 |
-| Rate limits (spec) | — | **Open** | Inline per-endpoint docs and the consolidated Rate Limits table contradict each other. Entries: 15/day inline vs 10/day in table. Replies: 15/day vs 10/day. Notes: 30/day vs 20/day. Bookmarks: 75/day vs 50/day. Profile/Settings updates: 15/day vs 10/day. Unknown which is authoritative — report to API maintainer. | 2026-05-29 |
+| Rate limits (spec) | — | **Open** | Inline per-endpoint docs and the consolidated Rate Limits table still contradict each other in v0.4.1. Entries: 15/day inline vs 10/day in table. Replies: 15/day vs 10/day. Notes: 30/day vs 20/day. Bookmarks: 75/day vs 50/day. Profile updates: 15/day vs 10/day. Guild threads/join/leave are now consistent. Unknown which is authoritative — report to API maintainer. | 2026-05-29 |
 
 ---
 
@@ -56,14 +55,30 @@ Guilds are member groups with their own forum of threads. A user can belong to o
 | `/v1/guilds/:slug/members` | GET | List guild members (paginated, oldest-joined first) | **Done** — feature 29 |
 | `/v1/guilds/:slug/posts` | GET | List guild threads (most recently active first) | **Done** — feature 29 |
 | `/v1/guilds/:slug/posts` | POST | Create guild thread (title + topics supported) | **Done** — feature 29 |
-| `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | Out of scope — founding and membership management are web-only by design |
-| `/v1/guilds/:slug/leave` | POST | Leave a guild (founders blocked — web only; 403 via API) | Out of scope — same as above |
+| `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | Deferred — newly documented as an official API endpoint in v0.4.1 (was previously considered web-only). Implementation not yet planned. |
+| `/v1/guilds/:slug/leave` | POST | Leave a guild (founders blocked via API; 403) | Deferred — newly documented as an official API endpoint in v0.4.1. Implementation not yet planned. |
 
 Notes:
 - Guild threads are ordinary posts with `guildId`, `guildSlug`, `isGuildThread: true`; replying uses `POST /v1/replies` as normal.
 - `guild_new_thread` notifications are already display-ready (`notifSummary`/`notifIcon` have explicit cases) and navigation is wired via `TargetID` → `ShowNotificationPostMsg`.
-- The `isMember` field on `GET /v1/guilds/:slug` always returns `false` (server bug); membership enforcement is left to the server — the TUI does not gate compose.
-- Join/leave require use of the web interface.
+- The `isMember` / `role` fields on `GET /v1/guilds/:slug` were broken in v0.4 but are **fixed in v0.4.1** (verified 2026-06-01 — see Resolved Issues). The `GetGuild()` client method could now be called to read accurate membership state, though the current `User.GuildSlug` approach also works.
+- Join/leave are now official v0.4.1 API endpoints. Any authenticated user can also create a guild thread without being a member (explicitly stated in v0.4.1 spec).
+- v0.4.1 adds `profilePictureUrl` to both the guild list response and the guild members list response. The `Guild` and `GuildMember` model types and wire layer do not yet carry this field.
+
+### Guilds (new in v0.4.1)
+
+| Area | Description | Priority |
+|---|---|---|
+| `profilePictureUrl` on Guild / GuildMember | v0.4.1 adds this field to the guild list response and the member list response. Not in model types or wire layer. Low value for a TUI but keeps model in sync. | Low |
+| Guild join (`POST /v1/guilds/:slug/join`) | Now an official API endpoint. One guild per user; 409 if already in one. | Deferred |
+| Guild leave (`POST /v1/guilds/:slug/leave`) | Now an official API endpoint. Founders get 403 — must use web. | Deferred |
+
+### Notifications (new in v0.4.1)
+
+| Area | Description | Priority |
+|---|---|---|
+| `type` filter on `GET /v1/notifications` | `?type=reply,reply_mention` — comma-separated list of notification types to fetch. Not currently used; could power a future "filter by type" UX. | Low |
+| New notification types | v0.4.1 adds: `supporter_granted`, `supporter_removed`, `hacker_granted`, `hacker_removed`, `image_permission_granted`, `image_permission_removed`, `attachment_permission_granted`, `attachment_permission_removed`, `system_ban`. Current notification renderer has a fallback for unknown types; these will display but without dedicated icon/text. | Low |
 
 ### Replies
 
@@ -104,6 +119,7 @@ Notes:
 
 | Endpoint | Description | Resolved |
 |---|---|---|
+| `GET /v1/guilds/:slug` — `isMember`/`role` | Server-side bug: always returned `false`/`null` in v0.4. Fixed in v0.4.1 — verified 2026-06-01: `isMember: true`, `role: "member"` returned correctly for authenticated member of `technica`. TUI `GetOwnProfile`→`guildSlug` workaround stays as belt-and-braces. | 2026-06-01 |
 | `DELETE /v1/posts/:id` | Delete own post — wired in client, feed, and post detail; `d` key with y/n confirmation | 2026-04-16 |
 | `DELETE /v1/replies/:id` | Delete own reply — wired in client and post detail; `d` key with y/n confirmation | 2026-04-16 |
 | `PATCH /v1/users/me` (extended) | `websiteName`, `websiteImageUrl`, `locationLatitude`, `locationLongitude` added to model, wire layer, and profile edit form (`e` key) | 2026-04-16 |

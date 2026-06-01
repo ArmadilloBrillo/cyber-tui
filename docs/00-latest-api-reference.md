@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.4
+﻿# ᑕ¥βєяรקค¢є API v0.4.1
 
 ## Access
 
@@ -511,7 +511,7 @@ Rate limit: 45/min.
 POST /v1/guilds/:slug/posts
 ```
 
-You must be a member of the guild (otherwise `403`).
+Guild forums are open: any authenticated user can start a thread (membership is not required), matching the web.
 
 ```json
 {
@@ -827,3 +827,4 @@ Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for 
 | Location name | 64 chars |
 | Topics per entry | 3 |
 | Username | 3-20 chars |
+
