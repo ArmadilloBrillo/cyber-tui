@@ -100,6 +100,7 @@ type ProfileModel struct {
 	timeDisplayFormat string
 	loc               *time.Location
 	filterNSFW        bool
+	showFollowerCount bool
 
 	// Sub-tab state (view mode only).
 	activeTab   profileTab
@@ -553,6 +554,7 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 				m.tabSelected = 0
 			}
 		}
+		m.showFollowerCount = msg.Settings.ShowFollowerCount
 		w := msg.Width
 		if w > 80 {
 			w = 80
@@ -682,10 +684,13 @@ func (m ProfileModel) View() string {
 
 	// --- View mode: compact header + tab bar + content ---
 
-	counts := theme.Subtle.Render(fmt.Sprintf(
-		"%d followers · %d following · %d posts",
-		m.user.FollowersCount, m.user.FollowingCount, m.user.PostsCount,
-	))
+	var counts string
+	if m.showFollowerCount {
+		counts = theme.Subtle.Render(fmt.Sprintf(
+			"%d followers · %d following · %d posts",
+			m.user.FollowersCount, m.user.FollowingCount, m.user.PostsCount,
+		))
+	}
 
 	// Tab bar — pinned to terminal width to prevent terminal-side line wrapping,
 	// which would cause Bubble Tea's line-diff renderer to miscalculate cursor
@@ -718,14 +723,12 @@ func (m ProfileModel) View() string {
 		content = m.followListTabView(m.followers, tabFollowers, "followers")
 	}
 
-	out := lipgloss.JoinVertical(lipgloss.Left,
-		username,
-		counts,
-		"",
-		tabBar,
-		"",
-		content,
-	)
+	headerParts := []string{username}
+	if m.showFollowerCount {
+		headerParts = append(headerParts, counts)
+	}
+	headerParts = append(headerParts, "", tabBar, "", content)
+	out := lipgloss.JoinVertical(lipgloss.Left, headerParts...)
 	if availH := m.height - theme.ChromeHeight; availH > 0 {
 		out = lipgloss.NewStyle().MaxHeight(availH).Render(out)
 	}

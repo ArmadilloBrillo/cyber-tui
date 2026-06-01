@@ -54,6 +54,7 @@ func TestProfileSetFollowState_False(t *testing.T) {
 
 func TestProfileView_CountsDisplayed(t *testing.T) {
 	m := screens.NewProfileModel().SetUser(testUser())
+	m, _ = m.Update(screens.SharedConfigMsg{Settings: model.Settings{ShowFollowerCount: true}})
 	view := m.View()
 
 	if !strings.Contains(view, "35 followers") {
@@ -64,6 +65,16 @@ func TestProfileView_CountsDisplayed(t *testing.T) {
 	}
 	if !strings.Contains(view, "6 posts") {
 		t.Errorf("View should contain '6 posts', got:\n%s", view)
+	}
+}
+
+func TestProfileView_CountsHidden(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser())
+	// showFollowerCount defaults to false — counts must not appear
+	view := m.View()
+
+	if strings.Contains(view, "followers") {
+		t.Errorf("View should not contain 'followers' when showFollowerCount=false, got:\n%s", view)
 	}
 }
 
@@ -111,6 +122,7 @@ func TestProfileUpdate_FKey_EmitsUnfollowMsg_WhenFollowing(t *testing.T) {
 
 func TestProfileIncrementFollowersCount(t *testing.T) {
 	m := screens.NewProfileModel().SetUser(testUser()) // FollowersCount = 35
+	m, _ = m.Update(screens.SharedConfigMsg{Settings: model.Settings{ShowFollowerCount: true}})
 	m = m.IncrementFollowersCount(1)
 
 	view := m.View()
