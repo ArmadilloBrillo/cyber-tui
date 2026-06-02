@@ -483,11 +483,12 @@ Browse the guild directory, drill into threads, and view guild members.
 - Three-mode screen: guild list → guild thread feed → member list
 - Guild list sorted by member count, cursor-paginated; `enter` opens the thread feed
 - Thread feed is a standard paginated post list; `m` opens the member list, `esc` returns to the guild list
+- Thread feed shows a membership hint bar (`J` to join, `l` to leave) with y/n confirmation; `GetGuild` is fetched alongside the thread list to populate membership state
 - Member list is cursor-paginated oldest-joined first; `enter` navigates to the member's profile, `esc` returns to the thread feed
 
-Key types: `GuildsModel`, `LoadMoreGuildsMsg`, `LoadGuildPostsMsg`, `LoadMoreGuildPostsMsg`, `LoadGuildMembersMsg`, `LoadMoreGuildMembersMsg`  
-Key methods: `SetGuilds`, `AppendGuilds`, `SetGuildPosts`, `AppendGuildPosts`, `SetGuildMembers`, `AppendGuildMembers`  
-Key accessors: `IsBrowsingGuild()`, `IsBrowsingMembers()`
+Key types: `GuildsModel`, `LoadMoreGuildsMsg`, `LoadGuildPostsMsg`, `LoadMoreGuildPostsMsg`, `LoadGuildMembersMsg`, `LoadMoreGuildMembersMsg`, `JoinGuildMsg`, `LeaveGuildMsg`  
+Key methods: `SetGuilds`, `AppendGuilds`, `SetGuildPosts`, `AppendGuildPosts`, `SetGuildMembers`, `AppendGuildMembers`, `SetGuildDetail`, `BackToGuildList`  
+Key accessors: `IsBrowsingGuild()`, `IsBrowsingMembers()`, `IsDetailLoaded()`, `GuildDetail()`, `IsConfirmingJoin()`, `IsConfirmingLeave()`
 
 #### `topics.go`
 

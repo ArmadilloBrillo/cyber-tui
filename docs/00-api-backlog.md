@@ -51,12 +51,12 @@ Guilds are member groups with their own forum of threads. A user can belong to o
 | Endpoint | Method | Description | Status |
 |---|---|---|---|
 | `/v1/guilds` | GET | List guilds (paginated, most-populated first) | **Done** — feature 29 |
-| `/v1/guilds/:slug` | GET | Get guild detail + caller's `isMember` / `role` | Not called — server `isMember` bug; membership delegated to server on post |
+| `/v1/guilds/:slug` | GET | Get guild detail + caller's `isMember` / `role` | **Done** — fetched alongside thread list; used for membership hint bar |
 | `/v1/guilds/:slug/members` | GET | List guild members (paginated, oldest-joined first) | **Done** — feature 29 |
 | `/v1/guilds/:slug/posts` | GET | List guild threads (most recently active first) | **Done** — feature 29 |
 | `/v1/guilds/:slug/posts` | POST | Create guild thread (title + topics supported) | **Done** — feature 29 |
-| `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | Deferred — newly documented as an official API endpoint in v0.4.1 (was previously considered web-only). Implementation not yet planned. |
-| `/v1/guilds/:slug/leave` | POST | Leave a guild (founders blocked via API; 403) | Deferred — newly documented as an official API endpoint in v0.4.1. Implementation not yet planned. |
+| `/v1/guilds/:slug/join` | POST | Join a guild (one per user; 409 if already in one) | **Done** — `J` key in guild threads view |
+| `/v1/guilds/:slug/leave` | POST | Leave a guild (founders blocked via API; 403) | **Done** — `l` key in guild threads view; founders see no action key |
 
 Notes:
 - Guild threads are ordinary posts with `guildId`, `guildSlug`, `isGuildThread: true`; replying uses `POST /v1/replies` as normal.
@@ -70,8 +70,8 @@ Notes:
 | Area | Description | Priority |
 |---|---|---|
 | `profilePictureUrl` on Guild / GuildMember | v0.4.1 adds this field to the guild list response and the member list response. Not in model types or wire layer. Low value for a TUI but keeps model in sync. | Low |
-| Guild join (`POST /v1/guilds/:slug/join`) | Now an official API endpoint. One guild per user; 409 if already in one. | Deferred |
-| Guild leave (`POST /v1/guilds/:slug/leave`) | Now an official API endpoint. Founders get 403 — must use web. | Deferred |
+| Guild join (`POST /v1/guilds/:slug/join`) | Now an official API endpoint. One guild per user; 409 if already in one. | **Done** |
+| Guild leave (`POST /v1/guilds/:slug/leave`) | Now an official API endpoint. Founders get 403 — must use web. | **Done** |
 
 ### Notifications (new in v0.4.1)
 
@@ -132,4 +132,7 @@ Notes:
 | `PATCH /v1/notes/:id` | Server-side 500 bug resolved in API v0.4. Note editing and revision history fully operational. | 2026-05-29 |
 | `POST /v1/posts` (extended) | `CreatePost` now accepts `title`, `isPublic`, `isNSFW`. `Post` model gained `Title`, `Slug`, `GuildID`, `GuildSlug`, `IsGuildThread`. Title rendered in feed/detail/profile/bookmarks. Feature 28. | 2026-05-29 |
 | `GET /v1/guilds/:slug/members` | Guild member list — paginated, oldest-joined first; `m` from guild posts view; `enter` navigates to profile. Feature 29. | 2026-05-30 |
+| `GET /v1/guilds/:slug` (join/leave flow) | Guild detail (`isMember`, `role`) fetched alongside thread list. `J` to join, `l` to leave with y/n confirmation and membership hint bar. Feature 29. | 2026-06-01 |
+| `POST /v1/guilds/:slug/join` | Join guild — `J` key in guild thread feed with confirmation prompt; success banner "✓ Joined #name". Feature 29. | 2026-06-01 |
+| `POST /v1/guilds/:slug/leave` | Leave guild — `l` key in guild thread feed with confirmation prompt; success banner "✓ Left #name"; navigates back to guild list. Feature 29. | 2026-06-01 |
 | Attachments (image/audio) | Attachment URLs surfaced via `GetFocusedURLs` and opened with `o`. Best-effort handling for a TUI — no further work needed. | 2026-05-30 |

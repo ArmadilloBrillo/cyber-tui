@@ -1143,6 +1143,16 @@ func (c *HTTPClient) GetGuildMembers(slug, cursor string) ([]model.GuildMember, 
 	return fetchPage(c, path, wireGuildMemberToModel)
 }
 
+func (c *HTTPClient) JoinGuild(slug string) error {
+	_, err := c.doRequest("POST", "/v1/guilds/"+url.PathEscape(slug)+"/join", nil)
+	return err
+}
+
+func (c *HTTPClient) LeaveGuild(slug string) error {
+	_, err := c.doRequest("POST", "/v1/guilds/"+url.PathEscape(slug)+"/leave", nil)
+	return err
+}
+
 func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []string) (model.Post, error) {
 	if topics == nil {
 		topics = []string{}

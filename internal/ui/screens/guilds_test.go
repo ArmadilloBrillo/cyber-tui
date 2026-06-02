@@ -432,3 +432,171 @@ func TestGuildsModel_FilterNSFW_Off_ShowsAll(t *testing.T) {
 		t.Errorf("expected g2 (nsfw), got %s", sp.Post.ID)
 	}
 }
+
+// --- Guild join / leave ---
+
+func inPostsView(t *testing.T) screens.GuildsModel {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts(sampleGuildPosts(), "")
+	return m
+}
+
+func TestGuildsModel_SetGuildDetail_StoresDetailAndMarksLoaded(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	if m.IsDetailLoaded() {
+		t.Error("detail should not be loaded before SetGuildDetail")
+	}
+	m = m.SetGuildDetail(model.Guild{ID: "g1", Name: "Alpha", Slug: "alpha", IsMember: false})
+	if !m.IsDetailLoaded() {
+		t.Error("IsDetailLoaded should return true after SetGuildDetail")
+	}
+	if m.GuildDetail().Name != "Alpha" {
+		t.Errorf("expected Name 'Alpha', got %q", m.GuildDetail().Name)
+	}
+}
+
+func TestGuildsModel_JKey_WhenNotMember_SetsConfirmJoin(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: false})
+	m, _ = m.Update(keyMsg_g("J"))
+	if !m.IsConfirmingJoin() {
+		t.Error("J key when not a member should set confirming to join")
+	}
+}
+
+func TestGuildsModel_JKey_WhenAlreadyMember_DoesNothing(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: true, Role: "member"})
+	m, _ = m.Update(keyMsg_g("J"))
+	if m.IsConfirmingJoin() {
+		t.Error("J key when already a member should not set confirming")
+	}
+}
+
+func TestGuildsModel_JKey_WhenDetailNotLoaded_DoesNothing(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	// detail not loaded
+	m, _ = m.Update(keyMsg_g("J"))
+	if m.IsConfirmingJoin() {
+		t.Error("J key when detail not loaded should not set confirming")
+	}
+}
+
+func TestGuildsModel_LKey_WhenMember_SetsConfirmLeave(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: true, Role: "member"})
+	m, _ = m.Update(keyMsg_g("L"))
+	if !m.IsConfirmingLeave() {
+		t.Error("l key when a member should set confirming to leave")
+	}
+}
+
+func TestGuildsModel_LKey_WhenFounder_DoesNothing(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: true, Role: "founder"})
+	m, _ = m.Update(keyMsg_g("L"))
+	if m.IsConfirmingLeave() {
+		t.Error("l key when founder should not set confirming")
+	}
+}
+
+func TestGuildsModel_ConfirmY_Join_EmitsJoinGuildMsg(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: false})
+	m, _ = m.Update(keyMsg_g("J"))
+	m2, cmd := m.Update(keyMsg_g("y"))
+	if cmd == nil {
+		t.Fatal("expected a cmd after y confirmation")
+	}
+	msg := cmd()
+	jm, ok := msg.(screens.JoinGuildMsg)
+	if !ok {
+		t.Fatalf("expected JoinGuildMsg, got %T", msg)
+	}
+	if jm.Slug != "alpha" {
+		t.Errorf("expected slug 'alpha', got %q", jm.Slug)
+	}
+	if m2.IsConfirmingJoin() {
+		t.Error("confirming should be cleared after y")
+	}
+}
+
+func TestGuildsModel_ConfirmY_Leave_EmitsLeaveGuildMsg(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: true, Role: "member"})
+	m, _ = m.Update(keyMsg_g("L"))
+	m2, cmd := m.Update(keyMsg_g("y"))
+	if cmd == nil {
+		t.Fatal("expected a cmd after y confirmation")
+	}
+	msg := cmd()
+	lm, ok := msg.(screens.LeaveGuildMsg)
+	if !ok {
+		t.Fatalf("expected LeaveGuildMsg, got %T", msg)
+	}
+	if lm.Slug != "alpha" {
+		t.Errorf("expected slug 'alpha', got %q", lm.Slug)
+	}
+	if m2.IsConfirmingLeave() {
+		t.Error("confirming should be cleared after y")
+	}
+}
+
+func TestGuildsModel_ConfirmN_ClearsConfirming(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: false})
+	m, _ = m.Update(keyMsg_g("J"))
+	m2, cmd := m.Update(keyMsg_g("n"))
+	if cmd != nil {
+		t.Error("n should not emit a cmd")
+	}
+	if m2.IsConfirmingJoin() {
+		t.Error("n should clear confirming")
+	}
+}
+
+func TestGuildsModel_ConfirmEsc_ClearsConfirming_StaysInPostsView(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: false})
+	m, _ = m.Update(keyMsg_g("J"))
+	m2, _ := m.Update(specialKey(tea.KeyEsc))
+	if m2.IsConfirmingJoin() {
+		t.Error("esc should clear confirming")
+	}
+	if !m2.IsBrowsingGuild() {
+		t.Error("esc while confirming should stay in posts view, not navigate back")
+	}
+}
+
+func TestGuildsModel_Esc_WithoutConfirm_NavigatesBack(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	// No confirming active — esc should navigate back to guild list
+	m2, _ := m.Update(specialKey(tea.KeyEsc))
+	if m2.IsBrowsingGuild() {
+		t.Error("esc without confirming should navigate back to guild list")
+	}
+}
+
+func TestGuildsModel_EscBack_ClearsDetailState(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: true, Role: "member"})
+	m2, _ := m.Update(specialKey(tea.KeyEsc))
+	if m2.IsDetailLoaded() {
+		t.Error("navigating back should clear guildDetailLoaded")
+	}
+}

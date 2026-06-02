@@ -29,6 +29,7 @@ type SharedConfigMsg struct {
 	WanderLust     bool
 	MaxThreadDepth int
 	Timezone       string
+	OwnGuildSlug   string
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
