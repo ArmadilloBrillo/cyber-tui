@@ -365,6 +365,45 @@ func TestNotifSummary_ThreadReply_NoAuthor(t *testing.T) {
 	}
 }
 
+// --- guild clause: post/reply notifications include "in #<guild>" verbatim ---
+
+func TestNotifSummary_Reply_WithGuild(t *testing.T) {
+	n := model.Notification{Type: "reply", GuildName: "technica"}
+	if got := notifSummary(n); got != "replied to your post in #technica." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+func TestNotifSummary_ThreadReply_WithGuild(t *testing.T) {
+	n := model.Notification{Type: "thread_reply", ThreadAuthorUsername: "7spires", GuildName: "technica"}
+	if got := notifSummary(n); got != "replied in @7spires's thread in #technica." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+func TestNotifSummary_NewPost_WithGuild_PreservesCasing(t *testing.T) {
+	// Guild names keep their own casing; only a leading # is added.
+	n := model.Notification{Type: "new_post_following", GuildName: "CHOOMS"}
+	if got := notifSummary(n); got != "published something in #CHOOMS." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+func TestNotifSummary_Reply_NoGuild_Unchanged(t *testing.T) {
+	n := model.Notification{Type: "reply"}
+	if got := notifSummary(n); got != "replied to your post." {
+		t.Errorf("non-guild reply must be unchanged, got %q", got)
+	}
+}
+
+func TestNotifSummary_Mention_NoGuildClause(t *testing.T) {
+	// *_mention types are intentionally excluded from the guild clause.
+	n := model.Notification{Type: "post_mention", GuildName: "technica"}
+	if got := notifSummary(n); got != "mentioned you in a post." {
+		t.Errorf("mention should not get a guild clause, got %q", got)
+	}
+}
+
 // --- notifIcon ---
 
 func TestNotifIcon_Reply_Unread(t *testing.T) {
@@ -433,7 +472,7 @@ func TestNotifs_Enter_GuildNewThread_EmitsShowPost(t *testing.T) {
 func TestNotifSummary_GuildNewThread_WithName(t *testing.T) {
 	n := model.Notification{Type: "guild_new_thread", GuildName: "technica"}
 	result := notifSummary(n)
-	if result != "posted a new thread in technica." {
+	if result != "posted a new thread in #technica." {
 		t.Errorf("unexpected summary: %q", result)
 	}
 }

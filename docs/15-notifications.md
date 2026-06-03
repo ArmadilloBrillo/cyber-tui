@@ -97,8 +97,12 @@ Pressing `enter` on `poke` or `new_follower` notifications (or any with an empty
 | `reply` | replied to your post. |
 | `reply_mention` | mentioned you in a reply. |
 | `thread_reply` | replied in @username's thread. (falls back to "a thread you're following" if author unknown) |
-| `guild_new_thread` | posted a new thread in \<guildName\>. (falls back to "posted a new thread." if guild name absent) |
+| `guild_new_thread` | posted a new thread in #\<guildName\>. (falls back to "posted a new thread." if guild name absent) |
 | `poke` | poked you. ¯\_(ツ)_/¯ |
+
+### Guild context
+
+When a post or reply notification happens inside a guild, the summary appends an `in #<guildName>` clause — e.g. `replied to your post in #technica.` or `published something in #CHOOMS.` This applies to `new_post_friend`, `new_post_following`, `reply`, and `thread_reply` whenever the notification carries `metadata.guildName`; `guild_new_thread` always shows it. The guild name is rendered **verbatim** (guilds choose their own casing); the leading `#` marks it as a guild, matching the app's existing convention (join/leave banners, the `guild_new_thread` icon). `*_mention` types are excluded to avoid awkward phrasing. The handling lives in `notifSummary` / `withGuild` in `internal/ui/screens/notifications.go`.
 
 ---
 
