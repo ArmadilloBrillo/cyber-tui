@@ -44,6 +44,35 @@ func TestFeed_FilterNSFW_HidesNSFWPost(t *testing.T) {
 	}
 }
 
+// With FilterNSFW on, selectedIndex is a visible-list index. SetPosts restores the
+// selection by ID; the restored index must stay in visible-list space so the scroll
+// math (which indexes the visible-length offsets slice) does not panic, and so the
+// URL opener reads the highlighted post rather than a filtered-out one.
+func TestFeed_FilterNSFW_RefreshKeepsVisibleSelection(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24}) // mark ready so scroll math runs
+	m, _ = m.Update(nsfwFilterMsg(true))
+
+	posts := []model.Post{
+		{ID: "a", AuthorUsername: "alice", Content: "first safe https://example.com/a"},
+		{ID: "x", AuthorUsername: "bob", Content: "nsfw https://example.com/x", IsNSFW: true},
+		{ID: "b", AuthorUsername: "carol", Content: "second safe https://example.com/b"},
+	}
+	m = m.SetPosts(posts, "")
+
+	// Move to the second visible post (b); the NSFW post x is filtered out.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	// Re-set the same posts (feed refresh / tab switch). Pre-fix this restored the
+	// selection from the unfiltered slice (index 2) and panicked in the scroll math.
+	m = m.SetPosts(posts, "")
+
+	urls := m.GetFocusedURLs()
+	if len(urls) != 1 || urls[0] != "https://example.com/b" {
+		t.Fatalf("GetFocusedURLs = %v, want [https://example.com/b]", urls)
+	}
+}
+
 func TestFeed_FilterNSFW_Off_ShowsAll(t *testing.T) {
 	m := screens.NewFeedModel()
 	m = m.SetPosts([]model.Post{

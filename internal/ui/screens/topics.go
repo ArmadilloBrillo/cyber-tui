@@ -426,11 +426,12 @@ func (m TopicsModel) ensureSelectedVisible() TopicsModel {
 		}
 		itemHeight = lipgloss.Height(m.renderTopicItem(selectedIndex))
 	} else {
+		visible := m.visiblePosts()
 		selectedIndex = m.postIndex
-		if selectedIndex >= len(m.posts) {
+		if selectedIndex >= len(visible) {
 			return m
 		}
-		itemHeight = lipgloss.Height(m.renderPostItem(m.posts[selectedIndex], false))
+		itemHeight = lipgloss.Height(m.renderPostItem(visible[selectedIndex], false))
 	}
 
 	if selectedIndex >= len(m.itemOffsets) {
@@ -472,13 +473,14 @@ func (m TopicsModel) IsBrowsingTopic() bool { return m.activeTopic != "" }
 // GetFocusedURLs implements URLProvider. Returns URLs from the selected post when
 // in post-list view; returns nil when browsing the topic list.
 func (m TopicsModel) GetFocusedURLs() []string {
-	if m.view != viewTopicPosts || len(m.posts) == 0 {
+	if m.view != viewTopicPosts {
 		return nil
 	}
-	if m.postIndex < 0 || m.postIndex >= len(m.posts) {
+	visible := m.visiblePosts()
+	if m.postIndex < 0 || m.postIndex >= len(visible) {
 		return nil
 	}
-	p := m.posts[m.postIndex]
+	p := visible[m.postIndex]
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
 }
 
