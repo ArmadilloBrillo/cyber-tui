@@ -156,6 +156,7 @@ func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 func (m PostDetailModel) SetReplies(replies []model.Reply) PostDetailModel {
 	m.selectedReply = -1 // keep post selected after replies load
 	m.loading = false
+	m.err = nil
 	if len(replies) > m.post.RepliesCount {
 		m.post.RepliesCount = len(replies)
 	}
@@ -217,6 +218,9 @@ func (m PostDetailModel) ComposeActive() bool { return m.compose.IsActive() }
 func (m PostDetailModel) SetError(err error) PostDetailModel {
 	m.err = err
 	m.loading = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -772,9 +776,6 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 }
 
 func (m PostDetailModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("loading…")
 	}

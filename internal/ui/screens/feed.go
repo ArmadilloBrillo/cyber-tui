@@ -1,7 +1,6 @@
 package screens
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -87,6 +86,7 @@ func ParseTopics(s string) []string {
 
 func (m FeedModel) SetFetching() FeedModel {
 	m.fetching = true
+	m.err = nil
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -142,6 +142,10 @@ func (m FeedModel) SetError(err error) FeedModel {
 	m.err = err
 	m.loading = false
 	m.fetching = false
+	m.refreshing = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -462,6 +466,9 @@ func (m FeedModel) buildContent() (string, []int) {
 		startLine = 1
 	}
 	if len(m.posts) == 0 {
+		if m.err != nil {
+			return prefix + theme.Subtle.Render("  couldn't load feed"), nil
+		}
 		return prefix + theme.Subtle.Render("  no posts yet"), nil
 	}
 	sep := "\n"
@@ -494,9 +501,6 @@ func (m FeedModel) renderPost(p model.Post, selected bool) string {
 }
 
 func (m FeedModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("feed error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("loading feed...")
 	}

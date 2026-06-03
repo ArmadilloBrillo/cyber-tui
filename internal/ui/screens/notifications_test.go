@@ -880,6 +880,34 @@ func TestNotifs_SetError_SetsErr(t *testing.T) {
 	}
 }
 
+// A failed initial load must not blank/block the screen: the view shows a subtle
+// inline "couldn't load" line instead of a full-screen error.
+func TestNotifs_SetError_ShowsInlineEmptyState(t *testing.T) {
+	m := initNotifs(nil) // ready, no notifications
+	m = m.SetError(errForTest("boom"))
+	view := m.View()
+	if strings.Contains(view, "boom") {
+		t.Errorf("raw error must not appear in the screen (banner handles it), got: %s", view)
+	}
+	if !strings.Contains(view, "couldn't load notifications") {
+		t.Errorf("expected inline 'couldn't load' empty-state, got: %s", view)
+	}
+}
+
+// Re-fetching clears a prior error so the screen is never a permanent trap.
+func TestNotifs_SetFetchingClearsError(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.SetError(errForTest("boom"))
+	m = m.SetFetching()
+	if m.err != nil {
+		t.Error("SetFetching should clear a prior error")
+	}
+	m = m.SetNotifs(nil, "")
+	if m.err != nil {
+		t.Error("SetNotifs should clear a prior error")
+	}
+}
+
 func TestNotifs_UnreadCount(t *testing.T) {
 	notifs := []model.Notification{
 		makeNotif("n1", "reply", "p1", false),

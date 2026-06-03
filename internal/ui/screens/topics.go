@@ -92,6 +92,7 @@ func (m TopicsModel) IsLoaded() bool { return m.loaded }
 
 func (m TopicsModel) SetFetching() TopicsModel {
 	m.fetching = true
+	m.err = nil
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -162,6 +163,9 @@ func (m TopicsModel) SetError(err error) TopicsModel {
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -295,9 +299,6 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 }
 
 func (m TopicsModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("topics error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("loading topics...")
 	}
@@ -325,6 +326,9 @@ func (m TopicsModel) buildContent() (string, []int) {
 
 	if m.view == viewTopicList {
 		if len(m.topics) == 0 {
+			if m.err != nil {
+				return prefix + theme.Subtle.Render("  couldn't load topics"), nil
+			}
 			return prefix + theme.Subtle.Render("  no topics yet"), nil
 		}
 		offsets := make([]int, len(m.topics))
@@ -343,6 +347,9 @@ func (m TopicsModel) buildContent() (string, []int) {
 
 	// viewTopicPosts
 	if len(m.posts) == 0 {
+		if m.err != nil {
+			return prefix + theme.Subtle.Render("  couldn't load posts"), nil
+		}
 		return prefix + theme.Subtle.Render("  no posts"), nil
 	}
 	visible := m.visiblePosts()

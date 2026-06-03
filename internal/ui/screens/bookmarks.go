@@ -1,7 +1,6 @@
 package screens
 
 import (
-	"fmt"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -82,6 +81,7 @@ func (m BookmarksModel) IsLoaded() bool { return m.loaded }
 
 func (m BookmarksModel) SetFetching() BookmarksModel {
 	m.fetching = true
+	m.err = nil
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -95,6 +95,7 @@ func (m BookmarksModel) SetBookmarks(items []model.Bookmark, cursor string) Book
 	m.loading = false
 	m.fetching = false
 	m.loaded = true
+	m.err = nil
 	m.selectedIndex = 0
 	if m.ready {
 		m = m.refreshContent()
@@ -138,6 +139,9 @@ func (m BookmarksModel) SetError(err error) BookmarksModel {
 	m.err = err
 	m.loading = false
 	m.fetching = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -290,6 +294,9 @@ func (m BookmarksModel) buildContent() (string, []int) {
 	}
 	visible := m.visibleItems()
 	if len(visible) == 0 {
+		if m.err != nil {
+			return theme.Subtle.Render("  couldn't load bookmarks"), nil
+		}
 		return theme.Subtle.Render("  no bookmarks yet — press b on a post to save it"), nil
 	}
 
@@ -434,9 +441,6 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 }
 
 func (m BookmarksModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("bookmarks error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("  Loading bookmarks…")
 	}

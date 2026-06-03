@@ -26,7 +26,6 @@ type ChatroomsModel struct {
 	input             textinput.Model
 	width             int
 	ready             bool
-	err               error
 	loc               *time.Location // timezone for timestamp display; nil = UTC
 	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
 }
@@ -155,10 +154,6 @@ func (m ChatroomsModel) renderMessages() string {
 }
 
 func (m ChatroomsModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("chatroom error: %s", m.err))
-	}
-
 	roomList := theme.Border.Width(chatroomSidebarWidth).Render(m.renderRoomList())
 
 	var chatArea string

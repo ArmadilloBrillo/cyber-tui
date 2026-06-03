@@ -131,6 +131,10 @@ The notifications screen opens in unread-only mode by default. Press `u` to togg
 
 Pressing `enter` on a navigable notification opens PostDetail. Pressing `esc` in PostDetail returns to the notifications screen with the previously selected notification visible. This uses a shared `postDetailReturn` field in the App to track which screen to return to (same mechanism used by Feed → PostDetail → Feed).
 
+### Deleted-post notifications
+
+A notification can point to a post that has since been deleted; the notification list carries no "deleted target" field, so this only surfaces when the post is opened and `GET /v1/posts/:id` returns `404 NOT_FOUND`. Rather than blocking the screen, the post-open fetch returns `notifPostLoadErrMsg`; `handleNotifications` shows a transient banner **"This post has been deleted"** and leaves the notifications list intact and usable. (A 401 here still redirects to login; other errors show their message in the banner.) See [31-global-notifications.md](31-global-notifications.md) for the banner mechanism and the broader "errors never block a screen" model.
+
 ---
 
 ## API Endpoints

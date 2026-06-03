@@ -1,7 +1,6 @@
 package screens
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -62,6 +61,7 @@ func (m NotificationsModel) IsReady() bool { return m.ready }
 
 func (m NotificationsModel) SetFetching() NotificationsModel {
 	m.fetching = true
+	m.err = nil
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -72,6 +72,7 @@ func (m NotificationsModel) SetNotifs(notifs []model.Notification, cursor string
 	m.notifs = notifs
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
+	m.err = nil
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
@@ -100,6 +101,9 @@ func (m NotificationsModel) SetError(err error) NotificationsModel {
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -359,6 +363,9 @@ func (m NotificationsModel) buildContent() (string, []int) {
 	}
 
 	if len(visible) == 0 {
+		if m.err != nil {
+			return prefix + theme.Subtle.Render("  couldn't load notifications"), nil
+		}
 		if m.showUnreadOnly {
 			return prefix + theme.Subtle.Render("  all caught up"), nil
 		}
@@ -531,9 +538,6 @@ func (m NotificationsModel) renderNotif(n model.Notification, selected bool) str
 }
 
 func (m NotificationsModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("notifications error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("loading notifications...")
 	}
