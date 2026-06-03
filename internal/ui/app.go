@@ -1235,6 +1235,8 @@ func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
 		err = m.err
 	case actionErrMsg:
 		err = m.err
+	case notifPostLoadErrMsg:
+		err = m.err
 	default:
 		return a, nil, false
 	}
@@ -1281,7 +1283,21 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screenJournal:
 		a.journal = a.journal.SetError(m.err)
 	}
-	return a, nil, true
+	// Errors never block a screen: the per-screen SetError above only feeds an
+	// inline "couldn't load" empty-state, while the failure is announced in the
+	// transient global banner so it is visible even when content is already shown.
+	a, cmd := a.notify(notifyError, friendlyErr(m.err))
+	return a, cmd, true
+}
+
+// friendlyErr converts an API error into human-facing banner text, softening the
+// raw "API error NOT_FOUND (404): …" wording for the common deleted-resource case.
+func friendlyErr(err error) string {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.Status == 404 {
+		return "Not found — it may have been deleted."
+	}
+	return err.Error()
 }
 
 // activeScreenHasFocusedInput returns true when the current screen has a
@@ -2175,6 +2191,12 @@ type wanderTickMsg struct{}
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
 type errMsg struct{ err error }
 
+// notifPostLoadErrMsg is the failure of opening a post from the Notifications
+// screen. It is handled in handleNotifications so a deleted target surfaces as a
+// friendly transient banner ("This post has been deleted") instead of routing
+// through handleErr and blanking the list.
+type notifPostLoadErrMsg struct{ err error }
+
 // notifyLevel selects the color of a global notification banner.
 type notifyLevel int
 
@@ -2185,8 +2207,9 @@ const (
 )
 
 // actionErrMsg is a non-fatal failure from a user-initiated action (post, reply,
-// delete, follow, …). Unlike errMsg — which blanks a screen via SetError —
-// it surfaces as a transient global banner and never blocks a tab.
+// delete, follow, …). Like errMsg it surfaces as a transient global banner and
+// never blocks a tab; unlike errMsg it does not set any screen's inline
+// "couldn't load" empty-state, since there is no load in flight.
 type actionErrMsg struct{ err error }
 
 // notifyMsg sets the global banner directly; used for success/info surfacing.
@@ -2632,6 +2655,21 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.post)
 		return a, a.loadRepliesCmd(msg.post.ID), true
+	case notifPostLoadErrMsg:
+		// A dead session must still redirect to login — let handleUnauthorized
+		// (which runs later in the dispatch chain) claim it.
+		if errors.Is(msg.err, api.ErrUnauthorized) {
+			return a, nil, false
+		}
+		// The target post is gone (or otherwise unfetchable): announce it in the
+		// transient banner and leave the notifications list untouched.
+		var apiErr *api.APIError
+		if errors.As(msg.err, &apiErr) && apiErr.Status == 404 {
+			a, cmd := a.notify(notifyWarn, "This post has been deleted")
+			return a, cmd, true
+		}
+		a, cmd := a.notify(notifyError, msg.err.Error())
+		return a, cmd, true
 	case screens.ShowUserProfileMsg:
 		if a.active != screenNotifications {
 			return a, nil, false
@@ -3076,7 +3114,7 @@ func (a *App) loadPostAndShowCmd(postID string) tea.Cmd {
 	return func() tea.Msg {
 		post, err := a.client.GetPost(postID)
 		if err != nil {
-			return errMsg{err}
+			return notifPostLoadErrMsg{err}
 		}
 		return notifPostLoadedMsg{post: post}
 	}

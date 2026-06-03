@@ -192,6 +192,7 @@ func (m ProfileModel) SetFollowFeedback(text string) ProfileModel {
 func (m ProfileModel) SetUser(u model.User) ProfileModel {
 	m.user = u
 	m.followFeedback = ""
+	m.err = nil
 	return m
 }
 
@@ -218,6 +219,7 @@ func (m ProfileModel) SetUserPosts(posts []model.Post, cursor string) ProfileMod
 	m.posts = posts
 	m.tabMeta[tabPosts] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
+	m.err = nil
 	return m
 }
 
@@ -234,6 +236,7 @@ func (m ProfileModel) SetUserReplies(replies []model.Reply, cursor string) Profi
 	m.replies = replies
 	m.tabMeta[tabReplies] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
+	m.err = nil
 	return m
 }
 
@@ -250,6 +253,7 @@ func (m ProfileModel) SetUserFollowing(follows []model.Follow, cursor string) Pr
 	m.following = follows
 	m.tabMeta[tabFollowing] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
+	m.err = nil
 	return m
 }
 
@@ -266,6 +270,7 @@ func (m ProfileModel) SetUserFollowers(follows []model.Follow, cursor string) Pr
 	m.followers = follows
 	m.tabMeta[tabFollowers] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
+	m.err = nil
 	return m
 }
 
@@ -672,8 +677,14 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 
 // View renders the profile screen.
 func (m ProfileModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("profile error: %s", m.err))
+	// The core profile hasn't loaded yet: show a non-blocking placeholder rather
+	// than a broken header. A failed load surfaces in the global banner; navigating
+	// away and back re-fetches.
+	if m.user.Username == "" {
+		if m.err != nil {
+			return theme.Subtle.Render("couldn't load profile")
+		}
+		return theme.Subtle.Render("loading profile…")
 	}
 
 	username := theme.Title.Render("@" + m.user.Username)

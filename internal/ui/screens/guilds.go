@@ -149,6 +149,7 @@ func (m GuildsModel) IsLoaded() bool { return m.loaded }
 // SetFetching marks the model as loading and refreshes the loading indicator.
 func (m GuildsModel) SetFetching() GuildsModel {
 	m.fetching = true
+	m.err = nil
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -290,6 +291,9 @@ func (m GuildsModel) SetError(err error) GuildsModel {
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -539,9 +543,6 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 
 // View renders the guilds screen.
 func (m GuildsModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("guilds error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("loading guilds...")
 	}
@@ -634,6 +635,9 @@ func (m GuildsModel) buildContent() (string, []int) {
 
 	if m.view == viewGuildList {
 		if len(m.guilds) == 0 {
+			if m.err != nil {
+				return prefix + theme.Subtle.Render("  couldn't load guilds"), nil
+			}
 			return prefix + theme.Subtle.Render("  no guilds yet"), nil
 		}
 		offsets := make([]int, len(m.guilds))
@@ -651,6 +655,9 @@ func (m GuildsModel) buildContent() (string, []int) {
 
 	if m.view == viewGuildMembers {
 		if len(m.members) == 0 {
+			if m.err != nil {
+				return prefix + theme.Subtle.Render("  couldn't load members"), nil
+			}
 			return prefix + theme.Subtle.Render("  no members"), nil
 		}
 		offsets := make([]int, len(m.members))
@@ -668,6 +675,9 @@ func (m GuildsModel) buildContent() (string, []int) {
 
 	// viewGuildPosts
 	if len(m.posts) == 0 {
+		if m.err != nil {
+			return prefix + theme.Subtle.Render("  couldn't load threads"), nil
+		}
 		return prefix + theme.Subtle.Render("  no threads"), nil
 	}
 	visible := m.visiblePosts()

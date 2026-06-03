@@ -365,6 +365,45 @@ func TestNotifSummary_ThreadReply_NoAuthor(t *testing.T) {
 	}
 }
 
+// --- guild clause: post/reply notifications include "in #<guild>" verbatim ---
+
+func TestNotifSummary_Reply_WithGuild(t *testing.T) {
+	n := model.Notification{Type: "reply", GuildName: "technica"}
+	if got := notifSummary(n); got != "replied to your post in #technica." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+func TestNotifSummary_ThreadReply_WithGuild(t *testing.T) {
+	n := model.Notification{Type: "thread_reply", ThreadAuthorUsername: "7spires", GuildName: "technica"}
+	if got := notifSummary(n); got != "replied in @7spires's thread in #technica." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+func TestNotifSummary_NewPost_WithGuild_PreservesCasing(t *testing.T) {
+	// Guild names keep their own casing; only a leading # is added.
+	n := model.Notification{Type: "new_post_following", GuildName: "CHOOMS"}
+	if got := notifSummary(n); got != "published something in #CHOOMS." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+func TestNotifSummary_Reply_NoGuild_Unchanged(t *testing.T) {
+	n := model.Notification{Type: "reply"}
+	if got := notifSummary(n); got != "replied to your post." {
+		t.Errorf("non-guild reply must be unchanged, got %q", got)
+	}
+}
+
+func TestNotifSummary_Mention_NoGuildClause(t *testing.T) {
+	// *_mention types are intentionally excluded from the guild clause.
+	n := model.Notification{Type: "post_mention", GuildName: "technica"}
+	if got := notifSummary(n); got != "mentioned you in a post." {
+		t.Errorf("mention should not get a guild clause, got %q", got)
+	}
+}
+
 // --- notifIcon ---
 
 func TestNotifIcon_Reply_Unread(t *testing.T) {
@@ -433,7 +472,7 @@ func TestNotifs_Enter_GuildNewThread_EmitsShowPost(t *testing.T) {
 func TestNotifSummary_GuildNewThread_WithName(t *testing.T) {
 	n := model.Notification{Type: "guild_new_thread", GuildName: "technica"}
 	result := notifSummary(n)
-	if result != "posted a new thread in technica." {
+	if result != "posted a new thread in #technica." {
 		t.Errorf("unexpected summary: %q", result)
 	}
 }
@@ -877,6 +916,34 @@ func TestNotifs_SetError_SetsErr(t *testing.T) {
 	m = m.SetError(err)
 	if m.err != err {
 		t.Error("expected err to be set")
+	}
+}
+
+// A failed initial load must not blank/block the screen: the view shows a subtle
+// inline "couldn't load" line instead of a full-screen error.
+func TestNotifs_SetError_ShowsInlineEmptyState(t *testing.T) {
+	m := initNotifs(nil) // ready, no notifications
+	m = m.SetError(errForTest("boom"))
+	view := m.View()
+	if strings.Contains(view, "boom") {
+		t.Errorf("raw error must not appear in the screen (banner handles it), got: %s", view)
+	}
+	if !strings.Contains(view, "couldn't load notifications") {
+		t.Errorf("expected inline 'couldn't load' empty-state, got: %s", view)
+	}
+}
+
+// Re-fetching clears a prior error so the screen is never a permanent trap.
+func TestNotifs_SetFetchingClearsError(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.SetError(errForTest("boom"))
+	m = m.SetFetching()
+	if m.err != nil {
+		t.Error("SetFetching should clear a prior error")
+	}
+	m = m.SetNotifs(nil, "")
+	if m.err != nil {
+		t.Error("SetNotifs should clear a prior error")
 	}
 }
 

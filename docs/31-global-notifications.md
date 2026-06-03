@@ -1,8 +1,8 @@
 # 31 · Global Notifications
 
-A single transient banner surfaces non-fatal action errors (and info/warning messages) without blocking the screen they occurred on.
+A single transient banner surfaces non-fatal errors (and info/warning messages) without blocking the screen they occurred on.
 
-Previously, any API error — including a failed action like posting to a guild the user isn't a member of — was rendered as permanent full-screen red text that replaced the whole tab until the app restarted.
+**Errors never block a screen.** Previously, any *load* error was rendered as permanent full-screen red text that replaced the whole tab until the app restarted — and several screens never cleared it, trapping the user (the canonical case: a notification pointing to a deleted post, which 404s on open). Now every failure surfaces in the transient banner, and a screen with no content shows a subtle inline "couldn't load …" line instead of a blocking error.
 
 ---
 
@@ -10,10 +10,14 @@ Previously, any API error — including a failed action like posting to a guild 
 
 | Failure kind | Message | Routed by | Display |
 |---|---|---|---|
-| **Load failure** — a fetch that populates a screen returns an error (screen would be empty) | `errMsg` | `handleErr` → active screen's `SetError` | Full-screen message explaining the empty screen |
+| **Load failure** — a fetch that populates a screen returns an error | `errMsg` | `handleErr` → global banner **and** active screen's `SetError` | Transient banner (via `friendlyErr`); the screen stays usable. If it has no content, its empty-state reads "couldn't load …" instead of the normal "nothing here yet" |
 | **Action failure** — create / reply / delete / follow / save / submit / send is rejected (screen still has content) | `actionErrMsg` | `handleNotify` → global banner | Transient banner; screen content stays visible and usable |
 
-The distinguishing question for a command: *if this fails, does the screen still have valid content to show?* If yes, it uses `actionErrMsg`.
+`handleErr` still calls each screen's `SetError`, but that error now only feeds the inline empty-state — `View()` never collapses to a bare error string. The error is always cleared on the next load (see *Self-healing* below), so no screen can stay stuck.
+
+### Deleted-post notifications
+
+Opening a notification whose target post was deleted is special-cased so the banner reads a friendly **"This post has been deleted"** rather than the raw 404. The post-open fetch returns `notifPostLoadErrMsg`, handled in `handleNotifications`: a `*api.APIError` with `Status == 404` → friendly warning banner; `ErrUnauthorized` falls through to the login redirect; anything else → error banner. The notification API exposes no "deleted target" field, so the 404 on open is the only signal (confirmed against API v0.4.1).
 
 ---
 
@@ -41,6 +45,8 @@ Each notification bumps `notifyGen` and captures that value in its auto-dismiss 
 |---|---|
 | `App.notifyText` / `notifyLevel` / `notifyGen` | Current banner text, severity, and generation counter (empty text = hidden) |
 | `actionErrMsg{err}` | Non-fatal action failure; surfaces as a banner |
+| `notifPostLoadErrMsg{err}` | Failure opening a post from Notifications; friendly-handled in `handleNotifications` (404 → "This post has been deleted") |
+| `friendlyErr(err)` | Softens raw API errors for the banner (404 → "Not found — it may have been deleted.") |
 | `notifyMsg{text, level}` | Set the banner directly (e.g. info/success surfacing) |
 | `notifyExpireMsg{gen}` | Auto-dismiss tick; clears the banner iff `gen == App.notifyGen` |
 | `notify(level, text)` | Helper: sets banner state and returns the timed-expire command |
@@ -53,17 +59,18 @@ Each notification bumps `notifyGen` and captures that value in its auto-dismiss 
 
 All mutation commands return `actionErrMsg` on failure: guild post, post, reply, post/reply delete, follow/unfollow, profile save, settings save, note create/update/delete, note publish, send room message, send C-Mail. A failed bookmark create (which rolls back its optimistic add) also raises a banner.
 
-All `load*` commands keep `errMsg` (full-screen `SetError`).
+All `load*` commands return `errMsg`, which `handleErr` now routes to the banner (plus the inline empty-state). The post-open path from Notifications uses `notifPostLoadErrMsg` instead, for friendly deleted-post handling.
 
 ---
 
 ## Self-healing load errors
 
-Screen success setters clear their stored `err` so a stale full-screen load error can no longer persist:
+No screen blocks on a load error, and every screen clears its stored `err` on the next fetch (`SetFetching`) and on each successful setter, so a stale error can never persist:
 
-- `guilds.go`: `SetGuilds`, `AppendGuilds`, `SetGuildPosts`, `AppendGuildPosts`, `SetGuildMembers`, `AppendGuildMembers`
-- `feed.go`: `SetPosts`
-- `topics.go`: `SetTopics`, `AppendTopics`, `SetTopicPosts`
+- Every list/detail screen's `SetFetching` clears `err` before re-fetching.
+- Success setters clear `err`: `feed.SetPosts`; `notifications.SetNotifs`; `bookmarks.SetBookmarks`; `guilds.SetGuilds`/`SetGuildPosts`/`SetGuildMembers`; `topics.SetTopics`/`SetTopicPosts`; `journal.SetNotes`; `profile.SetUser` + the four sub-tab setters; `postdetail.SetPost`/`SetReplies`; `cmail.SetConversations`.
+
+When a screen has no content and an `err` is set, its `View()`/empty-state renders a subtle "couldn't load …" line. `chatrooms` carried a dead, never-set `err` field and blocking branch — both removed.
 
 ---
 
@@ -79,3 +86,20 @@ Screen success setters clear their stored `err` so a stale full-screen load erro
 | `TestNotify_KeypressDismissesButKeyStillActs` | A keypress clears the banner and still performs its action (`?` opens help) |
 | `TestNotify_ExpireAfterKeypressIsNoOp` | A stale tick after keypress-dismiss is a no-op |
 | `TestActionErrMsg_DoesNotBlankScreen` | An action error keeps guild content visible while showing the banner |
+
+`internal/ui/app_test.go`
+
+| Test | Verifies |
+|---|---|
+| `TestNotifPostLoadErr_DeletedPostShowsBanner` | A 404 on post-open → "This post has been deleted" warning banner; stays on Notifications |
+| `TestNotifPostLoadErr_OtherErrorShowsBanner` | Any other post-open failure → error banner |
+| `TestNotifPostLoadErr_UnauthorizedRedirectsToLogin` | A 401 on post-open still redirects to login |
+| `TestHandleErr_FiresBannerWithoutBlocking` | A load error fires the banner and keeps the user on their screen |
+| `TestFriendlyErr_404IsSoftened` | `friendlyErr` softens a 404 and passes other errors through |
+
+`internal/ui/screens/notifications_test.go`
+
+| Test | Verifies |
+|---|---|
+| `TestNotifs_SetError_ShowsInlineEmptyState` | An errored empty screen shows "couldn't load …" inline, not the raw error |
+| `TestNotifs_SetFetchingClearsError` | `SetFetching` and `SetNotifs` clear a prior error (no permanent trap) |

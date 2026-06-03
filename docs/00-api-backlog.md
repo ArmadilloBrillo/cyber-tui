@@ -12,6 +12,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | Endpoint | Method | Status | Description | Discovered |
 |---|---|---|---|---|
 | `/v1/follows` | GET | **Open** | Response does not include `followerUsername` or `followedUsername`. Confirmed still missing in v0.4 (re-tested 2026-05-29). The profile Following/Followers tabs fall back to showing a truncated user ID; profile navigation from those tabs is disabled until the API returns usernames. | 2026-04-17 |
+| `/v1/notifications` | GET | **Open (by design?)** | Notifications can point to posts that have since been deleted, and the notification object exposes no "target deleted/unavailable" flag — opening one is the only way to discover the target is gone (`GET /v1/posts/:id` → 404). The client now handles this gracefully (friendly "This post has been deleted" banner, non-blocking). A `targetDeleted` field (or server-side filtering of dead-target notifications) would let the client mark/skip them up front. | 2026-06-03 |
 | Rate limits (spec) | — | **Open** | Inline per-endpoint docs and the consolidated Rate Limits table still contradict each other in v0.4.1. Entries: 15/day inline vs 10/day in table. Replies: 15/day vs 10/day. Notes: 30/day vs 20/day. Bookmarks: 75/day vs 50/day. Profile updates: 15/day vs 10/day. Guild threads/join/leave are now consistent. Unknown which is authoritative — report to API maintainer. | 2026-05-29 |
 
 ---

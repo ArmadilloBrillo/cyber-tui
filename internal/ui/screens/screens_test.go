@@ -318,12 +318,21 @@ func TestPostDetail_SetError_ClearsLoading(t *testing.T) {
 	}
 }
 
-func TestPostDetail_SetError_ShowsErrorInView(t *testing.T) {
+// TestPostDetail_SetError_DoesNotBlockView verifies the non-blocking error
+// contract: a load error must never collapse the screen to a bare error string.
+// The post (loaded before the error) stays rendered; the failure is surfaced in
+// the global banner instead.
+func TestPostDetail_SetError_DoesNotBlockView(t *testing.T) {
 	m := screens.NewPostDetailModel()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPost(makePost())
 	m = m.SetError(fmt.Errorf("connection refused"))
-	if !strings.Contains(m.View(), "connection refused") {
-		t.Errorf("expected error message in view, got: %s", m.View())
+	view := m.View()
+	if strings.Contains(view, "connection refused") {
+		t.Errorf("error must not block the view (it belongs in the global banner), got: %s", view)
+	}
+	if !strings.Contains(view, makePost().Content) {
+		t.Errorf("expected post content to remain visible after error, got: %s", view)
 	}
 }
 

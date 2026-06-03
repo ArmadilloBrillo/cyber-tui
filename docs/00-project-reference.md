@@ -8,7 +8,7 @@ Comprehensive map of every module, file, and artifact in this repository. Use th
 
 **cyber-tui** is a terminal user interface (TUI) client for [cyberspace.online](https://cyberspace.online) — a retro text-only social network. It is written in Go, using [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI event loop, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling, and [Wish](https://github.com/charmbracelet/wish) to optionally host the client over SSH.
 
-The client talks to the cyberspace.online REST API (current target v0.3.6; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages. See `docs/00-latest-api-reference.md` for the current API spec snapshot.
+The client talks to the cyberspace.online REST API (current target v0.4.1; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages. See `docs/00-latest-api-reference.md` for the current API spec snapshot.
 
 ---
 
@@ -317,10 +317,11 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 - Surfaces transient errors via a **global notification banner** that replaces the status-bar row, colored by severity, and auto-dismisses after 4 s or on the next keypress (which still performs its normal action)
 - Runs background tick jobs: `schedulePollCmd` (60 s unread count), `scheduleWanderCmd` (1 h wander check)
 
-**Error handling — two paths:**
+**Error handling — errors never block a screen:**
 
-- **Load failures** (a fetch that populates a screen returns an error) wrap the error in `errMsg`; `handleErr` routes it to the active screen's `SetError`, which renders a full-screen message explaining the empty screen. Screen success setters (`SetGuilds`, `SetPosts`, `SetTopics`, …) clear `err` so a stale load error never persists.
-- **Action failures** (create/reply/delete/follow/save/submit) wrap the error in `actionErrMsg`; `handleNotify` shows it as the transient global banner without blanking the screen, so the tab stays usable. The banner is driven by `notifyText`/`notifyLevel`/`notifyGen` on `App`; `notifyExpireMsg` carries a generation id so a stale auto-dismiss tick cannot clear a newer notification. `notifyMsg` and the `notify(level, text)` helper allow surfacing info/warning messages directly.
+- **Load failures** (a fetch that populates a screen returns an error) wrap the error in `errMsg`; `handleErr` fires the transient global banner (text via `friendlyErr`) **and** sets the active screen's `err`. That `err` only feeds a subtle inline "couldn't load …" empty-state — no `View()` collapses to a full-screen error. Every screen clears `err` on the next fetch (`SetFetching`) and on each success setter, so a load error can never trap the user.
+- **Post-open from Notifications** uses `notifPostLoadErrMsg` instead of `errMsg`, so a deleted target (404) shows a friendly "This post has been deleted" banner; 401 still redirects to login. The notification payload has no deleted-target field, so the 404 on open is the only signal (API v0.4.1).
+- **Action failures** (create/reply/delete/follow/save/submit) wrap the error in `actionErrMsg`; `handleNotify` shows it as the transient global banner without blanking the screen, so the tab stays usable. The banner is driven by `notifyText`/`notifyLevel`/`notifyGen` on `App`; `notifyExpireMsg` carries a generation id so a stale auto-dismiss tick cannot clear a newer notification. `notifyMsg` and the `notify(level, text)` helper allow surfacing info/warning messages directly. See `docs/31-global-notifications.md`.
 
 #### `app_test.go`
 

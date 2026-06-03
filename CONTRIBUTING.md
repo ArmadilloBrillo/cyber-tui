@@ -71,7 +71,7 @@ Pre-built binaries for Linux (amd64/arm64) and Windows (amd64) are attached to e
 
 ## Versioning
 
-Release tags mirror the cyberspace.online API version they target (e.g. `v0.3.6`). Patch releases (`v0.3.7`) are used for TUI-only fixes between API updates. The current target API version is always recorded in `docs/00-latest-api-reference.md`.
+Release tags mirror the cyberspace.online API version they target (e.g. `v0.4.1`). Patch releases (`v0.4.2`) are used for TUI-only fixes between API updates. The current target API version is always recorded in `docs/00-latest-api-reference.md`.
 
 ## Questions
 

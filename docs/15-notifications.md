@@ -97,8 +97,12 @@ Pressing `enter` on `poke` or `new_follower` notifications (or any with an empty
 | `reply` | replied to your post. |
 | `reply_mention` | mentioned you in a reply. |
 | `thread_reply` | replied in @username's thread. (falls back to "a thread you're following" if author unknown) |
-| `guild_new_thread` | posted a new thread in \<guildName\>. (falls back to "posted a new thread." if guild name absent) |
+| `guild_new_thread` | posted a new thread in #\<guildName\>. (falls back to "posted a new thread." if guild name absent) |
 | `poke` | poked you. ¯\_(ツ)_/¯ |
+
+### Guild context
+
+When a post or reply notification happens inside a guild, the summary appends an `in #<guildName>` clause — e.g. `replied to your post in #technica.` or `published something in #CHOOMS.` This applies to `new_post_friend`, `new_post_following`, `reply`, and `thread_reply` whenever the notification carries `metadata.guildName`; `guild_new_thread` always shows it. The guild name is rendered **verbatim** (guilds choose their own casing); the leading `#` marks it as a guild, matching the app's existing convention (join/leave banners, the `guild_new_thread` icon). `*_mention` types are excluded to avoid awkward phrasing. The handling lives in `notifSummary` / `withGuild` in `internal/ui/screens/notifications.go`.
 
 ---
 
@@ -130,6 +134,10 @@ The notifications screen opens in unread-only mode by default. Press `u` to togg
 ## Back Navigation
 
 Pressing `enter` on a navigable notification opens PostDetail. Pressing `esc` in PostDetail returns to the notifications screen with the previously selected notification visible. This uses a shared `postDetailReturn` field in the App to track which screen to return to (same mechanism used by Feed → PostDetail → Feed).
+
+### Deleted-post notifications
+
+A notification can point to a post that has since been deleted; the notification list carries no "deleted target" field, so this only surfaces when the post is opened and `GET /v1/posts/:id` returns `404 NOT_FOUND`. Rather than blocking the screen, the post-open fetch returns `notifPostLoadErrMsg`; `handleNotifications` shows a transient banner **"This post has been deleted"** and leaves the notifications list intact and usable. (A 401 here still redirects to login; other errors show their message in the banner.) See [31-global-notifications.md](31-global-notifications.md) for the banner mechanism and the broader "errors never block a screen" model.
 
 ---
 
