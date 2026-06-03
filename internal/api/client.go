@@ -286,16 +286,16 @@ type wireNotificationPrefs struct {
 
 // wireSettings is used to decode GET /v1/settings responses — includes all fields.
 type wireSettings struct {
-	Notifications      wireNotificationPrefs `json:"notifications"`
-	FilterNSFW         bool                  `json:"filterNSFW"`
-	ShowFollowerCount  bool                  `json:"showFollowerCount"`
-	AutoWatchOnReply   bool                  `json:"autoWatchOnReply"`
-	IconTheme          string                `json:"iconTheme"`
-	FollowedTopics     []string              `json:"followedTopics"`
-	MutedTopics        []string              `json:"mutedTopics"`
-	ImagePixelSize     string                `json:"imagePixelSize"`
-	TimeDisplayFormat  string                `json:"timeDisplayFormat"`
-	DefaultPublicPost  bool                  `json:"defaultPublicPost"`
+	Notifications     wireNotificationPrefs `json:"notifications"`
+	FilterNSFW        bool                  `json:"filterNSFW"`
+	ShowFollowerCount bool                  `json:"showFollowerCount"`
+	AutoWatchOnReply  bool                  `json:"autoWatchOnReply"`
+	IconTheme         string                `json:"iconTheme"`
+	FollowedTopics    []string              `json:"followedTopics"`
+	MutedTopics       []string              `json:"mutedTopics"`
+	ImagePixelSize    string                `json:"imagePixelSize"`
+	TimeDisplayFormat string                `json:"timeDisplayFormat"`
+	DefaultPublicPost bool                  `json:"defaultPublicPost"`
 }
 
 // wirePatchSettings is the PATCH /v1/settings payload — only the fields the
@@ -659,13 +659,13 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 			Reply:    w.Notifications.Reply,
 			Poke:     w.Notifications.Poke,
 		},
-		FilterNSFW:         w.FilterNSFW,
-		ShowFollowerCount:  w.ShowFollowerCount,
-		AutoWatchOnReply:   w.AutoWatchOnReply,
-		IconTheme:          w.IconTheme,
-		FollowedTopics:     w.FollowedTopics,
-		MutedTopics:        w.MutedTopics,
-		ImagePixelSize:     w.ImagePixelSize,
+		FilterNSFW:        w.FilterNSFW,
+		ShowFollowerCount: w.ShowFollowerCount,
+		AutoWatchOnReply:  w.AutoWatchOnReply,
+		IconTheme:         w.IconTheme,
+		FollowedTopics:    w.FollowedTopics,
+		MutedTopics:       w.MutedTopics,
+		ImagePixelSize:    w.ImagePixelSize,
 		TimeDisplayFormat: w.TimeDisplayFormat,
 		DefaultPublicPost: w.DefaultPublicPost,
 	}
@@ -1006,9 +1006,9 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 			Reply:    update.Notifications.Reply,
 			Poke:     update.Notifications.Poke,
 		},
-		FilterNSFW:         update.FilterNSFW,
-		ShowFollowerCount:  update.ShowFollowerCount,
-		AutoWatchOnReply:   update.AutoWatchOnReply,
+		FilterNSFW:        update.FilterNSFW,
+		ShowFollowerCount: update.ShowFollowerCount,
+		AutoWatchOnReply:  update.AutoWatchOnReply,
 		TimeDisplayFormat: update.TimeDisplayFormat,
 		DefaultPublicPost: update.DefaultPublicPost,
 	})

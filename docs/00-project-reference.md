@@ -604,7 +604,7 @@ Permissions: `0600` (owner read/write only)
 | `autoPassword` | string | — | Pre-fill password (plain text; not recommended) |
 | `sshListenAddr` | string | — | Enable SSH server mode (e.g. `":2222"`) |
 | `sshHostKeyPath` | string | — | Path to SSH host private key |
-| `wanderLust` | bool | `true` | Wander mode toggle; `true` = on, `false` = off |
+| `wanderLust` | bool | `false` | Wander mode toggle; `true` = on, `false` = off |
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
 
 ---
