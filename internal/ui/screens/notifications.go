@@ -413,11 +413,21 @@ func notifSummary(n model.Notification) string {
 	base := baseNotifSummary(n)
 	switch n.Type {
 	case "new_post_friend", "new_post_following", "reply", "thread_reply":
-		if n.GuildName != "" {
-			return withGuild(base, n.GuildName)
+		if g := guildLabel(n); g != "" {
+			return withGuild(base, g)
 		}
 	}
 	return base
+}
+
+// guildLabel returns the guild handle to display, preferring the slug — the stable
+// lowercase handle the server sends for guild replies/posts (metadata.guildSlug) —
+// over the rarer display name. Empty when the notification has no guild context.
+func guildLabel(n model.Notification) string {
+	if n.GuildSlug != "" {
+		return n.GuildSlug
+	}
+	return n.GuildName
 }
 
 // withGuild inserts " in #<guild>" before a single trailing period. The guild
@@ -458,8 +468,8 @@ func baseNotifSummary(n model.Notification) string {
 		}
 		return "replied in a thread you're following."
 	case "guild_new_thread":
-		if n.GuildName != "" {
-			return "posted a new thread in #" + n.GuildName + "."
+		if g := guildLabel(n); g != "" {
+			return "posted a new thread in #" + g + "."
 		}
 		return "posted a new thread."
 	case "poke":

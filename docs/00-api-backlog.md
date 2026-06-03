@@ -61,7 +61,8 @@ Guilds are member groups with their own forum of threads. A user can belong to o
 
 Notes:
 - Guild threads are ordinary posts with `guildId`, `guildSlug`, `isGuildThread: true`; replying uses `POST /v1/replies` as normal.
-- `guild_new_thread` notifications are already display-ready (`notifSummary`/`notifIcon` have explicit cases) and navigation is wired via `TargetID` → `ShowNotificationPostMsg`.
+- `guild_new_thread` notifications are display-ready (`notifSummary`/`notifIcon` have explicit cases) and navigation is wired via `TargetID` → `ShowNotificationPostMsg`.
+- Notification metadata for guild **replies/posts** uses `metadata.guildSlug` + `metadata.isGuildThread: true` (observed 2026-06-03), **not** `metadata.guildName`. The client decodes `guildSlug` and shows `in #<slug>` on `reply`/`thread_reply`/`new_post_*` (prefers slug over the rarer `guildName`). The server `docs.md` does not document the notification `metadata` object schema — a server-side doc gap.
 - The `isMember` / `role` fields on `GET /v1/guilds/:slug` were broken in v0.4 but are **fixed in v0.4.1** (verified 2026-06-01 — see Resolved Issues). The `GetGuild()` client method could now be called to read accurate membership state, though the current `User.GuildSlug` approach also works.
 - Join/leave are now official v0.4.1 API endpoints. Any authenticated user can also create a guild thread without being a member (explicitly stated in v0.4.1 spec).
 - v0.4.1 adds `profilePictureUrl` to both the guild list response and the guild members list response. The `Guild` and `GuildMember` model types and wire layer do not yet carry this field.

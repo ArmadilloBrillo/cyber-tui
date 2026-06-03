@@ -639,7 +639,7 @@ func TestHTTPGetNotifications_ParsesNotifs(t *testing.T) {
 				"actorUsername": "molly_millions",
 				"targetId":      "p1",
 				"targetType":    "reply",
-				"metadata":      map[string]any{"replyId": "r42"},
+				"metadata":      map[string]any{"replyId": "r42", "guildSlug": "chooms", "isGuildThread": true},
 			},
 			{
 				"id":            "n2",
@@ -671,6 +671,9 @@ func TestHTTPGetNotifications_ParsesNotifs(t *testing.T) {
 	}
 	if notifs[0].ReplyID != "r42" {
 		t.Errorf("replyID mismatch: got %q, want %q", notifs[0].ReplyID, "r42")
+	}
+	if notifs[0].GuildSlug != "chooms" {
+		t.Errorf("guildSlug mismatch: got %q, want %q", notifs[0].GuildSlug, "chooms")
 	}
 	if notifs[1].ID != "n2" || notifs[1].Read != true {
 		t.Errorf("notifs[1] mismatch: %+v", notifs[1])

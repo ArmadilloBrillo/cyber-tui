@@ -374,6 +374,22 @@ func TestNotifSummary_Reply_WithGuild(t *testing.T) {
 	}
 }
 
+// The server sends guildSlug (not guildName) for guild replies; it must drive the clause.
+func TestNotifSummary_Reply_WithGuildSlug(t *testing.T) {
+	n := model.Notification{Type: "reply", GuildSlug: "chooms"}
+	if got := notifSummary(n); got != "replied to your post in #chooms." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+// When both are present the slug (the stable lowercase handle) wins.
+func TestNotifSummary_GuildSlug_PreferredOverName(t *testing.T) {
+	n := model.Notification{Type: "reply", GuildName: "CHOOMS", GuildSlug: "chooms"}
+	if got := notifSummary(n); got != "replied to your post in #chooms." {
+		t.Errorf("expected slug to win, got: %q", got)
+	}
+}
+
 func TestNotifSummary_ThreadReply_WithGuild(t *testing.T) {
 	n := model.Notification{Type: "thread_reply", ThreadAuthorUsername: "7spires", GuildName: "technica"}
 	if got := notifSummary(n); got != "replied in @7spires's thread in #technica." {
