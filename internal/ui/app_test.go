@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -288,5 +289,44 @@ func TestGetFocusedURLs_LoginScreen(t *testing.T) {
 	a := newTestApp() // active == screenLogin, not in switch
 	if got := a.getFocusedURLs(); got != nil {
 		t.Errorf("expected nil on login screen, got %v", got)
+	}
+}
+
+// --- ErrUnauthorized → login redirect ---
+
+func TestHandleUnauthorized_ErrMsgRoutesToLogin(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true // saveConfig is a no-op, so the real config is untouched
+	a.tokens = model.Tokens{IDToken: "x", RefreshToken: "y"}
+	a.currentUser = model.User{Email: "me@example.com"}
+
+	m, _ := a.Update(errMsg{api.ErrUnauthorized})
+	got, ok := m.(App)
+	if !ok {
+		t.Fatalf("Update returned %T, want App", m)
+	}
+	if got.active != screenLogin {
+		t.Errorf("active = %v, want screenLogin", got.active)
+	}
+	if got.tokens != (model.Tokens{}) {
+		t.Errorf("tokens not cleared: %+v", got.tokens)
+	}
+}
+
+func TestHandleUnauthorized_ActionErrAlsoRoutes(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+	m, _ := a.Update(actionErrMsg{api.ErrUnauthorized})
+	if got := m.(App); got.active != screenLogin {
+		t.Errorf("active = %v, want screenLogin after actionErrMsg", got.active)
+	}
+}
+
+func TestHandleUnauthorized_OtherErrorDoesNotRedirect(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+	m, _ := a.Update(errMsg{errors.New("network down")})
+	if got := m.(App); got.active != screenFeed {
+		t.Errorf("active = %v, want screenFeed (non-401 must not redirect)", got.active)
 	}
 }
