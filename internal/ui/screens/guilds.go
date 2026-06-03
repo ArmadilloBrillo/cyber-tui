@@ -55,7 +55,7 @@ type LeaveGuildMsg struct{ Slug string }
 type guildsConfirm int
 
 const (
-	confirmNoneG  guildsConfirm = iota
+	confirmNoneG guildsConfirm = iota
 	confirmJoinG
 	confirmLeaveG
 )
@@ -826,11 +826,12 @@ func (m GuildsModel) ensureSelectedVisible() GuildsModel {
 		}
 		itemHeight = lipgloss.Height(m.renderMemberItem(m.members[selectedIndex], false))
 	} else {
+		visible := m.visiblePosts()
 		selectedIndex = m.postIndex
-		if selectedIndex >= len(m.posts) {
+		if selectedIndex >= len(visible) {
 			return m
 		}
-		itemHeight = lipgloss.Height(m.renderPostItem(m.posts[selectedIndex], false))
+		itemHeight = lipgloss.Height(m.renderPostItem(visible[selectedIndex], false))
 	}
 
 	if selectedIndex >= len(m.itemOffsets) {
@@ -890,12 +891,13 @@ func (m GuildsModel) GetFocusedURLs() []string {
 		}
 		return nil
 	}
-	if m.view != viewGuildPosts || len(m.posts) == 0 {
+	if m.view != viewGuildPosts {
 		return nil
 	}
-	if m.postIndex < 0 || m.postIndex >= len(m.posts) {
+	visible := m.visiblePosts()
+	if m.postIndex < 0 || m.postIndex >= len(visible) {
 		return nil
 	}
-	p := m.posts[m.postIndex]
+	p := visible[m.postIndex]
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
 }

@@ -96,8 +96,8 @@ func (m FeedModel) SetFetching() FeedModel {
 func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
 	m.err = nil
 	var prevID string
-	if m.selectedIndex < len(m.posts) {
-		prevID = m.posts[m.selectedIndex].ID
+	if oldVisible := m.visiblePosts(); m.selectedIndex < len(oldVisible) {
+		prevID = oldVisible[m.selectedIndex].ID
 	}
 
 	m.posts = posts
@@ -108,7 +108,7 @@ func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
 	m.refreshing = false
 	m.selectedIndex = 0
 	if prevID != "" {
-		for i, p := range m.posts {
+		for i, p := range m.visiblePosts() {
 			if p.ID == prevID {
 				m.selectedIndex = i
 				break
@@ -158,8 +158,11 @@ func (m FeedModel) RemovePost(postID string) FeedModel {
 	for i, p := range m.posts {
 		if p.ID == postID {
 			m.posts = append(m.posts[:i], m.posts[i+1:]...)
-			if m.selectedIndex >= len(m.posts) && m.selectedIndex > 0 {
-				m.selectedIndex = len(m.posts) - 1
+			if vis := len(m.visiblePosts()); m.selectedIndex >= vis {
+				m.selectedIndex = vis - 1
+				if m.selectedIndex < 0 {
+					m.selectedIndex = 0
+				}
 			}
 			break
 		}
@@ -223,11 +226,12 @@ func (m FeedModel) refreshContent() FeedModel {
 // selected post is fully visible. If the post is taller than the viewport,
 // its top is aligned with the viewport top.
 func (m FeedModel) ensureSelectedVisible() FeedModel {
-	if !m.ready || len(m.postOffsets) == 0 || m.selectedIndex >= len(m.posts) {
+	visible := m.visiblePosts()
+	if !m.ready || len(m.postOffsets) == 0 || m.selectedIndex >= len(visible) {
 		return m
 	}
 	postStart := m.postOffsets[m.selectedIndex]
-	postHeight := lipgloss.Height(m.renderPost(m.posts[m.selectedIndex], false))
+	postHeight := lipgloss.Height(m.renderPost(visible[m.selectedIndex], false))
 	postEnd := postStart + postHeight - 1
 
 	viewTop := m.viewport.YOffset
@@ -519,9 +523,10 @@ func (m FeedModel) View() string {
 
 // GetFocusedURLs implements URLProvider. Returns URLs from the selected post's content.
 func (m FeedModel) GetFocusedURLs() []string {
-	if len(m.posts) == 0 || m.selectedIndex < 0 || m.selectedIndex >= len(m.posts) {
+	visible := m.visiblePosts()
+	if m.selectedIndex < 0 || m.selectedIndex >= len(visible) {
 		return nil
 	}
-	p := m.posts[m.selectedIndex]
+	p := visible[m.selectedIndex]
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
 }

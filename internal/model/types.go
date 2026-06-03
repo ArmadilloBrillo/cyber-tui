@@ -133,14 +133,14 @@ type NotificationPrefs struct {
 // Settings maps to the fields returned by GET /v1/settings.
 // KeyboardBindings and MutedUsersByRoom are opaque JSON objects — not modelled yet.
 type Settings struct {
-	Notifications      NotificationPrefs
-	FilterNSFW         bool
-	ShowFollowerCount  bool
-	AutoWatchOnReply   bool
-	IconTheme          string
-	FollowedTopics     []string
-	MutedTopics        []string
-	ImagePixelSize     string // named preset or pixel multiplier, e.g. "sharp", "2"
+	Notifications     NotificationPrefs
+	FilterNSFW        bool
+	ShowFollowerCount bool
+	AutoWatchOnReply  bool
+	IconTheme         string
+	FollowedTopics    []string
+	MutedTopics       []string
+	ImagePixelSize    string // named preset or pixel multiplier, e.g. "sharp", "2"
 	TimeDisplayFormat string // "datetime", "relative", "unix", or "swatch"
 	DefaultPublicPost bool
 }

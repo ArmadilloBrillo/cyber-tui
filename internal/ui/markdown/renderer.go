@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -86,6 +87,7 @@ var mdInstance = goldmark.New(
 // viewport display. width is the inner content width for word-wrapping.
 func Render(content string, width int) string {
 	content = html.UnescapeString(content)
+	content = sanitize.Strip(content)
 	content = norm.NFC.String(content)
 	content = stripAmbiguousRunes(content)
 	if strings.TrimSpace(content) == "" {
@@ -112,6 +114,7 @@ func Render(content string, width int) string {
 // is not appropriate (bookmarks, profile post lists).
 func FirstLine(content string) string {
 	content = html.UnescapeString(content)
+	content = sanitize.Strip(content)
 	content = norm.NFC.String(content)
 	content = stripAmbiguousRunes(content)
 	for _, line := range strings.Split(content, "\n") {

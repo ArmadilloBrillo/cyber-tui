@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -136,7 +137,7 @@ type App struct {
 	// settings holds the user's preferences fetched from GET /v1/settings on login.
 	settings model.Settings
 
-	// wanderLust is the local config value for wander mode. Defaults to true.
+	// wanderLust is the local config value for wander mode. Defaults to false (off).
 	wanderLust bool
 	// maxThreadDepth is the local config value for reply nesting depth. Defaults to 3.
 	maxThreadDepth int
@@ -169,7 +170,7 @@ func NewApp(client api.Client) App {
 		active:             screenLogin,
 		focus:              focusMenu,
 		loc:                time.UTC,
-		wanderLust:         true,
+		wanderLust:         false,
 		login:              screens.NewLoginModel(""),
 		feed:               screens.NewFeedModel(),
 		chatrooms:          screens.NewChatroomsModel(),
@@ -308,6 +309,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a2, cmd
 	}
 	if a2, cmd, ok := a.handleJournal(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleUnauthorized(msg); ok {
 		return a2, cmd
 	}
 	if a2, cmd, ok := a.handleNotify(msg); ok {
@@ -1217,6 +1221,37 @@ func (a App) handleNotify(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	}
 	return a, nil, false
+}
+
+// handleUnauthorized intercepts an errMsg or actionErrMsg carrying the
+// ErrUnauthorized sentinel — returned by the API client after a token refresh
+// fails — and routes the user back to the login screen instead of leaving them
+// stranded on an errored screen. The dead refresh token is cleared so the next
+// launch starts at the login form rather than retrying a doomed auto-login.
+func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
+	var err error
+	switch m := msg.(type) {
+	case errMsg:
+		err = m.err
+	case actionErrMsg:
+		err = m.err
+	default:
+		return a, nil, false
+	}
+	if !errors.Is(err, api.ErrUnauthorized) || a.active == screenLogin {
+		return a, nil, false
+	}
+
+	_ = a.client.Logout()
+	a.tokens = model.Tokens{}
+	a.saveConfig(func(cfg *config.Config) { cfg.RefreshToken = "" })
+
+	a.active = screenLogin
+	a.focus = focusMenu
+	a.login = screens.NewLoginModel(a.currentUser.Email)
+
+	a, cmd := a.notify(notifyWarn, "session expired — please log in again")
+	return a, cmd, true
 }
 
 func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
@@ -2292,8 +2327,8 @@ type guildMembersPageMsg struct {
 	cursor  string
 }
 type guildDetailLoadedMsg struct{ guild model.Guild }
-type guildJoinedMsg       struct{ slug, name string }
-type guildLeftMsg         struct{ slug, name string }
+type guildJoinedMsg struct{ slug, name string }
+type guildLeftMsg struct{ slug, name string }
 
 type notifsLoadedMsg struct {
 	notifs []model.Notification
