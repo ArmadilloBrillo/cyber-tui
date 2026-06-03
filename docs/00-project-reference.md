@@ -8,7 +8,7 @@ Comprehensive map of every module, file, and artifact in this repository. Use th
 
 **cyber-tui** is a terminal user interface (TUI) client for [cyberspace.online](https://cyberspace.online) — a retro text-only social network. It is written in Go, using [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI event loop, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling, and [Wish](https://github.com/charmbracelet/wish) to optionally host the client over SSH.
 
-The client talks to the cyberspace.online REST API (current target v0.3.6; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages. See `docs/00-latest-api-reference.md` for the current API spec snapshot.
+The client talks to the cyberspace.online REST API (current target v0.4.1; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages. See `docs/00-latest-api-reference.md` for the current API spec snapshot.
 
 ---
 
