@@ -102,7 +102,9 @@ Pressing `enter` on `poke` or `new_follower` notifications (or any with an empty
 
 ### Guild context
 
-When a post or reply notification happens inside a guild, the summary appends an `in #<guildName>` clause — e.g. `replied to your post in #technica.` or `published something in #CHOOMS.` This applies to `new_post_friend`, `new_post_following`, `reply`, and `thread_reply` whenever the notification carries `metadata.guildName`; `guild_new_thread` always shows it. The guild name is rendered **verbatim** (guilds choose their own casing); the leading `#` marks it as a guild, matching the app's existing convention (join/leave banners, the `guild_new_thread` icon). `*_mention` types are excluded to avoid awkward phrasing. The handling lives in `notifSummary` / `withGuild` in `internal/ui/screens/notifications.go`.
+When a post or reply notification happens inside a guild, the summary appends an `in #<guild>` clause — e.g. `replied to your post in #chooms.` or `posted a new thread in #technica.` This applies to `new_post_friend`, `new_post_following`, `reply`, and `thread_reply` whenever the notification carries guild context; `guild_new_thread` always shows it.
+
+The guild handle comes from `metadata.guildSlug` (the lowercase handle the server sends for guild replies/posts, alongside `metadata.isGuildThread: true`); `metadata.guildName` is a rarer display-name variant. The UI prefers the slug (`guildLabel` in `internal/ui/screens/notifications.go`), so the value is rendered **verbatim** with a leading `#`, matching the app's existing convention (join/leave banners, the `guild_new_thread` icon). `*_mention` types are excluded to avoid awkward phrasing. The clause is applied by `notifSummary` / `withGuild`.
 
 ---
 
@@ -163,7 +165,13 @@ A notification can point to a post that has since been deleted; the notification
       "actorId": "user-123",
       "actorUsername": "molly_millions",
       "targetId": "post-456",
-      "targetType": "post"
+      "targetType": "reply",
+      "metadata": {
+        "replyId": "reply-789",
+        "authorUsername": "ragnar",
+        "guildSlug": "chooms",
+        "isGuildThread": true
+      }
     }
   ],
   "nextCursor": "cursor-xyz"
@@ -178,13 +186,17 @@ Note: the actor is returned as flat fields (`actorId`, `actorUsername`), not a n
 
 ```go
 type Notification struct {
-    ID         string
-    Type       string
-    Read       bool
-    CreatedAt  time.Time
-    Actor      NotificationActor
-    TargetID   string
-    TargetType string // "post", "reply", or ""
+    ID                   string
+    Type                 string
+    Read                 bool
+    CreatedAt            time.Time
+    Actor                NotificationActor
+    TargetID             string
+    TargetType           string // "post", "reply", or ""
+    ReplyID              string // metadata.replyId; reply to scroll to in PostDetail
+    ThreadAuthorUsername string // metadata.authorUsername; set for thread_reply
+    GuildName            string // metadata.guildName; rarer display-name variant
+    GuildSlug            string // metadata.guildSlug; guild handle shown as #slug
 }
 
 type NotificationActor struct {

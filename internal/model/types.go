@@ -224,6 +224,8 @@ type NotificationActor struct {
 // TargetType describes the notification category ("post" or "reply"); empty for poke/new_follower.
 // ReplyID is set from metadata.replyId for reply/thread_reply notifications and identifies
 // the specific reply to scroll to in PostDetail.
+// GuildSlug is set when the activity happened inside a guild (metadata.guildSlug); it is the
+// handle the UI shows as #slug. GuildName is the rarer display-name variant.
 type Notification struct {
 	ID                   string
 	Type                 string // "reply", "reply_mention", "post_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "unfollowed", "bookmark", "poke", "guild_new_thread", "chat_mention", "dm_message", "supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed", "image_permission_granted", "image_permission_removed", "attachment_permission_granted", "attachment_permission_removed", "system_ban"
@@ -234,5 +236,6 @@ type Notification struct {
 	TargetType           string // "post", "reply", or ""
 	ReplyID              string // populated for reply/thread_reply; the specific reply to highlight
 	ThreadAuthorUsername string // set for thread_reply; the original thread's author
-	GuildName            string // set for guild_new_thread; the guild display name
+	GuildName            string // guild display name (seen on guild_new_thread)
+	GuildSlug            string // guild handle from metadata.guildSlug; set on guild reply/post notifications (with isGuildThread)
 }
