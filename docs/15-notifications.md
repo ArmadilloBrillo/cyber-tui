@@ -180,6 +180,8 @@ A notification can point to a post that has since been deleted; the notification
 
 Note: the actor is returned as flat fields (`actorId`, `actorUsername`), not a nested object.
 
+As of API **v0.5.0** the server `docs.md` documents this notification object and its `metadata` keys (previously reverse-engineered); the shape above matches the documented schema. `metadata` is open-ended — unknown keys are treated as optional.
+
 ---
 
 ## Model

@@ -10,7 +10,7 @@ This file defines workflow guardrails for Claude. It is not project documentatio
 - **Stack:** Go + Bubble Tea (TUI), Lip Gloss (styling), Wish (SSH hosting)
 - **Code map:** `docs/00-project-reference.md` — comprehensive architecture, package structure, and file listing; **read this first to understand the codebase before targeting specific files for changes**
 - **Project docs:** `docs/` folder — numbered per feature (e.g. `docs/01-auth.md`)
-- **API status:** v0.4.1 — docs at https://api.cyberspace.online/docs.md — **always fetch before any API work** to catch changes
+- **API status:** v0.5.0 — docs at https://api.cyberspace.online/docs.md — **always fetch before any API work** to catch changes
 - **API snapshot:** `docs/00-latest-api-reference.md` — current baseline we're building against (check for drift against live URL)
 - **Key API facts:** login uses email (not username) · chat/DMs use Firebase RTDB (SSE), not REST · cursor-based pagination
 - **API backlog:** `docs/00-api-backlog.md` — unimplemented features and known server-side bugs; update whenever issues are found or features land
@@ -55,11 +55,11 @@ This file defines workflow guardrails for Claude. It is not project documentatio
 - `dev` → `main` only when a full milestone is complete and user approves
 
 ### Releases — API-aligned versioning
-- Release tags mirror the cyberspace.online API version they target: `v0.4.0`, `v0.4.1`, etc.
-- Current target: **v0.4.1** (see `docs/00-latest-api-reference.md`)
+- Release tags mirror the cyberspace.online API version they target: `v0.4.1`, `v0.5.0`, etc.
+- Current target: **v0.5.0** (see `docs/00-latest-api-reference.md`)
 - When the API ships a new version, open a new milestone on `dev` targeting that version
 - When the milestone is complete and the user approves, merge `dev` → `main` and tag with the API version
-- Incremental TUI releases within an API version use a fourth segment: `v0.4.1.1`, `v0.4.1.2`, etc.
+- Incremental TUI releases within an API version use a fourth segment: `v0.5.0.1`, `v0.5.0.2`, etc.
 - A milestone is a named set of features forming a coherent releasable version; the user defines scope and approves each release
 
 ---
