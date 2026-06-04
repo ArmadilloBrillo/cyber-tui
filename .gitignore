@@ -9,6 +9,7 @@
 ssh_host_key*
 
 #CLAUDE
+CLAUDE.md
 .claude/*
 !.claude/commands/
 !.claude/commands/*

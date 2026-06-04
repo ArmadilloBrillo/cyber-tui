@@ -21,9 +21,10 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 - **Post detail** — scrollable pager with threaded replies; compose replies inline; delete your own content
 - **Notifications** — reply, follow, poke, and bookmark alerts; mark individual or all as read; jump straight to the referenced post
 - **C-Mail** — direct messages with live updates via Firebase RTDB (SSE stream)
-- **Journal** — private notes visible only to you; list and delete notes (write operations pending a server-side fix)
+- **Journal** — private notes visible only to you; create, edit, and delete notes; browse full revision history
 - **Bookmarks** — save and browse bookmarked posts and replies; remove bookmarks inline
 - **Topics** — browse all tags sorted by post count; drill into a topic feed
+- **Guilds** — browse the guild directory; drill into guild threads; compose new threads; join or leave a guild; view the member list and navigate to member profiles
 - **Profile** — view any user's Info, Posts, Replies, Following, and Followers tabs; edit your own bio, website, and location; follow or unfollow users
 - **Settings** — notification preferences, content filters, and display options synced to your account
 - **Three themes** — `cyber` (bright green-on-black, default), `c64` (Commodore 64), `vt320` (amber VT320)
@@ -32,16 +33,15 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 - **Markdown rendering** — GFM formatting and @mention highlighting in post and reply content
 - **Session persistence** — refresh token saved to `~/.cyber-tui.json`; login only required when the token expires
 
-**Not yet fully wired (server-side paths not finalised):**
+**Not yet fully wired:**
 
-- **Chatrooms** — UI complete; REST integration deferred
-- **Journal write operations** — note creation, editing, and revision history disabled client-side pending a server fix for `PATCH /v1/notes/:id`
+- **Chatrooms** — UI complete; REST integration deferred (server-side paths not finalised)
 
 ---
 
 ## Requirements
 
-- [Go](https://go.dev) 1.24+
+- [Go](https://go.dev) 1.25+
 
 ---
 
@@ -134,3 +134,4 @@ See `docs/` for per-feature documentation.
 | Styling | [Lip Gloss](https://github.com/charmbracelet/lipgloss) |
 | Components | [Bubbles](https://github.com/charmbracelet/bubbles) |
 | SSH hosting | [Wish](https://github.com/charmbracelet/wish) |
+| Markdown | [goldmark](https://github.com/yuin/goldmark) |
