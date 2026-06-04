@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.4.1) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.5.0) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -13,7 +13,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 |---|---|---|---|---|
 | `/v1/follows` | GET | **Open** | Response does not include `followerUsername` or `followedUsername`. Confirmed still missing in v0.4 (re-tested 2026-05-29). The profile Following/Followers tabs fall back to showing a truncated user ID; profile navigation from those tabs is disabled until the API returns usernames. | 2026-04-17 |
 | `/v1/notifications` | GET | **Open (by design?)** | Notifications can point to posts that have since been deleted, and the notification object exposes no "target deleted/unavailable" flag — opening one is the only way to discover the target is gone (`GET /v1/posts/:id` → 404). The client now handles this gracefully (friendly "This post has been deleted" banner, non-blocking). A `targetDeleted` field (or server-side filtering of dead-target notifications) would let the client mark/skip them up front. | 2026-06-03 |
-| Rate limits (spec) | — | **Open** | Inline per-endpoint docs and the consolidated Rate Limits table still contradict each other in v0.4.1. Entries: 15/day inline vs 10/day in table. Replies: 15/day vs 10/day. Notes: 30/day vs 20/day. Bookmarks: 75/day vs 50/day. Profile updates: 15/day vs 10/day. Guild threads/join/leave are now consistent. Unknown which is authoritative — report to API maintainer. | 2026-05-29 |
+| Rate limits (spec) | — | **Resolved** | The v0.4.1 inline-vs-table contradiction is gone in v0.5.0: the consolidated Rate Limits table now matches the inline per-endpoint limits (Entries 15/day, Replies 15/day, Notes 30/day, Bookmarks 75/day, Profile/Settings 15/day). Read limits were also raised (most list endpoints 30→45/min; profile/follows/topics/bookmarks/notes 20→30/min). Resolved 2026-06-04. | 2026-05-29 |
 
 ---
 
@@ -62,7 +62,7 @@ Guilds are member groups with their own forum of threads. A user can belong to o
 Notes:
 - Guild threads are ordinary posts with `guildId`, `guildSlug`, `isGuildThread: true`; replying uses `POST /v1/replies` as normal.
 - `guild_new_thread` notifications are display-ready (`notifSummary`/`notifIcon` have explicit cases) and navigation is wired via `TargetID` → `ShowNotificationPostMsg`.
-- Notification metadata for guild **replies/posts** uses `metadata.guildSlug` + `metadata.isGuildThread: true` (observed 2026-06-03), **not** `metadata.guildName`. The client decodes `guildSlug` and shows `in #<slug>` on `reply`/`thread_reply`/`new_post_*` (prefers slug over the rarer `guildName`). The server `docs.md` does not document the notification `metadata` object schema — a server-side doc gap.
+- Notification metadata for guild **replies/posts** uses `metadata.guildSlug` + `metadata.isGuildThread: true` (observed 2026-06-03), **not** `metadata.guildName`. The client decodes `guildSlug` and shows `in #<slug>` on `reply`/`thread_reply`/`new_post_*` (prefers slug over the rarer `guildName`). As of API **v0.5.0** the server documents the notification object and its `metadata` keys (incl. `guildSlug`, `guildName`, `isGuildThread`, `threadId`, `postSlug`, `authorUsername`), closing the earlier doc gap; the client's slug-preference behavior matches the documented schema.
 - The `isMember` / `role` fields on `GET /v1/guilds/:slug` were broken in v0.4 but are **fixed in v0.4.1** (verified 2026-06-01 — see Resolved Issues). The `GetGuild()` client method could now be called to read accurate membership state, though the current `User.GuildSlug` approach also works.
 - Join/leave are now official v0.4.1 API endpoints. Any authenticated user can also create a guild thread without being a member (explicitly stated in v0.4.1 spec).
 - v0.4.1 adds `profilePictureUrl` to both the guild list response and the guild members list response. The `Guild` and `GuildMember` model types and wire layer do not yet carry this field.
