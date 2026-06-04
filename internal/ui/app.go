@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -10,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/x/ansi"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -34,6 +35,7 @@ const (
 	screenNotifications
 	screenSettings
 	screenBookmarks
+	screenGuilds
 	screenTopics
 	screenJournal
 )
@@ -60,6 +62,7 @@ var menuTabs = []struct {
 	{"notifications", screenNotifications},
 	{"journal", screenJournal},
 	{"bookmarks", screenBookmarks},
+	{"guilds", screenGuilds},
 	{"topics", screenTopics},
 	{"profile", screenProfile},
 	{"settings", screenSettings},
@@ -113,6 +116,7 @@ type App struct {
 	notifications  screens.NotificationsModel
 	settingsScreen screens.SettingsModel
 	bookmarks      screens.BookmarksModel
+	guilds         screens.GuildsModel
 	topics         screens.TopicsModel
 	journal        screens.JournalModel
 
@@ -133,10 +137,14 @@ type App struct {
 	// settings holds the user's preferences fetched from GET /v1/settings on login.
 	settings model.Settings
 
-	// wanderLust is the local config value for wander mode. Defaults to true.
+	// wanderLust is the local config value for wander mode. Defaults to false (off).
 	wanderLust bool
 	// maxThreadDepth is the local config value for reply nesting depth. Defaults to 3.
 	maxThreadDepth int
+
+	// ephemeral marks an SSH-hosted session whose state must never be read from
+	// or written to the host operator's config file.
+	ephemeral bool
 
 	// bookmarkedPostIDs and bookmarkedReplyIDs track which posts/replies the current
 	// user has bookmarked, populated from the bookmarks list and kept in sync on
@@ -147,26 +155,34 @@ type App struct {
 	// Required to call deleteBookmarkCmd when the user toggles off a bookmark with 'b'.
 	postBookmarkIDs  map[string]string // postID  → bookmark UUID
 	replyBookmarkIDs map[string]string // replyID → bookmark UUID
+
+	// notifyText is the transient global notification shown in place of the status
+	// bar. Empty means no notification is visible. notifyGen is bumped on every new
+	// notification and on dismissal so a stale expire tick can never clear a newer one.
+	notifyText  string
+	notifyLevel notifyLevel
+	notifyGen   int
 }
 
 func NewApp(client api.Client) App {
 	return App{
-		client:     client,
-		active:     screenLogin,
-		focus:      focusMenu,
-		loc:        time.UTC,
-		wanderLust: true,
-		login:          screens.NewLoginModel(""),
-		feed:           screens.NewFeedModel(),
-		chatrooms:      screens.NewChatroomsModel(),
-		cmail:          screens.NewCMailModel("", client),
-		profile:        screens.NewProfileModel(),
-		postDetail:     screens.NewPostDetailModel(),
-		notifications:  screens.NewNotificationsModel(),
-		settingsScreen: screens.NewSettingsModel(),
-		bookmarks:      screens.NewBookmarksModel(),
-		topics:         screens.NewTopicsModel(),
-		journal:        screens.NewJournalModel(0),
+		client:             client,
+		active:             screenLogin,
+		focus:              focusMenu,
+		loc:                time.UTC,
+		wanderLust:         false,
+		login:              screens.NewLoginModel(""),
+		feed:               screens.NewFeedModel(),
+		chatrooms:          screens.NewChatroomsModel(),
+		cmail:              screens.NewCMailModel("", client),
+		profile:            screens.NewProfileModel(),
+		postDetail:         screens.NewPostDetailModel(),
+		notifications:      screens.NewNotificationsModel(),
+		settingsScreen:     screens.NewSettingsModel(),
+		bookmarks:          screens.NewBookmarksModel(),
+		guilds:             screens.NewGuildsModel(),
+		topics:             screens.NewTopicsModel(),
+		journal:            screens.NewJournalModel(0),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -204,6 +220,28 @@ func (a App) WithSavedSession(s config.Config) App {
 	return a
 }
 
+// WithEphemeralSession marks the App as a remote SSH-hosted session. Such a
+// session must not persist or read session credentials and display preferences
+// from the host operator's config file.
+func (a App) WithEphemeralSession() App {
+	a.ephemeral = true
+	return a
+}
+
+// saveConfig loads the persisted config, applies mutate, and writes it back. It
+// is a no-op for ephemeral (SSH-hosted) sessions.
+func (a *App) saveConfig(mutate func(cfg *config.Config)) {
+	if a.ephemeral {
+		return
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return
+	}
+	mutate(&cfg)
+	_ = config.Save(cfg)
+}
+
 // --- init ---
 
 func (a App) Init() tea.Cmd {
@@ -227,19 +265,61 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a = a.applyWindowSize(m)
 		return a, a.delegateUpdate(msg)
 	}
-	if a2, cmd, ok := a.handleKeys(msg);       ok { return a2, cmd }
-	if a2, cmd, ok := a.handleAuth(msg);       ok { return a2, cmd }
-	if a2, cmd, ok := a.handleFeed(msg);       ok { return a2, cmd }
-	if a2, cmd, ok := a.handlePostDetail(msg); ok { return a2, cmd }
-	if a2, cmd, ok := a.handleChatrooms(msg);  ok { return a2, cmd }
-	if a2, cmd, ok := a.handleCMail(msg);      ok { return a2, cmd }
-	if a2, cmd, ok := a.handleProfile(msg);        ok { return a2, cmd }
-	if a2, cmd, ok := a.handleNotifications(msg); ok { return a2, cmd }
-	if a2, cmd, ok := a.handleSettings(msg);       ok { return a2, cmd }
-	if a2, cmd, ok := a.handleBookmarks(msg);      ok { return a2, cmd }
-	if a2, cmd, ok := a.handleTopics(msg);         ok { return a2, cmd }
-	if a2, cmd, ok := a.handleJournal(msg);        ok { return a2, cmd }
-	if a2, cmd, ok := a.handleErr(msg);            ok { return a2, cmd }
+	// Any keypress dismisses a visible notification early. We do NOT return here,
+	// so the key still flows on to do its normal job; bumping notifyGen neutralizes
+	// the pending expire tick.
+	if _, ok := msg.(tea.KeyMsg); ok && a.notifyText != "" {
+		a.notifyText = ""
+		a.notifyGen++
+	}
+	if a2, cmd, ok := a.handleKeys(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleAuth(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleFeed(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handlePostDetail(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleChatrooms(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleCMail(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleProfile(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleNotifications(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleSettings(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleBookmarks(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleGuilds(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleTopics(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleJournal(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleUnauthorized(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleNotify(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleErr(msg); ok {
+		return a2, cmd
+	}
 	return a, a.delegateUpdate(msg)
 }
 
@@ -254,6 +334,7 @@ func (a App) updateAll(msg tea.Msg) App {
 	a.notifications, _ = a.notifications.Update(msg)
 	a.settingsScreen, _ = a.settingsScreen.Update(msg)
 	a.bookmarks, _ = a.bookmarks.Update(msg)
+	a.guilds, _ = a.guilds.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
 	a.journal, _ = a.journal.Update(msg)
 	return a
@@ -263,7 +344,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone}
+	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, OwnGuildSlug: a.currentUser.GuildSlug}
 	*a = a.updateAll(msg)
 }
 
@@ -277,6 +358,7 @@ func (a *App) broadcastBookmarkedIDs() {
 	}
 	a.feed, _ = a.feed.Update(msg)
 	a.postDetail, _ = a.postDetail.Update(msg)
+	a.guilds, _ = a.guilds.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
 }
 
@@ -331,14 +413,13 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.broadcastConfig()
 			relaxed := a.relaxed
 			return a, func() tea.Msg {
-				if sess, err := config.Load(); err == nil {
+				a.saveConfig(func(cfg *config.Config) {
 					if relaxed {
-						sess.Density = "relaxed"
+						cfg.Density = "relaxed"
 					} else {
-						sess.Density = ""
+						cfg.Density = ""
 					}
-					_ = config.Save(sess)
-				}
+				})
 				return nil
 			}, true
 		}
@@ -390,17 +471,30 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	case "5":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenTopics
-			a.topics = a.topics.SetFetching()
-			return a, a.loadTopicsCmd(), true
+			a.active = screenGuilds
+			if !a.guilds.IsLoaded() {
+				a.guilds = a.guilds.SetFetching()
+				return a, a.loadGuildsCmd(""), true
+			}
+			return a, nil, true
 		}
 	case "6":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenTopics
+			if !a.topics.IsLoaded() {
+				a.topics = a.topics.SetFetching()
+				return a, a.loadTopicsCmd(), true
+			}
+			return a, nil, true
+		}
+	case "7":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenProfile
 			return a, a.loadProfileCmd(), true
 		}
-	case "7":
+	case "8":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenSettings
@@ -423,7 +517,10 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.SubmitLoginMsg:
 		return a, a.loginCmd(msg.Email, msg.Password), true
-	case screens.LoginMsg:
+	case loginSuccessMsg:
+		a.tokens = msg.tokens
+		a.currentUser = msg.user
+		a.cmail = screens.NewCMailModel(msg.user.Username, a.client)
 		return a, a.afterLoginCmd(), true
 	case screens.LoginErrMsg:
 		var cmd tea.Cmd
@@ -495,7 +592,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Topics), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
 	case screens.SubmitReplyMsg:
@@ -674,14 +771,13 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		tz := msg.Timezone
 		return a, func() tea.Msg {
 			if err := a.client.UpdateSettings(s); err != nil {
-				return errMsg{err}
+				return actionErrMsg{err}
 			}
-			if cfg, err := config.Load(); err == nil {
+			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
-				_ = config.Save(cfg)
-			}
+			})
 			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz}
 		}, true
 
@@ -701,10 +797,9 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case wanderDoneMsg:
 		if !msg.at.IsZero() {
-			if cfg, err := config.Load(); err == nil {
+			a.saveConfig(func(cfg *config.Config) {
 				cfg.LastWandered = msg.at
-				_ = config.Save(cfg)
-			}
+			})
 		}
 		return a, nil, true
 	}
@@ -761,7 +856,7 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.bookmarkedReplyIDs = newReplyIDs
 				delete(a.replyBookmarkIDs, replyID)
 				a.broadcastBookmarkedIDs()
-				return a, a.deleteBookmarkCmd(bookmarkID), true
+				return a, a.deleteBookmarkCmd(bookmarkID, false), true
 			}
 			// Toggle on: optimistic add.
 			newReplyIDs := make(map[string]struct{}, len(a.bookmarkedReplyIDs)+1)
@@ -786,7 +881,7 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.bookmarkedPostIDs = newPostIDs
 			delete(a.postBookmarkIDs, postID)
 			a.broadcastBookmarkedIDs()
-			return a, a.deleteBookmarkCmd(bookmarkID), true
+			return a, a.deleteBookmarkCmd(bookmarkID, false), true
 		}
 		// Toggle on: optimistic add.
 		newPostIDs := make(map[string]struct{}, len(a.bookmarkedPostIDs)+1)
@@ -818,7 +913,8 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.bookmarkedPostIDs = newPostIDs
 			}
 			a.broadcastBookmarkedIDs()
-			return a, nil, true
+			a, cmd := a.notify(notifyError, msg.err.Error())
+			return a, cmd, true
 		}
 		a.bookmarks = a.bookmarks.SetFetching()
 		return a, a.loadBookmarksCmd(""), true
@@ -845,10 +941,13 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 			delete(a.replyBookmarkIDs, msg.ReplyID)
 		}
 		a.broadcastBookmarkedIDs()
-		return a, a.deleteBookmarkCmd(msg.BookmarkID), true
+		return a, a.deleteBookmarkCmd(msg.BookmarkID, true), true
 	case bookmarkDeletedMsg:
-		a.bookmarks = a.bookmarks.SetFetching()
-		return a, a.loadBookmarksCmd(""), true
+		if !msg.fromBookmarksScreen {
+			a.bookmarks = a.bookmarks.SetFetching()
+			return a, a.loadBookmarksCmd(""), true
+		}
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -901,6 +1000,108 @@ func mergeBookmarkIDSets(postIDs, replyIDs map[string]struct{}, postBookmarks, r
 		}
 	}
 	return newPostIDs, newReplyIDs, newPostBookmarks, newReplyBookmarks
+}
+
+// handleGuilds processes guild list, guild posts, pagination, and post selection messages.
+func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case screens.RefreshGuildsMsg:
+		return a, a.loadGuildsCmd(""), true
+
+	case guildsLoadedMsg:
+		a.guilds = a.guilds.SetGuilds(msg.guilds, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadMoreGuildsMsg:
+		return a, a.loadMoreGuildsCmd(msg.Cursor), true
+
+	case guildsPageMsg:
+		a.guilds = a.guilds.AppendGuilds(msg.guilds, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadGuildPostsMsg:
+		return a, tea.Batch(a.loadGuildPostsCmd(msg.Slug), a.loadGuildDetailCmd(msg.Slug)), true
+
+	case guildPostsLoadedMsg:
+		if msg.slug != a.guilds.ActiveGuild() {
+			return a, nil, true
+		}
+		a.guilds = a.guilds.SetGuildPosts(msg.posts, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadMoreGuildPostsMsg:
+		return a, a.loadGuildPostsPageCmd(msg.Slug, msg.Cursor), true
+
+	case guildPostsPageMsg:
+		if msg.slug != a.guilds.ActiveGuild() {
+			return a, nil, true
+		}
+		a.guilds = a.guilds.AppendGuildPosts(msg.posts, msg.cursor)
+		return a, nil, true
+
+	case screens.RefreshGuildPostsMsg:
+		return a, a.loadGuildPostsCmd(msg.Slug), true
+
+	case screens.ShowGuildPostMsg:
+		a.postDetailReturn = screenGuilds
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.Post)
+		return a, a.loadRepliesCmd(msg.Post.ID), true
+
+	case screens.SubmitGuildPostMsg:
+		return a, a.createGuildPostCmd(msg.Slug, msg.Content, msg.Title, msg.Topics), true
+
+	case guildPostCreatedMsg:
+		return a, a.loadGuildPostsCmd(msg.slug), true
+
+	case screens.ShowUserProfileMsg:
+		a.profileReturn = screenGuilds
+		return a, a.loadUserProfileCmd(msg.Username), true
+
+	case screens.LoadGuildMembersMsg:
+		return a, a.loadGuildMembersCmd(msg.Slug, ""), true
+
+	case guildMembersLoadedMsg:
+		a.guilds = a.guilds.SetGuildMembers(msg.members, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadMoreGuildMembersMsg:
+		return a, a.loadGuildMembersCmd(msg.Slug, msg.Cursor), true
+
+	case guildMembersPageMsg:
+		a.guilds = a.guilds.AppendGuildMembers(msg.members, msg.cursor)
+		return a, nil, true
+
+	case guildDetailLoadedMsg:
+		a.guilds = a.guilds.SetGuildDetail(msg.guild)
+		return a, nil, true
+
+	case screens.JoinGuildMsg:
+		return a, a.joinGuildCmd(msg.Slug, a.guilds.GuildDetail().Name), true
+
+	case screens.LeaveGuildMsg:
+		return a, a.leaveGuildCmd(msg.Slug, a.guilds.GuildDetail().Name), true
+
+	case guildJoinedMsg:
+		detail := a.guilds.GuildDetail()
+		detail.IsMember = true
+		detail.Role = "member"
+		a.guilds = a.guilds.SetGuildDetail(detail)
+		a.currentUser.GuildSlug = msg.slug
+		a.guilds = a.guilds.SetOwnGuildSlug(msg.slug)
+		var notifyCmd tea.Cmd
+		a, notifyCmd = a.notify(notifyInfo, "✓ Joined #"+msg.name)
+		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
+
+	case guildLeftMsg:
+		a.guilds = a.guilds.BackToGuildList()
+		a.currentUser.GuildSlug = ""
+		a.guilds = a.guilds.SetOwnGuildSlug("")
+		var notifyCmd tea.Cmd
+		a, notifyCmd = a.notify(notifyInfo, "✓ Left #"+msg.name)
+		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
+	}
+	return a, nil, false
 }
 
 // handleTopics processes topic list, topic posts, pagination, and post selection messages.
@@ -989,6 +1190,72 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleErr routes API error messages to the active screen's error display.
+// notifyTTL is how long a global notification banner stays before auto-dismissing.
+const notifyTTL = 4 * time.Second
+
+// notify sets the global banner and returns the timed-expire command. Each call
+// bumps notifyGen and captures it in the tick closure, so only the newest
+// notification's expire can clear the banner.
+func (a App) notify(level notifyLevel, text string) (App, tea.Cmd) {
+	a.notifyGen++
+	a.notifyText = text
+	a.notifyLevel = level
+	gen := a.notifyGen
+	return a, tea.Tick(notifyTTL, func(time.Time) tea.Msg {
+		return notifyExpireMsg{gen: gen}
+	})
+}
+
+func (a App) handleNotify(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch m := msg.(type) {
+	case actionErrMsg:
+		a, cmd := a.notify(notifyError, m.err.Error())
+		return a, cmd, true
+	case notifyMsg:
+		a, cmd := a.notify(m.level, m.text)
+		return a, cmd, true
+	case notifyExpireMsg:
+		if m.gen == a.notifyGen {
+			a.notifyText = ""
+		}
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// handleUnauthorized intercepts an errMsg or actionErrMsg carrying the
+// ErrUnauthorized sentinel — returned by the API client after a token refresh
+// fails — and routes the user back to the login screen instead of leaving them
+// stranded on an errored screen. The dead refresh token is cleared so the next
+// launch starts at the login form rather than retrying a doomed auto-login.
+func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
+	var err error
+	switch m := msg.(type) {
+	case errMsg:
+		err = m.err
+	case actionErrMsg:
+		err = m.err
+	case notifPostLoadErrMsg:
+		err = m.err
+	default:
+		return a, nil, false
+	}
+	if !errors.Is(err, api.ErrUnauthorized) || a.active == screenLogin {
+		return a, nil, false
+	}
+
+	_ = a.client.Logout()
+	a.tokens = model.Tokens{}
+	a.saveConfig(func(cfg *config.Config) { cfg.RefreshToken = "" })
+
+	a.active = screenLogin
+	a.focus = focusMenu
+	a.login = screens.NewLoginModel(a.currentUser.Email)
+
+	a, cmd := a.notify(notifyWarn, "session expired — please log in again")
+	return a, cmd, true
+}
+
 func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 	m, ok := msg.(errMsg)
 	if !ok {
@@ -1009,12 +1276,28 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.settingsScreen = a.settingsScreen.SetError(m.err)
 	case screenBookmarks:
 		a.bookmarks = a.bookmarks.SetError(m.err)
+	case screenGuilds:
+		a.guilds = a.guilds.SetError(m.err)
 	case screenTopics:
 		a.topics = a.topics.SetError(m.err)
 	case screenJournal:
 		a.journal = a.journal.SetError(m.err)
 	}
-	return a, nil, true
+	// Errors never block a screen: the per-screen SetError above only feeds an
+	// inline "couldn't load" empty-state, while the failure is announced in the
+	// transient global banner so it is visible even when content is already shown.
+	a, cmd := a.notify(notifyError, friendlyErr(m.err))
+	return a, cmd, true
+}
+
+// friendlyErr converts an API error into human-facing banner text, softening the
+// raw "API error NOT_FOUND (404): …" wording for the common deleted-resource case.
+func friendlyErr(err error) string {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.Status == 404 {
+		return "Not found — it may have been deleted."
+	}
+	return err.Error()
 }
 
 // activeScreenHasFocusedInput returns true when the current screen has a
@@ -1030,6 +1313,8 @@ func (a App) activeScreenHasFocusedInput() bool {
 		return a.postDetail.ComposeActive()
 	case screenFeed:
 		return a.feed.ComposeActive()
+	case screenGuilds:
+		return a.guilds.ComposeActive()
 	case screenProfile:
 		return a.profile.ComposeActive()
 	case screenJournal:
@@ -1076,9 +1361,18 @@ func (a *App) navigateTab(delta int) tea.Cmd {
 			return a.loadBookmarksCmd("")
 		}
 		return nil
+	case screenGuilds:
+		if !a.guilds.IsLoaded() {
+			a.guilds = a.guilds.SetFetching()
+			return a.loadGuildsCmd("")
+		}
+		return nil
 	case screenTopics:
-		a.topics = a.topics.SetFetching()
-		return a.loadTopicsCmd()
+		if !a.topics.IsLoaded() {
+			a.topics = a.topics.SetFetching()
+			return a.loadTopicsCmd()
+		}
+		return nil
 	case screenJournal:
 		a.journal = a.journal.SetFetching()
 		return a.loadJournalCmd()
@@ -1107,6 +1401,8 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 		a.settingsScreen, cmd = a.settingsScreen.Update(msg)
 	case screenBookmarks:
 		a.bookmarks, cmd = a.bookmarks.Update(msg)
+	case screenGuilds:
+		a.guilds, cmd = a.guilds.Update(msg)
 	case screenTopics:
 		a.topics, cmd = a.topics.Update(msg)
 	case screenJournal:
@@ -1129,7 +1425,7 @@ func (a App) View() string {
 		a.renderTabBar(),
 		"", // separator row
 		content,
-		a.renderStatusBar(),
+		a.renderBottomBar(),
 	)
 	if a.themePickerOpen {
 		return overlayCenter(base, a.renderThemePicker(), a.width, a.height)
@@ -1184,6 +1480,8 @@ func (a App) renderActiveScreen() string {
 		return a.settingsScreen.View()
 	case screenBookmarks:
 		return a.bookmarks.View()
+	case screenGuilds:
+		return a.guilds.View()
 	case screenTopics:
 		return a.topics.View()
 	case screenJournal:
@@ -1203,7 +1501,7 @@ func (a App) screenHints() []hint {
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			return []hint{{"tab", "cycle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
+			return []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, more}
 	case screenPostDetail:
@@ -1228,6 +1526,27 @@ func (a App) screenHints() []hint {
 		return []hint{{"↑↓", "navigate"}, {"enter", "edit"}, {"n", "new"}, {"d", "delete"}, more}
 	case screenBookmarks:
 		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"d", "delete"}, more}
+	case screenGuilds:
+		if a.guilds.ComposeActive() {
+			return []hint{{"tab", "cycle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
+		}
+		if a.guilds.IsBrowsingMembers() {
+			return []hint{{"↑↓", "navigate"}, {"enter", "view profile"}, {"esc", "back"}, more}
+		}
+		if a.guilds.IsBrowsingGuild() {
+			if a.guilds.IsConfirmingJoin() || a.guilds.IsConfirmingLeave() {
+				return []hint{{"y", "confirm"}, {"n/esc", "cancel"}}
+			}
+			hints := []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "members"}, {"n", "new thread"}, {"esc", "back"}}
+			d := a.guilds.GuildDetail()
+			if a.guilds.IsDetailLoaded() && !d.IsMember && a.currentUser.GuildSlug == "" {
+				hints = append(hints, hint{"J", "join"})
+			} else if a.guilds.IsDetailLoaded() && d.IsMember && d.Role != "founder" {
+				hints = append(hints, hint{"L", "leave"})
+			}
+			return append(hints, more)
+		}
+		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, more}
 	case screenTopics:
 		if a.topics.IsBrowsingTopic() {
 			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
@@ -1284,6 +1603,39 @@ func hintRows(hints []hint, rowFn func(string, string) string) []string {
 		rows = append(rows, rowFn(key, h.desc))
 	}
 	return rows
+}
+
+// renderBottomBar renders the notification banner when one is active, otherwise
+// the status bar. Both occupy exactly one row, so ChromeHeight is unaffected.
+func (a App) renderBottomBar() string {
+	if a.notifyText == "" {
+		return a.renderStatusBar()
+	}
+	return a.renderNotification()
+}
+
+func (a App) renderNotification() string {
+	color := theme.ColorGreen
+	prefix := "✓ "
+	switch a.notifyLevel {
+	case notifyWarn:
+		color = theme.ColorYellow
+		prefix = "! "
+	case notifyError:
+		color = theme.ColorRed
+		prefix = "✕ "
+	}
+	const suffix = "  (any key to dismiss)"
+	// Reserve room for prefix, suffix, and the 1-char padding on each side.
+	budget := a.width - lipgloss.Width(prefix) - lipgloss.Width(suffix) - 2
+	text := ansi.Truncate(a.notifyText, max(0, budget), "…")
+	return lipgloss.NewStyle().
+		Foreground(theme.ColorBackground).
+		Background(color).
+		Bold(true).
+		Width(a.width).
+		Padding(0, 1).
+		Render(prefix + text + suffix)
 }
 
 func (a App) renderStatusBar() string {
@@ -1382,10 +1734,9 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(
 			refreshCmd,
 			func() tea.Msg {
-				if cfg, err := config.Load(); err == nil {
+				a.saveConfig(func(cfg *config.Config) {
 					cfg.Theme = selected
-					_ = config.Save(cfg)
-				}
+				})
 				return nil
 			},
 		)
@@ -1516,6 +1867,16 @@ func (a App) renderHelpModal() string {
 		}
 	case screenBookmarks:
 		localSection = section("bookmarks")
+	case screenGuilds:
+		if a.guilds.ComposeActive() {
+			localSection = section("guilds (compose)", row("Enter", "paragraph"))
+		} else if a.guilds.IsBrowsingMembers() {
+			localSection = section("guilds (members)", row("enter", "view profile"))
+		} else if a.guilds.IsBrowsingGuild() {
+			localSection = section("guilds (browsing)", row("n", "new thread"), row("m", "members"))
+		} else {
+			localSection = section("guilds")
+		}
 	case screenTopics:
 		if a.topics.IsBrowsingTopic() {
 			localSection = section("topics (browsing)")
@@ -1557,6 +1918,8 @@ func (a App) getFocusedURLs() []string {
 		p = a.profile
 	case screenBookmarks:
 		p = a.bookmarks
+	case screenGuilds:
+		p = a.guilds
 	case screenTopics:
 		p = a.topics
 	case screenJournal:
@@ -1692,13 +2055,19 @@ func overlayCenter(bg, fg string, bgW, bgH int) string {
 
 // --- commands ---
 
+// loginSuccessMsg carries the authenticated session back to the update loop so
+// App fields are set there rather than mutated from the command goroutine.
+type loginSuccessMsg struct {
+	tokens model.Tokens
+	user   model.User
+}
+
 func (a *App) loginCmd(email, password string) tea.Cmd {
 	return func() tea.Msg {
 		tokens, err := a.client.Login(email, password)
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		a.tokens = tokens
 		// Initialise the RTDB client from the rtdbToken (best effort).
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			_ = hc.InitRTDB(tokens.RTDBToken)
@@ -1707,27 +2076,24 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		a.currentUser = user
 		// Wire the user ID into the HTTP client for RTDB path construction.
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			hc.SetCurrentUID(user.ID)
 		}
-		a.cmail = screens.NewCMailModel(user.Username, a.client)
 		// Persist the refresh token so subsequent launches auto-login.
 		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
 		if a.relaxed {
 			density = "relaxed"
 		}
-		if cfg, err := config.Load(); err == nil {
+		a.saveConfig(func(cfg *config.Config) {
 			cfg.RefreshToken = tokens.RefreshToken
 			cfg.Username = user.Username
 			cfg.Email = email
 			cfg.SavedAt = time.Now().UTC()
 			cfg.Density = density
-			_ = config.Save(cfg)
-		}
-		return screens.LoginMsg{}
+		})
+		return loginSuccessMsg{tokens: tokens, user: user}
 	}
 }
 
@@ -1740,7 +2106,6 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		a.tokens = tokens
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			_ = hc.InitRTDB(tokens.RTDBToken)
 		}
@@ -1748,25 +2113,22 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		a.currentUser = user
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			hc.SetCurrentUID(user.ID)
 		}
-		a.cmail = screens.NewCMailModel(user.Username, a.client)
 		// Update savedAt so we know when the session was last used.
 		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
 		if a.relaxed {
 			density = "relaxed"
 		}
-		if cfg, err := config.Load(); err == nil {
+		a.saveConfig(func(cfg *config.Config) {
 			cfg.RefreshToken = tokens.RefreshToken
 			cfg.Username = user.Username
 			cfg.SavedAt = time.Now().UTC()
 			cfg.Density = density
-			_ = config.Save(cfg)
-		}
-		return screens.LoginMsg{}
+		})
+		return loginSuccessMsg{tokens: tokens, user: user}
 	}
 }
 
@@ -1775,10 +2137,14 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	a.profile = a.profile.SetUser(a.currentUser)
 	a.feed = a.feed.SetCurrentUsername(a.currentUser.Username)
 	a.feed = a.feed.SetFetching()
+	a.bookmarks = a.bookmarks.SetFetching()
+	a.topics = a.topics.SetFetching()
 	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username)
 	a.broadcastConfig()
 	return tea.Batch(
 		a.loadFeedCmd(),
+		a.loadBookmarksCmd(""),
+		a.loadTopicsCmd(),
 		a.loadProfileCmd(),
 		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
@@ -1824,6 +2190,36 @@ type settingsSavedMsg struct {
 type wanderTickMsg struct{}
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
 type errMsg struct{ err error }
+
+// notifPostLoadErrMsg is the failure of opening a post from the Notifications
+// screen. It is handled in handleNotifications so a deleted target surfaces as a
+// friendly transient banner ("This post has been deleted") instead of routing
+// through handleErr and blanking the list.
+type notifPostLoadErrMsg struct{ err error }
+
+// notifyLevel selects the color of a global notification banner.
+type notifyLevel int
+
+const (
+	notifyInfo notifyLevel = iota
+	notifyWarn
+	notifyError
+)
+
+// actionErrMsg is a non-fatal failure from a user-initiated action (post, reply,
+// delete, follow, …). Like errMsg it surfaces as a transient global banner and
+// never blocks a tab; unlike errMsg it does not set any screen's inline
+// "couldn't load" empty-state, since there is no load in flight.
+type actionErrMsg struct{ err error }
+
+// notifyMsg sets the global banner directly; used for success/info surfacing.
+type notifyMsg struct {
+	text  string
+	level notifyLevel
+}
+
+// notifyExpireMsg clears the banner iff gen still matches a.notifyGen.
+type notifyExpireMsg struct{ gen int }
 type bookmarksLoadedMsg struct {
 	items  []model.Bookmark
 	cursor string
@@ -1838,7 +2234,10 @@ type bookmarkCreatedMsg struct {
 	replyID    string
 	err        error
 }
-type bookmarkDeletedMsg struct{ bookmarkID string }
+type bookmarkDeletedMsg struct {
+	bookmarkID          string
+	fromBookmarksScreen bool
+}
 type bookmarkPostLoadedMsg struct{ post model.Post }
 type bookmarkReplyLoadedMsg struct {
 	post    model.Post
@@ -1922,6 +2321,37 @@ type topicPostsPageMsg struct {
 	posts  []model.Post
 	cursor string
 }
+
+type guildsLoadedMsg struct {
+	guilds []model.Guild
+	cursor string
+}
+type guildsPageMsg struct {
+	guilds []model.Guild
+	cursor string
+}
+type guildPostsLoadedMsg struct {
+	slug   string
+	posts  []model.Post
+	cursor string
+}
+type guildPostsPageMsg struct {
+	slug   string
+	posts  []model.Post
+	cursor string
+}
+type guildPostCreatedMsg struct{ slug string }
+type guildMembersLoadedMsg struct {
+	members []model.GuildMember
+	cursor  string
+}
+type guildMembersPageMsg struct {
+	members []model.GuildMember
+	cursor  string
+}
+type guildDetailLoadedMsg struct{ guild model.Guild }
+type guildJoinedMsg struct{ slug, name string }
+type guildLeftMsg struct{ slug, name string }
 
 type notifsLoadedMsg struct {
 	notifs []model.Notification
@@ -2028,7 +2458,7 @@ func (a *App) followUserCmd(userID string) tea.Cmd {
 	return func() tea.Msg {
 		followID, err := a.client.Follow(userID)
 		if err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return followResultMsg{followID: followID}
 	}
@@ -2037,7 +2467,7 @@ func (a *App) followUserCmd(userID string) tea.Cmd {
 func (a *App) unfollowUserCmd(followID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.Unfollow(followID); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return unfollowResultMsg{}
 	}
@@ -2098,7 +2528,7 @@ func (a *App) loadUserFollowersCmd(userID, cursor string) tea.Cmd {
 func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.SendRoomMessage(roomID, body); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return nil
 	}
@@ -2107,7 +2537,7 @@ func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.SendMessage(convID, body); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return nil
 	}
@@ -2127,17 +2557,17 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := a.client.CreateReply(postID, content, parentReplyID)
 		if err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return replyCreatedMsg{postID: postID}
 	}
 }
 
-func (a *App) createPostCmd(content string, topics []string) tea.Cmd {
+func (a *App) createPostCmd(content, title string, topics []string, isPublic, isNSFW bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, topics)
+		_, err := a.client.CreatePost(content, title, topics, isPublic, isNSFW)
 		if err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return postCreatedMsg{}
 	}
@@ -2169,7 +2599,7 @@ func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
 			}
 		}
 		if err := a.client.UpdateProfile(update); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		a.currentUser.Bio = msg.Bio
 		a.currentUser.WebsiteName = msg.WebsiteName
@@ -2225,6 +2655,21 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.post)
 		return a, a.loadRepliesCmd(msg.post.ID), true
+	case notifPostLoadErrMsg:
+		// A dead session must still redirect to login — let handleUnauthorized
+		// (which runs later in the dispatch chain) claim it.
+		if errors.Is(msg.err, api.ErrUnauthorized) {
+			return a, nil, false
+		}
+		// The target post is gone (or otherwise unfetchable): announce it in the
+		// transient banner and leave the notifications list untouched.
+		var apiErr *api.APIError
+		if errors.As(msg.err, &apiErr) && apiErr.Status == 404 {
+			a, cmd := a.notify(notifyWarn, "This post has been deleted")
+			return a, cmd, true
+		}
+		a, cmd := a.notify(notifyError, msg.err.Error())
+		return a, cmd, true
 	case screens.ShowUserProfileMsg:
 		if a.active != screenNotifications {
 			return a, nil, false
@@ -2374,10 +2819,10 @@ func (a *App) createBookmarkCmd(postID, replyID string) tea.Cmd {
 	}
 }
 
-func (a *App) deleteBookmarkCmd(id string) tea.Cmd {
+func (a *App) deleteBookmarkCmd(id string, fromBookmarksScreen bool) tea.Cmd {
 	return func() tea.Msg {
 		_ = a.client.DeleteBookmark(id) // fire-and-forget; UI already updated
-		return bookmarkDeletedMsg{bookmarkID: id}
+		return bookmarkDeletedMsg{bookmarkID: id, fromBookmarksScreen: fromBookmarksScreen}
 	}
 }
 
@@ -2423,6 +2868,99 @@ func (a *App) loadTopicPostsPageCmd(slug, cursor string) tea.Cmd {
 	}
 }
 
+// --- Guilds commands ---
+
+func (a *App) loadGuildsCmd(cursor string) tea.Cmd {
+	return func() tea.Msg {
+		guilds, nextCursor, err := a.client.GetGuilds(cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return guildsLoadedMsg{guilds: guilds, cursor: nextCursor}
+	}
+}
+
+func (a *App) loadMoreGuildsCmd(cursor string) tea.Cmd {
+	return func() tea.Msg {
+		guilds, nextCursor, err := a.client.GetGuilds(cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return guildsPageMsg{guilds: guilds, cursor: nextCursor}
+	}
+}
+
+func (a *App) loadGuildPostsCmd(slug string) tea.Cmd {
+	return func() tea.Msg {
+		posts, cursor, err := a.client.GetGuildPosts(slug, "")
+		if err != nil {
+			return errMsg{err}
+		}
+		return guildPostsLoadedMsg{slug: slug, posts: posts, cursor: cursor}
+	}
+}
+
+func (a *App) loadGuildPostsPageCmd(slug, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		posts, nextCursor, err := a.client.GetGuildPosts(slug, cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return guildPostsPageMsg{slug: slug, posts: posts, cursor: nextCursor}
+	}
+}
+
+func (a *App) createGuildPostCmd(slug, content, title string, topics []string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := a.client.CreateGuildPost(slug, content, title, topics)
+		if err != nil {
+			return actionErrMsg{err}
+		}
+		return guildPostCreatedMsg{slug: slug}
+	}
+}
+
+func (a *App) loadGuildDetailCmd(slug string) tea.Cmd {
+	return func() tea.Msg {
+		g, err := a.client.GetGuild(slug)
+		if err != nil {
+			return actionErrMsg{err}
+		}
+		return guildDetailLoadedMsg{guild: g}
+	}
+}
+
+func (a *App) joinGuildCmd(slug, name string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.JoinGuild(slug); err != nil {
+			return actionErrMsg{err}
+		}
+		return guildJoinedMsg{slug: slug, name: name}
+	}
+}
+
+func (a *App) leaveGuildCmd(slug, name string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.LeaveGuild(slug); err != nil {
+			return actionErrMsg{err}
+		}
+		return guildLeftMsg{slug: slug, name: name}
+	}
+}
+
+func (a *App) loadGuildMembersCmd(slug, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		members, nextCursor, err := a.client.GetGuildMembers(slug, cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		if cursor == "" {
+			return guildMembersLoadedMsg{members: members, cursor: nextCursor}
+		}
+		return guildMembersPageMsg{members: members, cursor: nextCursor}
+	}
+}
+
 // --- Journal (Notes) commands ---
 
 func (a *App) loadJournalCmd() tea.Cmd {
@@ -2451,7 +2989,7 @@ func (a *App) saveNoteCmd(noteID, content string, topics []string) tea.Cmd {
 		return func() tea.Msg {
 			note, err := a.client.CreateNote(content, topics)
 			if err != nil {
-				return errMsg{err}
+				return actionErrMsg{err}
 			}
 			return noteCreatedMsg{note: note}
 		}
@@ -2459,7 +2997,7 @@ func (a *App) saveNoteCmd(noteID, content string, topics []string) tea.Cmd {
 	id := noteID // capture for closure
 	return func() tea.Msg {
 		if err := a.client.UpdateNote(id, content, topics); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return noteUpdatedMsg{noteID: id, content: content, topics: topics}
 	}
@@ -2468,7 +3006,7 @@ func (a *App) saveNoteCmd(noteID, content string, topics []string) tea.Cmd {
 func (a *App) deleteNoteCmd(noteID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.DeleteNote(noteID); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return noteDeletedMsg{noteID: noteID}
 	}
@@ -2477,7 +3015,7 @@ func (a *App) deleteNoteCmd(noteID string) tea.Cmd {
 func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.DeletePost(postID); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return postDeletedMsg{postID: postID, fromFeed: fromFeed}
 	}
@@ -2486,18 +3024,19 @@ func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.DeleteReply(replyID); err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return replyDeletedMsg{replyID: replyID}
 	}
 }
 
 // publishNoteCmd creates a post from the note's content and topics.
+// Published notes have no title, are private, and not marked NSFW.
 func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, topics)
+		_, err := a.client.CreatePost(content, "", topics, false, false)
 		if err != nil {
-			return errMsg{err}
+			return actionErrMsg{err}
 		}
 		return notePublishedMsg{}
 	}
@@ -2536,6 +3075,9 @@ func (a *App) scheduleWanderCmd() tea.Cmd {
 // silent — the user is never notified.
 func (a *App) checkAndWanderCmd() tea.Cmd {
 	return func() tea.Msg {
+		if a.ephemeral {
+			return wanderDoneMsg{}
+		}
 		cfg, err := config.Load()
 		if err != nil {
 			return wanderDoneMsg{}
@@ -2572,7 +3114,7 @@ func (a *App) loadPostAndShowCmd(postID string) tea.Cmd {
 	return func() tea.Msg {
 		post, err := a.client.GetPost(postID)
 		if err != nil {
-			return errMsg{err}
+			return notifPostLoadErrMsg{err}
 		}
 		return notifPostLoadedMsg{post: post}
 	}

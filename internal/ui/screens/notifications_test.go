@@ -365,6 +365,61 @@ func TestNotifSummary_ThreadReply_NoAuthor(t *testing.T) {
 	}
 }
 
+// --- guild clause: post/reply notifications include "in #<guild>" verbatim ---
+
+func TestNotifSummary_Reply_WithGuild(t *testing.T) {
+	n := model.Notification{Type: "reply", GuildName: "technica"}
+	if got := notifSummary(n); got != "replied to your post in #technica." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+// The server sends guildSlug (not guildName) for guild replies; it must drive the clause.
+func TestNotifSummary_Reply_WithGuildSlug(t *testing.T) {
+	n := model.Notification{Type: "reply", GuildSlug: "chooms"}
+	if got := notifSummary(n); got != "replied to your post in #chooms." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+// When both are present the slug (the stable lowercase handle) wins.
+func TestNotifSummary_GuildSlug_PreferredOverName(t *testing.T) {
+	n := model.Notification{Type: "reply", GuildName: "CHOOMS", GuildSlug: "chooms"}
+	if got := notifSummary(n); got != "replied to your post in #chooms." {
+		t.Errorf("expected slug to win, got: %q", got)
+	}
+}
+
+func TestNotifSummary_ThreadReply_WithGuild(t *testing.T) {
+	n := model.Notification{Type: "thread_reply", ThreadAuthorUsername: "7spires", GuildName: "technica"}
+	if got := notifSummary(n); got != "replied in @7spires's thread in #technica." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+func TestNotifSummary_NewPost_WithGuild_PreservesCasing(t *testing.T) {
+	// Guild names keep their own casing; only a leading # is added.
+	n := model.Notification{Type: "new_post_following", GuildName: "CHOOMS"}
+	if got := notifSummary(n); got != "published something in #CHOOMS." {
+		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+func TestNotifSummary_Reply_NoGuild_Unchanged(t *testing.T) {
+	n := model.Notification{Type: "reply"}
+	if got := notifSummary(n); got != "replied to your post." {
+		t.Errorf("non-guild reply must be unchanged, got %q", got)
+	}
+}
+
+func TestNotifSummary_Mention_NoGuildClause(t *testing.T) {
+	// *_mention types are intentionally excluded from the guild clause.
+	n := model.Notification{Type: "post_mention", GuildName: "technica"}
+	if got := notifSummary(n); got != "mentioned you in a post." {
+		t.Errorf("mention should not get a guild clause, got %q", got)
+	}
+}
+
 // --- notifIcon ---
 
 func TestNotifIcon_Reply_Unread(t *testing.T) {
@@ -433,7 +488,7 @@ func TestNotifs_Enter_GuildNewThread_EmitsShowPost(t *testing.T) {
 func TestNotifSummary_GuildNewThread_WithName(t *testing.T) {
 	n := model.Notification{Type: "guild_new_thread", GuildName: "technica"}
 	result := notifSummary(n)
-	if result != "posted a new thread in technica." {
+	if result != "posted a new thread in #technica." {
 		t.Errorf("unexpected summary: %q", result)
 	}
 }
@@ -451,6 +506,211 @@ func TestNotifIcon_GuildNewThread(t *testing.T) {
 	icon := notifIcon(n)
 	if !strings.Contains(icon, "#") {
 		t.Errorf("expected # in icon, got %q", icon)
+	}
+}
+
+func TestNotifSummary_Unfollowed(t *testing.T) {
+	n := model.Notification{Type: "unfollowed"}
+	if notifSummary(n) != "unfollowed you." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_Unfollowed(t *testing.T) {
+	n := model.Notification{Type: "unfollowed", Read: false}
+	if !strings.Contains(notifIcon(n), "☹") {
+		t.Errorf("expected ☹ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_PostMention(t *testing.T) {
+	n := model.Notification{Type: "post_mention"}
+	if notifSummary(n) != "mentioned you in a post." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_PostMention(t *testing.T) {
+	n := model.Notification{Type: "post_mention", Read: false}
+	if !strings.Contains(notifIcon(n), "@") {
+		t.Errorf("expected @ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_ChatMention(t *testing.T) {
+	n := model.Notification{Type: "chat_mention"}
+	if notifSummary(n) != "mentioned you in chat." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_ChatMention(t *testing.T) {
+	n := model.Notification{Type: "chat_mention", Read: false}
+	if !strings.Contains(notifIcon(n), "»") {
+		t.Errorf("expected » in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_DmMessage(t *testing.T) {
+	n := model.Notification{Type: "dm_message"}
+	if notifSummary(n) != "sent you a message." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_DmMessage(t *testing.T) {
+	n := model.Notification{Type: "dm_message", Read: false}
+	if !strings.Contains(notifIcon(n), "✉") {
+		t.Errorf("expected ✉ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_SupporterGranted(t *testing.T) {
+	n := model.Notification{Type: "supporter_granted"}
+	if notifSummary(n) != "granted you Supporter status." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifSummary_SupporterRemoved(t *testing.T) {
+	n := model.Notification{Type: "supporter_removed"}
+	if notifSummary(n) != "removed your Supporter status." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_Supporter(t *testing.T) {
+	n := model.Notification{Type: "supporter_granted", Read: false}
+	if !strings.Contains(notifIcon(n), "$") {
+		t.Errorf("expected $ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_HackerGranted(t *testing.T) {
+	n := model.Notification{Type: "hacker_granted"}
+	if notifSummary(n) != "granted you Hacker status." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifSummary_HackerRemoved(t *testing.T) {
+	n := model.Notification{Type: "hacker_removed"}
+	if notifSummary(n) != "removed your Hacker status." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_Hacker(t *testing.T) {
+	n := model.Notification{Type: "hacker_granted", Read: false}
+	if !strings.Contains(notifIcon(n), "^") {
+		t.Errorf("expected ^ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_ImagePermissionGranted(t *testing.T) {
+	n := model.Notification{Type: "image_permission_granted"}
+	if notifSummary(n) != "granted you image permissions." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifSummary_ImagePermissionRemoved(t *testing.T) {
+	n := model.Notification{Type: "image_permission_removed"}
+	if notifSummary(n) != "removed your image permissions." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifSummary_AttachmentPermissionGranted(t *testing.T) {
+	n := model.Notification{Type: "attachment_permission_granted"}
+	if notifSummary(n) != "granted you attachment permissions." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifSummary_AttachmentPermissionRemoved(t *testing.T) {
+	n := model.Notification{Type: "attachment_permission_removed"}
+	if notifSummary(n) != "removed your attachment permissions." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_Permission(t *testing.T) {
+	n := model.Notification{Type: "image_permission_granted", Read: false}
+	if !strings.Contains(notifIcon(n), "%") {
+		t.Errorf("expected %% in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_SystemBan(t *testing.T) {
+	n := model.Notification{Type: "system_ban"}
+	if notifSummary(n) != "your account has been banned." {
+		t.Errorf("unexpected summary: %q", notifSummary(n))
+	}
+}
+
+func TestNotifIcon_SystemBan(t *testing.T) {
+	n := model.Notification{Type: "system_ban", Read: false}
+	if !strings.Contains(notifIcon(n), "☠") {
+		t.Errorf("expected ☠ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifs_Enter_Unfollowed_EmitsShowUserProfileMsg(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "unfollowed", "", false)}
+	m := initNotifs(notifs)
+	_, msgs := runKeyAll(m, "enter")
+	var gotProfile bool
+	for _, msg := range msgs {
+		if _, ok := msg.(ShowUserProfileMsg); ok {
+			gotProfile = true
+		}
+	}
+	if !gotProfile {
+		t.Error("expected ShowUserProfileMsg for unfollowed enter")
+	}
+}
+
+func TestNotifs_Enter_DmMessage_EmitsShowUserProfileMsg(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "dm_message", "", false)}
+	m := initNotifs(notifs)
+	_, msgs := runKeyAll(m, "enter")
+	var gotProfile bool
+	for _, msg := range msgs {
+		if _, ok := msg.(ShowUserProfileMsg); ok {
+			gotProfile = true
+		}
+	}
+	if !gotProfile {
+		t.Error("expected ShowUserProfileMsg for dm_message enter")
+	}
+}
+
+func TestNotifs_Enter_ChatMention_EmitsShowUserProfileMsg(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "chat_mention", "", false)}
+	m := initNotifs(notifs)
+	_, msgs := runKeyAll(m, "enter")
+	var gotProfile bool
+	for _, msg := range msgs {
+		if _, ok := msg.(ShowUserProfileMsg); ok {
+			gotProfile = true
+		}
+	}
+	if !gotProfile {
+		t.Error("expected ShowUserProfileMsg for chat_mention enter")
+	}
+}
+
+func TestNotifs_Enter_PostMention_EmitsShowPost(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "post_mention", "p5", false)}
+	m := initNotifs(notifs)
+	_, msg := runKey(m, "enter")
+	sp, ok := msg.(ShowNotificationPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowNotificationPostMsg, got %T", msg)
+	}
+	if sp.PostID != "p5" {
+		t.Errorf("expected PostID p5, got %s", sp.PostID)
 	}
 }
 
@@ -517,8 +777,8 @@ func TestNotifs_UnreadFilter_ResetsIndex(t *testing.T) {
 
 func TestNotifs_UnreadFilter_HidesRead(t *testing.T) {
 	notifs := []model.Notification{
-		makeNotif("n1", "reply", "p1", true),  // read
-		makeNotif("n2", "poke", "", false),     // unread
+		makeNotif("n1", "reply", "p1", true),    // read
+		makeNotif("n2", "poke", "", false),      // unread
 		makeNotif("n3", "bookmark", "p3", true), // read
 	}
 	m := initNotifs(notifs)
@@ -672,6 +932,34 @@ func TestNotifs_SetError_SetsErr(t *testing.T) {
 	m = m.SetError(err)
 	if m.err != err {
 		t.Error("expected err to be set")
+	}
+}
+
+// A failed initial load must not blank/block the screen: the view shows a subtle
+// inline "couldn't load" line instead of a full-screen error.
+func TestNotifs_SetError_ShowsInlineEmptyState(t *testing.T) {
+	m := initNotifs(nil) // ready, no notifications
+	m = m.SetError(errForTest("boom"))
+	view := m.View()
+	if strings.Contains(view, "boom") {
+		t.Errorf("raw error must not appear in the screen (banner handles it), got: %s", view)
+	}
+	if !strings.Contains(view, "couldn't load notifications") {
+		t.Errorf("expected inline 'couldn't load' empty-state, got: %s", view)
+	}
+}
+
+// Re-fetching clears a prior error so the screen is never a permanent trap.
+func TestNotifs_SetFetchingClearsError(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.SetError(errForTest("boom"))
+	m = m.SetFetching()
+	if m.err != nil {
+		t.Error("SetFetching should clear a prior error")
+	}
+	m = m.SetNotifs(nil, "")
+	if m.err != nil {
+		t.Error("SetNotifs should clear a prior error")
 	}
 }
 

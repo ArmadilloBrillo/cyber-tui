@@ -8,7 +8,7 @@ Comprehensive map of every module, file, and artifact in this repository. Use th
 
 **cyber-tui** is a terminal user interface (TUI) client for [cyberspace.online](https://cyberspace.online) — a retro text-only social network. It is written in Go, using [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI event loop, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling, and [Wish](https://github.com/charmbracelet/wish) to optionally host the client over SSH.
 
-The client talks to the cyberspace.online REST API (v0.2) and to Firebase Realtime Database (RTDB) for live direct messages. See `docs/03-api-reference.md` for the baseline API spec.
+The client talks to the cyberspace.online REST API (current target v0.4.1; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages. See `docs/00-latest-api-reference.md` for the current API spec snapshot.
 
 ---
 
@@ -32,6 +32,9 @@ cyber-tui/
 │   │   └── timezone_test.go     # Timezone parsing tests
 │   ├── model/
 │   │   └── types.go             # Shared domain types
+│   ├── sanitize/
+│   │   ├── sanitize.go          # Strip control chars from untrusted server strings
+│   │   └── sanitize_test.go     # Sanitizer tests
 │   ├── rtdb/
 │   │   ├── client.go            # Firebase RTDB REST + SSE client
 │   │   ├── jwt.go               # JWT decode for RTDB project ID
@@ -119,7 +122,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 |---|---|
 | `Tokens` | IDToken, RefreshToken, RTDBToken returned from login |
 | `User` | Profile (ID, username, displayName, email, bio, websiteUrl, websiteName, websiteImageUrl, pinnedPostID, locationName, locationLatitude, locationLongitude) |
-| `Post` | Feed item (ID, authorID, authorUsername, content, topics, repliesCount, bookmarksCount, isPublic, isNSFW, deleted, createdAt) |
+| `Post` | Feed item (ID, authorID, authorUsername, content, title, slug, guildID, guildSlug, isGuildThread, topics, repliesCount, bookmarksCount, isPublic, isNSFW, deleted, createdAt) |
 | `Reply` | Comment on a post (ID, postID, authorID, authorUsername, content, parentReplyID, createdAt) |
 | `ProfileUpdate` | Optional fields for PATCH /v1/users/me (all pointer types, includes new website/location fields) |
 | `Message` | DM/chat message (ID, from, body, createdAt) |
@@ -130,6 +133,8 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName) |
 | `Bookmark` | Saved post or reply (ID, type, postID/replyID, content snapshot, author, createdAt) |
 | `Topic` | Tag with post count (slug, postCount) |
+| `Guild` | Guild community (ID, name, slug, icon, bio, memberCount, founderUsername, createdAt, isMember, role, link, linkText) |
+| `GuildMember` | Guild membership record (membershipID, guildID, guildSlug, userID, username, role, joinedAt, displayName) |
 | `Follow` | Follow relationship (ID, followerID, followedID, followerUsername, followedUsername, createdAt) |
 | `Note` | Private journal note (ID, authorID, content, topics, revisionNumber, deleted, createdAt) |
 | `NoteRevision` | Single historical revision of a note (revisionNumber, content, topics, createdAt) |
@@ -149,7 +154,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Group | Methods |
 |---|---|
 | Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()` |
-| Feed | `GetFeed(cursor)`, `CreatePost(content, topics)`, `GetPost(postID)`, `DeletePost(postID)` |
+| Feed | `GetFeed(cursor)`, `CreatePost(content, title, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)` |
 | Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)` |
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
 | User History | `GetUserPosts(username, cursor)`, `GetUserReplies(username, cursor)` |
@@ -187,7 +192,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 
 **Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow` — match the JSON envelope shapes returned by the API.
 
-**Note:** `HTTPClient` is not goroutine-safe. The `tokens` field is mutated by `Login` and `refresh`. Bubble Tea's single-update-loop model largely prevents concurrent mutation, but this may need a `sync.Mutex` if command goroutines become truly parallel.
+**Note:** `HTTPClient.tokens` is guarded by a `sync.Mutex`. Bubble Tea runs commands in concurrent goroutines, so reads in `doRequest` and writes in `Login`/`refresh` go through the token accessor methods (`idToken`, `setTokens`, `snapshotTokens`, `applyRefresh`). See `docs/30-security-hardening.md`.
 
 #### `mock.go`
 
@@ -272,13 +277,13 @@ Tests for RTDB REST operations, SSE parsing, and JWT decoding.
 
 SSH server hosting via Wish (Charmbracelet).
 
-`Serve(addr, hostKeyPath, client api.Client)`:
+`Serve(addr, hostKeyPath, newClient func() api.Client)`:
 
 1. Creates a Wish server with Bubble Tea middleware
-2. Each SSH connection gets a fresh `ui.App` instance — identical to the local TUI
-3. Listens for SIGTERM/Interrupt and shuts down gracefully with a 5-second timeout
+2. Each SSH connection gets a fresh `ui.App` built with its own `api.Client` from `newClient`, marked ephemeral via `WithEphemeralSession` so it never reads or writes the host config
+3. Listens for SIGTERM/Interrupt and shuts down gracefully with a 5-second timeout; `ListenAndServe` errors are surfaced
 
-The SSH and local modes share all TUI code; no conditional logic in `ui/`.
+SSH mode is experimental and unauthenticated; startup warns accordingly. The SSH and local modes otherwise share all TUI code. See `docs/30-security-hardening.md`.
 
 ---
 
@@ -298,7 +303,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 | `WithAutoLogin(email, password)` | method | Pre-fills credentials for programmatic login |
 | `WithSavedEmail(email)` | method | Pre-fills email field on login screen |
 
-**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenTopics`, `screenJournal`, `screenSettings`
+**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenGuilds`, `screenTopics`, `screenJournal`, `screenSettings`
 
 **Responsibilities:**
 
@@ -309,7 +314,14 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 - Renders tab bar, active screen, and status bar
 - Manages global shortcuts (`1`–`4` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `o` URL opener, `q`/`ctrl+c` quit)
 - Handles automatic token refresh on `ErrUnauthorized` responses
+- Surfaces transient errors via a **global notification banner** that replaces the status-bar row, colored by severity, and auto-dismisses after 4 s or on the next keypress (which still performs its normal action)
 - Runs background tick jobs: `schedulePollCmd` (60 s unread count), `scheduleWanderCmd` (1 h wander check)
+
+**Error handling — errors never block a screen:**
+
+- **Load failures** (a fetch that populates a screen returns an error) wrap the error in `errMsg`; `handleErr` fires the transient global banner (text via `friendlyErr`) **and** sets the active screen's `err`. That `err` only feeds a subtle inline "couldn't load …" empty-state — no `View()` collapses to a full-screen error. Every screen clears `err` on the next fetch (`SetFetching`) and on each success setter, so a load error can never trap the user.
+- **Post-open from Notifications** uses `notifPostLoadErrMsg` instead of `errMsg`, so a deleted target (404) shows a friendly "This post has been deleted" banner; 401 still redirects to login. The notification payload has no deleted-target field, so the 404 on open is the only signal (API v0.4.1).
+- **Action failures** (create/reply/delete/follow/save/submit) wrap the error in `actionErrMsg`; `handleNotify` shows it as the transient global banner without blanking the screen, so the tab stays usable. The banner is driven by `notifyText`/`notifyLevel`/`notifyGen` on `App`; `notifyExpireMsg` carries a generation id so a stale auto-dismiss tick cannot clear a newer notification. `notifyMsg` and the `notify(level, text)` helper allow surfacing info/warning messages directly. See `docs/31-global-notifications.md`.
 
 #### `app_test.go`
 
@@ -357,7 +369,7 @@ Home feed of posts from followed users.
 - Dense/relaxed display modes; post content truncated to 4 lines in list view
 - Timezone-aware timestamps via `displayTime()`
 
-Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg`, `DeletePostMsg`  
+Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg` (Content, Title, Topics, IsPublic, IsNSFW), `DeletePostMsg`  
 Key function: `ParseTopics(s string) []string` — splits comma-separated string, caps at 3  
 Key methods: `SetCurrentUsername(username)`, `RemovePost(postID)`
 
@@ -419,9 +431,9 @@ Settings are organised into static `settingsGroups`, each containing `settingsIt
 | Group | Field |
 |---|---|
 | Notifications | bookmark, reply, poke |
-| Content | filterNSFW, hideImagesInFeed, hideAudioInFeed |
+| Content | filterNSFW |
 | Social | showFollowerCount, autoWatchOnReply, defaultPublicPost |
-| Display | timeDisplayFormat (enum), useLegacyMenuOrder |
+| Display | timeDisplayFormat (enum) |
 
 **Deferred fields** (read from API, never patched): `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics`
 
@@ -465,6 +477,20 @@ Saved posts and replies, cursor-paginated.
 Key types: `BookmarksModel`, `DeleteBookmarkMsg`, `ToggleBookmarkMsg`  
 Key methods: `SetBookmarks(items, cursor)`, `AppendBookmarks(items, cursor)`, `RemoveBookmark(id)`
 
+#### `guilds.go`
+
+Browse the guild directory, drill into threads, and view guild members.
+
+- Three-mode screen: guild list → guild thread feed → member list
+- Guild list sorted by member count, cursor-paginated; `enter` opens the thread feed
+- Thread feed is a standard paginated post list; `m` opens the member list, `esc` returns to the guild list
+- Thread feed shows a membership hint bar (`J` to join, `l` to leave) with y/n confirmation; `GetGuild` is fetched alongside the thread list to populate membership state
+- Member list is cursor-paginated oldest-joined first; `enter` navigates to the member's profile, `esc` returns to the thread feed
+
+Key types: `GuildsModel`, `LoadMoreGuildsMsg`, `LoadGuildPostsMsg`, `LoadMoreGuildPostsMsg`, `LoadGuildMembersMsg`, `LoadMoreGuildMembersMsg`, `JoinGuildMsg`, `LeaveGuildMsg`  
+Key methods: `SetGuilds`, `AppendGuilds`, `SetGuildPosts`, `AppendGuildPosts`, `SetGuildMembers`, `AppendGuildMembers`, `SetGuildDetail`, `BackToGuildList`  
+Key accessors: `IsBrowsingGuild()`, `IsBrowsingMembers()`, `IsDetailLoaded()`, `GuildDetail()`, `IsConfirmingJoin()`, `IsConfirmingLeave()`
+
 #### `topics.go`
 
 Browse all topics (tags) and drill into posts for a selected topic.
@@ -485,7 +511,7 @@ Private notes (Journal), cursor-paginated. Notes are visible only to the author.
 - Confirmation overlay (y/n) for publish and delete actions
 - Viewport height dynamically adjusts when compose box grows or confirmation overlay appears
 
-**Note creation (`n`), editing (`enter`), and revision history (`h`) are currently disabled** via `noteWriteDisabled: true` in `NewJournalModel`. Flip to `false` once `PATCH /v1/notes/:id` is fixed server-side. All code paths remain in place.
+Note creation (`n`), editing (`enter`), deletion (`d`), and revision history (`h`) are all active. `PATCH /v1/notes/:id` was fixed server-side in API v0.4.
 
 Key types: `JournalModel`, `SubmitSaveNoteMsg`, `SubmitPublishNoteMsg`, `SubmitDeleteNoteMsg`, `LoadMoreJournalMsg`, `LoadNoteRevisionsMsg`, `LoadNoteRevisionMsg`  
 Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNoteContent(noteID, content, topics)`, `DeleteNote(noteID)`, `SetRevisions(noteID, revisions, cursor)`, `SetRevisionPreview(note)`
@@ -572,13 +598,14 @@ Permissions: `0600` (owner read/write only)
 | `timezone` | string | `"UTC"` | UTC offset label (e.g. "UTC+5:30") |
 | `theme` | string | `"cyber"` | `"cyber"`, `"c64"`, or `"vt320"` |
 | `apiBaseURL` | string | `"https://api.cyberspace.online"` | Override for development |
+| `allowInsecureApi` | bool | `false` | Permit a plain `http://` `apiBaseURL` to a non-loopback host |
 | `useMock` | bool | `false` | Use `MockClient` instead of real API |
 | `debug` | bool | `false` | Verbose RTDB / HTTP output |
 | `autoEmail` | string | — | Pre-fill email on login screen |
 | `autoPassword` | string | — | Pre-fill password (plain text; not recommended) |
 | `sshListenAddr` | string | — | Enable SSH server mode (e.g. `":2222"`) |
 | `sshHostKeyPath` | string | — | Path to SSH host private key |
-| `wanderLust` | bool | `true` | Wander mode toggle; `true` = on, `false` = off |
+| `wanderLust` | bool | `false` | Wander mode toggle; `true` = on, `false` = off |
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
 
 ---
@@ -684,7 +711,10 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | Key | Action |
 |---|---|
 | `enter` | Insert paragraph break |
+| `tab` | Cycle focus: compose → title → topics → compose (Feed only) |
 | `alt+enter` / `ctrl+s` | Submit |
+| `alt+p` | Toggle public flag (Feed compose only) |
+| `alt+s` | Toggle NSFW flag (Feed compose only) |
 | `esc` | Cancel |
 
 ### Notifications
@@ -768,11 +798,12 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 |---|---|
 | **Chatrooms API** | UI fully built; REST integration deferred (server paths not finalized) |
 | **C-Mail REST** | Conversation list + history loaded from mock; RTDB subscribe wired; full path confirmed post-beta |
-| **HTTPClient thread safety** | Tokens field mutated by Login/refresh with no mutex; acceptable under Bubble Tea's single-update loop, but may need `sync.Mutex` if command goroutines become truly concurrent |
+| **HTTPClient thread safety** | Resolved: `tokens` is guarded by a `sync.Mutex` (see `docs/30-security-hardening.md`) |
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized |
-| **Journal write operations** | `PATCH /v1/notes/:id` returns 500 server-side. Note creation, editing, and revision history are disabled client-side (`noteWriteDisabled: true` in `NewJournalModel`). Only list and delete remain active. Flip the flag once the API is fixed. See `docs/00-api-backlog.md`. |
+| **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |
 | **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |
 | **Attachments** | Image and YouTube audio attachments on posts/replies are not supported in the TUI |
 | **Note revision pagination** | `GetNoteRevisions` cursor is implemented in the API client but the UI loads only the first page |
 | **Profile navigation depth** | Navigating from a Following/Followers tab to another user's profile is single-level; ESC returns to the original `profileReturn` destination, not the intermediate profile |
+| **Feed position — deep pagination** | When returning to the Feed tab, the selected post is restored by ID from the fresh first-page load. If the post was reached via pagination it will not be in page 1 and the feed falls back to the top. Fix options: re-fetch pages sequentially until found (expensive), or skip the tab-switch reload (stale data). Neither is warranted for typical usage. |
 | **Ambiguous-width character stripping** | Unicode EAW = "A" characters (kaomoji symbols, `©`, `®`, `™`, Greek letters, etc.) are stripped at two points: (1) `stripAmbiguousRunes` in `shared.go` strips them from post/reply content before display; (2) `filterAmbiguousKeyMsg` in `shared.go` intercepts `tea.KeyRunes` messages before they reach any `textarea` or `textinput` component (compose, topics, profile fields, C-Mail, chatrooms). Their column width is undefined and varies by terminal/font, causing border overflow and cursor misalignment. Wide (CJK), halfwidth, and zero-width characters are unaffected. |

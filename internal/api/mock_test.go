@@ -143,12 +143,29 @@ func TestMockGetFeed_ReturnsEmptyCursor(t *testing.T) {
 
 func TestMockCreatePost_ReturnsPost(t *testing.T) {
 	m := newMock()
-	post, err := m.CreatePost("hello matrix", []string{"test"})
+	post, err := m.CreatePost("hello matrix", "", []string{"test"}, false, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if post.Content != "hello matrix" {
 		t.Errorf("expected content %q, got %q", "hello matrix", post.Content)
+	}
+}
+
+func TestMockCreatePost_TitleAndFlags(t *testing.T) {
+	m := newMock()
+	post, err := m.CreatePost("body text", "My Title", []string{"test"}, true, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if post.Title != "My Title" {
+		t.Errorf("expected title %q, got %q", "My Title", post.Title)
+	}
+	if !post.IsPublic {
+		t.Error("expected IsPublic=true")
+	}
+	if !post.IsNSFW {
+		t.Error("expected IsNSFW=true")
 	}
 }
 

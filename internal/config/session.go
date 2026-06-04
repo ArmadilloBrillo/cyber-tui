@@ -34,6 +34,9 @@ type Config struct {
 	Theme string `json:"theme,omitempty"`
 	// APIBaseURL overrides the default API endpoint (https://api.cyberspace.online).
 	APIBaseURL string `json:"apiBaseURL,omitempty"`
+	// AllowInsecureAPI permits a plain http:// APIBaseURL to a non-loopback host.
+	// Off by default so bearer tokens are never sent in cleartext by accident.
+	AllowInsecureAPI bool `json:"allowInsecureApi,omitempty"`
 	// UseMock runs the app against mock data (no credentials needed).
 	UseMock bool `json:"useMock,omitempty"`
 	// Debug enables verbose RTDB debug output.
@@ -49,7 +52,7 @@ type Config struct {
 
 	// WanderLust controls the wander mode easter egg, which silently updates
 	// the profile location to a random position twice per day.
-	// Defaults to true when absent from the JSON file.
+	// Defaults to false (off) when absent from the JSON file.
 	WanderLust bool `json:"wanderLust"`
 	// LastWandered records when wander mode last fired.
 	// Zero value means it has never run, which triggers an immediate update.
@@ -92,17 +95,9 @@ func Load() (Config, error) {
 		}
 		return Config{}, err
 	}
-	// Detect absent keys before unmarshaling so we can apply defaults.
-	var raw map[string]json.RawMessage
-	_ = json.Unmarshal(data, &raw)
-	_, hasWanderLust := raw["wanderLust"]
-
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Config{}, err
-	}
-	if !hasWanderLust {
-		c.WanderLust = true
 	}
 	return c, nil
 }

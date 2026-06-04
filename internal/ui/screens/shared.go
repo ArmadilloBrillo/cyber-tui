@@ -7,6 +7,15 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
+// typographicPunctOK mirrors the whitelist in the markdown package: EAW=A characters
+// that are consistently 1 column in Western terminals and safe to type/display.
+var typographicPunctOK = map[rune]bool{
+	'\u2018': true, '\u2019': true, // curly single quotes
+	'\u201C': true, '\u201D': true, // curly double quotes
+	'\u2013': true, '\u2014': true, // en/em dash
+	'\u2026': true, // ellipsis
+}
+
 // filterAmbiguousKeyMsg replaces ambiguous-width runes in a KeyRunes message with spaces
 // before they reach a textarea or textinput component.
 func filterAmbiguousKeyMsg(msg tea.KeyMsg) (tea.KeyMsg, bool) {
@@ -15,7 +24,7 @@ func filterAmbiguousKeyMsg(msg tea.KeyMsg) (tea.KeyMsg, bool) {
 	}
 	filtered := make([]rune, len(msg.Runes))
 	for i, r := range msg.Runes {
-		if runewidth.IsAmbiguousWidth(r) {
+		if runewidth.IsAmbiguousWidth(r) && !typographicPunctOK[r] {
 			filtered[i] = ' '
 		} else {
 			filtered[i] = r

@@ -2,7 +2,6 @@ package screens
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -66,12 +65,12 @@ type CMailModel struct {
 	err           error
 	currentUser   string
 
-	focusPane          CMailFocus
-	selectedConv       int            // index into conversations
-	sidebarWidth       int            // inner content width, computed on WindowSizeMsg
-	width              int            // terminal width, stored for View()
-	loc                *time.Location // timezone for timestamp display; nil = UTC
-	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
+	focusPane         CMailFocus
+	selectedConv      int            // index into conversations
+	sidebarWidth      int            // inner content width, computed on WindowSizeMsg
+	width             int            // terminal width, stored for View()
+	loc               *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
 
 	// DM subscription state — managed entirely within CMailModel.
 	client       api.Client
@@ -153,6 +152,7 @@ func (m CMailModel) SetError(err error) CMailModel {
 // SetConversations replaces the conversation list, clamping the selection cursor if needed.
 func (m CMailModel) SetConversations(convs []model.Conversation) CMailModel {
 	m.conversations = convs
+	m.err = nil
 	if len(convs) > 0 && m.selectedConv >= len(convs) {
 		m.selectedConv = len(convs) - 1
 	}
@@ -341,6 +341,12 @@ func (m CMailModel) otherParticipant(conv model.Conversation) string {
 
 func (m CMailModel) renderConvList() string {
 	out := theme.Title.Render("c-mail") + "\n\n"
+	if len(m.conversations) == 0 {
+		if m.err != nil {
+			return out + theme.Subtle.Render("couldn't load conversations")
+		}
+		return out + theme.Subtle.Render("no conversations yet")
+	}
 	maxPreview := m.sidebarWidth - 4
 	if maxPreview < 4 {
 		maxPreview = 4
@@ -419,10 +425,6 @@ func (m CMailModel) AppendMessage(msg model.Message) CMailModel {
 }
 
 func (m CMailModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("c-mail error: %s", m.err))
-	}
-
 	listBorder := theme.Border
 	if m.focusPane == FocusCMailLeft {
 		listBorder = theme.ActiveBorder

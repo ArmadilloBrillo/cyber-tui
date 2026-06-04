@@ -11,13 +11,10 @@ func defaultSettings() model.Settings {
 	return model.Settings{
 		Notifications:     model.NotificationPrefs{Bookmark: true, Reply: true, Poke: false},
 		FilterNSFW:        false,
-		HideImagesInFeed:  false,
-		HideAudioInFeed:   false,
 		ShowFollowerCount: true,
 		AutoWatchOnReply:  false,
 		DefaultPublicPost: true,
 		TimeDisplayFormat: "relative",
-		UseLegacyMenuOrder: false,
 	}
 }
 
@@ -156,7 +153,7 @@ func TestSettings_Toggle_FilterNSFW(t *testing.T) {
 
 func TestSettings_Tab_CyclesEnum(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 9 // time format
+	m.cursor = 7 // time format
 	if m.settings.TimeDisplayFormat != "relative" {
 		t.Error("default TimeDisplayFormat should be 'relative'")
 	}
@@ -168,7 +165,7 @@ func TestSettings_Tab_CyclesEnum(t *testing.T) {
 
 func TestSettings_ShiftTab_CyclesEnum(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 9
+	m.cursor = 7
 	m, _ = m.Update(keyMsg("shift+tab"))
 	if m.settings.TimeDisplayFormat != "datetime" {
 		t.Error("shift+tab from 'relative' should cycle to 'datetime'")
@@ -177,7 +174,7 @@ func TestSettings_ShiftTab_CyclesEnum(t *testing.T) {
 
 func TestSettings_Enum_WrapsForward(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 9
+	m.cursor = 7
 	// Cycle from relative -> unix -> swatch -> datetime -> relative
 	m.settings.TimeDisplayFormat = "swatch"
 	m, _ = m.Update(keyMsg("tab"))
@@ -188,7 +185,7 @@ func TestSettings_Enum_WrapsForward(t *testing.T) {
 
 func TestSettings_Enum_WrapsBackward(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 9
+	m.cursor = 7
 	m.settings.TimeDisplayFormat = "datetime"
 	m, _ = m.Update(keyMsg("shift+tab"))
 	if m.settings.TimeDisplayFormat != "swatch" {
@@ -372,7 +369,7 @@ func TestSettings_View_ShowsCheckboxFalse(t *testing.T) {
 
 func TestSettings_View_ShowsEnumValue(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 9 // time format
+	m.cursor = 7 // time format
 	view := m.View()
 	if !containsSubstring(view, "relative") {
 		t.Error("View should show the current enum value")
@@ -419,7 +416,7 @@ func TestSettings_WanderGroup_Visible(t *testing.T) {
 func TestSettings_WanderToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
-	m.cursor = 13 // wander mode item (shifted by timezone addition)
+	m.cursor = 10 // wander mode item
 	m, _ = m.Update(keyMsg("enter"))
 	if m.wanderLust {
 		t.Error("toggling wander mode should flip wanderLust to false")
@@ -476,7 +473,7 @@ func TestSettings_Timezone_CyclesForward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.timezone = "UTC"
 	m.originalTimezone = "UTC"
-	m.cursor = 12 // timezone item
+	m.cursor = 9 // timezone item
 	m, _ = m.Update(keyMsg("tab"))
 	if m.timezone == "UTC" {
 		t.Error("tab should advance timezone from UTC")
@@ -487,7 +484,7 @@ func TestSettings_Timezone_CyclesBackward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.timezone = "UTC"
 	m.originalTimezone = "UTC"
-	m.cursor = 12
+	m.cursor = 9
 	m, _ = m.Update(keyMsg("shift+tab"))
 	if m.timezone == "UTC" {
 		t.Error("shift+tab should cycle timezone backward from UTC")
@@ -497,12 +494,12 @@ func TestSettings_Timezone_CyclesBackward(t *testing.T) {
 func TestSettings_Timezone_Wraps(t *testing.T) {
 	m := initSettings(defaultSettings())
 	items := flatItems()
-	last := items[12].options[len(items[12].options)-1]
+	last := items[9].options[len(items[9].options)-1]
 	m.timezone = last
 	m.originalTimezone = last
-	m.cursor = 12
+	m.cursor = 9
 	m, _ = m.Update(keyMsg("tab"))
-	first := items[12].options[0]
+	first := items[9].options[0]
 	if m.timezone != first {
 		t.Errorf("tab from last timezone should wrap to first, got %s", m.timezone)
 	}

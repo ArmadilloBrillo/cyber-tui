@@ -10,21 +10,22 @@ type Tokens struct {
 }
 
 type User struct {
-	ID               string
-	Username         string
-	DisplayName      string
-	Email            string
-	Bio              string
-	WebsiteUrl       string
-	WebsiteName      string
-	WebsiteImageUrl  string
-	PinnedPostID     string
-	LocationName     string
+	ID                string
+	Username          string
+	DisplayName       string
+	Email             string
+	Bio               string
+	WebsiteUrl        string
+	WebsiteName       string
+	WebsiteImageUrl   string
+	PinnedPostID      string
+	LocationName      string
 	LocationLatitude  float64
 	LocationLongitude float64
-	FollowersCount   int
-	FollowingCount   int
-	PostsCount       int
+	FollowersCount    int
+	FollowingCount    int
+	PostsCount        int
+	GuildSlug         string // empty when not a guild member
 }
 
 // Follow maps to a record returned by GET /v1/follows.
@@ -58,6 +59,11 @@ type Post struct {
 	AuthorID       string
 	AuthorUsername string
 	Content        string
+	Title          string
+	Slug           string
+	GuildID        string
+	GuildSlug      string
+	IsGuildThread  bool
 	Topics         []string
 	RepliesCount   int
 	BookmarksCount int
@@ -127,19 +133,16 @@ type NotificationPrefs struct {
 // Settings maps to the fields returned by GET /v1/settings.
 // KeyboardBindings and MutedUsersByRoom are opaque JSON objects — not modelled yet.
 type Settings struct {
-	Notifications      NotificationPrefs
-	FilterNSFW         bool
-	ShowFollowerCount  bool
-	HideImagesInFeed   bool
-	HideAudioInFeed    bool
-	AutoWatchOnReply   bool
-	IconTheme          string
-	FollowedTopics     []string
-	MutedTopics        []string
-	ImagePixelSize     string // named preset or pixel multiplier, e.g. "sharp", "2"
-	TimeDisplayFormat  string // "datetime", "relative", "unix", or "swatch"
-	UseLegacyMenuOrder bool
-	DefaultPublicPost  bool
+	Notifications     NotificationPrefs
+	FilterNSFW        bool
+	ShowFollowerCount bool
+	AutoWatchOnReply  bool
+	IconTheme         string
+	FollowedTopics    []string
+	MutedTopics       []string
+	ImagePixelSize    string // named preset or pixel multiplier, e.g. "sharp", "2"
+	TimeDisplayFormat string // "datetime", "relative", "unix", or "swatch"
+	DefaultPublicPost bool
 }
 
 // Bookmark maps to the shape returned by GET /v1/bookmarks.
@@ -160,13 +163,42 @@ type Topic struct {
 	PostCount int
 }
 
+// Guild maps to the shape returned by GET /v1/guilds and GET /v1/guilds/:slug.
+// IsMember and Role are only populated by the single-guild endpoint.
+type Guild struct {
+	ID              string
+	Name            string
+	Slug            string
+	Icon            string
+	Bio             string
+	MemberCount     int
+	FounderUsername string
+	CreatedAt       time.Time
+	IsMember        bool
+	Role            string // "founder", "member", or ""
+	Link            string
+	LinkText        string
+}
+
+// GuildMember represents a single membership returned by GET /v1/guilds/:slug/members.
+type GuildMember struct {
+	MembershipID string
+	GuildID      string
+	GuildSlug    string
+	UserID       string
+	Username     string
+	Role         string // "founder" or "member"
+	JoinedAt     time.Time
+	DisplayName  string
+}
+
 // Note is a private note visible only to the author.
 // RevisionNumber increments each time the note is updated via PATCH /v1/notes/:id.
 type Note struct {
 	ID             string
 	AuthorID       string
 	Content        string
-	Topics         []string  // max 3; sent on create/update but not returned by the list API
+	Topics         []string // max 3; sent on create/update but not returned by the list API
 	RevisionNumber int
 	Deleted        bool
 	CreatedAt      time.Time
@@ -192,15 +224,18 @@ type NotificationActor struct {
 // TargetType describes the notification category ("post" or "reply"); empty for poke/new_follower.
 // ReplyID is set from metadata.replyId for reply/thread_reply notifications and identifies
 // the specific reply to scroll to in PostDetail.
+// GuildSlug is set when the activity happened inside a guild (metadata.guildSlug); it is the
+// handle the UI shows as #slug. GuildName is the rarer display-name variant.
 type Notification struct {
-	ID         string
-	Type       string // "reply", "reply_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "bookmark", "poke", "guild_new_thread"
-	Read       bool
-	CreatedAt  time.Time
-	Actor      NotificationActor
-	TargetID   string
-	TargetType string // "post", "reply", or ""
+	ID                   string
+	Type                 string // "reply", "reply_mention", "post_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "unfollowed", "bookmark", "poke", "guild_new_thread", "chat_mention", "dm_message", "supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed", "image_permission_granted", "image_permission_removed", "attachment_permission_granted", "attachment_permission_removed", "system_ban"
+	Read                 bool
+	CreatedAt            time.Time
+	Actor                NotificationActor
+	TargetID             string
+	TargetType           string // "post", "reply", or ""
 	ReplyID              string // populated for reply/thread_reply; the specific reply to highlight
 	ThreadAuthorUsername string // set for thread_reply; the original thread's author
-	GuildName            string // set for guild_new_thread; the guild display name
+	GuildName            string // guild display name (seen on guild_new_thread)
+	GuildSlug            string // guild handle from metadata.guildSlug; set on guild reply/post notifications (with isGuildThread)
 }

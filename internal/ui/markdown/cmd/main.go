@@ -57,4 +57,9 @@ func main() {
 	fmt.Printf("  strings.Count(newlines)=%d\n", strings.Count(combined2, "\n"))
 }
 
-func max(a, b int) int { if a > b { return a }; return b }
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}

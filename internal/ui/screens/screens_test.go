@@ -318,12 +318,21 @@ func TestPostDetail_SetError_ClearsLoading(t *testing.T) {
 	}
 }
 
-func TestPostDetail_SetError_ShowsErrorInView(t *testing.T) {
+// TestPostDetail_SetError_DoesNotBlockView verifies the non-blocking error
+// contract: a load error must never collapse the screen to a bare error string.
+// The post (loaded before the error) stays rendered; the failure is surfaced in
+// the global banner instead.
+func TestPostDetail_SetError_DoesNotBlockView(t *testing.T) {
 	m := screens.NewPostDetailModel()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPost(makePost())
 	m = m.SetError(fmt.Errorf("connection refused"))
-	if !strings.Contains(m.View(), "connection refused") {
-		t.Errorf("expected error message in view, got: %s", m.View())
+	view := m.View()
+	if strings.Contains(view, "connection refused") {
+		t.Errorf("error must not block the view (it belongs in the global banner), got: %s", view)
+	}
+	if !strings.Contains(view, makePost().Content) {
+		t.Errorf("expected post content to remain visible after error, got: %s", view)
 	}
 }
 
@@ -628,6 +637,10 @@ func TestFeed_ComposeSubmit_EmitsSubmitNewPostMsg(t *testing.T) {
 	if len(snp.Topics) != 1 || snp.Topics[0] != "tui" {
 		t.Errorf("expected topics=[tui] from pre-filled input, got %v", snp.Topics)
 	}
+	// No title entered — should be empty.
+	if snp.Title != "" {
+		t.Errorf("expected empty Title, got %q", snp.Title)
+	}
 }
 
 func TestFeed_P_EmitsShowUserProfileMsg(t *testing.T) {
@@ -834,8 +847,8 @@ func TestProfile_SetUserFollowing_LazyLoadNotFiredAgain(t *testing.T) {
 		{ID: "fw1", FollowedUsername: "molly_millions"},
 	}, "")
 	// Tab 3 times to reach Following tab.
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Posts
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Replies
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})    // Posts
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})    // Replies
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Following
 	// Already loaded — should emit no lazy-load command.
 	if cmd != nil {
@@ -926,8 +939,8 @@ func TestParseTopics(t *testing.T) {
 		{"", nil},
 		{"go, tui, programming", []string{"go", "tui", "programming"}},
 		{"my cool topic, other", []string{"my cool topic", "other"}},
-		{"a, b, c, d", []string{"a", "b", "c"}},   // capped at 3
-		{"a,  ,  , b", []string{"a", "b"}},          // empty parts filtered
+		{"a, b, c, d", []string{"a", "b", "c"}},                   // capped at 3
+		{"a,  ,  , b", []string{"a", "b"}},                        // empty parts filtered
 		{"  trimmed  ,  spaces  ", []string{"trimmed", "spaces"}}, // whitespace trimmed
 	}
 	for _, tc := range cases {
@@ -1343,4 +1356,3 @@ func TestJournal_SetFetching_ClearedBySetNotes(t *testing.T) {
 		t.Errorf("expected loading message to be gone after SetNotes, got: %q", view)
 	}
 }
-

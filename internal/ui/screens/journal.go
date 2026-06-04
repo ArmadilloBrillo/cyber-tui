@@ -35,11 +35,11 @@ type JournalModel struct {
 	loading    bool
 	fetching   bool // true while the initial (or tab-switch) load is in flight
 
-	selectedIdx  int
-	noteOffsets  []int // start line of each note within viewport content
-	editMode     bool  // true while compose is open
-	isNewNote    bool  // true = create, false = update existing
-	editingID    string
+	selectedIdx int
+	noteOffsets []int // start line of each note within viewport content
+	editMode    bool  // true while compose is open
+	isNewNote   bool  // true = create, false = update existing
+	editingID   string
 
 	compose       ComposeModel
 	topicsInput   textinput.Model
@@ -48,7 +48,7 @@ type JournalModel struct {
 	confirming confirmKind
 
 	// Revision history state.
-	revisionsMode   bool                // true when viewing revision history
+	revisionsMode   bool // true when viewing revision history
 	revisions       []model.NoteRevision
 	revisionsCursor string
 	revisionsNoteID string
@@ -78,6 +78,7 @@ func NewJournalModel(width int) JournalModel {
 
 func (m JournalModel) SetFetching() JournalModel {
 	m.fetching = true
+	m.err = nil
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -186,6 +187,9 @@ func (m JournalModel) SetError(err error) JournalModel {
 	m.err = err
 	m.loading = false
 	m.fetching = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -521,6 +525,9 @@ func (m JournalModel) refreshRevisionsContent() JournalModel {
 // buildRevisionListContent renders the list of revisions.
 func (m JournalModel) buildRevisionListContent() string {
 	if len(m.revisions) == 0 {
+		if m.err != nil {
+			return theme.Subtle.Render("  couldn't load revisions.")
+		}
 		return theme.Subtle.Render("  no revisions found.")
 	}
 
@@ -702,6 +709,9 @@ func (m JournalModel) buildContent() (string, []int) {
 		if m.loading {
 			return theme.Subtle.Render("  loading notes…"), nil
 		}
+		if m.err != nil {
+			return theme.Subtle.Render("  couldn't load notes"), nil
+		}
 		return theme.Subtle.Render("  no notes yet"), nil
 	}
 
@@ -785,11 +795,7 @@ func (m JournalModel) renderNote(note model.Note, selected bool) string {
 	return boxStyle.Render(content)
 }
 
-
 func (m JournalModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("journal error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("loading journal…")
 	}

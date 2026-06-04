@@ -159,7 +159,9 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 			ID:             "p1",
 			AuthorID:       "1",
 			AuthorUsername: "neuromancer",
+			Title:          "On Flatline",
 			Content:        "flatline is not death, it is elsewhere",
+			Slug:           "on-flatline",
 			CreatedAt:      time.Now().Add(-10 * time.Minute),
 			Topics:         []string{"cyberspace", "philosophy"},
 		},
@@ -170,6 +172,7 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 			Content:        "the matrix has its roots in primitive arcade games",
 			CreatedAt:      time.Now().Add(-1 * time.Hour),
 			Topics:         []string{"history"},
+			IsNSFW:         true,
 		},
 		{
 			ID:             "p3",
@@ -178,19 +181,20 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 			Content:        "i need you to plug in and find what's waiting on the other side",
 			CreatedAt:      time.Now().Add(-3 * time.Hour),
 			Topics:         []string{"mission"},
+			IsPublic:       true,
 		},
 	}, "", nil
 }
 
 func (m *MockClient) CreateReply(postID, content, parentReplyID string) (model.Reply, error) {
 	return model.Reply{
-		ID:            "reply-new-1",
-		PostID:        postID,
-		AuthorID:      mockUsers[0].ID,
+		ID:             "reply-new-1",
+		PostID:         postID,
+		AuthorID:       mockUsers[0].ID,
 		AuthorUsername: mockUsers[0].Username,
-		Content:       content,
-		ParentReplyID: parentReplyID,
-		CreatedAt:     time.Now(),
+		Content:        content,
+		ParentReplyID:  parentReplyID,
+		CreatedAt:      time.Now(),
 	}, nil
 }
 
@@ -213,14 +217,17 @@ func (m *MockClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	}, nil
 }
 
-func (m *MockClient) CreatePost(content string, topics []string) (model.Post, error) {
+func (m *MockClient) CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
 	return model.Post{
 		ID:             "new-1",
 		AuthorID:       mockUsers[0].ID,
 		AuthorUsername: mockUsers[0].Username,
 		Content:        content,
+		Title:          title,
 		CreatedAt:      time.Now(),
 		Topics:         topics,
+		IsPublic:       isPublic,
+		IsNSFW:         isNSFW,
 	}, nil
 }
 
@@ -294,6 +301,29 @@ func (m *MockClient) GetTopicPosts(slug string, cursor string) ([]model.Post, st
 	}
 	return topicPosts, "", nil
 }
+
+func (m *MockClient) GetGuilds(cursor string) ([]model.Guild, string, error) {
+	return nil, "", nil
+}
+
+func (m *MockClient) GetGuild(slug string) (model.Guild, error) {
+	return model.Guild{}, nil
+}
+
+func (m *MockClient) GetGuildPosts(slug string, cursor string) ([]model.Post, string, error) {
+	return nil, "", nil
+}
+
+func (m *MockClient) CreateGuildPost(slug, content, title string, topics []string) (model.Post, error) {
+	return model.Post{}, nil
+}
+
+func (m *MockClient) GetGuildMembers(slug, cursor string) ([]model.GuildMember, string, error) {
+	return nil, "", nil
+}
+
+func (m *MockClient) JoinGuild(slug string) error  { return nil }
+func (m *MockClient) LeaveGuild(slug string) error { return nil }
 
 func (m *MockClient) GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error) {
 	if !unreadOnly {

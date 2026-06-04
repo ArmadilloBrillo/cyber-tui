@@ -48,7 +48,7 @@ var profileFieldLabels = [numProfileFields]string{
 type profileTab int
 
 const (
-	tabInfo      profileTab = iota
+	tabInfo profileTab = iota
 	tabPosts
 	tabReplies
 	tabFollowing
@@ -99,6 +99,8 @@ type ProfileModel struct {
 	// Display settings (from SharedConfigMsg).
 	timeDisplayFormat string
 	loc               *time.Location
+	filterNSFW        bool
+	showFollowerCount bool
 
 	// Sub-tab state (view mode only).
 	activeTab   profileTab
@@ -120,6 +122,19 @@ type SaveProfileMsg struct {
 	LocationName    string
 	Latitude        string // empty or numeric string; parsed in app.go
 	Longitude       string
+}
+
+func (m ProfileModel) visibleProfilePosts() []model.Post {
+	if !m.filterNSFW {
+		return m.posts
+	}
+	out := m.posts[:0:0]
+	for _, p := range m.posts {
+		if !p.IsNSFW {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func newProfileInputs() []textinput.Model {
@@ -177,6 +192,7 @@ func (m ProfileModel) SetFollowFeedback(text string) ProfileModel {
 func (m ProfileModel) SetUser(u model.User) ProfileModel {
 	m.user = u
 	m.followFeedback = ""
+	m.err = nil
 	return m
 }
 
@@ -203,6 +219,7 @@ func (m ProfileModel) SetUserPosts(posts []model.Post, cursor string) ProfileMod
 	m.posts = posts
 	m.tabMeta[tabPosts] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
+	m.err = nil
 	return m
 }
 
@@ -219,6 +236,7 @@ func (m ProfileModel) SetUserReplies(replies []model.Reply, cursor string) Profi
 	m.replies = replies
 	m.tabMeta[tabReplies] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
+	m.err = nil
 	return m
 }
 
@@ -235,6 +253,7 @@ func (m ProfileModel) SetUserFollowing(follows []model.Follow, cursor string) Pr
 	m.following = follows
 	m.tabMeta[tabFollowing] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
+	m.err = nil
 	return m
 }
 
@@ -251,6 +270,7 @@ func (m ProfileModel) SetUserFollowers(follows []model.Follow, cursor string) Pr
 	m.followers = follows
 	m.tabMeta[tabFollowers] = tabScrollMeta{cursor: cursor, loaded: true, exhausted: cursor == ""}
 	m.tabSelected = 0
+	m.err = nil
 	return m
 }
 
@@ -407,7 +427,7 @@ func (m ProfileModel) switchTab(delta int) (ProfileModel, tea.Cmd) {
 func (m ProfileModel) activeTabLen() int {
 	switch m.activeTab {
 	case tabPosts:
-		return len(m.posts)
+		return len(m.visibleProfilePosts())
 	case tabReplies:
 		return len(m.replies)
 	case tabFollowing:
@@ -498,7 +518,7 @@ func (m ProfileModel) handleTabEnter() (ProfileModel, tea.Cmd) {
 	}
 	switch m.activeTab {
 	case tabPosts:
-		post := m.posts[m.tabSelected]
+		post := m.visibleProfilePosts()[m.tabSelected]
 		return m, func() tea.Msg { return ShowProfilePostMsg{Post: post} }
 	case tabReplies:
 		reply := m.replies[m.tabSelected]
@@ -533,6 +553,13 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 		if msg.Loc != nil {
 			m.loc = msg.Loc
 		}
+		if msg.Settings.FilterNSFW != m.filterNSFW {
+			m.filterNSFW = msg.Settings.FilterNSFW
+			if m.activeTab == tabPosts {
+				m.tabSelected = 0
+			}
+		}
+		m.showFollowerCount = msg.Settings.ShowFollowerCount
 		w := msg.Width
 		if w > 80 {
 			w = 80
@@ -650,8 +677,14 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 
 // View renders the profile screen.
 func (m ProfileModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("profile error: %s", m.err))
+	// The core profile hasn't loaded yet: show a non-blocking placeholder rather
+	// than a broken header. A failed load surfaces in the global banner; navigating
+	// away and back re-fetches.
+	if m.user.Username == "" {
+		if m.err != nil {
+			return theme.Subtle.Render("couldn't load profile")
+		}
+		return theme.Subtle.Render("loading profile…")
 	}
 
 	username := theme.Title.Render("@" + m.user.Username)
@@ -662,10 +695,13 @@ func (m ProfileModel) View() string {
 
 	// --- View mode: compact header + tab bar + content ---
 
-	counts := theme.Subtle.Render(fmt.Sprintf(
-		"%d followers · %d following · %d posts",
-		m.user.FollowersCount, m.user.FollowingCount, m.user.PostsCount,
-	))
+	var counts string
+	if m.showFollowerCount {
+		counts = theme.Subtle.Render(fmt.Sprintf(
+			"%d followers · %d following · %d posts",
+			m.user.FollowersCount, m.user.FollowingCount, m.user.PostsCount,
+		))
+	}
 
 	// Tab bar — pinned to terminal width to prevent terminal-side line wrapping,
 	// which would cause Bubble Tea's line-diff renderer to miscalculate cursor
@@ -698,14 +734,12 @@ func (m ProfileModel) View() string {
 		content = m.followListTabView(m.followers, tabFollowers, "followers")
 	}
 
-	out := lipgloss.JoinVertical(lipgloss.Left,
-		username,
-		counts,
-		"",
-		tabBar,
-		"",
-		content,
-	)
+	headerParts := []string{username}
+	if m.showFollowerCount {
+		headerParts = append(headerParts, counts)
+	}
+	headerParts = append(headerParts, "", tabBar, "", content)
+	out := lipgloss.JoinVertical(lipgloss.Left, headerParts...)
 	if availH := m.height - theme.ChromeHeight; availH > 0 {
 		out = lipgloss.NewStyle().MaxHeight(availH).Render(out)
 	}
@@ -774,13 +808,14 @@ func (m ProfileModel) postsTabView() string {
 	if !m.tabMeta[tabPosts].loaded {
 		return theme.Subtle.Render("loading…")
 	}
-	if len(m.posts) == 0 {
+	visible := m.visibleProfilePosts()
+	if len(visible) == 0 {
 		return theme.Subtle.Render("no posts.")
 	}
-	top, end := m.tabSliceRange(len(m.posts))
+	top, end := m.tabSliceRange(len(visible))
 	lines := make([]string, 0, end-top)
 	for i := top; i < end; i++ {
-		lines = append(lines, m.renderPostItem(m.posts[i], i == m.tabSelected))
+		lines = append(lines, m.renderPostItem(visible[i], i == m.tabSelected))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -824,7 +859,11 @@ func (m ProfileModel) renderPostItem(p model.Post, selected bool) string {
 		innerWidth = 40
 	}
 	ts := theme.Subtle.Render(displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, true))
-	left := theme.Highlight.Render("@"+p.AuthorUsername) + "  " + theme.Base.Render(truncateStr(markdown.FirstLine(p.Content), innerWidth-lipgloss.Width(ts)-lipgloss.Width(theme.Highlight.Render("@"+p.AuthorUsername))-4))
+	previewText := markdown.FirstLine(p.Content)
+	if p.Title != "" {
+		previewText = p.Title
+	}
+	left := theme.Highlight.Render("@"+p.AuthorUsername) + "  " + theme.Base.Render(truncateStr(previewText, innerWidth-lipgloss.Width(ts)-lipgloss.Width(theme.Highlight.Render("@"+p.AuthorUsername))-4))
 	gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ts)
 	var line string
 	if gap > 0 {
@@ -983,4 +1022,3 @@ func (m ProfileModel) GetFocusedURLs() []string {
 	}
 	return urls
 }
-

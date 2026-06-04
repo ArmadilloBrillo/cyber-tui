@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -45,8 +46,8 @@ func TestTabIndex_Notifs(t *testing.T) {
 func TestTabIndex_Profile(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenProfile
-	if got := a.tabIndex(); got != 5 {
-		t.Errorf("expected 5, got %d", got)
+	if got := a.tabIndex(); got != 6 {
+		t.Errorf("expected 6, got %d", got)
 	}
 }
 
@@ -70,9 +71,18 @@ func TestNavigateTab_LeftFromFeed_Wraps(t *testing.T) {
 	}
 }
 
-func TestNavigateTab_RightFromBookmarks_GoesToTopics(t *testing.T) {
+func TestNavigateTab_RightFromBookmarks_GoesToGuilds(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenBookmarks
+	a.navigateTab(+1)
+	if a.active != screenGuilds {
+		t.Errorf("expected screenGuilds, got %v", a.active)
+	}
+}
+
+func TestNavigateTab_RightFromGuilds_GoesToTopics(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
 	a.navigateTab(+1)
 	if a.active != screenTopics {
 		t.Errorf("expected screenTopics, got %v", a.active)
@@ -82,8 +92,8 @@ func TestNavigateTab_RightFromBookmarks_GoesToTopics(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// menuTabs order: feed, notifications, journal, bookmarks, topics, profile, settings
-	expected := []screen{screenNotifications, screenJournal, screenBookmarks, screenTopics, screenProfile, screenSettings, screenFeed}
+	// menuTabs order: feed, notifications, journal, bookmarks, guilds, topics, profile, settings
+	expected := []screen{screenNotifications, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(+1)
 		if a.active != want {
@@ -95,8 +105,8 @@ func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// menuTabs order: feed, notifications, journal, bookmarks, topics, profile, settings
-	expected := []screen{screenSettings, screenProfile, screenTopics, screenBookmarks, screenJournal, screenNotifications, screenFeed}
+	// menuTabs order: feed, notifications, journal, bookmarks, guilds, topics, profile, settings
+	expected := []screen{screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenNotifications, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(-1)
 		if a.active != want {
@@ -279,5 +289,122 @@ func TestGetFocusedURLs_LoginScreen(t *testing.T) {
 	a := newTestApp() // active == screenLogin, not in switch
 	if got := a.getFocusedURLs(); got != nil {
 		t.Errorf("expected nil on login screen, got %v", got)
+	}
+}
+
+// --- ErrUnauthorized → login redirect ---
+
+func TestHandleUnauthorized_ErrMsgRoutesToLogin(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true // saveConfig is a no-op, so the real config is untouched
+	a.tokens = model.Tokens{IDToken: "x", RefreshToken: "y"}
+	a.currentUser = model.User{Email: "me@example.com"}
+
+	m, _ := a.Update(errMsg{api.ErrUnauthorized})
+	got, ok := m.(App)
+	if !ok {
+		t.Fatalf("Update returned %T, want App", m)
+	}
+	if got.active != screenLogin {
+		t.Errorf("active = %v, want screenLogin", got.active)
+	}
+	if got.tokens != (model.Tokens{}) {
+		t.Errorf("tokens not cleared: %+v", got.tokens)
+	}
+}
+
+func TestHandleUnauthorized_ActionErrAlsoRoutes(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+	m, _ := a.Update(actionErrMsg{api.ErrUnauthorized})
+	if got := m.(App); got.active != screenLogin {
+		t.Errorf("active = %v, want screenLogin after actionErrMsg", got.active)
+	}
+}
+
+func TestHandleUnauthorized_OtherErrorDoesNotRedirect(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+	m, _ := a.Update(errMsg{errors.New("network down")})
+	if got := m.(App); got.active != screenFeed {
+		t.Errorf("active = %v, want screenFeed (non-401 must not redirect)", got.active)
+	}
+}
+
+// --- errors never block: notifPostLoadErrMsg & handleErr → banner ---
+
+// A notification pointing to a deleted post must surface as a friendly,
+// non-blocking warning banner rather than blanking the notifications list.
+func TestNotifPostLoadErr_DeletedPostShowsBanner(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenNotifications
+	deleted := &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "Post not found"}
+
+	m, _ := a.Update(notifPostLoadErrMsg{err: deleted})
+	got := m.(App)
+	if got.notifyText != "This post has been deleted" {
+		t.Errorf("notifyText = %q, want deleted-post banner", got.notifyText)
+	}
+	if got.notifyLevel != notifyWarn {
+		t.Errorf("notifyLevel = %v, want notifyWarn", got.notifyLevel)
+	}
+	if got.active != screenNotifications {
+		t.Errorf("active = %v, want screenNotifications (must not navigate away)", got.active)
+	}
+}
+
+// Any other post-open failure still surfaces in the banner (with its raw text),
+// never blocking the screen.
+func TestNotifPostLoadErr_OtherErrorShowsBanner(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenNotifications
+
+	m, _ := a.Update(notifPostLoadErrMsg{err: errors.New("network down")})
+	got := m.(App)
+	if got.notifyText != "network down" {
+		t.Errorf("notifyText = %q, want raw error text", got.notifyText)
+	}
+	if got.notifyLevel != notifyError {
+		t.Errorf("notifyLevel = %v, want notifyError", got.notifyLevel)
+	}
+}
+
+// A dead session on the post-open path must still redirect to login rather than
+// being swallowed by the banner.
+func TestNotifPostLoadErr_UnauthorizedRedirectsToLogin(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenNotifications
+	a.ephemeral = true
+
+	m, _ := a.Update(notifPostLoadErrMsg{err: api.ErrUnauthorized})
+	if got := m.(App); got.active != screenLogin {
+		t.Errorf("active = %v, want screenLogin", got.active)
+	}
+}
+
+// handleErr must fire the global banner (non-blocking) for load failures while
+// keeping the user on their current screen.
+func TestHandleErr_FiresBannerWithoutBlocking(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+
+	m, _ := a.Update(errMsg{errors.New("network down")})
+	got := m.(App)
+	if got.notifyText != "network down" {
+		t.Errorf("notifyText = %q, want banner with error text", got.notifyText)
+	}
+	if got.active != screenFeed {
+		t.Errorf("active = %v, want screenFeed (error must not navigate)", got.active)
+	}
+}
+
+// friendlyErr softens the raw API 404 wording for the banner.
+func TestFriendlyErr_404IsSoftened(t *testing.T) {
+	got := friendlyErr(&api.APIError{Code: "NOT_FOUND", Status: 404, Message: "Post not found"})
+	if got != "Not found — it may have been deleted." {
+		t.Errorf("friendlyErr(404) = %q, want softened message", got)
+	}
+	if got := friendlyErr(errors.New("boom")); got != "boom" {
+		t.Errorf("friendlyErr(non-api) = %q, want raw text", got)
 	}
 }

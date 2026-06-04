@@ -104,10 +104,10 @@ type SubmitReplyMsg struct {
 type PostDetailModel struct {
 	post          model.Post
 	replies       []model.Reply
-	flatTree      []replyNode   // DFS-ordered tree walk; len always == len(replies)
-	replyOffsets  []int         // start line of each reply within the viewport content
-	replyHeights  []int         // rendered height of each reply (matches offsets; set by buildContent)
-	postHeight    int           // rendered height of the full post block; set by refreshContent
+	flatTree      []replyNode // DFS-ordered tree walk; len always == len(replies)
+	replyOffsets  []int       // start line of each reply within the viewport content
+	replyHeights  []int       // rendered height of each reply (matches offsets; set by buildContent)
+	postHeight    int         // rendered height of the full post block; set by refreshContent
 	selectedReply int
 	viewport      viewport.Model
 	width         int
@@ -116,12 +116,12 @@ type PostDetailModel struct {
 	loading       bool
 	err           error
 
-	compose            ComposeModel
-	replyPostID        string         // postID set when compose opens
-	replyParentID      string         // parentReplyID set when compose opens (empty = top-level)
-	relaxed            bool           // true = blank lines between post, header, and replies
-	loc                *time.Location // timezone for timestamp display; nil = UTC
-	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
+	compose           ComposeModel
+	replyPostID       string         // postID set when compose opens
+	replyParentID     string         // parentReplyID set when compose opens (empty = top-level)
+	relaxed           bool           // true = blank lines between post, header, and replies
+	loc               *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
 
 	currentUsername string        // set after login; guards the delete key to own content
 	confirming      pdConfirmKind // pending delete confirmation
@@ -156,6 +156,7 @@ func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 func (m PostDetailModel) SetReplies(replies []model.Reply) PostDetailModel {
 	m.selectedReply = -1 // keep post selected after replies load
 	m.loading = false
+	m.err = nil
 	if len(replies) > m.post.RepliesCount {
 		m.post.RepliesCount = len(replies)
 	}
@@ -217,6 +218,9 @@ func (m PostDetailModel) ComposeActive() bool { return m.compose.IsActive() }
 func (m PostDetailModel) SetError(err error) PostDetailModel {
 	m.err = err
 	m.loading = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -511,7 +515,28 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 					// Reply top is visible — move to previous item.
 					m.selectedReply--
 					m = m.refreshContent()
-					m = m.ensureSelectedVisible()
+					// Mirror the down-scroll behaviour: snap the previous item
+					// fully into view if it fits the viewport; otherwise leave
+					// the viewport in place and let the user scroll through it
+					// line-by-line.
+					var prevStart, prevHeight int
+					if m.selectedReply == -1 {
+						prevStart = 0
+						prevHeight = m.postHeight
+					} else {
+						prevStart = m.replyOffsets[m.selectedReply]
+						prevHeight = m.replyHeights[m.selectedReply]
+					}
+					if prevHeight <= m.viewport.Height {
+						// Item fits — snap it fully into view (mirrors down behaviour).
+						m = m.ensureSelectedVisible()
+					} else {
+						// Item is taller than the viewport — align its bottom to the
+						// viewport bottom so the selection highlight is visible and
+						// the user can scroll up through it line-by-line.
+						itemEnd := prevStart + prevHeight - 1
+						m.viewport.SetYOffset(itemEnd - m.viewport.Height + 1)
+					}
 				}
 			} else {
 				// Post is selected — scroll viewport up (pager behaviour).
@@ -661,15 +686,29 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 		header = left
 	}
 
+	// Badges line: guild indicator, nsfw, public — omitted when none apply.
+	var badgeParts []string
+	if m.post.IsGuildThread && m.post.GuildSlug != "" {
+		badgeParts = append(badgeParts, theme.Subtle.Render("[#"+m.post.GuildSlug+"]"))
+	}
+	if m.post.IsNSFW {
+		badgeParts = append(badgeParts, theme.Error.Render("[nsfw]"))
+	}
+	if m.post.IsPublic {
+		badgeParts = append(badgeParts, theme.Subtle.Render("[public]"))
+	}
+	badges := strings.Join(badgeParts, "  ")
+
 	body := markdown.Render(m.post.Content, innerWidth)
 	if att := renderAttachments(m.post.Attachments); att != "" {
 		body = body + "\n" + att
 	}
 
-	topics := ""
+	var topicsSB strings.Builder
 	for _, t := range m.post.Topics {
-		topics += theme.Subtle.Render("#"+t) + " "
+		topicsSB.WriteString(theme.Subtle.Render("#"+t) + " ")
 	}
+	topics := topicsSB.String()
 
 	boxStyle := theme.Border
 	if selected {
@@ -678,13 +717,16 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 	if innerWidth > 0 {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}
-	return boxStyle.Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			body,
-			fmt.Sprintf("\n%s", topics),
-		),
-	)
+
+	rows := []string{header}
+	if badges != "" {
+		rows = append(rows, badges)
+	}
+	if m.post.Title != "" {
+		rows = append(rows, theme.Title.Render(m.post.Title))
+	}
+	rows = append(rows, body, fmt.Sprintf("\n%s", topics))
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
 func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
@@ -692,12 +734,11 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 	cardWidth := m.width - 2 - indentW
 	innerWidth := cardWidth - 2
 
-	var headerParts []string
+	headerParts := []string{theme.Highlight.Render("@" + node.Reply.AuthorUsername)}
 	if node.ParentUsername != "" {
-		headerParts = append(headerParts, theme.Subtle.Render("↩ @"+node.ParentUsername+"  "))
+		headerParts = append(headerParts, theme.Subtle.Render("  ↩ @"+node.ParentUsername))
 	}
 	headerParts = append(headerParts,
-		theme.Highlight.Render("@"+node.Reply.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	)
 	_, replyBookmarked := m.bookmarkedReplyIDs[node.Reply.ID]
@@ -735,9 +776,6 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 }
 
 func (m PostDetailModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("loading…")
 	}

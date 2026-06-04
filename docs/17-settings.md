@@ -15,17 +15,14 @@ This feature aligns the codebase with API v0.3.2, which supports 13 preference f
 | `Notifications.Bookmark` | bool | Alert on bookmarks | Device-roaming |
 | `Notifications.Reply` | bool | Alert on replies | Device-roaming |
 | `Notifications.Poke` | bool | Alert on pokes | Device-roaming |
-| `FilterNSFW` | bool | Hide NSFW content | Device-roaming |
+| `FilterNSFW` | bool | Hide posts where `isNSFW == true` in Feed, Topics, Guilds (posts view), and Profile (Posts tab). Bookmarks and PostDetail are unaffected. | Device-roaming |
 | `ShowFollowerCount` | bool | Public follower visibility | Device-roaming |
-| `HideImagesInFeed` | bool | Disable image rendering | Device-roaming |
-| `HideAudioInFeed` | bool | Disable audio rendering | Device-roaming |
 | `AutoWatchOnReply` | bool | Auto-subscribe to thread on reply | Device-roaming |
 | `IconTheme` | string | Icon set (not yet modelled) | Device-roaming |
 | `TimeDisplayFormat` | string | Time display: `"datetime"`, `"relative"`, `"unix"`, `"swatch"` | Device-roaming |
 | `FollowedTopics` | []string | Topics subscribed to | Device-roaming |
 | `MutedTopics` | []string | Topics to hide | Device-roaming |
 | `ImagePixelSize` | string | Pixel multiplier or preset (e.g., "sharp", "2") | Device-roaming |
-| `UseLegacyMenuOrder` | bool | Show old menu layout | Device-roaming |
 | `DefaultPublicPost` | bool | Posts default to public | Device-roaming |
 
 **Note:** `KeyboardBindings` and `MutedUsersByRoom` are opaque JSON objects — not modelled yet.
@@ -63,16 +60,13 @@ type Settings struct {
     Notifications      NotificationPrefs
     FilterNSFW         bool
     ShowFollowerCount  bool
-    HideImagesInFeed   bool
-    HideAudioInFeed    bool
     AutoWatchOnReply   bool
     IconTheme          string
     FollowedTopics     []string
     MutedTopics        []string
     ImagePixelSize     string // preset or multiplier, e.g., "sharp" or "2"
-    TimeDisplayFormat  string // "datetime", "relative", "unix", or "swatch"
-    UseLegacyMenuOrder bool
-    DefaultPublicPost  bool
+    TimeDisplayFormat string // "datetime", "relative", "unix", or "swatch"
+    DefaultPublicPost bool
 }
 ```
 
@@ -146,8 +140,6 @@ Changes are accumulated in memory until `ctrl+s` is pressed. This respects the A
 
 **Content group:**
 - Filter NSFW (bool)
-- Hide images in feed (bool)
-- Hide audio in feed (bool)
 
 **Social group:**
 - Show follower count (bool)
@@ -156,7 +148,6 @@ Changes are accumulated in memory until `ctrl+s` is pressed. This respects the A
 
 **Display group:**
 - Time format (enum: datetime / relative / unix / swatch)
-- Legacy menu order (bool)
 
 ### Deferred Fields
 

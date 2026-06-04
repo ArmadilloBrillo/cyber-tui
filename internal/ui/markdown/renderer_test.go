@@ -286,6 +286,27 @@ func TestRender_AmbiguousRunesStripped(t *testing.T) {
 	}
 }
 
+func TestRender_TypographicPunctPreserved(t *testing.T) {
+	cases := []struct {
+		r    rune
+		name string
+	}{
+		{'‘', "LEFT SINGLE QUOTATION MARK"},
+		{'’', "RIGHT SINGLE QUOTATION MARK"},
+		{'“', "LEFT DOUBLE QUOTATION MARK"},
+		{'”', "RIGHT DOUBLE QUOTATION MARK"},
+		{'–', "EN DASH"},
+		{'—', "EM DASH"},
+		{'…', "HORIZONTAL ELLIPSIS"},
+	}
+	for _, tc := range cases {
+		raw := Render("Hello "+string(tc.r)+" world", 80)
+		if !strings.ContainsRune(strip(raw), tc.r) {
+			t.Errorf("%s (U+%04X) should be preserved: %q", tc.name, tc.r, strip(raw))
+		}
+	}
+}
+
 func TestRender_HalfwidthKatakanaModifierStripped(t *testing.T) {
 	// U+FF9F HALFWIDTH KATAKANA VOICED ITERATION MARK has GCB=Extend:
 	// go-runewidth says width=1 (not ambiguous), but rivo/uniseg (used by lipgloss)
@@ -399,5 +420,56 @@ func TestFirstLine_NoANSI(t *testing.T) {
 	got := FirstLine("**bold** text with [link](https://example.com)")
 	if strings.Contains(got, "\x1b") {
 		t.Errorf("FirstLine must not contain ANSI codes: %q", got)
+	}
+}
+
+func TestFirstLine_MentionOnly(t *testing.T) {
+	got := FirstLine("@alice")
+	if got != "@alice" {
+		t.Errorf("FirstLine(%q) = %q, want %q", "@alice", got, "@alice")
+	}
+	if strings.Contains(got, "\x1b") {
+		t.Errorf("FirstLine must not contain ANSI codes: %q", got)
+	}
+}
+
+func TestFirstLine_MentionAtStart(t *testing.T) {
+	got := FirstLine("@alice: hello world")
+	if got != "@alice: hello world" {
+		t.Errorf("FirstLine(%q) = %q, want %q", "@alice: hello world", got, "@alice: hello world")
+	}
+	if strings.Contains(got, "\x1b") {
+		t.Errorf("FirstLine must not contain ANSI codes: %q", got)
+	}
+}
+
+// HTML numeric entities (e.g. &#27;) survive the API-boundary control-char
+// sanitization because they are printable ASCII, and html.UnescapeString decodes
+// them back into raw control characters. Render/FirstLine must re-strip them so a
+// remote author cannot inject terminal escape sequences (clear-screen CSI,
+// window-title/clipboard OSC) into a viewer's terminal.
+func TestRender_EntityEncodedEscapesStripped(t *testing.T) {
+	// CSI clear-screen via decimal and hex entities. The injected ESC must not
+	// reach the output; styling SGR codes always end in 'm', so a raw "\x1b[2J"
+	// can only come from the decoded payload.
+	for _, in := range []string{"&#27;[2J", "&#x1b;[2J"} {
+		out := Render(in, 40)
+		if strings.Contains(out, "\x1b[2J") {
+			t.Errorf("Render(%q) leaked a raw clear-screen escape: %q", in, out)
+		}
+	}
+	// OSC window-title/clipboard injection: ESC ]0;...BEL. Styling never emits
+	// an OSC introducer, so "\x1b]" in the output means the payload leaked.
+	out := Render("&#x1b;]0;pwneddone", 40)
+	if strings.Contains(out, "\x1b]") {
+		t.Errorf("Render leaked a raw OSC introducer: %q", out)
+	}
+}
+
+func TestFirstLine_EntityEncodedEscapesStripped(t *testing.T) {
+	// FirstLine returns plain text with no styling, so no ESC may appear at all.
+	got := FirstLine("&#27;[2J cleared")
+	if strings.ContainsRune(got, '\x1b') {
+		t.Errorf("FirstLine leaked a raw escape: %q", got)
 	}
 }

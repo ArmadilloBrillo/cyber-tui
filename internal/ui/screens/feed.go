@@ -1,18 +1,15 @@
 package screens
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
-
 
 // LoadMoreFeedMsg is emitted by FeedModel when the viewport reaches the bottom
 // and a next-page cursor is available. App intercepts this and fires the API call.
@@ -31,43 +28,43 @@ type ShowPostForReplyMsg struct{ Post model.Post }
 
 // SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
 type SubmitNewPostMsg struct {
-	Content string
-	Topics  []string
+	Content  string
+	Title    string // empty = no title
+	Topics   []string
+	IsPublic bool
+	IsNSFW   bool
 }
 
 type FeedModel struct {
-	posts              []model.Post
-	postOffsets        []int // start line of each post within the viewport content
-	viewport           viewport.Model
-	compose            ComposeModel
-	topicsInput        textinput.Model
-	topicsFocused      bool
-	width              int
-	height             int
-	selectedIndex      int
-	ready              bool
-	err                error
-	nextCursor         string
-	loading            bool
-	fetching           bool // true while the initial (or tab-switch) load is in flight
-	refreshing         bool // true while re-fetching newest posts (up at top)
-	exhausted          bool // true once API returned an empty cursor
-	relaxed            bool           // true = blank line between posts (relaxed density)
-	loc                *time.Location // timezone for timestamp display; nil = UTC
-	timeDisplayFormat  string         // API setting: "datetime", "relative", "unix", "swatch"
+	posts             []model.Post
+	postOffsets       []int // start line of each post within the viewport content
+	viewport          viewport.Model
+	panel             PostComposePanel
+	defaultPublicPost bool // mirrored from settings; initialises panel.isPublic on each open
+	width             int
+	height            int
+	selectedIndex     int
+	ready             bool
+	err               error
+	nextCursor        string
+	loading           bool
+	fetching          bool           // true while the initial (or tab-switch) load is in flight
+	refreshing        bool           // true while re-fetching newest posts (up at top)
+	exhausted         bool           // true once API returned an empty cursor
+	relaxed           bool           // true = blank line between posts (relaxed density)
+	loc               *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
 
 	currentUsername  string // set after login; used to guard the delete key
 	confirmingDelete bool   // true while the delete-post confirmation overlay is shown
 
 	bookmarkedPostIDs map[string]struct{}
+	filterNSFW        bool
 }
 
 func NewFeedModel() FeedModel {
-	ti := textinput.New()
-	ti.Placeholder = "add topics  (go, my topic, …  max 3)"
 	return FeedModel{
-		compose:     NewComposeModel(0),
-		topicsInput: ti,
+		panel: NewPostComposePanel(0),
 	}
 }
 
@@ -89,6 +86,7 @@ func ParseTopics(s string) []string {
 
 func (m FeedModel) SetFetching() FeedModel {
 	m.fetching = true
+	m.err = nil
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -96,6 +94,12 @@ func (m FeedModel) SetFetching() FeedModel {
 }
 
 func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
+	m.err = nil
+	var prevID string
+	if oldVisible := m.visiblePosts(); m.selectedIndex < len(oldVisible) {
+		prevID = oldVisible[m.selectedIndex].ID
+	}
+
 	m.posts = posts
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
@@ -103,9 +107,21 @@ func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
 	m.fetching = false
 	m.refreshing = false
 	m.selectedIndex = 0
+	if prevID != "" {
+		for i, p := range m.visiblePosts() {
+			if p.ID == prevID {
+				m.selectedIndex = i
+				break
+			}
+		}
+	}
 	if m.ready {
 		m = m.refreshContent()
-		m.viewport.GotoTop()
+		if m.selectedIndex == 0 {
+			m.viewport.GotoTop()
+		} else {
+			m = m.ensureSelectedVisible()
+		}
 	}
 	return m
 }
@@ -126,6 +142,10 @@ func (m FeedModel) SetError(err error) FeedModel {
 	m.err = err
 	m.loading = false
 	m.fetching = false
+	m.refreshing = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -142,8 +162,11 @@ func (m FeedModel) RemovePost(postID string) FeedModel {
 	for i, p := range m.posts {
 		if p.ID == postID {
 			m.posts = append(m.posts[:i], m.posts[i+1:]...)
-			if m.selectedIndex >= len(m.posts) && m.selectedIndex > 0 {
-				m.selectedIndex = len(m.posts) - 1
+			if vis := len(m.visiblePosts()); m.selectedIndex >= vis {
+				m.selectedIndex = vis - 1
+				if m.selectedIndex < 0 {
+					m.selectedIndex = 0
+				}
 			}
 			break
 		}
@@ -152,6 +175,19 @@ func (m FeedModel) RemovePost(postID string) FeedModel {
 		m = m.refreshContent()
 	}
 	return m
+}
+
+func (m FeedModel) visiblePosts() []model.Post {
+	if !m.filterNSFW {
+		return m.posts
+	}
+	out := m.posts[:0:0]
+	for _, p := range m.posts {
+		if !p.IsNSFW {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (m FeedModel) SetRelaxed(relaxed bool) FeedModel {
@@ -194,11 +230,12 @@ func (m FeedModel) refreshContent() FeedModel {
 // selected post is fully visible. If the post is taller than the viewport,
 // its top is aligned with the viewport top.
 func (m FeedModel) ensureSelectedVisible() FeedModel {
-	if !m.ready || len(m.postOffsets) == 0 || m.selectedIndex >= len(m.posts) {
+	visible := m.visiblePosts()
+	if !m.ready || len(m.postOffsets) == 0 || m.selectedIndex >= len(visible) {
 		return m
 	}
 	postStart := m.postOffsets[m.selectedIndex]
-	postHeight := lipgloss.Height(m.renderPost(m.posts[m.selectedIndex], false))
+	postHeight := lipgloss.Height(m.renderPost(visible[m.selectedIndex], false))
 	postEnd := postStart + postHeight - 1
 
 	viewTop := m.viewport.YOffset
@@ -220,8 +257,8 @@ func (m FeedModel) ensureSelectedVisible() FeedModel {
 	return m
 }
 
-// ComposeActive reports whether the new-post compose box is open.
-func (m FeedModel) ComposeActive() bool { return m.compose.IsActive() }
+// ComposeActive reports whether the new-post compose panel is open.
+func (m FeedModel) ComposeActive() bool { return m.panel.IsActive() }
 
 func (m FeedModel) Init() tea.Cmd { return nil }
 
@@ -229,8 +266,16 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		m.defaultPublicPost = msg.Settings.DefaultPublicPost
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
+		if msg.Settings.FilterNSFW != m.filterNSFW {
+			m.filterNSFW = msg.Settings.FilterNSFW
+			m.selectedIndex = 0
+			if m.ready {
+				m = m.refreshContent()
+			}
+		}
 		return m, nil
 
 	case BookmarkedIDsMsg:
@@ -243,12 +288,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.compose = m.compose.SetWidth(msg.Width)
-		innerW := msg.Width - 4
-		if innerW < 1 {
-			innerW = 1
-		}
-		m.topicsInput.Width = innerW
+		m.panel = m.panel.SetWidth(msg.Width)
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, m.viewportHeight())
 			m = m.refreshContent()
@@ -262,9 +302,14 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 
 	case ComposeSubmitMsg:
 		content := msg.Content
-		topics := ParseTopics(m.topicsInput.Value())
+		title := m.panel.TitleValue()
+		topics := ParseTopics(m.panel.TopicsRaw())
+		isPublic := m.panel.IsPublic()
+		isNSFW := m.panel.IsNSFW()
 		m = m.closeCompose()
-		return m, func() tea.Msg { return SubmitNewPostMsg{Content: content, Topics: topics} }
+		return m, func() tea.Msg {
+			return SubmitNewPostMsg{Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
+		}
 
 	case ComposeCancelMsg:
 		m = m.closeCompose()
@@ -275,8 +320,8 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		if m.confirmingDelete {
 			switch msg.String() {
 			case "y":
-				if m.selectedIndex < len(m.posts) {
-					postID := m.posts[m.selectedIndex].ID
+				if visible := m.visiblePosts(); m.selectedIndex < len(visible) {
+					postID := visible[m.selectedIndex].ID
 					m.confirmingDelete = false
 					m.viewport.Height = m.viewportHeight()
 					return m, func() tea.Msg { return DeletePostMsg{PostID: postID} }
@@ -290,50 +335,13 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.compose.IsActive() {
-			switch msg.String() {
-			case "tab":
-				if m.topicsFocused {
-					m.topicsFocused = false
-					m.topicsInput.Blur()
-					var cmd tea.Cmd
-					m.compose, cmd = m.compose.SetFocused(true)
-					return m, cmd
-				}
-				m.topicsFocused = true
-				m.compose, _ = m.compose.SetFocused(false)
-				cmd := m.topicsInput.Focus()
-				return m, cmd
-			case "ctrl+s":
-				if m.topicsFocused {
-					content := m.compose.Content()
-					topics := ParseTopics(m.topicsInput.Value())
-					m.compose = m.compose.Close()
-					m.topicsFocused = false
-					m.topicsInput.Blur()
-					m.viewport.Height = m.viewportHeight()
-					return m, func() tea.Msg { return SubmitNewPostMsg{Content: content, Topics: topics} }
-				}
-			case "esc":
-				if m.topicsFocused {
-					m.topicsFocused = false
-					m.topicsInput.Blur()
-					m.compose = m.compose.Close()
-					m.viewport.Height = m.viewportHeight()
-					return m, nil
-				}
-			}
-			if m.topicsFocused {
-				var cmd tea.Cmd
-				filtered, ok := filterAmbiguousKeyMsg(msg)
-				if !ok {
-					return m, nil
-				}
-				m.topicsInput, cmd = m.topicsInput.Update(filtered)
-				return m, cmd
-			}
+		if m.panel.IsActive() {
+			oldH := m.panel.PanelHeight()
 			var cmd tea.Cmd
-			m.compose, cmd = m.compose.Update(msg)
+			m.panel, cmd = m.panel.Update(msg)
+			if m.panel.PanelHeight() != oldH {
+				m.viewport.Height = m.viewportHeight()
+			}
 			return m, cmd
 		}
 		switch msg.String() {
@@ -349,44 +357,41 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) {
-				post := m.posts[m.selectedIndex]
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				post := visible[m.selectedIndex]
 				return m, func() tea.Msg { return ShowPostMsg{Post: post} }
 			}
 		case "r":
-			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) {
-				post := m.posts[m.selectedIndex]
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				post := visible[m.selectedIndex]
 				return m, func() tea.Msg { return ShowPostForReplyMsg{Post: post} }
 			}
 		case "p":
-			if len(m.posts) > 0 {
-				username := m.posts[m.selectedIndex].AuthorUsername
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				username := visible[m.selectedIndex].AuthorUsername
 				return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 			}
 			return m, nil
 		case "b":
-			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) {
-				postID := m.posts[m.selectedIndex].ID
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				postID := visible[m.selectedIndex].ID
 				return m, func() tea.Msg { return BookmarkPostMsg{PostID: postID} }
 			}
 			return m, nil
 		case "d":
-			if len(m.posts) > 0 && m.selectedIndex < len(m.posts) &&
-				m.posts[m.selectedIndex].AuthorUsername == m.currentUsername {
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) &&
+				visible[m.selectedIndex].AuthorUsername == m.currentUsername {
 				m.confirmingDelete = true
 				m.viewport.Height = m.viewportHeight()
 			}
 			return m, nil
 		case "n":
-			m.topicsInput.SetValue("tui")
-			m.topicsFocused = false
-			m.topicsInput.Blur()
 			var cmd tea.Cmd
-			m.compose, cmd = m.compose.Open("new post", "what's on your mind…")
+			m.panel, cmd = m.panel.Open(m.defaultPublicPost)
 			m.viewport.Height = m.viewportHeight()
 			return m, cmd
 		case "down", "j":
-			if m.selectedIndex < len(m.posts)-1 {
+			if m.selectedIndex < len(m.visiblePosts())-1 {
 				m.selectedIndex++
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()
@@ -415,13 +420,12 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	return m, cmd
 }
 
-// viewportHeight returns the viewport height in rows, shrinking to make room for
-// the compose box, tags input, and the delete-confirmation overlay when active.
+// viewportHeight returns the viewport height in rows, shrinking to make room
+// for the compose panel and the delete-confirmation overlay when active.
 func (m FeedModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight
-	if m.compose.IsActive() {
-		h -= m.compose.BoxHeight()
-		h -= 3 // tags input row: border top + content + border bottom
+	if m.panel.IsActive() {
+		h -= m.panel.PanelHeight()
 	}
 	if m.confirmingDelete {
 		h -= confirmBoxHeight
@@ -433,9 +437,7 @@ func (m FeedModel) viewportHeight() int {
 }
 
 func (m FeedModel) closeCompose() FeedModel {
-	m.compose = m.compose.Close()
-	m.topicsFocused = false
-	m.topicsInput.Blur()
+	m.panel = m.panel.Close()
 	m.viewport.Height = m.viewportHeight()
 	return m
 }
@@ -464,6 +466,9 @@ func (m FeedModel) buildContent() (string, []int) {
 		startLine = 1
 	}
 	if len(m.posts) == 0 {
+		if m.err != nil {
+			return prefix + theme.Subtle.Render("  couldn't load feed"), nil
+		}
 		return prefix + theme.Subtle.Render("  no posts yet"), nil
 	}
 	sep := "\n"
@@ -472,10 +477,11 @@ func (m FeedModel) buildContent() (string, []int) {
 		sep = "\n\n"
 		lineInc = 1
 	}
-	offsets := make([]int, len(m.posts))
+	visible := m.visiblePosts()
+	offsets := make([]int, len(visible))
 	var out string
 	currentLine := startLine
-	for i, p := range m.posts {
+	for i, p := range visible {
 		offsets[i] = currentLine
 		rendered := m.renderPost(p, i == m.selectedIndex)
 		out += rendered + sep
@@ -495,9 +501,6 @@ func (m FeedModel) renderPost(p model.Post, selected bool) string {
 }
 
 func (m FeedModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("feed error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("loading feed...")
 	}
@@ -513,19 +516,10 @@ func (m FeedModel) View() string {
 		)
 	}
 
-	if m.compose.IsActive() {
-		topicsStyle := theme.Border
-		if m.topicsFocused {
-			topicsStyle = theme.ActiveBorder
-		}
-		if m.width > 2 {
-			topicsStyle = topicsStyle.Width(m.width - 2)
-		}
-		topicsBox := topicsStyle.Render(m.topicsInput.View())
+	if m.panel.IsActive() {
 		return lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
-			m.compose.View(),
-			topicsBox,
+			m.panel.View(),
 		)
 	}
 	return m.viewport.View()
@@ -533,9 +527,10 @@ func (m FeedModel) View() string {
 
 // GetFocusedURLs implements URLProvider. Returns URLs from the selected post's content.
 func (m FeedModel) GetFocusedURLs() []string {
-	if len(m.posts) == 0 || m.selectedIndex < 0 || m.selectedIndex >= len(m.posts) {
+	visible := m.visiblePosts()
+	if m.selectedIndex < 0 || m.selectedIndex >= len(visible) {
 		return nil
 	}
-	p := m.posts[m.selectedIndex]
+	p := visible[m.selectedIndex]
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
 }

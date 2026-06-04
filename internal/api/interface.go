@@ -19,7 +19,7 @@ type Client interface {
 	// Feed — pass empty cursor for first page; use returned cursor for next page.
 	// Returns empty next-cursor when there are no more pages.
 	GetFeed(cursor string) ([]model.Post, string, error)
-	CreatePost(content string, topics []string) (model.Post, error)
+	CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error)
 	// GetPost fetches a single post by ID (used when jumping from a notification).
 	GetPost(postID string) (model.Post, error)
 
@@ -82,6 +82,27 @@ type Client interface {
 	// GetTopicPosts returns paginated posts for a topic.
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetTopicPosts(slug string, cursor string) ([]model.Post, string, error)
+
+	// Guilds — browse guilds and threads within them.
+	// GetGuilds returns guilds with at least one member, most populated first.
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetGuilds(cursor string) ([]model.Guild, string, error)
+	// GetGuild fetches a single guild by slug including the caller's IsMember and Role.
+	GetGuild(slug string) (model.Guild, error)
+	// GetGuildPosts returns paginated threads for a guild, most recently active first.
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetGuildPosts(slug string, cursor string) ([]model.Post, string, error)
+	// CreateGuildPost creates a new thread in a guild. Caller must be a member.
+	CreateGuildPost(slug, content, title string, topics []string) (model.Post, error)
+	// GetGuildMembers returns paginated members for a guild, oldest-joined first.
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetGuildMembers(slug, cursor string) ([]model.GuildMember, string, error)
+	// JoinGuild joins the guild identified by slug. Returns an error if the user is
+	// already a member of another guild (409) or if the slug does not exist (404).
+	JoinGuild(slug string) error
+	// LeaveGuild leaves the guild identified by slug. Returns an error if the user
+	// is the founder (403) or is not a member.
+	LeaveGuild(slug string) error
 
 	// Posts — deletion.
 	// DeletePost soft-deletes a post owned by the authenticated user.

@@ -1,7 +1,6 @@
 package screens
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -35,22 +34,22 @@ type ShowNotificationPostMsg struct {
 }
 
 type NotificationsModel struct {
-	notifs        []model.Notification
-	notifOffsets  []int // start line of each notification within the viewport content
-	viewport      viewport.Model
-	width         int
-	height        int
-	selectedIndex int
-	ready         bool
-	loading       bool
-	fetching      bool // true while the initial (or tab-switch) load is in flight
-	refreshing    bool
-	exhausted     bool
-	nextCursor    string
+	notifs         []model.Notification
+	notifOffsets   []int // start line of each notification within the viewport content
+	viewport       viewport.Model
+	width          int
+	height         int
+	selectedIndex  int
+	ready          bool
+	loading        bool
+	fetching       bool // true while the initial (or tab-switch) load is in flight
+	refreshing     bool
+	exhausted      bool
+	nextCursor     string
 	showUnreadOnly bool
-	err           error
-	relaxed       bool
-	loc           *time.Location
+	err            error
+	relaxed        bool
+	loc            *time.Location
 }
 
 func NewNotificationsModel() NotificationsModel {
@@ -62,6 +61,7 @@ func (m NotificationsModel) IsReady() bool { return m.ready }
 
 func (m NotificationsModel) SetFetching() NotificationsModel {
 	m.fetching = true
+	m.err = nil
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -72,6 +72,7 @@ func (m NotificationsModel) SetNotifs(notifs []model.Notification, cursor string
 	m.notifs = notifs
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
+	m.err = nil
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
@@ -100,6 +101,9 @@ func (m NotificationsModel) SetError(err error) NotificationsModel {
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -292,7 +296,8 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 				return m, nil
 			}
 			n := visible[m.selectedIndex]
-			if n.Type == "poke" || n.Type == "new_follower" {
+			if n.Type == "poke" || n.Type == "new_follower" || n.Type == "unfollowed" ||
+				n.Type == "chat_mention" || n.Type == "dm_message" {
 				// No post to open — navigate to actor's profile and mark read.
 				m = m.MarkRead(n.ID)
 				notifID, username := n.ID, n.Actor.Username
@@ -358,6 +363,9 @@ func (m NotificationsModel) buildContent() (string, []int) {
 	}
 
 	if len(visible) == 0 {
+		if m.err != nil {
+			return prefix + theme.Subtle.Render("  couldn't load notifications"), nil
+		}
 		if m.showUnreadOnly {
 			return prefix + theme.Subtle.Render("  all caught up"), nil
 		}
@@ -399,8 +407,42 @@ func (m NotificationsModel) buildContent() (string, []int) {
 	return prefix + out, offsets
 }
 
-// notifSummary returns the action text for a notification.
+// notifSummary returns the action text for a notification. For post/reply
+// activity inside a guild it appends an " in #<guild>" clause (see withGuild).
 func notifSummary(n model.Notification) string {
+	base := baseNotifSummary(n)
+	switch n.Type {
+	case "new_post_friend", "new_post_following", "reply", "thread_reply":
+		if g := guildLabel(n); g != "" {
+			return withGuild(base, g)
+		}
+	}
+	return base
+}
+
+// guildLabel returns the guild handle to display, preferring the slug — the stable
+// lowercase handle the server sends for guild replies/posts (metadata.guildSlug) —
+// over the rarer display name. Empty when the notification has no guild context.
+func guildLabel(n model.Notification) string {
+	if n.GuildSlug != "" {
+		return n.GuildSlug
+	}
+	return n.GuildName
+}
+
+// withGuild inserts " in #<guild>" before a single trailing period. The guild
+// name is used verbatim (guilds choose their own casing); the leading # marks it
+// as a guild, matching the app's existing convention (join/leave banners, icons).
+func withGuild(base, guild string) string {
+	clause := " in #" + guild
+	if strings.HasSuffix(base, ".") {
+		return base[:len(base)-1] + clause + "."
+	}
+	return base + clause
+}
+
+// baseNotifSummary returns the action text for a notification without any guild clause.
+func baseNotifSummary(n model.Notification) string {
 	switch n.Type {
 	case "new_post_friend", "new_post_following":
 		return "published something."
@@ -408,22 +450,48 @@ func notifSummary(n model.Notification) string {
 		return "saved your entry."
 	case "new_follower":
 		return "started following you."
+	case "unfollowed":
+		return "unfollowed you."
 	case "reply":
 		return "replied to your post."
 	case "reply_mention":
 		return "mentioned you in a reply."
+	case "post_mention":
+		return "mentioned you in a post."
+	case "chat_mention":
+		return "mentioned you in chat."
+	case "dm_message":
+		return "sent you a message."
 	case "thread_reply":
 		if n.ThreadAuthorUsername != "" {
 			return "replied in @" + n.ThreadAuthorUsername + "'s thread."
 		}
 		return "replied in a thread you're following."
 	case "guild_new_thread":
-		if n.GuildName != "" {
-			return "posted a new thread in " + n.GuildName + "."
+		if g := guildLabel(n); g != "" {
+			return "posted a new thread in #" + g + "."
 		}
 		return "posted a new thread."
 	case "poke":
 		return `poked you ¯\_(ツ)_/¯`
+	case "supporter_granted":
+		return "granted you Supporter status."
+	case "supporter_removed":
+		return "removed your Supporter status."
+	case "hacker_granted":
+		return "granted you Hacker status."
+	case "hacker_removed":
+		return "removed your Hacker status."
+	case "image_permission_granted":
+		return "granted you image permissions."
+	case "image_permission_removed":
+		return "removed your image permissions."
+	case "attachment_permission_granted":
+		return "granted you attachment permissions."
+	case "attachment_permission_removed":
+		return "removed your attachment permissions."
+	case "system_ban":
+		return "your account has been banned."
 	default:
 		return n.Type
 	}
@@ -436,7 +504,7 @@ func notifIcon(n model.Notification) string {
 	switch n.Type {
 	case "reply", "thread_reply":
 		sym = "↩"
-	case "reply_mention":
+	case "reply_mention", "post_mention":
 		sym = "@"
 	case "new_post_friend", "new_post_following":
 		sym = "★"
@@ -444,10 +512,25 @@ func notifIcon(n model.Notification) string {
 		sym = "♥"
 	case "new_follower":
 		sym = "+"
+	case "unfollowed":
+		sym = "☹"
 	case "guild_new_thread":
 		sym = "#"
 	case "poke":
 		sym = "~"
+	case "chat_mention":
+		sym = "»"
+	case "dm_message":
+		sym = "✉"
+	case "supporter_granted", "supporter_removed":
+		sym = "$"
+	case "hacker_granted", "hacker_removed":
+		sym = "^"
+	case "image_permission_granted", "image_permission_removed",
+		"attachment_permission_granted", "attachment_permission_removed":
+		sym = "%"
+	case "system_ban":
+		sym = "☠"
 	default:
 		sym = "·"
 	}
@@ -489,9 +572,6 @@ func (m NotificationsModel) renderNotif(n model.Notification, selected bool) str
 }
 
 func (m NotificationsModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("notifications error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("loading notifications...")
 	}

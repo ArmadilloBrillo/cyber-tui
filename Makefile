@@ -20,6 +20,15 @@ build-all:
 	GOOS=linux  GOARCH=arm64 go build $(LDFLAGS) -o dist/$(BINARY)-linux-arm64   ./cmd/cyber-tui
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o dist/$(BINARY)-windows-amd64.exe ./cmd/cyber-tui
 
+.PHONY: lint
+lint:
+	go vet ./...
+	staticcheck ./...
+
+.PHONY: vuln
+vuln:
+	govulncheck ./...
+
 .PHONY: fetch
 fetch:
 	go run ./cmd/apifetch $(ARGS)

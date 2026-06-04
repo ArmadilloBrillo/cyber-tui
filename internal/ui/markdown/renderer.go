@@ -11,7 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
-	"golang.org/x/text/unicode/norm"
+	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -20,6 +20,7 @@ import (
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
+	"golang.org/x/text/unicode/norm"
 )
 
 // --- @mention extension ---
@@ -86,6 +87,7 @@ var mdInstance = goldmark.New(
 // viewport display. width is the inner content width for word-wrapping.
 func Render(content string, width int) string {
 	content = html.UnescapeString(content)
+	content = sanitize.Strip(content)
 	content = norm.NFC.String(content)
 	content = stripAmbiguousRunes(content)
 	if strings.TrimSpace(content) == "" {
@@ -112,6 +114,7 @@ func Render(content string, width int) string {
 // is not appropriate (bookmarks, profile post lists).
 func FirstLine(content string) string {
 	content = html.UnescapeString(content)
+	content = sanitize.Strip(content)
 	content = norm.NFC.String(content)
 	content = stripAmbiguousRunes(content)
 	for _, line := range strings.Split(content, "\n") {
@@ -412,11 +415,27 @@ func (r *renderer) rawTextNode(node ast.Node) string {
 			}
 		case *ast.String:
 			sb.Write(n.Value)
+		case *MentionNode:
+			sb.WriteByte('@')
+			sb.Write(n.Username)
 		default:
 			sb.WriteString(r.rawTextNode(child))
 		}
 	}
 	return sb.String()
+}
+
+// typographicPunct is the set of EAW=A (ambiguous-width) characters that are
+// consistently measured as 1 column in modern Western terminals and must not
+// be replaced with spaces.
+var typographicPunct = map[rune]bool{
+	'\u2018': true, // ‘  LEFT SINGLE QUOTATION MARK
+	'\u2019': true, // ’  RIGHT SINGLE QUOTATION MARK / apostrophe
+	'\u201C': true, // “  LEFT DOUBLE QUOTATION MARK
+	'\u201D': true, // ”  RIGHT DOUBLE QUOTATION MARK
+	'\u2013': true, // –  EN DASH
+	'\u2014': true, // —  EM DASH
+	'\u2026': true, // …  HORIZONTAL ELLIPSIS
 }
 
 // stripAmbiguousRunes normalises Unicode characters whose display width cannot be
@@ -436,7 +455,11 @@ func stripAmbiguousRunes(s string) string {
 			// that runewidth.StringWidth treats as 0-width in context but the terminal
 			// renders as 1 column (wcwidth), causing layout overflow
 		case runewidth.IsAmbiguousWidth(r) && !unicode.IsLetter(r):
-			b.WriteRune(' ') // ambiguous EAW=A non-letter symbol — normalise to space to avoid CJK layout overflow
+			if typographicPunct[r] {
+				b.WriteRune(r) // common typographic punct — 1 column in Western terminals
+			} else {
+				b.WriteRune(' ') // ambiguous EAW=A non-letter symbol — normalise to space to avoid CJK layout overflow
+			}
 		default:
 			b.WriteRune(r)
 		}

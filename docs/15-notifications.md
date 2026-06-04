@@ -97,8 +97,14 @@ Pressing `enter` on `poke` or `new_follower` notifications (or any with an empty
 | `reply` | replied to your post. |
 | `reply_mention` | mentioned you in a reply. |
 | `thread_reply` | replied in @username's thread. (falls back to "a thread you're following" if author unknown) |
-| `guild_new_thread` | posted a new thread in \<guildName\>. (falls back to "posted a new thread." if guild name absent) |
+| `guild_new_thread` | posted a new thread in #\<guildName\>. (falls back to "posted a new thread." if guild name absent) |
 | `poke` | poked you. ¯\_(ツ)_/¯ |
+
+### Guild context
+
+When a post or reply notification happens inside a guild, the summary appends an `in #<guild>` clause — e.g. `replied to your post in #chooms.` or `posted a new thread in #technica.` This applies to `new_post_friend`, `new_post_following`, `reply`, and `thread_reply` whenever the notification carries guild context; `guild_new_thread` always shows it.
+
+The guild handle comes from `metadata.guildSlug` (the lowercase handle the server sends for guild replies/posts, alongside `metadata.isGuildThread: true`); `metadata.guildName` is a rarer display-name variant. The UI prefers the slug (`guildLabel` in `internal/ui/screens/notifications.go`), so the value is rendered **verbatim** with a leading `#`, matching the app's existing convention (join/leave banners, the `guild_new_thread` icon). `*_mention` types are excluded to avoid awkward phrasing. The clause is applied by `notifSummary` / `withGuild`.
 
 ---
 
@@ -131,6 +137,10 @@ The notifications screen opens in unread-only mode by default. Press `u` to togg
 
 Pressing `enter` on a navigable notification opens PostDetail. Pressing `esc` in PostDetail returns to the notifications screen with the previously selected notification visible. This uses a shared `postDetailReturn` field in the App to track which screen to return to (same mechanism used by Feed → PostDetail → Feed).
 
+### Deleted-post notifications
+
+A notification can point to a post that has since been deleted; the notification list carries no "deleted target" field, so this only surfaces when the post is opened and `GET /v1/posts/:id` returns `404 NOT_FOUND`. Rather than blocking the screen, the post-open fetch returns `notifPostLoadErrMsg`; `handleNotifications` shows a transient banner **"This post has been deleted"** and leaves the notifications list intact and usable. (A 401 here still redirects to login; other errors show their message in the banner.) See [31-global-notifications.md](31-global-notifications.md) for the banner mechanism and the broader "errors never block a screen" model.
+
 ---
 
 ## API Endpoints
@@ -155,7 +165,13 @@ Pressing `enter` on a navigable notification opens PostDetail. Pressing `esc` in
       "actorId": "user-123",
       "actorUsername": "molly_millions",
       "targetId": "post-456",
-      "targetType": "post"
+      "targetType": "reply",
+      "metadata": {
+        "replyId": "reply-789",
+        "authorUsername": "ragnar",
+        "guildSlug": "chooms",
+        "isGuildThread": true
+      }
     }
   ],
   "nextCursor": "cursor-xyz"
@@ -164,19 +180,25 @@ Pressing `enter` on a navigable notification opens PostDetail. Pressing `esc` in
 
 Note: the actor is returned as flat fields (`actorId`, `actorUsername`), not a nested object.
 
+As of API **v0.5.0** the server `docs.md` documents this notification object and its `metadata` keys (previously reverse-engineered); the shape above matches the documented schema. `metadata` is open-ended — unknown keys are treated as optional.
+
 ---
 
 ## Model
 
 ```go
 type Notification struct {
-    ID         string
-    Type       string
-    Read       bool
-    CreatedAt  time.Time
-    Actor      NotificationActor
-    TargetID   string
-    TargetType string // "post", "reply", or ""
+    ID                   string
+    Type                 string
+    Read                 bool
+    CreatedAt            time.Time
+    Actor                NotificationActor
+    TargetID             string
+    TargetType           string // "post", "reply", or ""
+    ReplyID              string // metadata.replyId; reply to scroll to in PostDetail
+    ThreadAuthorUsername string // metadata.authorUsername; set for thread_reply
+    GuildName            string // metadata.guildName; rarer display-name variant
+    GuildSlug            string // metadata.guildSlug; guild handle shown as #slug
 }
 
 type NotificationActor struct {

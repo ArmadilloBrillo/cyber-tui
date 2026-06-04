@@ -32,7 +32,7 @@ type LoadMoreTopicsMsg struct{ Cursor string }
 type topicsView int
 
 const (
-	viewTopicList  topicsView = iota
+	viewTopicList topicsView = iota
 	viewTopicPosts
 )
 
@@ -46,35 +46,53 @@ type TopicsModel struct {
 	topicsExhausted  bool
 
 	// Topic posts state
-	activeTopic  string
-	posts        []model.Post
-	postIndex    int
-	nextCursor   string
-	exhausted    bool
-	loading      bool
-	fetching     bool // true while the initial (or tab-switch) load is in flight
-	refreshing   bool
+	activeTopic string
+	posts       []model.Post
+	postIndex   int
+	nextCursor  string
+	exhausted   bool
+	loading     bool
+	fetching    bool // true while the initial (or tab-switch) load is in flight
+	refreshing  bool
+	loaded      bool
 
 	// Shared
-	viewport         viewport.Model
-	itemOffsets      []int
-	width            int
+	viewport    viewport.Model
+	itemOffsets []int
+	width       int
 
 	bookmarkedPostIDs map[string]struct{}
-	height           int
-	ready            bool
-	err              error
-	loc              *time.Location
-	relaxed          bool
+	height            int
+	ready             bool
+	err               error
+	loc               *time.Location
+	relaxed           bool
 	timeDisplayFormat string
+	filterNSFW        bool
 }
 
 func NewTopicsModel() TopicsModel {
 	return TopicsModel{}
 }
 
+func (m TopicsModel) visiblePosts() []model.Post {
+	if !m.filterNSFW {
+		return m.posts
+	}
+	out := m.posts[:0:0]
+	for _, p := range m.posts {
+		if !p.IsNSFW {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (m TopicsModel) IsLoaded() bool { return m.loaded }
+
 func (m TopicsModel) SetFetching() TopicsModel {
 	m.fetching = true
+	m.err = nil
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -82,6 +100,7 @@ func (m TopicsModel) SetFetching() TopicsModel {
 }
 
 func (m TopicsModel) SetTopics(items []model.Topic, cursor string) TopicsModel {
+	m.err = nil
 	m.topics = items
 	m.topicIndex = 0
 	m.topicsNextCursor = cursor
@@ -89,6 +108,7 @@ func (m TopicsModel) SetTopics(items []model.Topic, cursor string) TopicsModel {
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	m.loaded = true
 	if m.ready {
 		m = m.refreshContent()
 		m.viewport.GotoTop()
@@ -97,6 +117,7 @@ func (m TopicsModel) SetTopics(items []model.Topic, cursor string) TopicsModel {
 }
 
 func (m TopicsModel) AppendTopics(items []model.Topic, cursor string) TopicsModel {
+	m.err = nil
 	m.topics = append(m.topics, items...)
 	m.topicsNextCursor = cursor
 	m.topicsExhausted = cursor == ""
@@ -109,6 +130,7 @@ func (m TopicsModel) AppendTopics(items []model.Topic, cursor string) TopicsMode
 }
 
 func (m TopicsModel) SetTopicPosts(posts []model.Post, cursor string) TopicsModel {
+	m.err = nil
 	m.posts = posts
 	m.postIndex = 0
 	m.nextCursor = cursor
@@ -141,6 +163,9 @@ func (m TopicsModel) SetError(err error) TopicsModel {
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -154,6 +179,10 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			m.loc = msg.Loc
 		}
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		if msg.Settings.FilterNSFW != m.filterNSFW {
+			m.filterNSFW = msg.Settings.FilterNSFW
+			m.postIndex = 0
+		}
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -188,20 +217,12 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					m.topicIndex--
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-				} else if !m.loading && !m.refreshing {
-					m.refreshing = true
-					m = m.refreshContent()
-					return m, func() tea.Msg { return RefreshTopicsMsg{} }
 				}
 			} else {
 				if m.postIndex > 0 {
 					m.postIndex--
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-				} else if !m.loading && !m.refreshing {
-					m.refreshing = true
-					m = m.refreshContent()
-					return m, func() tea.Msg { return RefreshTopicPostsMsg{Slug: m.activeTopic} }
 				}
 			}
 			return m, nil
@@ -221,7 +242,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					}
 				}
 			} else {
-				if m.postIndex < len(m.posts)-1 {
+				if m.postIndex < len(m.visiblePosts())-1 {
 					m.postIndex++
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
@@ -244,8 +265,8 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					return m, func() tea.Msg { return LoadTopicPostsMsg{Slug: slug} }
 				}
 			} else {
-				if len(m.posts) > 0 && m.postIndex < len(m.posts) {
-					post := m.posts[m.postIndex]
+				if visible := m.visiblePosts(); len(visible) > 0 && m.postIndex < len(visible) {
+					post := visible[m.postIndex]
 					return m, func() tea.Msg { return ShowTopicPostMsg{Post: post} }
 				}
 			}
@@ -278,9 +299,6 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 }
 
 func (m TopicsModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("topics error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("loading topics...")
 	}
@@ -308,6 +326,9 @@ func (m TopicsModel) buildContent() (string, []int) {
 
 	if m.view == viewTopicList {
 		if len(m.topics) == 0 {
+			if m.err != nil {
+				return prefix + theme.Subtle.Render("  couldn't load topics"), nil
+			}
 			return prefix + theme.Subtle.Render("  no topics yet"), nil
 		}
 		offsets := make([]int, len(m.topics))
@@ -326,14 +347,18 @@ func (m TopicsModel) buildContent() (string, []int) {
 
 	// viewTopicPosts
 	if len(m.posts) == 0 {
+		if m.err != nil {
+			return prefix + theme.Subtle.Render("  couldn't load posts"), nil
+		}
 		return prefix + theme.Subtle.Render("  no posts"), nil
 	}
-	offsets := make([]int, len(m.posts))
+	visible := m.visiblePosts()
+	offsets := make([]int, len(visible))
 	currentLine := startLine
 	var out string
-	for i := range m.posts {
+	for i, p := range visible {
 		offsets[i] = currentLine
-		rendered := m.renderPostItem(m.posts[i], i == m.postIndex)
+		rendered := m.renderPostItem(p, i == m.postIndex)
 		out += rendered + sep
 		currentLine += lipgloss.Height(rendered) + lineInc - 1
 	}
@@ -408,11 +433,12 @@ func (m TopicsModel) ensureSelectedVisible() TopicsModel {
 		}
 		itemHeight = lipgloss.Height(m.renderTopicItem(selectedIndex))
 	} else {
+		visible := m.visiblePosts()
 		selectedIndex = m.postIndex
-		if selectedIndex >= len(m.posts) {
+		if selectedIndex >= len(visible) {
 			return m
 		}
-		itemHeight = lipgloss.Height(m.renderPostItem(m.posts[selectedIndex], false))
+		itemHeight = lipgloss.Height(m.renderPostItem(visible[selectedIndex], false))
 	}
 
 	if selectedIndex >= len(m.itemOffsets) {
@@ -454,13 +480,14 @@ func (m TopicsModel) IsBrowsingTopic() bool { return m.activeTopic != "" }
 // GetFocusedURLs implements URLProvider. Returns URLs from the selected post when
 // in post-list view; returns nil when browsing the topic list.
 func (m TopicsModel) GetFocusedURLs() []string {
-	if m.view != viewTopicPosts || len(m.posts) == 0 {
+	if m.view != viewTopicPosts {
 		return nil
 	}
-	if m.postIndex < 0 || m.postIndex >= len(m.posts) {
+	visible := m.visiblePosts()
+	if m.postIndex < 0 || m.postIndex >= len(visible) {
 		return nil
 	}
-	p := m.posts[m.postIndex]
+	p := visible[m.postIndex]
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
 }
 

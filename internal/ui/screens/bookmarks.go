@@ -1,15 +1,14 @@
 package screens
 
 import (
-	"fmt"
-	"strings"
-	"time"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
+	"strings"
+	"time"
 )
 
 // LoadMoreBookmarksMsg is emitted when the user scrolls to the last item
@@ -55,16 +54,34 @@ type BookmarksModel struct {
 	err           error
 	loc           *time.Location
 	relaxed       bool
+	filterNSFW    bool
 }
 
 func NewBookmarksModel() BookmarksModel {
 	return BookmarksModel{}
 }
 
+// visibleItems returns the bookmarks shown given the FilterNSFW setting. Only
+// posts carry an NSFW flag; bookmarked replies have none and are always shown.
+func (m BookmarksModel) visibleItems() []model.Bookmark {
+	if !m.filterNSFW {
+		return m.items
+	}
+	out := m.items[:0:0]
+	for _, b := range m.items {
+		if b.Post != nil && b.Post.IsNSFW {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
 func (m BookmarksModel) IsLoaded() bool { return m.loaded }
 
 func (m BookmarksModel) SetFetching() BookmarksModel {
 	m.fetching = true
+	m.err = nil
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -78,6 +95,7 @@ func (m BookmarksModel) SetBookmarks(items []model.Bookmark, cursor string) Book
 	m.loading = false
 	m.fetching = false
 	m.loaded = true
+	m.err = nil
 	m.selectedIndex = 0
 	if m.ready {
 		m = m.refreshContent()
@@ -102,8 +120,11 @@ func (m BookmarksModel) MarkDeleted(id string) BookmarksModel {
 	for i, b := range m.items {
 		if b.ID == id {
 			m.items = append(m.items[:i], m.items[i+1:]...)
-			if m.selectedIndex >= len(m.items) && m.selectedIndex > 0 {
-				m.selectedIndex--
+			if vis := len(m.visibleItems()); m.selectedIndex >= vis {
+				m.selectedIndex = vis - 1
+				if m.selectedIndex < 0 {
+					m.selectedIndex = 0
+				}
 			}
 			break
 		}
@@ -118,6 +139,9 @@ func (m BookmarksModel) SetError(err error) BookmarksModel {
 	m.err = err
 	m.loading = false
 	m.fetching = false
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -129,6 +153,10 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 		m.relaxed = msg.Relaxed
 		if msg.Loc != nil {
 			m.loc = msg.Loc
+		}
+		if msg.Settings.FilterNSFW != m.filterNSFW {
+			m.filterNSFW = msg.Settings.FilterNSFW
+			m.selectedIndex = 0
 		}
 		if m.ready {
 			m = m.refreshContent()
@@ -159,7 +187,7 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 			}
 			return m, nil
 		case "down", "j":
-			if m.selectedIndex < len(m.items)-1 {
+			if m.selectedIndex < len(m.visibleItems())-1 {
 				m.selectedIndex++
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()
@@ -172,20 +200,22 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 			}
 			return m, nil
 		case "d":
-			if len(m.items) == 0 || m.selectedIndex >= len(m.items) {
+			visible := m.visibleItems()
+			if m.selectedIndex >= len(visible) {
 				return m, nil
 			}
-			b := m.items[m.selectedIndex]
+			b := visible[m.selectedIndex]
 			id := b.ID
 			m = m.MarkDeleted(id)
 			return m, func() tea.Msg {
 				return DeleteBookmarkMsg{BookmarkID: id, PostID: b.PostID, ReplyID: b.ReplyID}
 			}
 		case "enter":
-			if len(m.items) == 0 || m.selectedIndex >= len(m.items) {
+			visible := m.visibleItems()
+			if m.selectedIndex >= len(visible) {
 				return m, nil
 			}
-			b := m.items[m.selectedIndex]
+			b := visible[m.selectedIndex]
 			if b.Post != nil {
 				post := *b.Post
 				return m, func() tea.Msg { return ShowPostMsg{Post: post} }
@@ -229,7 +259,6 @@ func (m BookmarksModel) location() *time.Location {
 	return m.loc
 }
 
-
 func (m BookmarksModel) refreshContent() BookmarksModel {
 	content, offsets := m.buildContent()
 	m.itemOffsets = offsets
@@ -238,11 +267,12 @@ func (m BookmarksModel) refreshContent() BookmarksModel {
 }
 
 func (m BookmarksModel) ensureSelectedVisible() BookmarksModel {
-	if !m.ready || len(m.itemOffsets) == 0 || m.selectedIndex >= len(m.items) {
+	visible := m.visibleItems()
+	if !m.ready || len(m.itemOffsets) == 0 || m.selectedIndex >= len(visible) {
 		return m
 	}
 	itemStart := m.itemOffsets[m.selectedIndex]
-	itemHeight := lipgloss.Height(m.renderItem(m.items[m.selectedIndex], false))
+	itemHeight := lipgloss.Height(m.renderItem(visible[m.selectedIndex], false))
 	itemEnd := itemStart + itemHeight - 1
 	viewTop := m.viewport.YOffset
 	viewBottom := viewTop + m.viewport.Height - 1
@@ -262,7 +292,11 @@ func (m BookmarksModel) buildContent() (string, []int) {
 	if m.fetching {
 		return theme.Subtle.Render("  Loading bookmarks…"), nil
 	}
-	if len(m.items) == 0 {
+	visible := m.visibleItems()
+	if len(visible) == 0 {
+		if m.err != nil {
+			return theme.Subtle.Render("  couldn't load bookmarks"), nil
+		}
 		return theme.Subtle.Render("  no bookmarks yet — press b on a post to save it"), nil
 	}
 
@@ -273,10 +307,10 @@ func (m BookmarksModel) buildContent() (string, []int) {
 		lineInc = 1
 	}
 
-	offsets := make([]int, len(m.items))
+	offsets := make([]int, len(visible))
 	var sb strings.Builder
 	currentLine := 0
-	for i, b := range m.items {
+	for i, b := range visible {
 		offsets[i] = currentLine
 		rendered := m.renderItem(b, i == m.selectedIndex)
 		sb.WriteString(rendered)
@@ -351,11 +385,16 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 		line1 = left1
 	}
 
-	// Line 2: content preview truncated to align under the gap before the timestamp.
+	// Line 2: title (if set) or content preview, truncated to align under the timestamp.
 	rightWidth := lipgloss.Width(right1)
 	previewMax := max(innerWidth-rightWidth-1, 1)
-	preview := strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
-	line2 := theme.Base.Render(markdown.TruncateToWidth(preview, previewMax))
+	var previewText string
+	if b.Post != nil && b.Post.Title != "" {
+		previewText = b.Post.Title
+	} else {
+		previewText = strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
+	}
+	line2 := theme.Base.Render(markdown.TruncateToWidth(previewText, previewMax))
 
 	// Line 3: topics or "no topics" — always rendered so card height is fixed.
 	// Topics are truncated to innerWidth to prevent wrapping (which would break the 5-line guarantee).
@@ -402,9 +441,6 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 }
 
 func (m BookmarksModel) View() string {
-	if m.err != nil {
-		return theme.Error.Render(fmt.Sprintf("bookmarks error: %s", m.err))
-	}
 	if !m.ready {
 		return theme.Subtle.Render("  Loading bookmarks…")
 	}
@@ -413,10 +449,11 @@ func (m BookmarksModel) View() string {
 
 // GetFocusedURLs implements URLProvider. Returns URLs from the selected bookmark's content.
 func (m BookmarksModel) GetFocusedURLs() []string {
-	if len(m.items) == 0 || m.selectedIndex < 0 || m.selectedIndex >= len(m.items) {
+	visible := m.visibleItems()
+	if m.selectedIndex < 0 || m.selectedIndex >= len(visible) {
 		return nil
 	}
-	b := m.items[m.selectedIndex]
+	b := visible[m.selectedIndex]
 	if b.Post != nil {
 		return append(extractURLs(b.Post.Content), attachmentURLs(b.Post.Attachments)...)
 	}

@@ -54,6 +54,7 @@ func TestProfileSetFollowState_False(t *testing.T) {
 
 func TestProfileView_CountsDisplayed(t *testing.T) {
 	m := screens.NewProfileModel().SetUser(testUser())
+	m, _ = m.Update(screens.SharedConfigMsg{Settings: model.Settings{ShowFollowerCount: true}})
 	view := m.View()
 
 	if !strings.Contains(view, "35 followers") {
@@ -64,6 +65,16 @@ func TestProfileView_CountsDisplayed(t *testing.T) {
 	}
 	if !strings.Contains(view, "6 posts") {
 		t.Errorf("View should contain '6 posts', got:\n%s", view)
+	}
+}
+
+func TestProfileView_CountsHidden(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser())
+	// showFollowerCount defaults to false — counts must not appear
+	view := m.View()
+
+	if strings.Contains(view, "followers") {
+		t.Errorf("View should not contain 'followers' when showFollowerCount=false, got:\n%s", view)
 	}
 }
 
@@ -107,11 +118,11 @@ func TestProfileUpdate_FKey_EmitsUnfollowMsg_WhenFollowing(t *testing.T) {
 	}
 }
 
-
 // --- IncrementFollowersCount ---
 
 func TestProfileIncrementFollowersCount(t *testing.T) {
 	m := screens.NewProfileModel().SetUser(testUser()) // FollowersCount = 35
+	m, _ = m.Update(screens.SharedConfigMsg{Settings: model.Settings{ShowFollowerCount: true}})
 	m = m.IncrementFollowersCount(1)
 
 	view := m.View()
@@ -311,5 +322,67 @@ func TestProfileEditForm_ComposeCancel_ClosesForm(t *testing.T) {
 	m2, _ := m.Update(screens.ComposeCancelMsg{})
 	if m2.ComposeActive() {
 		t.Error("expected ComposeActive to be false after ComposeCancelMsg")
+	}
+}
+
+// --- FilterNSFW ---
+
+func profileWithPosts(posts []model.Post) screens.ProfileModel {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetUserPosts(posts, "")
+	// Switch to Posts tab (Info→Posts is one Tab press in view mode)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	return m
+}
+
+func TestProfile_FilterNSFW_HidesNSFWPost(t *testing.T) {
+	posts := []model.Post{
+		{ID: "pp1", AuthorUsername: "ragnar", Content: "safe"},
+		{ID: "pp2", AuthorUsername: "ragnar", Content: "nsfw", IsNSFW: true},
+		{ID: "pp3", AuthorUsername: "ragnar", Content: "also safe"},
+	}
+	m := profileWithPosts(posts)
+	m, _ = m.Update(nsfwFilterMsg(true))
+
+	// Navigate to end of visible list (2 visible, max index 1)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	// Enter should return pp3, not pp2
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	msg := cmd()
+	sp, ok := msg.(screens.ShowProfilePostMsg)
+	if !ok {
+		t.Fatalf("expected ShowProfilePostMsg, got %T", msg)
+	}
+	if sp.Post.ID != "pp3" {
+		t.Errorf("expected pp3 (safe), got %s", sp.Post.ID)
+	}
+}
+
+func TestProfile_FilterNSFW_Off_ShowsAll(t *testing.T) {
+	posts := []model.Post{
+		{ID: "pp1", AuthorUsername: "ragnar", Content: "safe"},
+		{ID: "pp2", AuthorUsername: "ragnar", Content: "nsfw", IsNSFW: true},
+	}
+	m := profileWithPosts(posts)
+	m, _ = m.Update(nsfwFilterMsg(false))
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	msg := cmd()
+	sp, ok := msg.(screens.ShowProfilePostMsg)
+	if !ok {
+		t.Fatalf("expected ShowProfilePostMsg, got %T", msg)
+	}
+	if sp.Post.ID != "pp2" {
+		t.Errorf("expected pp2 (nsfw), got %s", sp.Post.ID)
 	}
 }

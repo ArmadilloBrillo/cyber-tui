@@ -39,17 +39,26 @@ var settingsGroups = []settingsGroup{
 			{
 				label: "bookmark alerts", kind: "bool",
 				getBool: func(m SettingsModel) bool { return m.settings.Notifications.Bookmark },
-				toggle:  func(m SettingsModel) SettingsModel { m.settings.Notifications.Bookmark = !m.settings.Notifications.Bookmark; return m },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.settings.Notifications.Bookmark = !m.settings.Notifications.Bookmark
+					return m
+				},
 			},
 			{
 				label: "reply alerts", kind: "bool",
 				getBool: func(m SettingsModel) bool { return m.settings.Notifications.Reply },
-				toggle:  func(m SettingsModel) SettingsModel { m.settings.Notifications.Reply = !m.settings.Notifications.Reply; return m },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.settings.Notifications.Reply = !m.settings.Notifications.Reply
+					return m
+				},
 			},
 			{
 				label: "poke alerts", kind: "bool",
 				getBool: func(m SettingsModel) bool { return m.settings.Notifications.Poke },
-				toggle:  func(m SettingsModel) SettingsModel { m.settings.Notifications.Poke = !m.settings.Notifications.Poke; return m },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.settings.Notifications.Poke = !m.settings.Notifications.Poke
+					return m
+				},
 			},
 		},
 	},
@@ -61,16 +70,6 @@ var settingsGroups = []settingsGroup{
 				getBool: func(m SettingsModel) bool { return m.settings.FilterNSFW },
 				toggle:  func(m SettingsModel) SettingsModel { m.settings.FilterNSFW = !m.settings.FilterNSFW; return m },
 			},
-			{
-				label: "hide images in feed", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.settings.HideImagesInFeed },
-				toggle:  func(m SettingsModel) SettingsModel { m.settings.HideImagesInFeed = !m.settings.HideImagesInFeed; return m },
-			},
-			{
-				label: "hide audio in feed", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.settings.HideAudioInFeed },
-				toggle:  func(m SettingsModel) SettingsModel { m.settings.HideAudioInFeed = !m.settings.HideAudioInFeed; return m },
-			},
 		},
 	},
 	{
@@ -79,17 +78,26 @@ var settingsGroups = []settingsGroup{
 			{
 				label: "show follower count", kind: "bool",
 				getBool: func(m SettingsModel) bool { return m.settings.ShowFollowerCount },
-				toggle:  func(m SettingsModel) SettingsModel { m.settings.ShowFollowerCount = !m.settings.ShowFollowerCount; return m },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.settings.ShowFollowerCount = !m.settings.ShowFollowerCount
+					return m
+				},
 			},
 			{
 				label: "auto-watch on reply", kind: "bool",
 				getBool: func(m SettingsModel) bool { return m.settings.AutoWatchOnReply },
-				toggle:  func(m SettingsModel) SettingsModel { m.settings.AutoWatchOnReply = !m.settings.AutoWatchOnReply; return m },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.settings.AutoWatchOnReply = !m.settings.AutoWatchOnReply
+					return m
+				},
 			},
 			{
 				label: "default public post", kind: "bool",
 				getBool: func(m SettingsModel) bool { return m.settings.DefaultPublicPost },
-				toggle:  func(m SettingsModel) SettingsModel { m.settings.DefaultPublicPost = !m.settings.DefaultPublicPost; return m },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.settings.DefaultPublicPost = !m.settings.DefaultPublicPost
+					return m
+				},
 			},
 		},
 	},
@@ -104,11 +112,6 @@ var settingsGroups = []settingsGroup{
 					m.settings.TimeDisplayFormat = cycleStringEnum(m.settings.TimeDisplayFormat, []string{"datetime", "relative", "unix", "swatch"}, delta)
 					return m
 				},
-			},
-			{
-				label: "legacy menu order", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.settings.UseLegacyMenuOrder },
-				toggle:  func(m SettingsModel) SettingsModel { m.settings.UseLegacyMenuOrder = !m.settings.UseLegacyMenuOrder; return m },
 			},
 			{
 				label: "thread depth", kind: "enum",
@@ -222,13 +225,10 @@ func (m SettingsModel) IsDirty() bool {
 func settingsEqual(a, b model.Settings) bool {
 	return a.Notifications == b.Notifications &&
 		a.FilterNSFW == b.FilterNSFW &&
-		a.HideImagesInFeed == b.HideImagesInFeed &&
-		a.HideAudioInFeed == b.HideAudioInFeed &&
 		a.ShowFollowerCount == b.ShowFollowerCount &&
 		a.AutoWatchOnReply == b.AutoWatchOnReply &&
 		a.DefaultPublicPost == b.DefaultPublicPost &&
-		a.TimeDisplayFormat == b.TimeDisplayFormat &&
-		a.UseLegacyMenuOrder == b.UseLegacyMenuOrder
+		a.TimeDisplayFormat == b.TimeDisplayFormat
 }
 
 // flatItems returns the flat ordered list of all items across all groups.

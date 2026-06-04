@@ -211,6 +211,99 @@ func TestHTTPGetFeed_SendsCursor(t *testing.T) {
 	}
 }
 
+func TestHTTPCreatePost_SendsAllFields(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &gotBody)
+		writeOK(t, w, map[string]any{
+			"postId": "new-post-1",
+			"slug":   "my-title",
+			"title":  "My Title",
+		})
+	})))
+	c.Login("u@example.com", "pass") //nolint:errcheck
+
+	post, err := c.CreatePost("body text", "My Title", []string{"cyber"}, true, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if post.ID != "new-post-1" {
+		t.Errorf("post.ID = %q, want new-post-1", post.ID)
+	}
+	if post.Title != "My Title" {
+		t.Errorf("post.Title = %q, want My Title", post.Title)
+	}
+	if post.Slug != "my-title" {
+		t.Errorf("post.Slug = %q, want my-title", post.Slug)
+	}
+	if !post.IsPublic {
+		t.Error("expected post.IsPublic=true")
+	}
+	if !post.IsNSFW {
+		t.Error("expected post.IsNSFW=true")
+	}
+	if gotBody["title"] != "My Title" {
+		t.Errorf("request body title = %v, want My Title", gotBody["title"])
+	}
+	if gotBody["isPublic"] != true {
+		t.Errorf("request body isPublic = %v, want true", gotBody["isPublic"])
+	}
+	if gotBody["isNSFW"] != true {
+		t.Errorf("request body isNSFW = %v, want true", gotBody["isNSFW"])
+	}
+}
+
+func TestHTTPGetFeed_ParsesExtendedPostFields(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{
+				"postId":         "p1",
+				"authorId":       "u1",
+				"authorUsername": "neuromancer",
+				"content":        "hello",
+				"title":          "A Title",
+				"slug":           "a-title",
+				"guildId":        "g1",
+				"guildSlug":      "night-owls",
+				"isGuildThread":  true,
+				"topics":         []string{},
+				"isPublic":       false,
+				"isNSFW":         true,
+				"deleted":        false,
+				"createdAt":      "2025-01-01T12:00:00.000Z",
+			},
+		})
+	}))
+
+	posts, _, err := c.GetFeed("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("len(posts) = %d, want 1", len(posts))
+	}
+	p := posts[0]
+	if p.Title != "A Title" {
+		t.Errorf("Title = %q, want A Title", p.Title)
+	}
+	if p.Slug != "a-title" {
+		t.Errorf("Slug = %q, want a-title", p.Slug)
+	}
+	if p.GuildID != "g1" {
+		t.Errorf("GuildID = %q, want g1", p.GuildID)
+	}
+	if p.GuildSlug != "night-owls" {
+		t.Errorf("GuildSlug = %q, want night-owls", p.GuildSlug)
+	}
+	if !p.IsGuildThread {
+		t.Error("expected IsGuildThread=true")
+	}
+	if !p.IsNSFW {
+		t.Error("expected IsNSFW=true")
+	}
+}
+
 func TestHTTPGetOwnProfile_ParsesUser(t *testing.T) {
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeOK(t, w, map[string]string{
@@ -546,7 +639,7 @@ func TestHTTPGetNotifications_ParsesNotifs(t *testing.T) {
 				"actorUsername": "molly_millions",
 				"targetId":      "p1",
 				"targetType":    "reply",
-				"metadata":      map[string]any{"replyId": "r42"},
+				"metadata":      map[string]any{"replyId": "r42", "guildSlug": "chooms", "isGuildThread": true},
 			},
 			{
 				"id":            "n2",
@@ -578,6 +671,9 @@ func TestHTTPGetNotifications_ParsesNotifs(t *testing.T) {
 	}
 	if notifs[0].ReplyID != "r42" {
 		t.Errorf("replyID mismatch: got %q, want %q", notifs[0].ReplyID, "r42")
+	}
+	if notifs[0].GuildSlug != "chooms" {
+		t.Errorf("guildSlug mismatch: got %q, want %q", notifs[0].GuildSlug, "chooms")
 	}
 	if notifs[1].ID != "n2" || notifs[1].Read != true {
 		t.Errorf("notifs[1] mismatch: %+v", notifs[1])

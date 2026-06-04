@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
@@ -217,6 +218,17 @@ func (m ComposeModel) View() string {
 	if !m.active {
 		return ""
 	}
+	m.textarea.FocusedStyle.Text = theme.Base
+	m.textarea.FocusedStyle.CursorLine = theme.Base
+	m.textarea.BlurredStyle.Text = theme.Base
+	m.textarea.BlurredStyle.CursorLine = theme.Base
+	m.textarea.FocusedStyle.Placeholder = theme.Subtle
+	m.textarea.BlurredStyle.Placeholder = theme.Subtle
+	if m.textarea.Focused() {
+		_ = (&m.textarea).Focus()
+	} else {
+		(&m.textarea).Blur()
+	}
 	inner := lipgloss.JoinVertical(lipgloss.Left,
 		theme.Subtle.Render(m.context),
 		m.textarea.View(),
@@ -225,6 +237,326 @@ func (m ComposeModel) View() string {
 	if m.focused {
 		boxStyle = theme.ActiveBorder
 	}
+	if m.width > 2 {
+		boxStyle = boxStyle.Width(m.width - 2)
+	}
+	return boxStyle.Render(inner)
+}
+
+// postField identifies which input has focus inside a PostComposePanel.
+type postField int
+
+const (
+	postFieldTitle postField = iota
+	postFieldBody
+	postFieldTopics
+	postFieldPublic
+	postFieldNSFW
+	postFieldCount
+)
+
+// PostComposePanel is a unified single-box compose panel for new posts.
+// It combines title, body, and topics inputs with public/NSFW toggles
+// into a single bordered panel. Tab cycles through all fields; Space
+// toggles the public and NSFW checkboxes.
+type PostComposePanel struct {
+	titleInput  textinput.Model
+	textarea    textarea.Model
+	topicsInput textinput.Model
+	isPublic    bool
+	isNSFW      bool
+	focus       postField
+	active      bool
+	width       int
+	bodyLines   int
+}
+
+func NewPostComposePanel(width int) PostComposePanel {
+	ti := textinput.New()
+	ti.Placeholder = "title (optional)"
+	ti.Prompt = "" // the row label acts as the prompt
+
+	ta := textarea.New()
+	ta.CharLimit = 32768
+	ta.ShowLineNumbers = false
+	ta.Placeholder = "what's on your mind…"
+
+	top := textinput.New()
+	top.Placeholder = "go, my topic, …  max 3"
+	top.Prompt = "" // the row label acts as the prompt
+
+	m := PostComposePanel{
+		titleInput:  ti,
+		textarea:    ta,
+		topicsInput: top,
+		bodyLines:   composeMinLines,
+	}
+	return m.SetWidth(width)
+}
+
+// Open resets all fields and opens the panel with focus on the title input.
+func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
+	m.active = true
+	m.focus = postFieldTitle
+	m.isPublic = defaultPublic
+	m.isNSFW = false
+	m.titleInput.SetValue("")
+	m.topicsInput.SetValue("tui")
+	m.textarea.SetValue("")
+	m.bodyLines = composeMinLines
+	m.textarea.SetHeight(composeMinLines)
+	m.textarea.Blur()
+	m.topicsInput.Blur()
+	return m, m.titleInput.Focus()
+}
+
+// Close blurs all inputs and marks the panel inactive.
+func (m PostComposePanel) Close() PostComposePanel {
+	m.active = false
+	m.focus = postFieldTitle
+	m.titleInput.SetValue("")
+	m.titleInput.Blur()
+	m.textarea.SetValue("")
+	m.textarea.Blur()
+	m.topicsInput.Blur()
+	return m
+}
+
+func (m PostComposePanel) IsActive() bool     { return m.active }
+func (m PostComposePanel) Content() string    { return m.textarea.Value() }
+func (m PostComposePanel) TitleValue() string { return strings.TrimSpace(m.titleInput.Value()) }
+func (m PostComposePanel) TopicsRaw() string  { return m.topicsInput.Value() }
+func (m PostComposePanel) IsPublic() bool     { return m.isPublic }
+func (m PostComposePanel) IsNSFW() bool       { return m.isNSFW }
+
+// PanelHeight returns the total terminal rows the panel renders:
+// 2 (border) + 1 (title row) + 1 (sep) + bodyLines + 1 (sep) + 1 (topics row).
+func (m PostComposePanel) PanelHeight() int { return m.bodyLines + 6 }
+
+// SetWidth resizes all inner inputs to fit the new panel width.
+func (m PostComposePanel) SetWidth(w int) PostComposePanel {
+	m.width = w
+	innerW := w - 4 // border chars (2) + horizontal padding (1 each side)
+	if innerW < 1 {
+		innerW = 1
+	}
+	const (
+		labelW   = 7  // "title  " or "topics "
+		togglesW = 22 // "  [x] public  [ ] nsfw"
+		cursorW  = 1  // textinput.View() renders Width+1 (cursor always occupies one extra slot)
+	)
+	titleInputW := innerW - labelW - cursorW
+	if titleInputW < 1 {
+		titleInputW = 1
+	}
+	m.titleInput.Width = titleInputW
+
+	topicsInputW := innerW - labelW - togglesW - cursorW
+	if topicsInputW < 1 {
+		topicsInputW = 1
+	}
+	m.topicsInput.Width = topicsInputW
+
+	m.textarea.SetWidth(innerW)
+	return m
+}
+
+func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
+	switch m.focus {
+	case postFieldTitle:
+		m.titleInput.Blur()
+	case postFieldBody:
+		m.textarea.Blur()
+	case postFieldTopics:
+		m.topicsInput.Blur()
+	}
+	m.focus = postField((int(m.focus) + delta + int(postFieldCount)) % int(postFieldCount))
+	switch m.focus {
+	case postFieldTitle:
+		return m, m.titleInput.Focus()
+	case postFieldBody:
+		return m, m.textarea.Focus()
+	case postFieldTopics:
+		return m, m.topicsInput.Focus()
+	default: // postFieldPublic, postFieldNSFW
+		return m, nil
+	}
+}
+
+func (m PostComposePanel) recalcBodyHeight() PostComposePanel {
+	lines := strings.Count(m.textarea.Value(), "\n") + 1
+	n := lines
+	if n < composeMinLines {
+		n = composeMinLines
+	}
+	if n > composeMaxLines {
+		n = composeMaxLines
+	}
+	if n == m.bodyLines {
+		return m
+	}
+	growing := n > m.bodyLines
+	m.bodyLines = n
+	m.textarea.SetHeight(n)
+	if growing {
+		val := m.textarea.Value()
+		m.textarea.SetValue(val)
+		m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	}
+	return m
+}
+
+// Update handles key events and routes them to the focused field.
+func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
+	if !m.active {
+		return m, nil
+	}
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "ctrl+s":
+			content := m.textarea.Value()
+			return m, func() tea.Msg { return ComposeSubmitMsg{Content: content} }
+		case "esc":
+			return m, func() tea.Msg { return ComposeCancelMsg{} }
+		case "tab":
+			return m.moveFocus(1)
+		case "shift+tab":
+			return m.moveFocus(-1)
+		case " ":
+			switch m.focus {
+			case postFieldPublic:
+				m.isPublic = !m.isPublic
+				return m, nil
+			case postFieldNSFW:
+				m.isNSFW = !m.isNSFW
+				return m, nil
+			}
+		}
+	}
+	switch m.focus {
+	case postFieldTitle:
+		if km, ok := msg.(tea.KeyMsg); ok {
+			filtered, keep := filterAmbiguousKeyMsg(km)
+			if !keep {
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.titleInput, cmd = m.titleInput.Update(filtered)
+			return m, cmd
+		}
+		var cmd tea.Cmd
+		m.titleInput, cmd = m.titleInput.Update(msg)
+		return m, cmd
+	case postFieldBody:
+		if km, ok := msg.(tea.KeyMsg); ok {
+			if km.String() == "enter" {
+				m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				return m.recalcBodyHeight(), nil
+			}
+			filtered, keep := filterAmbiguousKeyMsg(km)
+			if !keep {
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.textarea, cmd = m.textarea.Update(filtered)
+			return m.recalcBodyHeight(), cmd
+		}
+		var cmd tea.Cmd
+		m.textarea, cmd = m.textarea.Update(msg)
+		return m.recalcBodyHeight(), cmd
+	case postFieldTopics:
+		if km, ok := msg.(tea.KeyMsg); ok {
+			filtered, keep := filterAmbiguousKeyMsg(km)
+			if !keep {
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.topicsInput, cmd = m.topicsInput.Update(filtered)
+			return m, cmd
+		}
+		var cmd tea.Cmd
+		m.topicsInput, cmd = m.topicsInput.Update(msg)
+		return m, cmd
+	}
+	// postFieldPublic, postFieldNSFW: no text input, only space handled above.
+	return m, nil
+}
+
+// View renders the unified compose panel as a single bordered box.
+func (m PostComposePanel) View() string {
+	if !m.active {
+		return ""
+	}
+	// Re-apply theme styles on the local copy so theme changes are reflected
+	// without having to reconstruct the panel.
+	m.titleInput.TextStyle = theme.Base
+	m.titleInput.PlaceholderStyle = theme.Subtle
+	m.topicsInput.TextStyle = theme.Base
+	m.topicsInput.PlaceholderStyle = theme.Subtle
+	m.textarea.FocusedStyle.Text = theme.Base
+	m.textarea.FocusedStyle.CursorLine = theme.Base
+	m.textarea.BlurredStyle.Text = theme.Base
+	m.textarea.BlurredStyle.CursorLine = theme.Base
+	m.textarea.FocusedStyle.Placeholder = theme.Subtle
+	m.textarea.BlurredStyle.Placeholder = theme.Subtle
+	// textarea holds an internal *Style pointer set by Focus/Blur pointing at
+	// the original stored model's field. Reset it on the local copy so it sees
+	// the style changes above.
+	if m.textarea.Focused() {
+		_ = (&m.textarea).Focus()
+	} else {
+		(&m.textarea).Blur()
+	}
+
+	innerW := m.width - 4
+	if innerW < 1 {
+		innerW = 1
+	}
+	sep := theme.Subtle.Render(strings.Repeat("─", innerW))
+
+	active := theme.Base
+	inactive := theme.Subtle
+
+	titleStyle := inactive
+	if m.focus == postFieldTitle {
+		titleStyle = active
+	}
+	titleRow := titleStyle.Render("title  ") + m.titleInput.View()
+
+	topicsStyle := inactive
+	if m.focus == postFieldTopics {
+		topicsStyle = active
+	}
+	pubCheck := "[ ]"
+	if m.isPublic {
+		pubCheck = "[x]"
+	}
+	nsfwCheck := "[ ]"
+	if m.isNSFW {
+		nsfwCheck = "[x]"
+	}
+	pubStyle := inactive
+	if m.focus == postFieldPublic {
+		pubStyle = active
+	}
+	nsfwStyle := inactive
+	if m.focus == postFieldNSFW {
+		nsfwStyle = active
+	}
+	topicsRow := topicsStyle.Render("topics ") +
+		m.topicsInput.View() +
+		"  " + pubStyle.Render(pubCheck+" public") +
+		"  " + nsfwStyle.Render(nsfwCheck+" nsfw")
+
+	inner := lipgloss.JoinVertical(lipgloss.Left,
+		titleRow,
+		sep,
+		m.textarea.View(),
+		sep,
+		topicsRow,
+	)
+	boxStyle := theme.ActiveBorder
 	if m.width > 2 {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}

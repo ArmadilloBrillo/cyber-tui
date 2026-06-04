@@ -1,4 +1,23 @@
-# ᑕ¥βєяรקค¢є API v0.3.6
+﻿# ᑕ¥βєяรקค¢є API v0.5.0
+
+## Access
+
+To use the API your account must either:
+
+- have API access explicitly granted on it, or
+- be a Cyberspace **supporter** account.
+
+Without one of these, all authenticated requests will be rejected.
+
+## Terms
+
+By using this API you agree that you will not:
+
+- **Scrape** the API — bulk-collect posts, replies, profiles, or any other content for redistribution, archival, or analysis outside the intended use of a personal client.
+- Run **bots** — automated accounts that post, reply, follow, react, or otherwise act without a human driving each action in real time.
+- Use the API to feed **AI systems** — no training, fine-tuning, embedding, or evaluation of language models on Cyberspace content; no LLM-driven agents that read or write through the API on your behalf.
+
+Cyberspace is a small, human social network. Accounts that violate these terms will be banned and their content removed. If you're building a personal client (TUI, mobile, desktop) that a real user drives, you're fine — that's exactly what the API is for.
 
 ## Authentication
 
@@ -128,6 +147,8 @@ Returns:
       "authorId": "uid",
       "authorUsername": "someone",
       "content": "markdown content",
+      "title": "Optional Title",
+      "slug": "optional-title",
       "topics": ["music", "linux"],
       "repliesCount": 5,
       "bookmarksCount": 2,
@@ -144,11 +165,21 @@ Returns:
 
 Pass `cursor` from the response to get the next page. `cursor` is `null` when there are no more results.
 
-### Get Entry
+### Get Entry by ID
 
 ```
 GET /v1/posts/:id
 ```
+
+For per-author slug lookup, use `GET /v1/users/:username/posts/:slug`.
+
+### Get Entry by Slug
+
+```
+GET /v1/users/:username/posts/:slug
+```
+
+Resolves an entry by its per-author URL slug. Returns the same shape as `GET /v1/posts/:id`. 404 if no entry exists for that `(username, slug)` pair.
 
 ### Create Entry
 
@@ -159,6 +190,8 @@ POST /v1/posts
 ```json
 {
   "content": "Your entry content (markdown)",
+  "title": "Optional Title",
+  "slug": "optional-slug",
   "topics": ["tag1", "tag2"],
   "isPublic": false,
   "isNSFW": false
@@ -166,11 +199,13 @@ POST /v1/posts
 ```
 
 - `content` -- required, max 32,768 characters
+- `title` -- optional, free-form, max 100 characters
+- `slug` -- optional, lowercase `[a-z0-9-]`, max 60 characters, unique per author. If omitted, one is generated server-side from the title, content, or attachments. If the slug is already taken by another of your posts, `-2`, `-3`, … is appended automatically. Reserved slugs (`blog`, `jukebox`, `public`, `replies`, `index`, `edit`, `new`, `admin`, anything starting with `_`) are rejected.
 - `topics` -- optional, max 3, must be lowercase
 - `isPublic` -- optional, makes entry visible without login
 - `isNSFW` -- optional, content warning flag
 
-Returns `{ "data": { "postId": "..." } }` (201).
+Returns `{ "data": { "postId": "...", "slug": "...", "title": "..." } }` (201). The `slug` field reflects the final stored slug, which may differ from what you submitted (collision suffix) or be derived from your content if omitted. `title` is only returned when set.
 
 Rate limit: 2/min, 15/day.
 
@@ -258,6 +293,16 @@ Returns paginated entries by the specified user, newest first.
 
 Rate limit: 45/min.
 
+### Get User's Entry by Slug
+
+```
+GET /v1/users/:username/posts/:slug
+```
+
+Returns a single entry matching the per-author slug. Same response shape as `GET /v1/posts/:id`. 404 if no entry exists for that `(username, slug)` pair.
+
+Rate limit: 45/min.
+
 ### List User's Replies
 
 ```
@@ -288,7 +333,7 @@ PATCH /v1/users/me
 }
 ```
 
-- `bio` -- max 127 characters, or `null` to clear
+- `bio` -- max 640 characters, or `null` to clear
 - `pinnedPostId` -- entry ID to pin, or `null` to unpin (must be your own entry)
 - `displayName` -- max 64 characters, or `null` to clear
 - `websiteUrl` -- must start with `http://` or `https://`, max 2048 characters, or `null` to clear
@@ -378,6 +423,142 @@ Rate limit: 3/min, 15/day.
 
 ---
 
+## Guilds
+
+Guilds are member groups with their own forum of threads. A user can belong to **one guild at a time**. Guilds are identified in the API by their **slug**.
+
+Founding a guild and editing its profile happen on the web, not through the API. The API covers discovery, membership, and the forum.
+
+### List Guilds
+
+```
+GET /v1/guilds?limit=20&cursor=<guildId>
+```
+
+Returns guilds with at least one member, most populated first. `cursor` is a guild ID.
+
+Each guild object:
+
+```json
+{
+  "id": "guildId",
+  "name": "Night Owls",
+  "slug": "night-owls",
+  "founderId": "uid",
+  "founderUsername": "someone",
+  "icon": "🦉",
+  "profilePictureUrl": "https://…",
+  "bio": "We never sleep",
+  "link": "https://…",
+  "linkText": "our site",
+  "memberCount": 42,
+  "createdAt": "2026-03-27T10:12:01.516Z"
+}
+```
+
+Rate limit: 30/min.
+
+### Get Guild
+
+```
+GET /v1/guilds/:slug
+```
+
+Returns the guild object plus the caller's membership state: `isMember` (boolean) and `role` (`"founder"`, `"member"`, or `null`). 404 if no guild has that slug.
+
+### List Guild Members
+
+```
+GET /v1/guilds/:slug/members?limit=20&cursor=<membershipId>
+```
+
+Returns memberships oldest-joined first, enriched with each member's `displayName` and `profilePictureUrl`. Banned and shadow-banned members are omitted. `cursor` is a membership ID.
+
+```json
+{
+  "data": [
+    {
+      "membershipId": "guildId_uid",
+      "guildId": "guildId",
+      "guildSlug": "night-owls",
+      "userId": "uid",
+      "username": "someone",
+      "role": "member",
+      "joinedAt": "2026-03-27T10:12:01.516Z",
+      "displayName": "Some One",
+      "profilePictureUrl": "https://…"
+    }
+  ],
+  "cursor": null
+}
+```
+
+Rate limit: 30/min.
+
+### List Guild Threads
+
+```
+GET /v1/guilds/:slug/posts?limit=20&cursor=<postId>
+```
+
+Returns the guild's threads, most recently active first. Threads are entries (same shape as `GET /v1/posts/:id`) carrying `guildId`, `guildSlug`, and `isGuildThread: true`. `cursor` is a post ID.
+
+Rate limit: 45/min.
+
+### Create Guild Thread
+
+```
+POST /v1/guilds/:slug/posts
+```
+
+Guild forums are open: any authenticated user can start a thread (membership is not required), matching the web.
+
+```json
+{
+  "content": "Thread body (markdown)",
+  "title": "Optional Title",
+  "slug": "optional-slug",
+  "topics": ["tag1", "tag2"]
+}
+```
+
+- `content` -- required, max 32,768 characters
+- `title` -- optional, max 100 characters
+- `slug` -- optional; same rules and auto-generation as `POST /v1/posts`
+- `topics` -- optional, max 3, lowercase
+
+Returns `{ "data": { "postId": "...", "slug": "...", "title": "..." } }` (201).
+
+**Replying to a thread** uses the normal `POST /v1/replies` with the thread's `postId` — a guild thread is an ordinary entry. Replies posted to a guild thread inherit its `guildId`, and posting a reply bumps the thread's activity so it rises in the thread list.
+
+Rate limit: 2/min, 15/day.
+
+### Join a Guild
+
+```
+POST /v1/guilds/:slug/join
+```
+
+No body. Joins the guild as a `member`. Returns `{ "data": { "guildId": "...", "role": "member" } }` (201).
+
+A user can only be in one guild. If you're already in another guild, this returns `409` — leave your current guild first.
+
+Rate limit: 3/min, 15/day.
+
+### Leave a Guild
+
+```
+POST /v1/guilds/:slug/leave
+```
+
+No body. Removes your membership and clears your guild fields. Returns `{ "data": { "guildId": "..." } }`.
+
+Founders cannot leave through the API (`403`) — manage the guild on the web. `404` if you aren't a member.
+
+Rate limit: 3/min, 15/day.
+
+---
+
 ## Notifications
 
 ### List Notifications
@@ -394,6 +575,47 @@ Query params:
 Notification types: `bookmark`, `reply`, `thread_reply`, `new_follower`, `unfollowed`, `new_post_following`, `new_post_friend`, `poke`, `chat_mention`, `post_mention`, `reply_mention`, `dm_message`, `guild_new_thread`, `supporter_granted`, `supporter_removed`, `hacker_granted`, `hacker_removed`, `image_permission_granted`, `image_permission_removed`, `attachment_permission_granted`, `attachment_permission_removed`, `system_ban`.
 
 Rate limit: 30/min.
+
+### Notification object
+
+Each notification has this shape:
+
+```json
+{
+  "id": "notificationId",
+  "userId": "recipientUid",
+  "type": "reply",
+  "actorId": "actorUid",
+  "actorUsername": "someone",
+  "targetId": "postId",
+  "targetType": "post",
+  "read": false,
+  "createdAt": "2026-06-03T12:00:00.000Z",
+  "metadata": { "postSlug": "my-entry", "replyId": "replyId", "authorUsername": "me" }
+}
+```
+
+- `actorId` / `actorUsername` — who triggered the notification (denormalized so no extra lookup is needed).
+- `targetType` — `post` or `reply`; `targetId` is the related entry's ID.
+- `read` — always `false` on creation.
+- `reason` — present only on some system notifications (e.g. `system_ban`).
+- `metadata` — type-dependent context. Common keys: `postSlug` and `authorUsername` (build the `/{username}/{slug}` deep link), `replyId` (the relevant reply), `postContent` / `replyContent` (the mention source text), and for guild threads `guildSlug`, `guildName`, `isGuildThread`, `threadId`. `metadata` is open-ended — clients should treat unknown keys as optional.
+
+`guildSlug` / `isGuildThread` here live inside notification `metadata`; the same names also appear as top-level fields on guild-thread **entries** (see Guilds).
+
+### How notifications are generated
+
+The API emits these notifications server-side — clients don't create them:
+
+- `new_follower` — someone follows you.
+- `bookmark` — someone bookmarks your entry or reply.
+- `reply` — someone replies to your entry.
+- `new_post_following` / `new_post_friend` — someone you follow posts a new entry. `new_post_friend` is sent when the follow is **mutual** (you follow each other); `new_post_following` when it's one-way.
+- `post_mention` / `reply_mention` — you're `@`-mentioned in an entry or reply. Mentions use the `@username` syntax (case-insensitive). Mentioning a user in an entry also subscribes them to that thread, so they receive `thread_reply` for future replies.
+- `thread_reply` — a new reply is posted to a thread you're watching.
+- `guild_new_thread` — a new thread is posted in a guild you belong to.
+
+Notifications are never sent to yourself for your own actions, and a user who would otherwise receive several notifications for the same event gets only one (the most specific). Remaining types in the list above are produced by other parts of the platform (DMs, chat, moderation, role/permission changes).
 
 ### Unread Count
 
@@ -598,31 +820,38 @@ All responses follow this structure:
 
 | Action | Per Minute | Per Day |
 |--------|-----------|---------|
-| Entries | 2 | 10 |
-| Replies | 3 | 10 |
-| Follows | 3 | 10 |
-| Unfollows | 3 | 10 |
-| Notes | 3 | 20 |
-| Bookmarks | 5 | 50 |
-| Profile updates | 2 | 10 |
-| Settings updates | 2 | 10 |
+| Entries | 2 | 15 |
+| Replies | 3 | 15 |
+| Follows | 3 | 15 |
+| Unfollows | 3 | 15 |
+| Notes | 3 | 30 |
+| Bookmarks | 5 | 75 |
+| Guild threads | 2 | 15 |
+| Guild join | 3 | 15 |
+| Guild leave | 3 | 15 |
+| Profile updates | 2 | 15 |
+| Settings updates | 2 | 15 |
+
+`POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour.
 
 ### Read Actions (Anti-Scraping)
 
 | Endpoint | Per Minute |
 |----------|-----------|
-| List entries | 30 |
-| List replies | 30 |
-| List user entries | 30 |
-| List user replies | 30 |
-| List topic entries | 30 |
-| List topics | 20 |
-| List bookmarks | 20 |
-| List notes | 20 |
+| List entries | 45 |
+| List replies | 45 |
+| List user entries | 45 |
+| List user replies | 45 |
+| List topic entries | 45 |
+| List topics | 30 |
+| List bookmarks | 30 |
+| List notes | 30 |
 | List notifications | 30 |
 | Unread notification count | 30 |
-| List followers/following | 20 |
-| View user profile | 20 |
+| List followers/following | 30 |
+| View user profile | 30 |
+| List guilds / members | 30 |
+| List guild threads | 45 |
 
 Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for daily, 60 seconds for per-minute).
 
@@ -631,8 +860,10 @@ Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for 
 | Field | Max Length |
 |-------|-----------|
 | Entry/reply/note content | 32,768 chars |
+| Entry title | 100 chars |
+| Entry slug | 60 chars, `[a-z0-9-]` |
 | Chat/DM message | 2,048 chars |
-| Bio | 127 chars |
+| Bio | 640 chars |
 | Display name | 64 chars |
 | Website URL | 2,048 chars |
 | Website name | 64 chars |
