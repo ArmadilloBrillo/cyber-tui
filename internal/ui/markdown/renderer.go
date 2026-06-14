@@ -454,6 +454,16 @@ func stripAmbiguousRunes(s string) string {
 			// strip: zero-width chars, and grapheme-extend modifiers (e.g. ﾟ U+FF9F)
 			// that runewidth.StringWidth treats as 0-width in context but the terminal
 			// renders as 1 column (wcwidth), causing layout overflow
+		case unicode.Is(unicode.Cf, r):
+			// strip: Unicode Format characters (e.g. U+06DD ARABIC END OF AYAH) carry
+			// no visible glyph in terminal fonts; the terminal renders a wide fallback
+			// (enclosing mark, tofu box) that overflows the measured column count.
+		case r >= 'ʰ' && r <= '˿':
+			// Spacing Modifier Letters (IPA/phonetic diacritics) are absent from most
+			// terminal fonts; the terminal substitutes a wide fallback glyph
+			// (e.g. ▼ for U+02D5 MODIFIER LETTER DOWN TACK) that overflows the
+			// measured column count.
+			b.WriteRune(' ')
 		case runewidth.IsAmbiguousWidth(r) && !unicode.IsLetter(r):
 			if typographicPunct[r] {
 				b.WriteRune(r) // common typographic punct — 1 column in Western terminals
