@@ -778,7 +778,11 @@ func (m ProfileModel) infoTabView() string {
 
 	var rows []string
 
-	rows = append(rows, markdown.Render(m.user.Bio, contentW))
+	bioLines := strings.Split(m.user.Bio, "\n")
+	for i, line := range bioLines {
+		bioLines[i] = wrapBioLine(line, contentW)
+	}
+	rows = append(rows, theme.Base.Render(strings.Join(bioLines, "\n")))
 
 	if m.user.WebsiteUrl != "" || m.user.WebsiteName != "" {
 		val := m.user.WebsiteName
@@ -1008,6 +1012,33 @@ func (m ProfileModel) renderFollowItem(f model.Follow, selected bool) string {
 func truncateStr(s string, maxW int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	return markdown.TruncateToWidth(s, maxW)
+}
+
+// wrapBioLine word-wraps a single bio line to fit within width columns.
+// Lines already within width are returned unchanged, preserving any intentional
+// whitespace (ASCII art, indentation). Lines that exceed width are split at
+// word boundaries; internal whitespace is normalised for prose readability.
+// Lines with no word boundaries (e.g. a long URL or art border) are kept as-is.
+func wrapBioLine(line string, width int) string {
+	if lipgloss.Width(line) <= width {
+		return line
+	}
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return line
+	}
+	var lines []string
+	current := words[0]
+	for _, word := range words[1:] {
+		if lipgloss.Width(current+" "+word) <= width {
+			current += " " + word
+		} else {
+			lines = append(lines, current)
+			current = word
+		}
+	}
+	lines = append(lines, current)
+	return strings.Join(lines, "\n")
 }
 
 func (m ProfileModel) editFormView(username string) string {
