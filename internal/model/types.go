@@ -26,6 +26,18 @@ type User struct {
 	FollowingCount    int
 	PostsCount        int
 	GuildSlug         string // empty when not a guild member
+	GuildID           string
+	GuildName         string
+	GuildIcon         string
+	ProfilePictureUrl string
+	IsSupporter       bool
+	SupporterIcon     string
+	SerialNumber      int
+	PublicPostsCount  int
+	HasPublicPosts    bool
+	CreatedAt         time.Time
+	LastActiveAt      time.Time
+	UpdatedAt         time.Time
 }
 
 // Follow maps to a record returned by GET /v1/follows.
