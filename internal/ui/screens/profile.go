@@ -14,7 +14,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
-const bioCharLimit = 127
+const bioCharLimit = 640
 
 // Field indices for the profile edit form.
 const (
@@ -703,6 +703,23 @@ func (m ProfileModel) View() string {
 		))
 	}
 
+	// Build right-aligned metadata for the username line: #serial · joined.
+	var metaParts []string
+	if m.user.SerialNumber > 0 {
+		metaParts = append(metaParts, fmt.Sprintf("#%d", m.user.SerialNumber))
+	}
+	if !m.user.CreatedAt.IsZero() {
+		metaParts = append(metaParts, m.user.CreatedAt.Format("Jan 2006"))
+	}
+	usernameLine := username
+	if len(metaParts) > 0 && m.width > 0 {
+		meta := theme.Subtle.Render(strings.Join(metaParts, " · "))
+		gap := m.width - lipgloss.Width(username) - lipgloss.Width(meta)
+		if gap > 1 {
+			usernameLine = username + strings.Repeat(" ", gap) + meta
+		}
+	}
+
 	// Tab bar — pinned to terminal width to prevent terminal-side line wrapping,
 	// which would cause Bubble Tea's line-diff renderer to miscalculate cursor
 	// positions and leave ghost lines on re-render (observed on WSL/Windows Terminal).
@@ -734,7 +751,7 @@ func (m ProfileModel) View() string {
 		content = m.followListTabView(m.followers, tabFollowers, "followers")
 	}
 
-	headerParts := []string{username}
+	headerParts := []string{usernameLine}
 	if m.showFollowerCount {
 		headerParts = append(headerParts, counts)
 	}
@@ -748,22 +765,33 @@ func (m ProfileModel) View() string {
 
 // infoTabView renders the Info tab content (bio, website, location, hint).
 func (m ProfileModel) infoTabView() string {
+	// lbl pads the keyword to a fixed width so all values left-align.
+	// "supporter" is the longest keyword at 9 chars; total label = 11 ("keyword: ").
+	lbl := func(s string) string {
+		return theme.Subtle.Render(fmt.Sprintf("%-9s: ", s))
+	}
+
+	contentW := m.width
+	if contentW > 80 || contentW < 1 {
+		contentW = 80
+	}
+
 	var rows []string
 
-	rows = append(rows, theme.Base.Render(m.user.Bio))
+	rows = append(rows, markdown.Render(m.user.Bio, contentW))
 
 	if m.user.WebsiteUrl != "" || m.user.WebsiteName != "" {
-		label := m.user.WebsiteName
-		if label == "" {
-			label = m.user.WebsiteUrl
+		val := m.user.WebsiteName
+		if val == "" {
+			val = m.user.WebsiteUrl
 		} else if m.user.WebsiteUrl != "" {
-			label = label + "  " + theme.Subtle.Render(m.user.WebsiteUrl)
+			val = val + "  " + theme.Subtle.Render(m.user.WebsiteUrl)
 		}
-		rows = append(rows, "", theme.Subtle.Render("web: ")+theme.Base.Render(label))
+		rows = append(rows, "", lbl("Website")+theme.Base.Render(val))
 	}
 
 	if m.user.WebsiteImageUrl != "" {
-		rows = append(rows, theme.Subtle.Render("img: ")+theme.Base.Render(m.user.WebsiteImageUrl))
+		rows = append(rows, lbl("img")+theme.Base.Render(m.user.WebsiteImageUrl))
 	}
 
 	if m.user.LocationName != "" {
@@ -771,11 +799,32 @@ func (m ProfileModel) infoTabView() string {
 		if m.user.LocationLatitude != 0 || m.user.LocationLongitude != 0 {
 			loc += fmt.Sprintf("  (%g, %g)", m.user.LocationLatitude, m.user.LocationLongitude)
 		}
-		rows = append(rows, theme.Subtle.Render("loc: ")+theme.Base.Render(loc))
+		rows = append(rows, lbl("Location")+theme.Base.Render(loc))
 	} else if m.user.LocationLatitude != 0 || m.user.LocationLongitude != 0 {
-		rows = append(rows, theme.Subtle.Render("loc: ")+
+		rows = append(rows, lbl("Location")+
 			theme.Base.Render(fmt.Sprintf("%g, %g", m.user.LocationLatitude, m.user.LocationLongitude)))
 	}
+
+	guildName := m.user.GuildName
+	if guildName == "" {
+		guildName = m.user.GuildSlug
+	}
+	if guildName != "" {
+		rows = append(rows, lbl("Guild")+theme.Base.Render(guildName))
+	}
+
+	if m.user.ProfilePictureUrl != "" {
+		rows = append(rows, lbl("Picture")+theme.Base.Render(m.user.ProfilePictureUrl))
+	}
+
+	supporterVal := "no"
+	if m.user.IsSupporter {
+		supporterVal = "yes"
+		if m.user.SupporterIcon != "" {
+			supporterVal = "yes (" + m.user.SupporterIcon + ")"
+		}
+	}
+	rows = append(rows, lbl("Supporter")+theme.Base.Render(supporterVal))
 
 	rows = append(rows, "")
 
@@ -1019,6 +1068,9 @@ func (m ProfileModel) GetFocusedURLs() []string {
 	}
 	if m.user.WebsiteImageUrl != "" {
 		urls = append(urls, urlutil.NormalizeURL(m.user.WebsiteImageUrl))
+	}
+	if m.user.ProfilePictureUrl != "" {
+		urls = append(urls, urlutil.NormalizeURL(m.user.ProfilePictureUrl))
 	}
 	return urls
 }
