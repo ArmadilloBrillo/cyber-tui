@@ -320,6 +320,42 @@ func TestRender_HalfwidthKatakanaModifierStripped(t *testing.T) {
 	}
 }
 
+func TestRender_CfFormatCharacterStripped(t *testing.T) {
+	// U+06DD ARABIC END OF AYAH is a Unicode Cf (Format) character. Terminal fonts
+	// lack a glyph for it and substitute a wide fallback (enclosing mark / tofu box)
+	// that overflows the measured column count. It must be stripped.
+	raw := Render("hello \u06dd world", 80)
+	if strings.ContainsRune(strip(raw), '\u06dd') {
+		t.Errorf("Cf character U+06DD should be stripped: %q", strip(raw))
+	}
+	if !strings.Contains(strip(raw), "hello") || !strings.Contains(strip(raw), "world") {
+		t.Errorf("surrounding text not preserved: %q", strip(raw))
+	}
+}
+
+func TestRender_SpacingModifierLetterReplacedWithSpace(t *testing.T) {
+	// U+02D5 MODIFIER LETTER DOWN TACK is in the Spacing Modifier Letters block
+	// (U+02B0–U+02FF). Terminal fonts substitute it with a wide fallback glyph
+	// (e.g. ▼) that overflows the measured column count. It must become a space.
+	raw := Render("hello ˕ world", 80)
+	if strings.ContainsRune(strip(raw), '˕') {
+		t.Errorf("Spacing Modifier Letter U+02D5 should be replaced: %q", strip(raw))
+	}
+	if !strings.Contains(strip(raw), "hello") || !strings.Contains(strip(raw), "world") {
+		t.Errorf("surrounding text not preserved: %q", strip(raw))
+	}
+}
+
+func TestRender_KaomojiCardHeight(t *testing.T) {
+	// Regression: reply HYZ9p6qMWRynM608LhhS contained U+06DD and U+02D5 which
+	// caused terminal line overflow, displacing the card's bottom border.
+	content := "༼;´༎ຶ \u06dd ༎ຶ༽ ---- (•˕ •マ.ᐟ"
+	out := Render(content, 76)
+	if h := lipgloss.Height(out); h != 1 {
+		t.Errorf("kaomoji should render as 1 line, got %d: %q", h, out)
+	}
+}
+
 func TestRender_DoubleWidthPreserved(t *testing.T) {
 	// Double-wide characters (CJK, fullwidth) must pass through unchanged:
 	// runewidth, lipgloss, and terminal wcwidth all agree on 2 columns, so
