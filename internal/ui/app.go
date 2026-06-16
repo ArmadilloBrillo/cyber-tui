@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -17,6 +18,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
@@ -142,6 +144,22 @@ type App struct {
 	// maxThreadDepth is the local config value for reply nesting depth. Defaults to 3.
 	maxThreadDepth int
 
+	// graphicsProtocol is the terminal image display protocol detected at startup.
+	// ProtocolNone means no image display is available and URLs open in a browser.
+	graphicsProtocol imgview.GraphicsProtocol
+
+	// imageViewer is the user's preference from config.ImageViewer. When "browser",
+	// image URLs always open in the OS browser even if a protocol is detected.
+	imageViewer string
+
+	// imageModal holds the state for the inline image overlay. When imageModalOpen
+	// is true, View composites the encoded image sequence over the base content.
+	imageModalOpen     bool
+	imageModalEncoded  string
+	imageModalCols     int
+	imageModalRows     int
+	imageNeedsCleanup  bool // true for one frame after modal closes, to delete Kitty placement
+
 	// ephemeral marks an SSH-hosted session whose state must never be read from
 	// or written to the host operator's config file.
 	ephemeral bool
@@ -217,6 +235,14 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.loc = s.GetLocation()
 	a.wanderLust = s.WanderLust
 	a.maxThreadDepth = s.GetMaxThreadDepth()
+	a.imageViewer = s.ImageViewer
+	return a
+}
+
+// WithGraphicsProtocol sets the terminal graphics protocol detected at startup.
+// When proto is ProtocolNone the image viewer feature is disabled entirely.
+func (a App) WithGraphicsProtocol(proto imgview.GraphicsProtocol) App {
+	a.graphicsProtocol = proto
 	return a
 }
 
@@ -261,6 +287,12 @@ func (a App) Init() tea.Cmd {
 // handled first and always falls through to delegateUpdate so the active
 // screen can also react to it.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// imageNeedsCleanup is a one-render-cycle flag: it is set true by the
+	// keypress that closes the modal and cleared here at the very start of the
+	// next Update call. This guarantees the cleanup frame is rendered before
+	// the flag is cleared, with no goroutine race.
+	a.imageNeedsCleanup = false
+
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
 		return a, a.delegateUpdate(msg)
@@ -271,6 +303,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(tea.KeyMsg); ok && a.notifyText != "" {
 		a.notifyText = ""
 		a.notifyGen++
+	}
+	// Any keypress closes the image modal. Consume the key so it doesn't
+	// accidentally trigger another action while the modal is visible.
+	if _, ok := msg.(tea.KeyMsg); ok && a.imageModalOpen {
+		a.imageModalOpen = false
+		a.imageNeedsCleanup = (a.graphicsProtocol == imgview.ProtocolKitty)
+		return a, nil
 	}
 	if a2, cmd, ok := a.handleKeys(msg); ok {
 		return a2, cmd
@@ -317,6 +356,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleNotify(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleImageViewer(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleErr(msg); ok {
 		return a2, cmd
 	}
@@ -344,7 +386,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, OwnGuildSlug: a.currentUser.GuildSlug}
+	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, OwnGuildSlug: a.currentUser.GuildSlug}
 	*a = a.updateAll(msg)
 }
 
@@ -769,6 +811,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		wl := msg.WanderLust
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
+		iv := msg.ImageViewer
 		return a, func() tea.Msg {
 			if err := a.client.UpdateSettings(s); err != nil {
 				return actionErrMsg{err}
@@ -777,8 +820,9 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.WanderLust = wl
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
+				cfg.ImageViewer = iv
 			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv}
 		}, true
 
 	case settingsSavedMsg:
@@ -786,8 +830,9 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.wanderLust = msg.wanderLust
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
+		a.imageViewer = msg.imageViewer
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer)
 		a.broadcastConfig()
 		a.refreshViewports()
 		return a, nil, true
@@ -1436,6 +1481,49 @@ func (a App) View() string {
 	if a.urlPickerOpen {
 		return overlayCenter(base, a.renderURLPicker(), a.width, a.height)
 	}
+	if a.imageModalOpen {
+		textModal := a.renderImageModal()
+		composed := overlayCenter(base, textModal, a.width, a.height)
+		// Compute the same offsets overlayCenter used so we can position
+		// the image sequence inside the border without embedding it in the
+		// overlay string (which would corrupt overlayCenter's ANSI splicing).
+		modalW := lipgloss.Width(textModal)
+		modalH := len(strings.Split(textModal, "\n"))
+		xOff := (a.width - modalW) / 2
+		yOff := (a.height - modalH) / 2
+		if xOff < 0 {
+			xOff = 0
+		}
+		if yOff < 0 {
+			yOff = 0
+		}
+		// theme.ActiveBorder: 1-char border + 1-char horizontal padding on each
+		// side. Image content therefore starts 2 cols right of the border edge.
+		// ANSI cursor sequences are 1-indexed; the border top row is yOff+1.
+		imgRow := yOff + 2 // past top border row (1-indexed)
+		imgCol := xOff + 3 // past border(1) + padding(1), 1-indexed
+		// Append cursor movement + image + cursor restore. These become part of
+		// the last "line" in Bubble Tea's diff renderer so they are written when
+		// that line changes without disrupting the fixed-height view.
+		return composed + fmt.Sprintf("\x1b[%d;%dH%s\x1b[%d;1H", imgRow, imgCol, a.imageModalEncoded, a.height)
+	}
+	if a.imageNeedsCleanup && a.graphicsProtocol == imgview.ProtocolKitty {
+		// Inject the Kitty delete-all command onto the line that held the modal's
+		// top border. That line visually changed (border → normal content) so
+		// Bubble Tea's diff renderer will rewrite it, delivering the delete
+		// sequence to the terminal and clearing the lingering image pixels.
+		// Modal height = imageModalRows blank lines + 2 border lines.
+		modalH := a.imageModalRows + 2
+		yOff := (a.height - modalH) / 2
+		if yOff < 0 {
+			yOff = 0
+		}
+		lines := strings.Split(base, "\n")
+		if yOff < len(lines) {
+			lines[yOff] = "\x1b_Ga=d,d=A\x1b\\" + lines[yOff]
+		}
+		return strings.Join(lines, "\n")
+	}
 	return base
 }
 
@@ -1947,7 +2035,8 @@ func (a App) handleOpenURL(urls []string) (App, tea.Cmd) {
 }
 
 // routeURL navigates to an internal screen for known cyberspace.online paths,
-// or opens the URL in the OS browser for everything else.
+// opens images in the terminal viewer when supported, or falls through to the
+// OS default browser.
 func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 	parsed, err := neturl.Parse(rawURL)
 	if err != nil {
@@ -1960,6 +2049,11 @@ func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 			return a, a.loadUserProfileCmd(parts[1])
 		}
 	}
+	if urlutil.IsImageURL(rawURL) &&
+		a.graphicsProtocol != imgview.ProtocolNone &&
+		a.imageViewer != "browser" {
+		return a.openImageInTerminal(rawURL)
+	}
 	return a, openExternalURL(rawURL)
 }
 
@@ -1969,6 +2063,48 @@ func openExternalURL(u string) tea.Cmd {
 		_ = urlutil.OpenURL(u)
 		return nil
 	}
+}
+
+// openImageInTerminal fetches rawURL, encodes it for the detected graphics
+// protocol, and returns a command that sends an imageFetchedMsg when done.
+func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
+	proto := a.graphicsProtocol
+	displayCols := a.width * 4 / 5
+	return a, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		img, err := imgview.Fetch(ctx, rawURL)
+		if err != nil {
+			return imageFetchedMsg{rawURL: rawURL, err: err}
+		}
+		switch proto {
+		case imgview.ProtocolKitty:
+			encoded, cols, rows := imgview.EncodeKitty(img, displayCols)
+			return imageFetchedMsg{rawURL: rawURL, encoded: encoded, cols: cols, rows: rows}
+		case imgview.ProtocolITerm2:
+			encoded, cols, rows, err := imgview.EncodeITerm2(img, displayCols)
+			return imageFetchedMsg{rawURL: rawURL, encoded: encoded, cols: cols, rows: rows, err: err}
+		default:
+			return imageFetchedMsg{rawURL: rawURL, err: fmt.Errorf("no graphics protocol")}
+		}
+	}
+}
+
+// handleImageViewer processes image fetch results. On success it opens the
+// inline modal overlay; on failure it silently falls back to the browser.
+func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch m := msg.(type) {
+	case imageFetchedMsg:
+		if m.err != nil {
+			return a, openExternalURL(m.rawURL), true
+		}
+		a.imageModalEncoded = m.encoded
+		a.imageModalCols = m.cols
+		a.imageModalRows = m.rows
+		a.imageModalOpen = true
+		return a, nil, true
+	}
+	return a, nil, false
 }
 
 // handleURLPickerKey processes keyboard input while the URL picker overlay is open.
@@ -1998,6 +2134,11 @@ func (a App) renderURLPicker() string {
 	items := make([]string, len(a.urlPickerItems))
 	for i, u := range a.urlPickerItems {
 		display := u
+		if urlutil.IsImageURL(u) &&
+			a.graphicsProtocol != imgview.ProtocolNone &&
+			a.imageViewer != "browser" {
+			display = "[img] " + display
+		}
 		if len(display) > 60 {
 			display = display[:57] + "..."
 		}
@@ -2011,6 +2152,19 @@ func (a App) renderURLPicker() string {
 	rows := append([]string{title, ""}, items...)
 	rows = append(rows, "", hint)
 	return theme.ActiveBorder.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
+}
+
+// renderImageModal returns the bordered text-only shell for the image overlay.
+// The image escape sequence is NOT embedded here; it is injected separately in
+// View() via ANSI cursor movement so that overlayCenter never sees binary
+// protocol data, which would corrupt the ANSI-aware string splicing.
+func (a App) renderImageModal() string {
+	blankLine := strings.Repeat(" ", a.imageModalCols)
+	lines := make([]string, a.imageModalRows)
+	for i := range lines {
+		lines[i] = blankLine
+	}
+	return theme.ActiveBorder.Render(strings.Join(lines, "\n"))
 }
 
 // overlayCenter composites fg centered over bg using ANSI-aware string splicing.
@@ -2186,6 +2340,7 @@ type settingsSavedMsg struct {
 	wanderLust     bool
 	maxThreadDepth int
 	timezone       string
+	imageViewer    string
 }
 type wanderTickMsg struct{}
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
@@ -2196,6 +2351,18 @@ type errMsg struct{ err error }
 // friendly transient banner ("This post has been deleted") instead of routing
 // through handleErr and blanking the list.
 type notifPostLoadErrMsg struct{ err error }
+
+// imageFetchedMsg carries the result of fetching and encoding an image for
+// terminal display. err is non-nil when the download or decode failed; rawURL
+// is retained so a failed decode can fall back to opening the browser.
+type imageFetchedMsg struct {
+	rawURL  string
+	encoded string
+	cols    int
+	rows    int
+	err     error
+}
+
 
 // notifyLevel selects the color of a global notification banner.
 type notifyLevel int

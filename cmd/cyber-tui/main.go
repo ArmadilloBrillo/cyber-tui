@@ -11,6 +11,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/config"
 	internalssh "github.com/ragnar/cyber-tui/internal/ssh"
 	"github.com/ragnar/cyber-tui/internal/ui"
+	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/version"
 )
@@ -30,6 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 	theme.Set(cfg.Theme)
+	gfxProto := imgview.DetectProtocol()
 
 	if !cfg.UseMock {
 		if err := validateBaseURL(cfg.APIBaseURL, cfg.AllowInsecureAPI); err != nil {
@@ -72,7 +74,7 @@ func main() {
 	}
 
 	// Local TUI mode
-	app := ui.NewApp(newClient())
+	app := ui.NewApp(newClient()).WithGraphicsProtocol(gfxProto)
 	// Prefer saved session (token-based) over autoEmail/autoPassword credentials.
 	if cfg.RefreshToken != "" {
 		app = app.WithSavedSession(cfg)
