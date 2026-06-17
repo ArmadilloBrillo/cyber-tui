@@ -281,6 +281,40 @@ GET /v1/users/me
 GET /v1/users/:username
 ```
 
+Both endpoints return the same user object shape:
+
+```json
+{
+  "userId": "uid",
+  "username": "someone",
+  "displayName": "Some One",
+  "bio": "text",
+  "websiteUrl": "https://example.com",
+  "websiteName": "My Site",
+  "websiteImageUrl": "https://example.com/button.png",
+  "pinnedPostId": "abc123",
+  "locationName": "London, UK",
+  "locationLatitude": 51.5074,
+  "locationLongitude": -0.1278,
+  "followersCount": 42,
+  "followingCount": 10,
+  "postsCount": 14,
+  "publicPostsCount": 1,
+  "hasPublicPosts": true,
+  "guildSlug": "night-owls",
+  "guildId": "guildId",
+  "guildName": "Night Owls",
+  "guildIcon": "owl",
+  "profilePictureUrl": "https://…",
+  "isSupporter": true,
+  "supporterIcon": "pi",
+  "serialNumber": 3889,
+  "createdAt": "2025-11-22T07:07:18.652Z",
+  "lastActiveAt": "2026-06-14T13:58:16.284Z",
+  "updatedAt": "2026-06-14T14:32:17.365Z"
+}
+```
+
 Rate limit: 30/min.
 
 ### List User's Entries

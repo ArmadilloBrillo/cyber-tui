@@ -29,6 +29,7 @@ type SharedConfigMsg struct {
 	WanderLust     bool
 	MaxThreadDepth int
 	Timezone       string
+	ImageViewer    string
 	OwnGuildSlug   string
 }
 
@@ -53,6 +54,7 @@ type SaveSettingsMsg struct {
 	WanderLust     bool
 	MaxThreadDepth int
 	Timezone       string
+	ImageViewer    string
 }
 
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark

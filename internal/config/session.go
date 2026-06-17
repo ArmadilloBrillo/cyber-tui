@@ -61,6 +61,11 @@ type Config struct {
 	// MaxThreadDepth controls how many levels of reply nesting are visually
 	// indented in the post detail view. 0 is treated as the default (3).
 	MaxThreadDepth int `json:"maxThreadDepth,omitempty"`
+
+	// ImageViewer controls how image URLs are opened when a terminal graphics
+	// protocol is detected. "terminal" (default) displays the image in a
+	// fullscreen modal; "browser" always opens in the OS default browser.
+	ImageViewer string `json:"imageViewer,omitempty"`
 }
 
 // GetMaxThreadDepth returns MaxThreadDepth, substituting the default (3) when

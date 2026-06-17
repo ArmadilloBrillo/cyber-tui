@@ -112,6 +112,18 @@ type wireUser struct {
 	FollowingCount    int     `json:"followingCount"`
 	PostsCount        int     `json:"postsCount"`
 	GuildSlug         string  `json:"guildSlug"`
+	GuildID           string  `json:"guildId"`
+	GuildName         string  `json:"guildName"`
+	GuildIcon         string  `json:"guildIcon"`
+	ProfilePictureUrl string  `json:"profilePictureUrl"`
+	IsSupporter       bool    `json:"isSupporter"`
+	SupporterIcon     string  `json:"supporterIcon"`
+	SerialNumber      int     `json:"serialNumber"`
+	PublicPostsCount  int     `json:"publicPostsCount"`
+	HasPublicPosts    bool    `json:"hasPublicPosts"`
+	CreatedAt         string  `json:"createdAt"`
+	LastActiveAt      string  `json:"lastActiveAt"`
+	UpdatedAt         string  `json:"updatedAt"`
 }
 
 type wireFollow struct {
@@ -621,6 +633,18 @@ func wireUserToModel(w wireUser) model.User {
 		FollowingCount:    w.FollowingCount,
 		PostsCount:        w.PostsCount,
 		GuildSlug:         w.GuildSlug,
+		GuildID:           w.GuildID,
+		GuildName:         w.GuildName,
+		GuildIcon:         w.GuildIcon,
+		ProfilePictureUrl: w.ProfilePictureUrl,
+		IsSupporter:       w.IsSupporter,
+		SupporterIcon:     w.SupporterIcon,
+		SerialNumber:      w.SerialNumber,
+		PublicPostsCount:  w.PublicPostsCount,
+		HasPublicPosts:    w.HasPublicPosts,
+		CreatedAt:         parseTime(w.CreatedAt),
+		LastActiveAt:      parseTime(w.LastActiveAt),
+		UpdatedAt:         parseTime(w.UpdatedAt),
 	}
 }
 

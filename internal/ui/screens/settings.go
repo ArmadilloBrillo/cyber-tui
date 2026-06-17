@@ -148,6 +148,24 @@ var settingsGroups = []settingsGroup{
 					return m
 				},
 			},
+			{
+				label: "image viewer", kind: "enum",
+				options: []string{"terminal", "browser"},
+				getEnum: func(m SettingsModel) string {
+					if m.imageViewer == "browser" {
+						return "browser"
+					}
+					return "terminal"
+				},
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					cur := m.imageViewer
+					if cur == "" {
+						cur = "terminal"
+					}
+					m.imageViewer = cycleStringEnum(cur, []string{"terminal", "browser"}, delta)
+					return m
+				},
+			},
 		},
 	},
 	{
@@ -172,6 +190,8 @@ type SettingsModel struct {
 	originalMaxThreadDepth int            // last saved baseline
 	timezone               string         // live local config value (UTC offset label)
 	originalTimezone       string         // last saved baseline
+	imageViewer            string         // live local config value ("terminal" or "browser")
+	originalImageViewer    string         // last saved baseline
 	cursor                 int
 	width                  int
 	height                 int
@@ -194,7 +214,7 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone string) SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, imageViewer string) SettingsModel {
 	m.saved = true
 	m.err = nil
 	m.original = m.settings
@@ -204,6 +224,8 @@ func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone st
 	m.originalMaxThreadDepth = maxThreadDepth
 	m.timezone = timezone
 	m.originalTimezone = timezone
+	m.imageViewer = imageViewer
+	m.originalImageViewer = imageViewer
 	return m
 }
 
@@ -218,7 +240,8 @@ func (m SettingsModel) IsDirty() bool {
 	return !settingsEqual(m.settings, m.original) ||
 		m.wanderLust != m.originalWanderLust ||
 		m.maxThreadDepth != m.originalMaxThreadDepth ||
-		m.timezone != m.originalTimezone
+		m.timezone != m.originalTimezone ||
+		m.imageViewer != m.originalImageViewer
 }
 
 // settingsEqual compares only the editable scalar fields.
@@ -296,6 +319,12 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			}
 			m.timezone = tz
 			m.originalTimezone = tz
+			iv := msg.ImageViewer
+			if iv == "" {
+				iv = "terminal"
+			}
+			m.imageViewer = iv
+			m.originalImageViewer = iv
 		}
 		return m, nil
 
@@ -344,8 +373,9 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				wl := m.wanderLust
 				td := m.maxThreadDepth
 				tz := m.timezone
+				iv := m.imageViewer
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv}
 				}
 			}
 			return m, nil
@@ -356,6 +386,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.wanderLust = m.originalWanderLust
 			m.maxThreadDepth = m.originalMaxThreadDepth
 			m.timezone = m.originalTimezone
+			m.imageViewer = m.originalImageViewer
 			m.saved = false
 			m.err = nil
 			return m, nil
