@@ -1,4 +1,4 @@
-﻿# ᑕ¥βєяรקค¢є API v0.5.0
+﻿# ᑕ¥βєяรקค¢є API v0.5.1
 
 ## Access
 
@@ -52,24 +52,6 @@ Returns:
 - `idToken` -- use as Bearer token for all API requests
 - `refreshToken` -- use to get a new idToken when it expires
 - `rtdbToken` -- use to connect to Realtime Database for chat/DMs
-
-### Register
-
-```
-POST /v1/auth/register
-```
-
-```json
-{ "email": "you@example.com", "password": "your_password", "username": "your_username" }
-```
-
-Username rules:
-- 3-20 characters
-- Lowercase letters, numbers, underscores only
-- Cannot be a reserved name (admin, system, etc.)
-- Cannot contain prohibited words
-
-Returns the same token structure as login (201).
 
 ### Refresh Token
 
@@ -255,6 +237,8 @@ POST /v1/replies
 
 Returns `{ "data": { "replyId": "..." } }` (201).
 
+Posting a reply auto-watches the thread (see Thread Watching) unless you've disabled `autoWatchOnReply` in Settings.
+
 Rate limit: 3/min, 15/day.
 
 ### Delete Reply
@@ -264,6 +248,55 @@ DELETE /v1/replies/:id
 ```
 
 Deletes the reply. Only the author (or site admin) can delete.
+
+---
+
+## Thread Watching
+
+Watching a thread means you receive `thread_reply` notifications when anyone replies to it. You're auto-watched when you reply to a thread (unless `autoWatchOnReply` is off) or when you're `@mentioned` in an entry; you can also watch/unwatch manually.
+
+### Watch Status
+
+```
+GET /v1/posts/:id/watch
+```
+
+Returns `{ "data": { "watching": true } }` -- whether you currently watch this thread.
+
+### Watch Thread
+
+```
+POST /v1/posts/:id/watch
+```
+
+Idempotent. Returns `{ "data": { "watching": true } }` (201).
+
+Rate limit: 10/min, 100/day.
+
+### Unwatch Thread
+
+```
+DELETE /v1/posts/:id/watch
+```
+
+Returns `{ "data": { "watching": false } }`.
+
+### List Watched Threads
+
+```
+GET /v1/watches?limit=20&cursor=<id>
+```
+
+Returns your watched threads, newest first:
+
+```json
+{
+  "data": [
+    { "id": "<userId>_<postId>", "postId": "abc123", "createdAt": "..." }
+  ],
+  "cursor": "<id>"
+}
+```
 
 ---
 
@@ -279,40 +312,6 @@ GET /v1/users/me
 
 ```
 GET /v1/users/:username
-```
-
-Both endpoints return the same user object shape:
-
-```json
-{
-  "userId": "uid",
-  "username": "someone",
-  "displayName": "Some One",
-  "bio": "text",
-  "websiteUrl": "https://example.com",
-  "websiteName": "My Site",
-  "websiteImageUrl": "https://example.com/button.png",
-  "pinnedPostId": "abc123",
-  "locationName": "London, UK",
-  "locationLatitude": 51.5074,
-  "locationLongitude": -0.1278,
-  "followersCount": 42,
-  "followingCount": 10,
-  "postsCount": 14,
-  "publicPostsCount": 1,
-  "hasPublicPosts": true,
-  "guildSlug": "night-owls",
-  "guildId": "guildId",
-  "guildName": "Night Owls",
-  "guildIcon": "owl",
-  "profilePictureUrl": "https://…",
-  "isSupporter": true,
-  "supporterIcon": "pi",
-  "serialNumber": 3889,
-  "createdAt": "2025-11-22T07:07:18.652Z",
-  "lastActiveAt": "2026-06-14T13:58:16.284Z",
-  "updatedAt": "2026-06-14T14:32:17.365Z"
-}
 ```
 
 Rate limit: 30/min.
@@ -807,6 +806,8 @@ PATCH /v1/settings
 
 Available fields: `notifications`, `filterNSFW`, `showFollowerCount`, `hideImagesInFeed`, `hideAudioInFeed`, `autoWatchOnReply`, `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom`, `iconTheme`, `followedTopics`, `mutedTopics`, `imagePixelSize`, `timeDisplayFormat`, `useLegacyMenuOrder`, `defaultPublicPost`.
 
+`autoWatchOnReply` (default on) controls whether posting a reply auto-watches that thread (see Thread Watching). Set it to `false` to opt out.
+
 Rate limit: 2/min, 15/day.
 
 ---
@@ -865,6 +866,7 @@ All responses follow this structure:
 | Guild leave | 3 | 15 |
 | Profile updates | 2 | 15 |
 | Settings updates | 2 | 15 |
+| Watch thread | 10 | 100 |
 
 `POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour.
 
@@ -886,6 +888,7 @@ All responses follow this structure:
 | View user profile | 30 |
 | List guilds / members | 30 |
 | List guild threads | 45 |
+| Watch status / list watched | 30 |
 
 Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for daily, 60 seconds for per-minute).
 
@@ -904,3 +907,4 @@ Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for 
 | Location name | 64 chars |
 | Topics per entry | 3 |
 | Username | 3-20 chars |
+

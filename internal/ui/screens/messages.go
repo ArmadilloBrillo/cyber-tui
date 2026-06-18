@@ -14,6 +14,19 @@ type BookmarkedIDsMsg struct {
 	ReplyIDs map[string]struct{}
 }
 
+// WatchedPostIDsMsg is broadcast by App whenever the set of watched thread IDs
+// changes (progressive load, watch, unwatch). Screens handle this to show the
+// [◉] indicator on watched threads.
+type WatchedPostIDsMsg struct {
+	PostIDs map[string]struct{}
+}
+
+// ToggleWatchPostMsg is emitted by Feed or PostDetail when the user presses 'w'
+// on a thread-root post to toggle its watch state.
+type ToggleWatchPostMsg struct {
+	PostID string
+}
+
 // SharedConfigMsg is broadcast by App whenever display-affecting settings change
 // (dimensions, timezone, display density). Each screen handles the fields it cares
 // about in its own Update; fields it doesn't use are ignored.

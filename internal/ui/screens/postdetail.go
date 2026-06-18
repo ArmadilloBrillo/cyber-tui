@@ -129,6 +129,7 @@ type PostDetailModel struct {
 
 	bookmarkedPostIDs  map[string]struct{}
 	bookmarkedReplyIDs map[string]struct{}
+	watchedPostIDs     map[string]struct{}
 }
 
 func NewPostDetailModel() PostDetailModel {
@@ -382,6 +383,13 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case WatchedPostIDsMsg:
+		m.watchedPostIDs = msg.PostIDs
+		if m.ready {
+			m = m.refreshContent()
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -502,6 +510,13 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			if m.post.ID != "" {
 				postID := m.post.ID
 				return m, func() tea.Msg { return BookmarkPostMsg{PostID: postID} }
+			}
+			return m, nil
+		case "w":
+			// Watch applies to the thread root only — ignore when a reply is focused.
+			if m.selectedReply < 0 && m.post.ID != "" {
+				postID := m.post.ID
+				return m, func() tea.Msg { return ToggleWatchPostMsg{PostID: postID} }
 			}
 			return m, nil
 		case "up", "k":
@@ -665,10 +680,11 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 	innerWidth := m.width - 4
 
 	_, postBookmarked := m.bookmarkedPostIDs[m.post.ID]
+	_, postWatched := m.watchedPostIDs[m.post.ID]
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+m.post.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(m.post.CreatedAt, m.location(), m.timeDisplayFormat, false)),
-	) + audioIcon(m.post.Attachments) + bookmarkIcon(postBookmarked)
+	) + audioIcon(m.post.Attachments) + bookmarkIcon(postBookmarked) + watchIcon(postWatched)
 	var rightParts []string
 	if ind := attachmentIndicator(m.post.Attachments); ind != "" {
 		rightParts = append(rightParts, ind)

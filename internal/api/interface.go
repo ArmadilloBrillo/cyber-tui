@@ -104,6 +104,15 @@ type Client interface {
 	// is the founder (403) or is not a member.
 	LeaveGuild(slug string) error
 
+	// Thread watching — watch/unwatch individual threads.
+	// GetWatches returns all watched threads, cursor-paginated (limit=50).
+	// Pass empty cursor for first page; use returned cursor for next page.
+	GetWatches(cursor string) ([]model.Watch, string, error)
+	// WatchPost subscribes the user to thread_reply notifications for the given post.
+	WatchPost(postID string) error
+	// UnwatchPost unsubscribes the user from the given thread.
+	UnwatchPost(postID string) error
+
 	// Posts — deletion.
 	// DeletePost soft-deletes a post owned by the authenticated user.
 	DeletePost(postID string) error

@@ -59,6 +59,7 @@ type FeedModel struct {
 	confirmingDelete bool   // true while the delete-post confirmation overlay is shown
 
 	bookmarkedPostIDs map[string]struct{}
+	watchedPostIDs    map[string]struct{}
 	filterNSFW        bool
 }
 
@@ -285,6 +286,13 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case WatchedPostIDsMsg:
+		m.watchedPostIDs = msg.PostIDs
+		if m.ready {
+			m = m.refreshContent()
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -376,6 +384,12 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
 				postID := visible[m.selectedIndex].ID
 				return m, func() tea.Msg { return BookmarkPostMsg{PostID: postID} }
+			}
+			return m, nil
+		case "w":
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				postID := visible[m.selectedIndex].ID
+				return m, func() tea.Msg { return ToggleWatchPostMsg{PostID: postID} }
 			}
 			return m, nil
 		case "d":
@@ -497,7 +511,8 @@ func (m FeedModel) buildContent() (string, []int) {
 
 func (m FeedModel) renderPost(p model.Post, selected bool) string {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, m.width, m.location(), m.timeDisplayFormat)
+	_, watched := m.watchedPostIDs[p.ID]
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat)
 }
 
 func (m FeedModel) View() string {
