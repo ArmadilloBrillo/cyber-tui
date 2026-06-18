@@ -115,7 +115,7 @@ var settingsGroups = []settingsGroup{
 			},
 			{
 				label: "thread depth", kind: "enum",
-				options: []string{"1", "2", "3", "4", "5"},
+				options: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"},
 				getEnum: func(m SettingsModel) string {
 					if m.maxThreadDepth == 0 {
 						return "3"
@@ -126,7 +126,7 @@ var settingsGroups = []settingsGroup{
 					if m.maxThreadDepth == 0 {
 						m.maxThreadDepth = 3
 					}
-					m.maxThreadDepth = cycleIntEnum(m.maxThreadDepth, []string{"1", "2", "3", "4", "5"}, delta)
+					m.maxThreadDepth = cycleIntEnum(m.maxThreadDepth, []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"}, delta)
 					return m
 				},
 			},
