@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.5.0) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.5.1) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -26,8 +26,8 @@ Ordered roughly by implementation effort / priority.
 
 | Endpoint | Method | Description | Priority |
 |---|---|---|---|
-| `/v1/auth/register` | POST | User registration (email, password, username) | Out of scope — registration and account management are web-only flows |
-| `/v1/auth/resend-verification` | POST | Resend email verification link | Out of scope — same as above |
+| `/v1/auth/register` | POST | ~~Removed in v0.5.1~~ — registration is web-only; endpoint no longer in the API spec | N/A |
+| `/v1/auth/resend-verification` | POST | Resend email verification link | Out of scope — web-only flow |
 | `/v1/auth/check-username` | POST | Check if a username is available (no auth required) | Out of scope — only relevant alongside registration |
 
 ### Posts
@@ -74,6 +74,23 @@ Notes:
 | `profilePictureUrl` on Guild / GuildMember | v0.4.1 adds this field to the guild list response and the member list response. Not in model types or wire layer. Low value for a TUI but keeps model in sync. | Low |
 | Guild join (`POST /v1/guilds/:slug/join`) | Now an official API endpoint. One guild per user; 409 if already in one. | **Done** |
 | Guild leave (`POST /v1/guilds/:slug/leave`) | Now an official API endpoint. Founders get 403 — must use web. | **Done** |
+
+### Thread Watching (new in v0.5.1)
+
+Watching a thread means you receive `thread_reply` notifications when anyone replies to it. Posting a reply auto-watches the thread (controlled by the `autoWatchOnReply` setting, default on).
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `GET /v1/posts/:id/watch` | GET | Check whether the current user is watching a thread | **Done** |
+| `POST /v1/posts/:id/watch` | POST | Watch a thread (idempotent; rate limit: 10/min, 100/day) | **Done** |
+| `DELETE /v1/posts/:id/watch` | DELETE | Unwatch a thread | **Done** |
+| `GET /v1/watches` | GET | List watched threads — used at startup to populate `◉` icons | **Done** |
+
+Notes:
+- `w` key in feed and post detail (root post only) toggles watch with optimistic update. `◉` icon displayed in feed, post detail, guild threads, and topics.
+- All pages of `GET /v1/watches` are fetched progressively at login; icon set updates after each page.
+- A dedicated "Watched Threads" screen (similar to bookmarks) remains a future low-priority option.
+- The `autoWatchOnReply` settings field (v0.5.1) is already surfaced in the Settings screen.
 
 ### Notifications (new in v0.4.1)
 

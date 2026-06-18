@@ -174,6 +174,11 @@ type App struct {
 	postBookmarkIDs  map[string]string // postID  → bookmark UUID
 	replyBookmarkIDs map[string]string // replyID → bookmark UUID
 
+	// watchedPostIDs tracks which thread-root posts the current user is watching.
+	// Populated progressively at login via GET /v1/watches (all pages) and kept in
+	// sync on watch/unwatch. Used to show [◉] indicators in feed and post detail.
+	watchedPostIDs map[string]struct{}
+
 	// notifyText is the transient global notification shown in place of the status
 	// bar. Empty means no notification is visible. notifyGen is bumped on every new
 	// notification and on dismissal so a stale expire tick can never clear a newer one.
@@ -205,6 +210,7 @@ func NewApp(client api.Client) App {
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
 		replyBookmarkIDs:   make(map[string]string),
+		watchedPostIDs:     make(map[string]struct{}),
 	}
 }
 
@@ -341,6 +347,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleBookmarks(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleWatches(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleGuilds(msg); ok {
 		return a2, cmd
 	}
@@ -398,6 +407,17 @@ func (a *App) broadcastBookmarkedIDs() {
 		PostIDs:  a.bookmarkedPostIDs,
 		ReplyIDs: a.bookmarkedReplyIDs,
 	}
+	a.feed, _ = a.feed.Update(msg)
+	a.postDetail, _ = a.postDetail.Update(msg)
+	a.guilds, _ = a.guilds.Update(msg)
+	a.topics, _ = a.topics.Update(msg)
+}
+
+// broadcastWatchedIDs pushes the current watched-post ID set to all screens
+// that render posts (feed, postDetail, guilds, topics). Call this whenever
+// the set changes (progressive load page, watch, unwatch).
+func (a *App) broadcastWatchedIDs() {
+	msg := screens.WatchedPostIDsMsg{PostIDs: a.watchedPostIDs}
 	a.feed, _ = a.feed.Update(msg)
 	a.postDetail, _ = a.postDetail.Update(msg)
 	a.guilds, _ = a.guilds.Update(msg)
@@ -640,6 +660,17 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SubmitReplyMsg:
 		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID), true
 	case replyCreatedMsg:
+		if a.settings.AutoWatchOnReply {
+			if _, alreadyWatched := a.watchedPostIDs[msg.postID]; !alreadyWatched {
+				newIDs := make(map[string]struct{}, len(a.watchedPostIDs)+1)
+				for k := range a.watchedPostIDs {
+					newIDs[k] = struct{}{}
+				}
+				newIDs[msg.postID] = struct{}{}
+				a.watchedPostIDs = newIDs
+				a.broadcastWatchedIDs()
+			}
+		}
 		return a, a.loadRepliesCmd(msg.postID), true
 	case screens.BackToFeedMsg:
 		a.active = a.postDetailReturn
@@ -991,6 +1022,87 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		if !msg.fromBookmarksScreen {
 			a.bookmarks = a.bookmarks.SetFetching()
 			return a, a.loadBookmarksCmd(""), true
+		}
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// --- Watch messages ---
+
+type watchPageMsg struct {
+	postIDs []string
+	cursor  string
+	err     error
+}
+
+type watchResultMsg struct {
+	postID string
+	err    error
+	added  bool // true = watch was added, false = watch was removed
+}
+
+// handleWatches processes progressive watch-page loads and watch/unwatch toggle messages.
+func (a App) handleWatches(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case watchPageMsg:
+		if msg.err != nil {
+			// Watches are non-critical; silently ignore load errors.
+			return a, nil, true
+		}
+		newIDs := make(map[string]struct{}, len(a.watchedPostIDs)+len(msg.postIDs))
+		for k := range a.watchedPostIDs {
+			newIDs[k] = struct{}{}
+		}
+		for _, id := range msg.postIDs {
+			newIDs[id] = struct{}{}
+		}
+		a.watchedPostIDs = newIDs
+		a.broadcastWatchedIDs()
+		if msg.cursor != "" {
+			return a, a.loadWatchesPageCmd(msg.cursor), true
+		}
+		return a, nil, true
+
+	case screens.ToggleWatchPostMsg:
+		postID := msg.PostID
+		if _, alreadyWatched := a.watchedPostIDs[postID]; alreadyWatched {
+			// Toggle off: optimistic remove.
+			newIDs := make(map[string]struct{}, len(a.watchedPostIDs))
+			for k := range a.watchedPostIDs {
+				newIDs[k] = struct{}{}
+			}
+			delete(newIDs, postID)
+			a.watchedPostIDs = newIDs
+			a.broadcastWatchedIDs()
+			return a, a.unwatchPostCmd(postID), true
+		}
+		// Toggle on: optimistic add.
+		newIDs := make(map[string]struct{}, len(a.watchedPostIDs)+1)
+		for k := range a.watchedPostIDs {
+			newIDs[k] = struct{}{}
+		}
+		newIDs[postID] = struct{}{}
+		a.watchedPostIDs = newIDs
+		a.broadcastWatchedIDs()
+		return a, a.watchPostCmd(postID), true
+
+	case watchResultMsg:
+		if msg.err != nil {
+			// Revert the optimistic update.
+			newIDs := make(map[string]struct{}, len(a.watchedPostIDs))
+			for k := range a.watchedPostIDs {
+				newIDs[k] = struct{}{}
+			}
+			if msg.added {
+				delete(newIDs, msg.postID)
+			} else {
+				newIDs[msg.postID] = struct{}{}
+			}
+			a.watchedPostIDs = newIDs
+			a.broadcastWatchedIDs()
+			a2, cmd := a.notify(notifyError, msg.err.Error())
+			return a2, cmd, true
 		}
 		return a, nil, true
 	}
@@ -1591,12 +1703,12 @@ func (a App) screenHints() []hint {
 		if a.feed.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, more}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
 			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"esc", "back"}, more}
+		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"esc", "back"}, more}
 	case screenProfile:
 		if a.profile.ComposeActive() {
 			return []hint{{"Ctrl+s", "save"}, {"Esc", "cancel"}, {"tab", "cycle"}}
@@ -2298,6 +2410,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	return tea.Batch(
 		a.loadFeedCmd(),
 		a.loadBookmarksCmd(""),
+		a.loadWatchesPageCmd(""),
 		a.loadTopicsCmd(),
 		a.loadProfileCmd(),
 		a.fetchUnreadCountCmd(),
@@ -2955,6 +3068,34 @@ func enrichBookmarks(client api.Client, items []model.Bookmark) []model.Bookmark
 		}
 	}
 	return out
+}
+
+func (a *App) loadWatchesPageCmd(cursor string) tea.Cmd {
+	return func() tea.Msg {
+		watches, nextCursor, err := a.client.GetWatches(cursor)
+		if err != nil {
+			return watchPageMsg{err: err}
+		}
+		ids := make([]string, len(watches))
+		for i, w := range watches {
+			ids[i] = w.PostID
+		}
+		return watchPageMsg{postIDs: ids, cursor: nextCursor}
+	}
+}
+
+func (a *App) watchPostCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		err := a.client.WatchPost(postID)
+		return watchResultMsg{postID: postID, err: err, added: true}
+	}
+}
+
+func (a *App) unwatchPostCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		err := a.client.UnwatchPost(postID)
+		return watchResultMsg{postID: postID, err: err, added: false}
+	}
 }
 
 func (a *App) loadBookmarksCmd(cursor string) tea.Cmd {

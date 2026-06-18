@@ -216,6 +216,13 @@ type Note struct {
 	CreatedAt      time.Time
 }
 
+// Watch represents a thread-watch record returned by GET /v1/watches.
+type Watch struct {
+	ID        string // "<userId>_<postId>"
+	PostID    string
+	CreatedAt time.Time
+}
+
 // NoteRevision represents a single historical revision of a note,
 // returned by GET /v1/notes/:id/revisions.
 type NoteRevision struct {

@@ -1356,3 +1356,32 @@ func TestJournal_SetFetching_ClearedBySetNotes(t *testing.T) {
 		t.Errorf("expected loading message to be gone after SetNotes, got: %q", view)
 	}
 }
+
+// --- RenderPost watch icon ---
+
+func TestRenderPost_WatchIconPresent(t *testing.T) {
+	p := model.Post{ID: "p1", AuthorUsername: "user", Content: "hello", CreatedAt: time.Now()}
+	out := screens.RenderPost(p, false, false, true, 80, time.UTC, "datetime")
+	if !strings.Contains(out, "◉") {
+		t.Errorf("expected ◉ watch icon in output, got: %q", out)
+	}
+}
+
+func TestRenderPost_WatchIconAbsentWhenNotWatched(t *testing.T) {
+	p := model.Post{ID: "p1", AuthorUsername: "user", Content: "hello", CreatedAt: time.Now()}
+	out := screens.RenderPost(p, false, false, false, 80, time.UTC, "datetime")
+	if strings.Contains(out, "◉") {
+		t.Errorf("expected no ◉ watch icon in output, got: %q", out)
+	}
+}
+
+func TestRenderPost_BookmarkAndWatchIconsStack(t *testing.T) {
+	p := model.Post{ID: "p1", AuthorUsername: "user", Content: "hello", CreatedAt: time.Now()}
+	out := screens.RenderPost(p, false, true, true, 80, time.UTC, "datetime")
+	if !strings.Contains(out, "★") {
+		t.Errorf("expected ★ bookmark icon in output")
+	}
+	if !strings.Contains(out, "◉") {
+		t.Errorf("expected ◉ watch icon in output")
+	}
+}

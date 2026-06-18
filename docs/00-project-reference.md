@@ -123,6 +123,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `Tokens` | IDToken, RefreshToken, RTDBToken returned from login |
 | `User` | Profile (ID, username, displayName, email, bio, websiteUrl, websiteName, websiteImageUrl, pinnedPostID, locationName, locationLatitude, locationLongitude) |
 | `Post` | Feed item (ID, authorID, authorUsername, content, title, slug, guildID, guildSlug, isGuildThread, topics, repliesCount, bookmarksCount, isPublic, isNSFW, deleted, createdAt) |
+| `Watch` | Thread-watch record (ID, PostID, CreatedAt) — returned by GET /v1/watches |
 | `Reply` | Comment on a post (ID, postID, authorID, authorUsername, content, parentReplyID, createdAt) |
 | `ProfileUpdate` | Optional fields for PATCH /v1/users/me (all pointer types, includes new website/location fields) |
 | `Message` | DM/chat message (ID, from, body, createdAt) |
@@ -155,6 +156,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 |---|---|
 | Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()` |
 | Feed | `GetFeed(cursor)`, `CreatePost(content, title, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)` |
+| Thread watching | `GetWatches(cursor)`, `WatchPost(postID)`, `UnwatchPost(postID)` |
 | Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)` |
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
 | User History | `GetUserPosts(username, cursor)`, `GetUserReplies(username, cursor)` |
@@ -694,6 +696,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `n` | New post |
 | `d` | Delete selected post (own posts only — prompts y/n) |
 | `p` | View author's profile |
+| `w` | Watch / unwatch the selected thread |
 
 ### Post Detail
 
@@ -704,6 +707,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `r` | Reply to selected post or reply |
 | `d` | Delete selected post or reply (own content only — prompts y/n) |
 | `p` | View author's profile |
+| `w` | Watch / unwatch the thread (root post focused only; no-op on replies) |
 | `esc` | Back to feed |
 
 ### Compose (embedded)

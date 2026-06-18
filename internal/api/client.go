@@ -163,6 +163,12 @@ type wireBookmark struct {
 	CreatedAt  string     `json:"createdAt"`
 }
 
+type wireWatch struct {
+	ID        string `json:"id"`
+	PostID    string `json:"postId"`
+	CreatedAt string `json:"createdAt"`
+}
+
 type wireTopic struct {
 	TopicID   string `json:"topicId"`
 	Name      string `json:"name"`
@@ -1110,6 +1116,34 @@ func (c *HTTPClient) CreateBookmark(postID, replyID string) (string, error) {
 
 func (c *HTTPClient) DeleteBookmark(id string) error {
 	_, err := c.doRequest("DELETE", "/v1/bookmarks/"+url.PathEscape(id), nil)
+	return err
+}
+
+// --- Thread watching ---
+
+func wireWatchToModel(w wireWatch) model.Watch {
+	return model.Watch{
+		ID:        w.ID,
+		PostID:    w.PostID,
+		CreatedAt: parseTime(w.CreatedAt),
+	}
+}
+
+func (c *HTTPClient) GetWatches(cursor string) ([]model.Watch, string, error) {
+	path := "/v1/watches?limit=50"
+	if cursor != "" {
+		path += "&cursor=" + url.QueryEscape(cursor)
+	}
+	return fetchPage(c, path, wireWatchToModel)
+}
+
+func (c *HTTPClient) WatchPost(postID string) error {
+	_, err := c.doRequest("POST", "/v1/posts/"+url.PathEscape(postID)+"/watch", nil)
+	return err
+}
+
+func (c *HTTPClient) UnwatchPost(postID string) error {
+	_, err := c.doRequest("DELETE", "/v1/posts/"+url.PathEscape(postID)+"/watch", nil)
 	return err
 }
 
