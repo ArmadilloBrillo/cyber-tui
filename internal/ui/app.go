@@ -660,6 +660,17 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SubmitReplyMsg:
 		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID), true
 	case replyCreatedMsg:
+		if a.settings.AutoWatchOnReply {
+			if _, alreadyWatched := a.watchedPostIDs[msg.postID]; !alreadyWatched {
+				newIDs := make(map[string]struct{}, len(a.watchedPostIDs)+1)
+				for k := range a.watchedPostIDs {
+					newIDs[k] = struct{}{}
+				}
+				newIDs[msg.postID] = struct{}{}
+				a.watchedPostIDs = newIDs
+				a.broadcastWatchedIDs()
+			}
+		}
 		return a, a.loadRepliesCmd(msg.postID), true
 	case screens.BackToFeedMsg:
 		a.active = a.postDetailReturn
