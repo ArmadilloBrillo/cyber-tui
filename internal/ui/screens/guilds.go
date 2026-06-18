@@ -108,6 +108,7 @@ type GuildsModel struct {
 	itemOffsets       []int
 	width             int
 	bookmarkedPostIDs map[string]struct{}
+	watchedPostIDs    map[string]struct{}
 	height            int
 	ready             bool
 	err               error
@@ -321,6 +322,13 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 
 	case BookmarkedIDsMsg:
 		m.bookmarkedPostIDs = msg.PostIDs
+		if m.ready {
+			m = m.refreshContent()
+		}
+		return m, nil
+
+	case WatchedPostIDsMsg:
+		m.watchedPostIDs = msg.PostIDs
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -805,7 +813,8 @@ func (m GuildsModel) renderMemberItem(mem model.GuildMember, selected bool) stri
 
 func (m GuildsModel) renderPostItem(p model.Post, selected bool) string {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, m.width, m.location(), m.timeDisplayFormat)
+	_, watched := m.watchedPostIDs[p.ID]
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat)
 }
 
 func (m GuildsModel) refreshContent() GuildsModel {

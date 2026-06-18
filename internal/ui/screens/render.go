@@ -15,15 +15,15 @@ const postMaxBodyLines = 4
 
 // RenderPost renders a model.Post as a bordered card matching the feed style.
 // selected controls the border colour (active vs inactive).
-// bookmarked adds a [★] badge to the header right side.
+// bookmarked adds a [★] badge; watched adds a [◉] badge — both in the header.
 // width is the full terminal width; loc and timeFormat control the timestamp display.
-func RenderPost(p model.Post, selected bool, bookmarked bool, width int, loc *time.Location, timeFormat string) string {
+func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string) string {
 	innerWidth := width - 4
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+p.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)),
-	) + audioIcon(p.Attachments) + bookmarkIcon(bookmarked)
+	) + audioIcon(p.Attachments) + bookmarkIcon(bookmarked) + watchIcon(watched)
 	var rightParts []string
 	if ind := attachmentIndicator(p.Attachments); ind != "" {
 		rightParts = append(rightParts, ind)
@@ -131,6 +131,14 @@ func audioIcon(attachments []model.Attachment) string {
 func bookmarkIcon(bookmarked bool) string {
 	if bookmarked {
 		return "  " + theme.Highlight.Render("★")
+	}
+	return ""
+}
+
+// watchIcon returns a ◉ icon (with leading spaces) when the thread is watched, else "".
+func watchIcon(watched bool) string {
+	if watched {
+		return "  " + theme.Highlight.Render("◉")
 	}
 	return ""
 }

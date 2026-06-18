@@ -1535,3 +1535,89 @@ func TestHTTPGetUserReplies_BuildsCorrectPath(t *testing.T) {
 		t.Errorf("AuthorUsername = %q, want neuromancer", replies[0].AuthorUsername)
 	}
 }
+
+// --- Watch ---
+
+func TestHTTPGetWatches_ReturnsList(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/watches" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		writeOKWithCursor(t, w, []map[string]any{
+			{"id": "uid_p1", "postId": "p1", "createdAt": "2025-01-01T12:00:00.000Z"},
+			{"id": "uid_p2", "postId": "p2", "createdAt": "2025-01-02T08:00:00.000Z"},
+		}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	watches, cursor, err := c.GetWatches("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cursor != "" {
+		t.Errorf("cursor = %q, want empty", cursor)
+	}
+	if len(watches) != 2 {
+		t.Fatalf("len(watches) = %d, want 2", len(watches))
+	}
+	if watches[0].PostID != "p1" {
+		t.Errorf("watches[0].PostID = %q, want p1", watches[0].PostID)
+	}
+	if watches[1].PostID != "p2" {
+		t.Errorf("watches[1].PostID = %q, want p2", watches[1].PostID)
+	}
+}
+
+func TestHTTPGetWatches_UsesCursor(t *testing.T) {
+	var gotQuery string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	})))
+	c.Login("u@example.com", "pass")
+
+	c.GetWatches("abc123")
+	if !strings.Contains(gotQuery, "cursor=abc123") {
+		t.Errorf("query = %q, want cursor=abc123", gotQuery)
+	}
+}
+
+func TestHTTPWatchPost_CallsCorrectEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		writeOK(t, w, map[string]any{"watching": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.WatchPost("p42"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "POST" {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/v1/posts/p42/watch" {
+		t.Errorf("path = %q, want /v1/posts/p42/watch", gotPath)
+	}
+}
+
+func TestHTTPUnwatchPost_CallsCorrectEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		writeOK(t, w, map[string]any{"watching": false})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.UnwatchPost("p42"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/v1/posts/p42/watch" {
+		t.Errorf("path = %q, want /v1/posts/p42/watch", gotPath)
+	}
+}
