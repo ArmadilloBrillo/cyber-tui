@@ -3062,7 +3062,11 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	case pollUnreadTickMsg:
 		return a, tea.Batch(a.fetchUnreadCountCmd(), a.schedulePollCmd()), true
 	case unreadCountMsg:
+		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count
+		if msg.count > prev {
+			return a, a.loadNotifsCmd(), true
+		}
 		return a, nil, true
 	}
 	return a, nil, false
