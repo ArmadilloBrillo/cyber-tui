@@ -70,6 +70,35 @@ var menuTabs = []struct {
 	{"settings", screenSettings},
 }
 
+const (
+	logoOrig          = "ᑕ¥βєяรקค¢є"
+	logoHoldFrames    = 5 // frames held fully scrambled (~300ms at 60ms/frame)
+	logoFrameInterval = 60 * time.Millisecond
+)
+
+var logoOrigRunes = []rune(logoOrig)
+
+var logoCyberPool = []rune{
+	'¥', '¢', '€', '£', '₿', '₽', '¤', '§', '©', '®',
+	'α', 'β', 'γ', 'δ', 'ε', 'λ', 'μ', 'π', 'σ', 'φ', 'ψ', 'ω',
+	'я', 'ю', 'э', 'ш', 'щ', 'ж', 'ф', 'г', 'ц', 'б',
+	'א', 'ב', 'ג', 'ד', 'ה', 'כ', 'ל', 'מ', 'נ', 'ק', 'ש',
+	'æ', 'ø', 'þ', 'ß', 'ñ', 'ç',
+	'ᑕ', 'ᑎ', 'ᒋ', 'ᓯ', 'ᑲ', 'ᒪ',
+	'∞', '∑', '√', '≈', '≠', '⊗', '⊕',
+	'░', '▒', '▓',
+}
+
+func randomCyberRune(exclude rune) rune {
+	for len(logoCyberPool) > 1 {
+		r := logoCyberPool[rand.Intn(len(logoCyberPool))]
+		if r != exclude {
+			return r
+		}
+	}
+	return logoCyberPool[0]
+}
+
 type App struct {
 	client      api.Client
 	tokens      model.Tokens
@@ -185,6 +214,11 @@ type App struct {
 	notifyText  string
 	notifyLevel notifyLevel
 	notifyGen   int
+
+	logoText      string
+	logoPhase     logoAnimPhase
+	logoFrame     int
+	logoPositions []int // shuffled index order for the current animation cycle
 }
 
 func NewApp(client api.Client) App {
@@ -211,6 +245,8 @@ func NewApp(client api.Client) App {
 		postBookmarkIDs:    make(map[string]string),
 		replyBookmarkIDs:   make(map[string]string),
 		watchedPostIDs:     make(map[string]struct{}),
+		logoText:           logoOrig,
+		logoPhase:          logoPhaseIdle,
 	}
 }
 
@@ -360,6 +396,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a2, cmd
 	}
 	if a2, cmd, ok := a.handleUnauthorized(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleLogoAnim(msg); ok {
 		return a2, cmd
 	}
 	if a2, cmd, ok := a.handleNotify(msg); ok {
@@ -1363,6 +1402,58 @@ func (a App) notify(level notifyLevel, text string) (App, tea.Cmd) {
 	})
 }
 
+func (a App) handleLogoAnim(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg.(type) {
+	case logoAnimTickMsg:
+		positions := make([]int, len(logoOrigRunes))
+		for i := range positions {
+			positions[i] = i
+		}
+		rand.Shuffle(len(positions), func(i, j int) { positions[i], positions[j] = positions[j], positions[i] })
+		a.logoPositions = positions
+		a.logoPhase = logoPhaseScrambling
+		a.logoFrame = 0
+		return a, logoFrameTickCmd(), true
+	case logoFrameTickMsg:
+		switch a.logoPhase {
+		case logoPhaseScrambling:
+			pos := a.logoPositions[a.logoFrame]
+			runes := []rune(a.logoText)
+			runes[pos] = randomCyberRune(logoOrigRunes[pos])
+			a.logoText = string(runes)
+			a.logoFrame++
+			if a.logoFrame >= len(logoOrigRunes) {
+				a.logoPhase = logoPhaseHold
+				a.logoFrame = 0
+			}
+			return a, logoFrameTickCmd(), true
+		case logoPhaseHold:
+			a.logoFrame++
+			if a.logoFrame >= logoHoldFrames {
+				a.logoPhase = logoPhaseUnscrambling
+				a.logoFrame = 0
+			}
+			return a, logoFrameTickCmd(), true
+		case logoPhaseUnscrambling:
+			pos := a.logoPositions[a.logoFrame]
+			runes := []rune(a.logoText)
+			runes[pos] = logoOrigRunes[pos]
+			a.logoText = string(runes)
+			a.logoFrame++
+			if a.logoFrame >= len(logoOrigRunes) {
+				a.logoPhase = logoPhaseIdle
+				a.logoFrame = 0
+				a.logoText = logoOrig
+				return a, scheduleLogoAnimCmd(), true
+			}
+			return a, logoFrameTickCmd(), true
+		default: // logoPhaseIdle — consume stale in-flight tick
+			return a, nil, true
+		}
+	}
+	return a, nil, false
+}
+
 func (a App) handleNotify(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case actionErrMsg:
@@ -1657,7 +1748,7 @@ func (a App) renderTabBar() string {
 		Foreground(theme.ColorBackground).
 		Bold(true).
 		Padding(0, 1).
-		Render("ᑕ¥βєяรקค¢є")
+		Render(a.logoText)
 	spacer := strings.Repeat(" ", max(0, a.width-lipgloss.Width(tabs)-lipgloss.Width(logo)))
 	return tabs + spacer + logo
 }
@@ -2418,6 +2509,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.loadSettingsCmd(),
 		a.scheduleWanderCmd(),
 		a.checkAndWanderCmd(),
+		scheduleLogoAnimCmd(),
 	)
 }
 
@@ -2484,6 +2576,15 @@ const (
 	notifyInfo notifyLevel = iota
 	notifyWarn
 	notifyError
+)
+
+type logoAnimPhase int
+
+const (
+	logoPhaseIdle         logoAnimPhase = iota
+	logoPhaseScrambling
+	logoPhaseHold
+	logoPhaseUnscrambling
 )
 
 // actionErrMsg is a non-fatal failure from a user-initiated action (post, reply,
@@ -2645,6 +2746,8 @@ type notifPostLoadedMsg struct{ post model.Post }
 type profilePostLoadedMsg struct{ post model.Post }
 type pollUnreadTickMsg struct{}
 type unreadCountMsg struct{ count int }
+type logoAnimTickMsg struct{}  // 30s idle trigger — begins the scramble animation
+type logoFrameTickMsg struct{} // 60ms per-frame tick during scramble/hold/unscramble
 
 func (a *App) loadFeedCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -3376,6 +3479,14 @@ func (a *App) schedulePollCmd() tea.Cmd {
 
 func (a *App) scheduleWanderCmd() tea.Cmd {
 	return tea.Tick(1*time.Hour, func(time.Time) tea.Msg { return wanderTickMsg{} })
+}
+
+func scheduleLogoAnimCmd() tea.Cmd {
+	return tea.Tick(30*time.Second, func(time.Time) tea.Msg { return logoAnimTickMsg{} })
+}
+
+func logoFrameTickCmd() tea.Cmd {
+	return tea.Tick(logoFrameInterval, func(time.Time) tea.Msg { return logoFrameTickMsg{} })
 }
 
 // checkAndWanderCmd fires a profile location update if wander mode is enabled
