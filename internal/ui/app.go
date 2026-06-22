@@ -13,8 +13,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -22,7 +20,6 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
-	"github.com/ragnar/cyber-tui/internal/version"
 )
 
 type screen int
@@ -51,24 +48,6 @@ const (
 
 // availableThemes is the ordered list of selectable themes shown in the picker.
 var availableThemes = []string{"cyber", "c64", "vt320"}
-
-var renderedVersionLine = theme.Subtle.Render("version " + version.Version + " (" + version.Commit + ")")
-
-// menuTabs is the ordered list of navigable screens, shared by the
-// renderer and key handler so the order is never out of sync.
-var menuTabs = []struct {
-	label string
-	s     screen
-}{
-	{"feed", screenFeed},
-	{"notifications", screenNotifications},
-	{"journal", screenJournal},
-	{"bookmarks", screenBookmarks},
-	{"guilds", screenGuilds},
-	{"topics", screenTopics},
-	{"profile", screenProfile},
-	{"settings", screenSettings},
-}
 
 const (
 	logoOrig          = "ᑕ¥βєяรקค¢є"
@@ -100,6 +79,7 @@ func randomCyberRune(exclude rune) rune {
 }
 
 type App struct {
+	layout      Layout
 	client      api.Client
 	tokens      model.Tokens
 	currentUser model.User
@@ -223,6 +203,7 @@ type App struct {
 
 func NewApp(client api.Client) App {
 	return App{
+		layout:             TabsLayout{},
 		client:             client,
 		active:             screenLogin,
 		focus:              focusMenu,
@@ -538,79 +519,8 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			return a, tea.Quit, true
 		}
-	case "1":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenFeed
-			a.feed = a.feed.SetFetching()
-			return a, a.loadFeedCmd(), true
-		}
-	case "2":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenNotifications
-			a.notifications = a.notifications.SetFetching()
-			return a, a.loadNotifsCmd(), true
-		}
-	case "3":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenJournal
-			a.journal = a.journal.SetFetching()
-			return a, a.loadJournalCmd(), true
-		}
-	case "4":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenBookmarks
-			if !a.bookmarks.IsLoaded() {
-				a.bookmarks = a.bookmarks.SetFetching()
-				return a, a.loadBookmarksCmd(""), true
-			}
-			return a, nil, true
-		}
-	case "5":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenGuilds
-			if !a.guilds.IsLoaded() {
-				a.guilds = a.guilds.SetFetching()
-				return a, a.loadGuildsCmd(""), true
-			}
-			return a, nil, true
-		}
-	case "6":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenTopics
-			if !a.topics.IsLoaded() {
-				a.topics = a.topics.SetFetching()
-				return a, a.loadTopicsCmd(), true
-			}
-			return a, nil, true
-		}
-	case "7":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenProfile
-			return a, a.loadProfileCmd(), true
-		}
-	case "8":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenSettings
-			return a, nil, true // no load cmd; settings already in memory
-		}
-	case "left":
-		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
-			return a, a.navigateTab(-1), true
-		}
-	case "right":
-		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
-			return a, a.navigateTab(+1), true
-		}
 	}
-	return a, nil, false
+	return a.layout.HandleNav(m, a)
 }
 
 // handleAuth processes login/registration flow messages.
@@ -1548,464 +1458,32 @@ func friendlyErr(err error) string {
 	return err.Error()
 }
 
-// activeScreenHasFocusedInput returns true when the current screen has a
-// text input that is focused, preventing arrow keys from being consumed by
-// the tab navigator instead.
-func (a App) activeScreenHasFocusedInput() bool {
-	switch a.active {
-	case screenChatrooms:
-		return a.chatrooms.InputFocused()
-	case screenCMail:
-		return a.cmail.InputFocused()
-	case screenPostDetail:
-		return a.postDetail.ComposeActive()
-	case screenFeed:
-		return a.feed.ComposeActive()
-	case screenGuilds:
-		return a.guilds.ComposeActive()
-	case screenProfile:
-		return a.profile.ComposeActive()
-	case screenJournal:
-		return a.journal.ComposeActive()
-	}
-	return false
-}
-
 // tabIndex returns the index of the currently active screen within menuTabs.
-func (a App) tabIndex() int {
-	for i, t := range menuTabs {
-		if t.s == a.active {
-			return i
-		}
-	}
-	return 0
-}
+func (a App) tabIndex() int { return tabIndexOf(a) }
 
 // navigateTab moves the active tab by delta (-1 or +1), wrapping at the ends.
 func (a *App) navigateTab(delta int) tea.Cmd {
-	if a.active == screenCMail {
-		a.cmail = a.cmail.CancelSubscription()
-	}
-	idx := (a.tabIndex() + delta + len(menuTabs)) % len(menuTabs)
-	a.active = menuTabs[idx].s
-	switch a.active {
-	case screenFeed:
-		a.feed = a.feed.SetFetching()
-		return a.loadFeedCmd()
-	case screenChatrooms:
-		return a.loadRoomsCmd()
-	case screenCMail:
-		return a.loadConvsCmd()
-	case screenProfile:
-		return a.loadProfileCmd()
-	case screenNotifications:
-		a.notifications = a.notifications.SetFetching()
-		return a.loadNotifsCmd()
-	case screenSettings:
-		return nil // no load cmd; settings already in memory
-	case screenBookmarks:
-		if !a.bookmarks.IsLoaded() {
-			a.bookmarks = a.bookmarks.SetFetching()
-			return a.loadBookmarksCmd("")
-		}
-		return nil
-	case screenGuilds:
-		if !a.guilds.IsLoaded() {
-			a.guilds = a.guilds.SetFetching()
-			return a.loadGuildsCmd("")
-		}
-		return nil
-	case screenTopics:
-		if !a.topics.IsLoaded() {
-			a.topics = a.topics.SetFetching()
-			return a.loadTopicsCmd()
-		}
-		return nil
-	case screenJournal:
-		a.journal = a.journal.SetFetching()
-		return a.loadJournalCmd()
-	}
-	return nil
+	var cmd tea.Cmd
+	*a, cmd = navigateTabBy(*a, delta)
+	return cmd
 }
 
 func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
-	switch a.active {
-	case screenLogin:
-		a.login, cmd = a.login.Update(msg)
-	case screenFeed:
-		a.feed, cmd = a.feed.Update(msg)
-	case screenChatrooms:
-		a.chatrooms, cmd = a.chatrooms.Update(msg)
-	case screenCMail:
-		a.cmail, cmd = a.cmail.Update(msg)
-	case screenProfile:
-		a.profile, cmd = a.profile.Update(msg)
-	case screenPostDetail:
-		a.postDetail, cmd = a.postDetail.Update(msg)
-	case screenNotifications:
-		a.notifications, cmd = a.notifications.Update(msg)
-	case screenSettings:
-		a.settingsScreen, cmd = a.settingsScreen.Update(msg)
-	case screenBookmarks:
-		a.bookmarks, cmd = a.bookmarks.Update(msg)
-	case screenGuilds:
-		a.guilds, cmd = a.guilds.Update(msg)
-	case screenTopics:
-		a.topics, cmd = a.topics.Update(msg)
-	case screenJournal:
-		a.journal, cmd = a.journal.Update(msg)
-	}
+	*a, cmd = a.layout.DelegateUpdate(msg, *a)
 	return cmd
 }
 
 // --- view ---
 
-func (a App) View() string {
-	if a.active == screenLogin {
-		return a.login.View()
-	}
-	// Fix the content area to the available height so the status bar
-	// is always anchored to the bottom regardless of content length.
-	contentHeight := a.height - theme.ChromeHeight
-	content := lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(a.renderActiveScreen())
-	base := lipgloss.JoinVertical(lipgloss.Left,
-		a.renderTabBar(),
-		"", // separator row
-		content,
-		a.renderBottomBar(),
-	)
-	if a.themePickerOpen {
-		return overlayCenter(base, a.renderThemePicker(), a.width, a.height)
-	}
-	if a.helpModalOpen {
-		return overlayCenter(base, a.renderHelpModal(), a.width, a.height)
-	}
-	if a.urlPickerOpen {
-		return overlayCenter(base, a.renderURLPicker(), a.width, a.height)
-	}
-	if a.imageModalOpen {
-		textModal := a.renderImageModal()
-		composed := overlayCenter(base, textModal, a.width, a.height)
-		// Compute the same offsets overlayCenter used so we can position
-		// the image sequence inside the border without embedding it in the
-		// overlay string (which would corrupt overlayCenter's ANSI splicing).
-		modalW := lipgloss.Width(textModal)
-		modalH := len(strings.Split(textModal, "\n"))
-		xOff := (a.width - modalW) / 2
-		yOff := (a.height - modalH) / 2
-		if xOff < 0 {
-			xOff = 0
-		}
-		if yOff < 0 {
-			yOff = 0
-		}
-		// theme.ActiveBorder: 1-char border + 1-char horizontal padding on each
-		// side. Image content therefore starts 2 cols right of the border edge.
-		// ANSI cursor sequences are 1-indexed; the border top row is yOff+1.
-		imgRow := yOff + 2 // past top border row (1-indexed)
-		imgCol := xOff + 3 // past border(1) + padding(1), 1-indexed
-		// Append cursor movement + image + cursor restore. These become part of
-		// the last "line" in Bubble Tea's diff renderer so they are written when
-		// that line changes without disrupting the fixed-height view.
-		return composed + fmt.Sprintf("\x1b[%d;%dH%s\x1b[%d;1H", imgRow, imgCol, a.imageModalEncoded, a.height)
-	}
-	if a.imageNeedsCleanup && a.graphicsProtocol == imgview.ProtocolKitty {
-		// Inject the Kitty delete-all command onto the line that held the modal's
-		// top border. That line visually changed (border → normal content) so
-		// Bubble Tea's diff renderer will rewrite it, delivering the delete
-		// sequence to the terminal and clearing the lingering image pixels.
-		// Modal height = imageModalRows blank lines + 2 border lines.
-		modalH := a.imageModalRows + 2
-		yOff := (a.height - modalH) / 2
-		if yOff < 0 {
-			yOff = 0
-		}
-		lines := strings.Split(base, "\n")
-		if yOff < len(lines) {
-			lines[yOff] = "\x1b_Ga=d,d=A\x1b\\" + lines[yOff]
-		}
-		return strings.Join(lines, "\n")
-	}
-	return base
-}
+func (a App) View() string { return a.layout.View(a) }
 
-func (a App) renderTabBar() string {
-	var tabs string
-	for _, t := range menuTabs {
-		label := t.label
-		if t.s == screenNotifications && a.polledUnreadCount > 0 {
-			label = fmt.Sprintf("%s (%d)", label, a.polledUnreadCount)
-		}
-		if a.active == t.s {
-			tabs += theme.ActiveTab.Render(label)
-		} else {
-			tabs += theme.Tab.Render(label)
-		}
-	}
-	logo := lipgloss.NewStyle().
-		Background(theme.ColorGreen).
-		Foreground(theme.ColorBackground).
-		Bold(true).
-		Padding(0, 1).
-		Render(a.logoText)
-	spacer := strings.Repeat(" ", max(0, a.width-lipgloss.Width(tabs)-lipgloss.Width(logo)))
-	return tabs + spacer + logo
-}
-
-func (a App) renderActiveScreen() string {
-	switch a.active {
-	case screenFeed:
-		return a.feed.View()
-	case screenChatrooms:
-		return a.chatrooms.View()
-	case screenCMail:
-		return a.cmail.View()
-	case screenProfile:
-		return a.profile.View()
-	case screenPostDetail:
-		return a.postDetail.View()
-	case screenNotifications:
-		return a.notifications.View()
-	case screenSettings:
-		return a.settingsScreen.View()
-	case screenBookmarks:
-		return a.bookmarks.View()
-	case screenGuilds:
-		return a.guilds.View()
-	case screenTopics:
-		return a.topics.View()
-	case screenJournal:
-		return a.journal.View()
-	}
-	return ""
-}
-
-// hint is a compact key+description pair shown in the status bar.
-type hint struct{ key, desc string }
-
-// screenHints returns context-sensitive hints for the active screen/state.
-// Keys and descriptions mirror the ?-modal exactly so both surfaces stay in sync.
-// The last entry is always {key:"?", desc:"more"} as the escape hatch to the full modal.
-func (a App) screenHints() []hint {
-	more := hint{"?", "more"}
-	switch a.active {
-	case screenFeed:
-		if a.feed.ComposeActive() {
-			return []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
-		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, more}
-	case screenPostDetail:
-		if a.postDetail.ComposeActive() {
-			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
-		}
-		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"esc", "back"}, more}
-	case screenProfile:
-		if a.profile.ComposeActive() {
-			return []hint{{"Ctrl+s", "save"}, {"Esc", "cancel"}, {"tab", "cycle"}}
-		}
-		if a.profile.IsReadOnly() {
-			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"tab", "cycle"}, more}
-		}
-		return []hint{{"↑↓", "navigate"}, {"e", "edit"}, {"tab", "cycle"}, more}
-	case screenNotifications:
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, more}
-	case screenJournal:
-		if a.journal.ComposeActive() {
-			return []hint{{"tab", "cycle"}, {"Ctrl+s", "save"}, {"Ctrl+p", "publish"}, {"Esc", "cancel"}}
-		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "edit"}, {"n", "new"}, {"d", "delete"}, more}
-	case screenBookmarks:
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"d", "delete"}, more}
-	case screenGuilds:
-		if a.guilds.ComposeActive() {
-			return []hint{{"tab", "cycle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
-		}
-		if a.guilds.IsBrowsingMembers() {
-			return []hint{{"↑↓", "navigate"}, {"enter", "view profile"}, {"esc", "back"}, more}
-		}
-		if a.guilds.IsBrowsingGuild() {
-			if a.guilds.IsConfirmingJoin() || a.guilds.IsConfirmingLeave() {
-				return []hint{{"y", "confirm"}, {"n/esc", "cancel"}}
-			}
-			hints := []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "members"}, {"n", "new thread"}, {"esc", "back"}}
-			d := a.guilds.GuildDetail()
-			if a.guilds.IsDetailLoaded() && !d.IsMember && a.currentUser.GuildSlug == "" {
-				hints = append(hints, hint{"J", "join"})
-			} else if a.guilds.IsDetailLoaded() && d.IsMember && d.Role != "founder" {
-				hints = append(hints, hint{"L", "leave"})
-			}
-			return append(hints, more)
-		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, more}
-	case screenTopics:
-		if a.topics.IsBrowsingTopic() {
-			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
-		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, {"esc", "back"}, more}
-	case screenSettings:
-		base := []hint{{"↑↓", "navigate"}, {"space", "toggle"}, {"tab", "cycle"}, more}
-		if a.settingsScreen.IsDirty() {
-			return append([]hint{{"Ctrl+s", "save"}, {"Esc", "revert"}}, base...)
-		}
-		return base
-	case screenCMail:
-		return []hint{{"← →", "switch pane"}, {"j/k", "navigate"}, {"enter", "send"}, more}
-	}
-	return []hint{more}
-}
-
-// sbStyle returns a bare style with the status bar background but no padding,
-// so fragments can be composed without accumulating per-fragment padding gaps.
-func sbStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Background(theme.ColorDimGreen)
-}
-
-// renderHints renders a []hint slice as a compact styled string with no padding.
-func renderHints(hints []hint) string {
-	key := sbStyle().Foreground(theme.ColorCyan).Bold(true)
-	desc := sbStyle().Foreground(theme.ColorWhite)
-	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
-	parts := make([]string, 0, len(hints)*3)
-	for i, h := range hints {
-		if i > 0 {
-			parts = append(parts, sep)
-		}
-		parts = append(parts, key.Render(h.key))
-		if h.desc != "" {
-			parts = append(parts, desc.Render(" "+h.desc))
-		}
-	}
-	return strings.Join(parts, "")
-}
-
-// hintRows converts hints to modal row strings using rowFn, skipping the "?" hint.
-// "↑↓" is expanded to "↑↓ / j/k" so the modal documents both navigation styles.
-func hintRows(hints []hint, rowFn func(string, string) string) []string {
-	rows := make([]string, 0, len(hints))
-	for _, h := range hints {
-		if h.key == "?" {
-			continue
-		}
-		key := h.key
-		if key == "↑↓" {
-			key = "↑↓ / j/k"
-		}
-		rows = append(rows, rowFn(key, h.desc))
-	}
-	return rows
-}
-
-// renderBottomBar renders the notification banner when one is active, otherwise
-// the status bar. Both occupy exactly one row, so ChromeHeight is unaffected.
-func (a App) renderBottomBar() string {
-	if a.notifyText == "" {
-		return a.renderStatusBar()
-	}
-	return a.renderNotification()
-}
-
-func (a App) renderNotification() string {
-	color := theme.ColorGreen
-	prefix := "✓ "
-	switch a.notifyLevel {
-	case notifyWarn:
-		color = theme.ColorYellow
-		prefix = "! "
-	case notifyError:
-		color = theme.ColorRed
-		prefix = "✕ "
-	}
-	const suffix = "  (any key to dismiss)"
-	// Reserve room for prefix, suffix, and the 1-char padding on each side.
-	budget := a.width - lipgloss.Width(prefix) - lipgloss.Width(suffix) - 2
-	text := ansi.Truncate(a.notifyText, max(0, budget), "…")
-	return lipgloss.NewStyle().
-		Foreground(theme.ColorBackground).
-		Background(color).
-		Bold(true).
-		Width(a.width).
-		Padding(0, 1).
-		Render(prefix + text + suffix)
-}
-
-func (a App) renderStatusBar() string {
-	user := sbStyle().Foreground(theme.ColorCyan).Bold(true)
-	meta := sbStyle().Foreground(theme.ColorWhite)
-	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
-
-	densityLabel := "dense"
-	if a.relaxed {
-		densityLabel = "relaxed"
-	}
-	tzLabel := a.timezone
-	if tzLabel == "" {
-		tzLabel = "UTC"
-	}
-	timeFmt := a.settings.TimeDisplayFormat
-	if timeFmt == "" {
-		timeFmt = "datetime"
-	}
-
-	username := user.Render("@" + a.currentUser.Username)
-	// Info items ordered by drop priority (last dropped = most important).
-	infoItems := []string{
-		sep + meta.Render(densityLabel),
-		sep + meta.Render(theme.CurrentName()),
-		sep + meta.Render(tzLabel),
-		sep + meta.Render(timeFmt),
-	}
-
-	hints := a.screenHints()
-	// Outer bar padding (1 char each side, matching StatusBar Padding(0,1)).
-	const barPad = 2
-
-	measure := func(numInfo, numHints int) int {
-		left := lipgloss.Width(username)
-		for _, item := range infoItems[:numInfo] {
-			left += lipgloss.Width(item)
-		}
-		right := lipgloss.Width(renderHints(hints[:numHints]))
-		return left + right + barPad
-	}
-
-	// Collapse info items first, then hints. Always keep at least "?".
-	numInfo := len(infoItems)
-	numHints := len(hints)
-	for numInfo >= 0 {
-		if measure(numInfo, numHints) <= a.width {
-			break
-		}
-		numInfo--
-	}
-	if numInfo < 0 {
-		numInfo = 0
-		for numHints > 1 && measure(0, numHints) > a.width {
-			numHints--
-		}
-	}
-
-	bg := sbStyle()
-	leftParts := []string{username}
-	leftParts = append(leftParts, infoItems[:numInfo]...)
-	left := lipgloss.JoinHorizontal(lipgloss.Top, leftParts...)
-	right := renderHints(hints[:numHints])
-	spacer := bg.Width(a.width - lipgloss.Width(left) - lipgloss.Width(right) - barPad).Render("")
-	bar := lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, right)
-	return bg.Padding(0, 1).Render(bar)
-}
+// activeScreenHasFocusedInput returns true when the current screen has a
+// text input that is focused, preventing arrow keys from being consumed by
+// the tab navigator instead.
+func (a App) activeScreenHasFocusedInput() bool { return a.layout.HasFocusedInput(a) }
 
 // --- theme picker ---
-
-// themeIndex returns the index of name in availableThemes, defaulting to 0.
-func themeIndex(name string) int {
-	for i, t := range availableThemes {
-		if t == name {
-			return i
-		}
-	}
-	return 0
-}
 
 // handleThemePickerKey processes keyboard input while the theme picker is open.
 func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2055,146 +1533,12 @@ func (a *App) refreshViewports() {
 	a.journal, _ = a.journal.Update(msg)
 }
 
-// renderThemePicker returns the centered overlay box for theme selection.
-func (a App) renderThemePicker() string {
-	title := theme.Title.Render("theme")
-	var items []string
-	for i, name := range availableThemes {
-		if i == a.themePickerCursor {
-			items = append(items, theme.Highlight.Render("▸ "+name))
-		} else {
-			items = append(items, theme.Subtle.Render("  "+name))
-		}
-	}
-	hint := theme.Subtle.Render("↑↓ preview   enter save   esc cancel")
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		"",
-		lipgloss.JoinVertical(lipgloss.Left, items...),
-		"",
-		hint,
-	)
-	return theme.ActiveBorder.Render(body)
-}
-
 // --- help modal ---
 
 // handleHelpModalKey closes the help modal on any keypress.
 func (a App) handleHelpModalKey(_ tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a.helpModalOpen = false
 	return a, nil
-}
-
-// renderHelpModal returns the centered overlay box listing keyboard shortcuts
-// for the global scope and the currently active screen.
-func (a App) renderHelpModal() string {
-	title := theme.Title.Render("shortcuts")
-	sectionStyle := theme.Subtle.Bold(true)
-	row := func(key, desc string) string {
-		k := theme.Highlight.Render(fmt.Sprintf("%-14s", key))
-		return lipgloss.JoinHorizontal(lipgloss.Top, k, theme.Subtle.Render(desc))
-	}
-
-	globalSection := lipgloss.JoinVertical(lipgloss.Left,
-		sectionStyle.Render("global"),
-		row("1-7", "feed · notifs · journal · bookmarks · topics · profile · settings"),
-		row("← →", "cycle tabs"),
-		row("t", "theme"),
-		row("v", "density"),
-		row("o", "open url"),
-		row("q", "quit"),
-	)
-
-	section := func(title string, extra ...string) string {
-		parts := append([]string{sectionStyle.Render(title)}, hintRows(a.screenHints(), row)...)
-		parts = append(parts, extra...)
-		return lipgloss.JoinVertical(lipgloss.Left, parts...)
-	}
-
-	var localSection string
-	switch a.active {
-	case screenFeed:
-		if a.feed.ComposeActive() {
-			localSection = section("feed (compose)", row("Enter", "paragraph"))
-		} else {
-			localSection = section("feed",
-				row("p", "view profile"),
-				row("d", "delete own"),
-			)
-		}
-	case screenPostDetail:
-		if a.postDetail.ComposeActive() {
-			localSection = section("post detail (compose)", row("Enter", "paragraph"))
-		} else {
-			localSection = section("post detail",
-				row("d", "delete own"),
-				row("p", "view profile"),
-			)
-		}
-	case screenProfile:
-		if a.profile.ComposeActive() {
-			localSection = section("profile (editing)")
-		} else if a.profile.IsReadOnly() {
-			localSection = section("profile",
-				row("enter", "open"),
-			)
-		} else {
-			localSection = section("profile (own)",
-				row("enter", "open"),
-			)
-		}
-	case screenNotifications:
-		localSection = section("notifications",
-			row("M", "mark all read"),
-			row("p", "view profile"),
-		)
-	case screenJournal:
-		if a.journal.ComposeActive() {
-			localSection = section("journal (editing)", row("Enter", "paragraph"))
-		} else {
-			localSection = section("journal",
-				row("h", "revision history"),
-			)
-		}
-	case screenBookmarks:
-		localSection = section("bookmarks")
-	case screenGuilds:
-		if a.guilds.ComposeActive() {
-			localSection = section("guilds (compose)", row("Enter", "paragraph"))
-		} else if a.guilds.IsBrowsingMembers() {
-			localSection = section("guilds (members)", row("enter", "view profile"))
-		} else if a.guilds.IsBrowsingGuild() {
-			localSection = section("guilds (browsing)", row("n", "new thread"), row("m", "members"))
-		} else {
-			localSection = section("guilds")
-		}
-	case screenTopics:
-		if a.topics.IsBrowsingTopic() {
-			localSection = section("topics (browsing)")
-		} else {
-			localSection = section("topics")
-		}
-	case screenSettings:
-		title := "settings"
-		if a.settingsScreen.IsDirty() {
-			title = "settings (unsaved changes)"
-		}
-		localSection = section(title)
-	case screenCMail:
-		localSection = section("c-mail")
-	}
-
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		"",
-		globalSection,
-		"",
-		localSection,
-		"",
-		theme.Subtle.Render("any key · close"),
-		renderedVersionLine,
-	)
-	return theme.ActiveBorder.Render(body)
 }
 
 // getFocusedURLs returns URLs from the currently selected item on the active screen.
@@ -2328,86 +1672,6 @@ func (a App) handleURLPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.urlPickerItems = nil
 	}
 	return a, nil
-}
-
-// renderURLPicker returns the URL picker overlay shown when the focused item has
-// multiple openable URLs.
-func (a App) renderURLPicker() string {
-	title := theme.Title.Render("open url")
-	items := make([]string, len(a.urlPickerItems))
-	for i, u := range a.urlPickerItems {
-		display := u
-		if urlutil.IsImageURL(u) &&
-			a.graphicsProtocol != imgview.ProtocolNone &&
-			a.imageViewer != "browser" {
-			display = "[img] " + display
-		}
-		if len(display) > 60 {
-			display = display[:57] + "..."
-		}
-		if i == a.urlPickerCursor {
-			items[i] = theme.Highlight.Render("▸ " + display)
-		} else {
-			items[i] = theme.Subtle.Render("  " + display)
-		}
-	}
-	hint := theme.Subtle.Render("↑↓ select   enter open   esc cancel")
-	rows := append([]string{title, ""}, items...)
-	rows = append(rows, "", hint)
-	return theme.ActiveBorder.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
-}
-
-// renderImageModal returns the bordered text-only shell for the image overlay.
-// The image escape sequence is NOT embedded here; it is injected separately in
-// View() via ANSI cursor movement so that overlayCenter never sees binary
-// protocol data, which would corrupt the ANSI-aware string splicing.
-func (a App) renderImageModal() string {
-	blankLine := strings.Repeat(" ", a.imageModalCols)
-	lines := make([]string, a.imageModalRows)
-	for i := range lines {
-		lines[i] = blankLine
-	}
-	return theme.ActiveBorder.Render(strings.Join(lines, "\n"))
-}
-
-// overlayCenter composites fg centered over bg using ANSI-aware string splicing.
-// Each line of fg replaces the corresponding characters in bg at the centered
-// position, preserving ANSI colour codes on both sides of the splice point.
-func overlayCenter(bg, fg string, bgW, bgH int) string {
-	fgW := lipgloss.Width(fg)
-	fgLines := strings.Split(fg, "\n")
-	fgH := len(fgLines)
-	bgLines := strings.Split(bg, "\n")
-
-	xOff := (bgW - fgW) / 2
-	yOff := (bgH - fgH) / 2
-	if xOff < 0 {
-		xOff = 0
-	}
-	if yOff < 0 {
-		yOff = 0
-	}
-
-	result := make([]string, len(bgLines))
-	copy(result, bgLines)
-
-	for i, fgLine := range fgLines {
-		bi := yOff + i
-		if bi < 0 || bi >= len(result) {
-			continue
-		}
-		bgLine := result[bi]
-		// Pad the background line if it's shorter than the splice end point.
-		bgLineW := ansi.StringWidth(bgLine)
-		needed := xOff + fgW
-		if bgLineW < needed {
-			bgLine += strings.Repeat(" ", needed-bgLineW)
-		}
-		left := ansi.Truncate(bgLine, xOff, "")
-		right := ansi.TruncateLeft(bgLine, xOff+fgW, "")
-		result[bi] = left + fgLine + right
-	}
-	return strings.Join(result, "\n")
 }
 
 // --- commands ---
