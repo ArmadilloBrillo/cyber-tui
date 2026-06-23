@@ -329,9 +329,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
-		cmd := a.delegateUpdate(msg)
-		a.broadcastConfig()
-		return a, cmd
+		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: m.Height}
+		return a, a.delegateUpdate(contentMsg)
 	}
 	// Any keypress dismisses a visible notification early. We do NOT return here,
 	// so the key still flows on to do its normal job; bumping notifyGen neutralizes
@@ -463,7 +462,8 @@ func (a *App) broadcastWatchedIDs() {
 func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
 	a.width = m.Width
 	a.height = m.Height
-	return a.updateAll(m)
+	contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: m.Height}
+	return a.updateAll(contentMsg)
 }
 
 // handleKeys processes tea.KeyMsg events: modal intercepts, focused-input
@@ -1538,7 +1538,7 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // theme by re-broadcasting the current terminal size. Called synchronously so
 // View() sees fresh content in the same frame.
 func (a *App) refreshViewports() {
-	msg := tea.WindowSizeMsg{Width: a.width, Height: a.height}
+	msg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(a.width), Height: a.height}
 	a.feed, _ = a.feed.Update(msg)
 	a.chatrooms, _ = a.chatrooms.Update(msg)
 	a.cmail, _ = a.cmail.Update(msg)
