@@ -22,8 +22,9 @@ func (l MillerLayout) View(a App) string {
 	}
 
 	contentH := a.height - 1 // full height minus bottom bar
+	contentW := a.width - millerSidebarWidth
 	navPane := lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(l.renderNav(a))
-	contentPane := lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(l.renderContent(a))
+	contentPane := lipgloss.NewStyle().Width(contentW).Height(contentH).MaxHeight(contentH).Render(l.renderContent(a))
 
 	sep := theme.Subtle.Render(strings.Repeat("│\n", contentH))
 	base := lipgloss.JoinVertical(lipgloss.Left,
