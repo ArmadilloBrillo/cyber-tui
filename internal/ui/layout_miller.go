@@ -316,6 +316,13 @@ func (l MillerLayout) renderNotification(a App) string {
 		Render(prefix + text + suffix)
 }
 
+func (l MillerLayout) screenHints(a App) []hint {
+	if a.focus == focusMenu {
+		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-8", "jump"}, {"?", "more"}}
+	}
+	return append([]hint{{"h/←", "menu"}}, TabsLayout{}.screenHints(a)...)
+}
+
 func (l MillerLayout) renderStatusBar(a App) string {
 	user := sbStyle().Foreground(theme.ColorCyan).Bold(true)
 	meta := sbStyle().Foreground(theme.ColorWhite)
@@ -329,21 +336,49 @@ func (l MillerLayout) renderStatusBar(a App) string {
 	if tzLabel == "" {
 		tzLabel = "UTC"
 	}
-	timeFmt := a.settings.TimeDisplayFormat
-	if timeFmt == "" {
-		timeFmt = "datetime"
-	}
 
 	username := user.Render("@" + a.currentUser.Username)
 	infoItems := []string{
-		meta.Render(densityLabel),
-		meta.Render(timeFmt),
-		meta.Render(tzLabel),
-		meta.Render("miller"),
+		sep + meta.Render(densityLabel),
+		sep + meta.Render(tzLabel),
+		sep + meta.Render("miller"),
 	}
-	info := strings.Join(infoItems, sep)
-	spacer := strings.Repeat(" ", max(0, a.width-lipgloss.Width(username)-lipgloss.Width(info)-2))
-	return sbStyle().Width(a.width).Render(username + spacer + info)
+
+	hints := l.screenHints(a)
+	const barPad = 2
+
+	measure := func(numInfo, numHints int) int {
+		left := lipgloss.Width(username)
+		for _, item := range infoItems[:numInfo] {
+			left += lipgloss.Width(item)
+		}
+		right := lipgloss.Width(renderHints(hints[:numHints]))
+		return left + right + barPad
+	}
+
+	numInfo := len(infoItems)
+	numHints := len(hints)
+	for numInfo >= 0 {
+		if measure(numInfo, numHints) <= a.width {
+			break
+		}
+		numInfo--
+	}
+	if numInfo < 0 {
+		numInfo = 0
+		for numHints > 1 && measure(0, numHints) > a.width {
+			numHints--
+		}
+	}
+
+	bg := sbStyle()
+	leftParts := []string{username}
+	leftParts = append(leftParts, infoItems[:numInfo]...)
+	left := lipgloss.JoinHorizontal(lipgloss.Top, leftParts...)
+	right := renderHints(hints[:numHints])
+	spacer := bg.Width(max(0, a.width-lipgloss.Width(left)-lipgloss.Width(right)-barPad)).Render("")
+	bar := lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, right)
+	return bg.Padding(0, 1).Render(bar)
 }
 
 func (l MillerLayout) renderThemePicker(a App) string {
