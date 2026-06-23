@@ -80,6 +80,7 @@ func randomCyberRune(exclude rune) rune {
 
 type App struct {
 	layout      Layout
+	layoutName  string // "tabs" (default) or "miller"; used when persisting to config
 	client      api.Client
 	tokens      model.Tokens
 	currentUser model.User
@@ -204,6 +205,7 @@ type App struct {
 func NewApp(client api.Client) App {
 	return App{
 		layout:             TabsLayout{},
+		layoutName:         "tabs",
 		client:             client,
 		active:             screenLogin,
 		focus:              focusMenu,
@@ -259,7 +261,16 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.wanderLust = s.WanderLust
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
+	a.layoutName = s.Layout
+	a.layout = layoutFromName(s.Layout)
 	return a
+}
+
+func layoutFromName(name string) Layout {
+	if name == "miller" {
+		return MillerLayout{}
+	}
+	return TabsLayout{}
 }
 
 // WithGraphicsProtocol sets the terminal graphics protocol detected at startup.
@@ -415,7 +426,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, OwnGuildSlug: a.currentUser.GuildSlug}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -792,6 +803,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
+		ln := msg.LayoutName
 		return a, func() tea.Msg {
 			if err := a.client.UpdateSettings(s); err != nil {
 				return actionErrMsg{err}
@@ -801,8 +813,9 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
+				cfg.Layout = ln
 			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -811,8 +824,10 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
+		a.layoutName = msg.layoutName
+		a.layout = layoutFromName(msg.layoutName)
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
 		return a, nil, true
@@ -1810,6 +1825,7 @@ type settingsSavedMsg struct {
 	maxThreadDepth int
 	timezone       string
 	imageViewer    string
+	layoutName     string
 }
 type wanderTickMsg struct{}
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made

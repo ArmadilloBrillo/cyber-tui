@@ -382,6 +382,8 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 	return false
 }
 
+func (l TabsLayout) ContentWidth(termWidth int) int { return termWidth }
+
 func (l TabsLayout) renderTabBar(a App) string {
 	var tabs string
 	for _, t := range menuTabs {

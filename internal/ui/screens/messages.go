@@ -44,6 +44,7 @@ type SharedConfigMsg struct {
 	Timezone       string
 	ImageViewer    string
 	OwnGuildSlug   string
+	LayoutName     string // "tabs" or "miller"; used by settings screen to show current value
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -68,6 +69,7 @@ type SaveSettingsMsg struct {
 	MaxThreadDepth int
 	Timezone       string
 	ImageViewer    string
+	LayoutName     string // "tabs" or "miller"
 }
 
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark

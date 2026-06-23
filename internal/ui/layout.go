@@ -9,4 +9,5 @@ type Layout interface {
 	HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool)
 	DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd)
 	HasFocusedInput(a App) bool
+	ContentWidth(termWidth int) int
 }
