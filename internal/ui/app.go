@@ -560,7 +560,9 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case feedLoadedMsg:
 		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
-		return a, nil, true
+		var detailCmd tea.Cmd
+		a.feed, detailCmd = a.feed.CurrentDetailCmd()
+		return a, detailCmd, true
 	case feedPageMsg:
 		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
 		return a, nil, true
@@ -568,6 +570,11 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadFeedCmd(), true
 	case screens.LoadMoreFeedMsg:
 		return a, a.loadFeedPageCmd(msg.Cursor), true
+	case screens.LoadFeedDetailMsg:
+		return a, a.loadFeedDetailCmd(msg.PostID), true
+	case screens.FeedDetailRepliesMsg:
+		a.feed, _ = a.feed.Update(msg)
+		return a, nil, true
 	case screens.ShowPostMsg:
 		a.postDetailReturn = a.active
 		a.active = screenPostDetail
@@ -2216,6 +2223,16 @@ func (a *App) loadRepliesCmd(postID string) tea.Cmd {
 			return errMsg{err}
 		}
 		return repliesLoadedMsg{replies: replies}
+	}
+}
+
+func (a *App) loadFeedDetailCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		replies, err := a.client.GetPostReplies(postID)
+		if err != nil {
+			return screens.FeedDetailRepliesMsg{PostID: postID}
+		}
+		return screens.FeedDetailRepliesMsg{PostID: postID, Replies: replies}
 	}
 }
 

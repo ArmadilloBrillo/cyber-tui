@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -25,6 +26,16 @@ type ShowPostMsg struct{ Post model.Post }
 // ShowPostForReplyMsg is emitted when the user presses 'r' on a selected post.
 // App navigates to post detail and opens the compose box immediately.
 type ShowPostForReplyMsg struct{ Post model.Post }
+
+// LoadFeedDetailMsg is emitted when the selected post changes so the app can
+// fetch replies for the Miller reading pane.
+type LoadFeedDetailMsg struct{ PostID string }
+
+// FeedDetailRepliesMsg delivers fetched replies back to FeedModel for the reading pane.
+type FeedDetailRepliesMsg struct {
+	PostID  string
+	Replies []model.Reply
+}
 
 // SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
 type SubmitNewPostMsg struct {
@@ -61,6 +72,11 @@ type FeedModel struct {
 	bookmarkedPostIDs map[string]struct{}
 	watchedPostIDs    map[string]struct{}
 	filterNSFW        bool
+
+	// Miller reading pane: replies for the currently selected post.
+	detailPostID  string
+	detailReplies []model.Reply
+	detailLoading bool
 }
 
 func NewFeedModel() FeedModel {
@@ -293,6 +309,15 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case FeedDetailRepliesMsg:
+		visible := m.visiblePosts()
+		if m.selectedIndex < len(visible) && visible[m.selectedIndex].ID == msg.PostID {
+			m.detailPostID = msg.PostID
+			m.detailReplies = msg.Replies
+			m.detailLoading = false
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -358,6 +383,9 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				m.selectedIndex--
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()
+				var detailCmd tea.Cmd
+				m, detailCmd = m.currentDetailCmd()
+				return m, detailCmd
 			} else if !m.loading && !m.refreshing {
 				m.refreshing = true
 				m = m.refreshContent()
@@ -409,6 +437,9 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				m.selectedIndex++
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()
+				var detailCmd tea.Cmd
+				m, detailCmd = m.currentDetailCmd()
+				return m, detailCmd
 			} else {
 				var loadCmd tea.Cmd
 				m, loadCmd = m.triggerLoadMore()
@@ -515,6 +546,43 @@ func (m FeedModel) renderPost(p model.Post, selected bool) string {
 	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
 }
 
+// currentDetailCmd emits LoadFeedDetailMsg for the currently selected post and marks
+// the detail pane as loading. Returns the updated model and the command to run.
+func (m FeedModel) currentDetailCmd() (FeedModel, tea.Cmd) {
+	visible := m.visiblePosts()
+	if m.selectedIndex >= len(visible) {
+		return m, nil
+	}
+	postID := visible[m.selectedIndex].ID
+	if postID == m.detailPostID {
+		return m, nil // already loaded/loading this post
+	}
+	m.detailPostID = postID
+	m.detailLoading = true
+	m.detailReplies = nil
+	return m, func() tea.Msg { return LoadFeedDetailMsg{PostID: postID} }
+}
+
+// CurrentDetailCmd is exported so app.go can trigger the initial detail load after
+// the feed's first page arrives.
+func (m FeedModel) CurrentDetailCmd() (FeedModel, tea.Cmd) {
+	return m.currentDetailCmd()
+}
+
+// renderDetailReply renders a single reply below the post card in the reading pane.
+func (m FeedModel) renderDetailReply(r model.Reply, width int) string {
+	header := theme.Subtle.Render("  ↳ ") +
+		theme.Highlight.Render("@"+r.AuthorUsername) +
+		theme.Subtle.Render("  "+displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, true))
+	innerWidth := width - 4
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+	body := strings.TrimRight(markdown.Render(r.Content, innerWidth), "\n")
+	body = "    " + strings.ReplaceAll(body, "\n", "\n    ")
+	return lipgloss.JoinVertical(lipgloss.Left, header, body)
+}
+
 // renderCompactPost renders a single-line summary of a post for the Miller compact list pane.
 // Format: "▶ @username  title_or_first_line" (selected) or "  @username  title_or_first_line".
 func (m FeedModel) renderCompactPost(p model.Post, selected bool, width int) string {
@@ -585,8 +653,8 @@ func (m FeedModel) CompactListView(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-// DetailView returns the full post card for the Miller reading pane.
-// The selected post is rendered without body truncation (maxBodyLines = 0).
+// DetailView returns the full post card + replies for the Miller reading pane.
+// The post body is rendered without truncation (maxBodyLines = 0).
 func (m FeedModel) DetailView(width, height int) string {
 	if !m.ready {
 		return theme.Subtle.Render("  loading…")
@@ -602,10 +670,19 @@ func (m FeedModel) DetailView(width, height int) string {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
 	card := RenderPost(p, true, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0)
-	if m.panel.IsActive() {
-		return lipgloss.JoinVertical(lipgloss.Left, card, m.panel.View())
+
+	parts := []string{card}
+	if m.detailLoading {
+		parts = append(parts, theme.Subtle.Render("  loading replies…"))
+	} else {
+		for _, r := range m.detailReplies {
+			parts = append(parts, m.renderDetailReply(r, width))
+		}
 	}
-	return card
+	if m.panel.IsActive() {
+		parts = append(parts, m.panel.View())
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m FeedModel) View() string {
