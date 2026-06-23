@@ -42,8 +42,9 @@ const (
 type focusTarget int
 
 const (
-	focusMenu focusTarget = iota
-	focusList             // reserved for future list navigation
+	focusMenu   focusTarget = iota
+	focusList               // list pane (compact post list in 3-pane Miller)
+	focusDetail             // reading pane (full post view in 3-pane Miller)
 )
 
 // availableThemes is the ordered list of selectable themes shown in the picker.
@@ -80,6 +81,7 @@ func randomCyberRune(exclude rune) rune {
 
 type App struct {
 	layout      Layout
+	layoutName  string // "tabs" (default) or "miller"; used when persisting to config
 	client      api.Client
 	tokens      model.Tokens
 	currentUser model.User
@@ -204,6 +206,7 @@ type App struct {
 func NewApp(client api.Client) App {
 	return App{
 		layout:             TabsLayout{},
+		layoutName:         "tabs",
 		client:             client,
 		active:             screenLogin,
 		focus:              focusMenu,
@@ -259,7 +262,16 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.wanderLust = s.WanderLust
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
+	a.layoutName = s.Layout
+	a.layout = layoutFromName(s.Layout)
 	return a
+}
+
+func layoutFromName(name string) Layout {
+	if name == "miller" {
+		return MillerLayout{}
+	}
+	return TabsLayout{}
 }
 
 // WithGraphicsProtocol sets the terminal graphics protocol detected at startup.
@@ -318,7 +330,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
-		return a, a.delegateUpdate(msg)
+		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
+		return a, a.delegateUpdate(contentMsg)
 	}
 	// Any keypress dismisses a visible notification early. We do NOT return here,
 	// so the key still flows on to do its normal job; bumping notifyGen neutralizes
@@ -415,7 +428,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, OwnGuildSlug: a.currentUser.GuildSlug}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -450,7 +463,8 @@ func (a *App) broadcastWatchedIDs() {
 func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
 	a.width = m.Width
 	a.height = m.Height
-	return a.updateAll(m)
+	contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
+	return a.updateAll(contentMsg)
 }
 
 // handleKeys processes tea.KeyMsg events: modal intercepts, focused-input
@@ -546,14 +560,39 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case feedLoadedMsg:
 		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
-		return a, nil, true
+		var detailCmd tea.Cmd
+		a.feed, detailCmd = a.feed.CurrentDetailCmd()
+		// In Miller layout the compact list is 1 row per post; auto-fill if the
+		// initial page is shorter than the column height.
+		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
+			compactH := a.height - 2 // header row + status bar
+			if a.feed.PostCount() < compactH {
+				return a, tea.Batch(detailCmd, a.loadFeedPageCmd(msg.cursor)), true
+			}
+		}
+		return a, detailCmd, true
 	case feedPageMsg:
 		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
+		// Keep auto-filling until the compact list column is full.
+		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
+			compactH := a.height - 2
+			if a.feed.PostCount() < compactH {
+				return a, a.loadFeedPageCmd(msg.cursor), true
+			}
+		}
 		return a, nil, true
 	case screens.RefreshFeedMsg:
 		return a, a.loadFeedCmd(), true
 	case screens.LoadMoreFeedMsg:
 		return a, a.loadFeedPageCmd(msg.Cursor), true
+	case screens.LoadFeedDetailMsg:
+		return a, a.loadFeedDetailCmd(msg.PostID), true
+	case screens.FeedDetailRepliesMsg:
+		a.feed, _ = a.feed.Update(msg)
+		return a, nil, true
+	case screens.FeedDetailNavMsg:
+		a.feed, _ = a.feed.Update(msg)
+		return a, nil, true
 	case screens.ShowPostMsg:
 		a.postDetailReturn = a.active
 		a.active = screenPostDetail
@@ -792,6 +831,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
+		ln := msg.LayoutName
 		return a, func() tea.Msg {
 			if err := a.client.UpdateSettings(s); err != nil {
 				return actionErrMsg{err}
@@ -801,8 +841,9 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
+				cfg.Layout = ln
 			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -811,8 +852,10 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
+		a.layoutName = msg.layoutName
+		a.layout = layoutFromName(msg.layoutName)
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
 		return a, nil, true
@@ -1133,6 +1176,22 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 		a.guilds = a.guilds.SetGuildPosts(msg.posts, msg.cursor)
+		var detailCmd tea.Cmd
+		a.guilds, detailCmd = a.guilds.CurrentDetailCmd()
+		if detailCmd != nil {
+			return a, detailCmd, true
+		}
+		return a, nil, true
+
+	case screens.LoadGuildThreadMsg:
+		return a, a.loadGuildThreadCmd(msg.PostID), true
+
+	case screens.GuildThreadRepliesMsg:
+		a.guilds, _ = a.guilds.Update(msg)
+		return a, nil, true
+
+	case screens.GuildThreadNavMsg:
+		a.guilds, _ = a.guilds.Update(msg)
 		return a, nil, true
 
 	case screens.LoadMoreGuildPostsMsg:
@@ -1232,6 +1291,22 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case topicPostsLoadedMsg:
 		a.topics = a.topics.SetTopicPosts(msg.posts, msg.cursor)
+		var detailCmd tea.Cmd
+		a.topics, detailCmd = a.topics.CurrentDetailCmd()
+		if detailCmd != nil {
+			return a, detailCmd, true
+		}
+		return a, nil, true
+
+	case screens.LoadTopicThreadMsg:
+		return a, a.loadTopicThreadCmd(msg.PostID), true
+
+	case screens.TopicThreadRepliesMsg:
+		a.topics, _ = a.topics.Update(msg)
+		return a, nil, true
+
+	case screens.TopicThreadNavMsg:
+		a.topics, _ = a.topics.Update(msg)
 		return a, nil, true
 
 	case screens.LoadMoreTopicPostsMsg:
@@ -1521,7 +1596,7 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // theme by re-broadcasting the current terminal size. Called synchronously so
 // View() sees fresh content in the same frame.
 func (a *App) refreshViewports() {
-	msg := tea.WindowSizeMsg{Width: a.width, Height: a.height}
+	msg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(a.width), Height: a.layout.ContentHeight(a.height)}
 	a.feed, _ = a.feed.Update(msg)
 	a.chatrooms, _ = a.chatrooms.Update(msg)
 	a.cmail, _ = a.cmail.Update(msg)
@@ -1810,6 +1885,7 @@ type settingsSavedMsg struct {
 	maxThreadDepth int
 	timezone       string
 	imageViewer    string
+	layoutName     string
 }
 type wanderTickMsg struct{}
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
@@ -2197,6 +2273,36 @@ func (a *App) loadRepliesCmd(postID string) tea.Cmd {
 			return errMsg{err}
 		}
 		return repliesLoadedMsg{replies: replies}
+	}
+}
+
+func (a *App) loadFeedDetailCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		replies, err := a.client.GetPostReplies(postID)
+		if err != nil {
+			return screens.FeedDetailRepliesMsg{PostID: postID}
+		}
+		return screens.FeedDetailRepliesMsg{PostID: postID, Replies: replies}
+	}
+}
+
+func (a *App) loadGuildThreadCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		replies, err := a.client.GetPostReplies(postID)
+		if err != nil {
+			return screens.GuildThreadRepliesMsg{PostID: postID}
+		}
+		return screens.GuildThreadRepliesMsg{PostID: postID, Replies: replies}
+	}
+}
+
+func (a *App) loadTopicThreadCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		replies, err := a.client.GetPostReplies(postID)
+		if err != nil {
+			return screens.TopicThreadRepliesMsg{PostID: postID}
+		}
+		return screens.TopicThreadRepliesMsg{PostID: postID, Replies: replies}
 	}
 }
 

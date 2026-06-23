@@ -143,8 +143,11 @@ func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 	a.active = menuTabs[idx].s
 	switch a.active {
 	case screenFeed:
-		a.feed = a.feed.SetFetching()
-		return a, a.loadFeedCmd()
+		if !a.feed.IsLoaded() {
+			a.feed = a.feed.SetFetching()
+			return a, a.loadFeedCmd()
+		}
+		return a, nil
 	case screenChatrooms:
 		return a, a.loadRoomsCmd()
 	case screenCMail:
@@ -254,8 +257,11 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenFeed
-			a.feed = a.feed.SetFetching()
-			return a, a.loadFeedCmd(), true
+			if !a.feed.IsLoaded() {
+				a.feed = a.feed.SetFetching()
+				return a, a.loadFeedCmd(), true
+			}
+			return a, nil, true
 		}
 	case "2":
 		if a.active != screenLogin {
@@ -381,6 +387,9 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 	}
 	return false
 }
+
+func (l TabsLayout) ContentWidth(termWidth int) int  { return termWidth }
+func (l TabsLayout) ContentHeight(termHeight int) int { return termHeight }
 
 func (l TabsLayout) renderTabBar(a App) string {
 	var tabs string

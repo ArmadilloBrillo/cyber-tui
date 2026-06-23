@@ -17,7 +17,9 @@ const postMaxBodyLines = 4
 // selected controls the border colour (active vs inactive).
 // bookmarked adds a [★] badge; watched adds a [◉] badge — both in the header.
 // width is the full terminal width; loc and timeFormat control the timestamp display.
-func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string) string {
+// maxBodyLines caps body text at that many lines (postMaxBodyLines for list views,
+// 0 for the reading pane where the full content should be shown).
+func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int) string {
 	innerWidth := width - 4
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -66,9 +68,9 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 	if innerWidth > 0 {
 		rendered := markdown.Render(p.Content, innerWidth)
 		lines := strings.Split(rendered, "\n")
-		if len(lines) > postMaxBodyLines {
-			body = strings.Join(lines[:postMaxBodyLines], "\n")
-			more := len(lines) - postMaxBodyLines
+		if maxBodyLines > 0 && len(lines) > maxBodyLines {
+			body = strings.Join(lines[:maxBodyLines], "\n")
+			more := len(lines) - maxBodyLines
 			body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
 		} else {
 			body = rendered
@@ -95,6 +97,7 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 		boxStyle = boxStyle.Width(width - 2)
 	}
 
+	body = strings.TrimRight(body, "\n")
 	rows := []string{header}
 	if badges != "" {
 		rows = append(rows, badges)
@@ -102,7 +105,10 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 	if p.Title != "" {
 		rows = append(rows, theme.Highlight.Render(p.Title))
 	}
-	rows = append(rows, body, fmt.Sprintf("\n%s", topics))
+	rows = append(rows, body)
+	if topics != "" {
+		rows = append(rows, "\n"+topics)
+	}
 	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 

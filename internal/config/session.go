@@ -66,6 +66,9 @@ type Config struct {
 	// protocol is detected. "terminal" (default) displays the image in a
 	// fullscreen modal; "browser" always opens in the OS default browser.
 	ImageViewer string `json:"imageViewer,omitempty"`
+
+	// Layout selects the UI layout. "" or "tabs" = tab bar (default); "miller" = sidebar columns.
+	Layout string `json:"layout,omitempty"`
 }
 
 // GetMaxThreadDepth returns MaxThreadDepth, substituting the default (3) when
