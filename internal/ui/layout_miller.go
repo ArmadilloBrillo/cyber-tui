@@ -26,7 +26,7 @@ func (l MillerLayout) View(a App) string {
 	navPane := lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(l.renderNav(a))
 	contentPane := lipgloss.NewStyle().Width(contentW).Height(contentH).MaxHeight(contentH).Render(l.renderContent(a))
 
-	sep := theme.Subtle.Render(strings.Repeat("│\n", contentH))
+	sep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
 	base := lipgloss.JoinVertical(lipgloss.Left,
 		lipgloss.JoinHorizontal(lipgloss.Top, navPane, sep, contentPane),
 		l.renderBottomBar(a),
@@ -222,8 +222,14 @@ func (l MillerLayout) HasFocusedInput(a App) bool {
 	return false
 }
 
-func (l MillerLayout) ContentWidth(termWidth int) int {
-	return termWidth - millerSidebarWidth
+func (l MillerLayout) ContentWidth(termWidth int) int { return termWidth - millerSidebarWidth }
+
+// ContentHeight inflates the height sent to screens so their viewport (which subtracts
+// theme.ChromeHeight = 3) fills the content pane exactly. Miller layout only uses 1 chrome
+// row (the status bar), so we add back the 2 rows that TabsLayout would have used for the
+// tab bar and separator.
+func (l MillerLayout) ContentHeight(termHeight int) int {
+	return termHeight + theme.TabBarHeight + theme.SeparatorHeight
 }
 
 func (l MillerLayout) renderNav(a App) string {

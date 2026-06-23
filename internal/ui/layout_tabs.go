@@ -382,7 +382,8 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 	return false
 }
 
-func (l TabsLayout) ContentWidth(termWidth int) int { return termWidth }
+func (l TabsLayout) ContentWidth(termWidth int) int  { return termWidth }
+func (l TabsLayout) ContentHeight(termHeight int) int { return termHeight }
 
 func (l TabsLayout) renderTabBar(a App) string {
 	var tabs string
