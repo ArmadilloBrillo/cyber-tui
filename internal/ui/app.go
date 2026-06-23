@@ -329,8 +329,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
+		cmd := a.delegateUpdate(msg)
 		a.broadcastConfig()
-		return a, a.delegateUpdate(msg)
+		return a, cmd
 	}
 	// Any keypress dismisses a visible notification early. We do NOT return here,
 	// so the key still flows on to do its normal job; bumping notifyGen neutralizes
