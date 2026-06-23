@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -50,6 +51,20 @@ type JoinGuildMsg struct{ Slug string }
 
 // LeaveGuildMsg is emitted when the user confirms leaving the active guild.
 type LeaveGuildMsg struct{ Slug string }
+
+// LoadGuildThreadMsg is emitted when the selected guild post changes so the app can
+// fetch replies for the Miller reading pane.
+type LoadGuildThreadMsg struct{ PostID string }
+
+// GuildThreadRepliesMsg delivers fetched replies back to GuildsModel for the reading pane.
+type GuildThreadRepliesMsg struct {
+	PostID  string
+	Replies []model.Reply
+}
+
+// GuildThreadNavMsg is emitted by the Miller layout when j/k is pressed in focusDetail
+// while the guilds screen is active, so the reading pane navigates between replies.
+type GuildThreadNavMsg struct{ Delta int }
 
 // guildsConfirm tracks whether a join/leave confirmation prompt is active.
 type guildsConfirm int
@@ -103,6 +118,13 @@ type GuildsModel struct {
 	// Compose panel for new guild threads (visible in posts view).
 	panel PostComposePanel
 
+	// Miller reading pane: replies for the currently selected guild post.
+	threadPostID    string
+	threadReplies   []model.Reply
+	threadFlatTree  []replyNode
+	threadReplyIndex int
+	threadLoading   bool
+
 	// Shared
 	viewport          viewport.Model
 	itemOffsets       []int
@@ -121,7 +143,8 @@ type GuildsModel struct {
 // NewGuildsModel returns a zero-value GuildsModel ready for first use.
 func NewGuildsModel() GuildsModel {
 	return GuildsModel{
-		panel: NewPostComposePanel(0),
+		panel:            NewPostComposePanel(0),
+		threadReplyIndex: -1,
 	}
 }
 
@@ -334,6 +357,28 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case GuildThreadRepliesMsg:
+		visible := m.visiblePosts()
+		if m.postIndex < len(visible) && visible[m.postIndex].ID == msg.PostID {
+			m.threadPostID = msg.PostID
+			m.threadReplies = msg.Replies
+			m.threadFlatTree = buildReplyTree(msg.Replies, 3)
+			m.threadReplyIndex = -1
+			m.threadLoading = false
+		}
+		return m, nil
+
+	case GuildThreadNavMsg:
+		maxIdx := len(m.threadFlatTree) - 1
+		m.threadReplyIndex += msg.Delta
+		if m.threadReplyIndex < -1 {
+			m.threadReplyIndex = -1
+		}
+		if m.threadReplyIndex > maxIdx {
+			m.threadReplyIndex = maxIdx
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -390,6 +435,9 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 				if m.postIndex > 0 {
 					m.postIndex--
 					m = m.refreshContent()
+					var detailCmd tea.Cmd
+					m, detailCmd = m.currentDetailCmd()
+					return m, detailCmd
 				} else if !m.loading && !m.refreshing {
 					slug := m.activeGuild
 					m.refreshing = true
@@ -422,6 +470,9 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 				if m.postIndex < len(m.visiblePosts())-1 {
 					m.postIndex++
 					m = m.refreshContent()
+					var detailCmd tea.Cmd
+					m, detailCmd = m.currentDetailCmd()
+					return m, detailCmd
 				} else if !m.exhausted && !m.loading {
 					slug, cursor := m.activeGuild, m.nextCursor
 					m.loading = true
@@ -919,4 +970,196 @@ func (m GuildsModel) GetFocusedURLs() []string {
 	}
 	p := visible[m.postIndex]
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
+}
+
+// IsViewingGuildPosts reports whether the guild post list is currently shown (3-pane applies).
+func (m GuildsModel) IsViewingGuildPosts() bool { return m.view == viewGuildPosts }
+
+// IsAtTop reports whether the first post is selected (used to suppress pull-to-refresh in Miller).
+func (m GuildsModel) IsAtTop() bool { return m.postIndex == 0 }
+
+// PostCount returns the number of currently visible guild posts.
+func (m GuildsModel) PostCount() int { return len(m.visiblePosts()) }
+
+func (m GuildsModel) currentDetailCmd() (GuildsModel, tea.Cmd) {
+	visible := m.visiblePosts()
+	if m.postIndex >= len(visible) {
+		return m, nil
+	}
+	postID := visible[m.postIndex].ID
+	if postID == m.threadPostID {
+		return m, nil
+	}
+	m.threadPostID = postID
+	m.threadLoading = true
+	m.threadReplies = nil
+	m.threadFlatTree = nil
+	m.threadReplyIndex = -1
+	return m, func() tea.Msg { return LoadGuildThreadMsg{PostID: postID} }
+}
+
+// CurrentDetailCmd is exported so app.go can trigger the initial detail load when guild posts first arrive.
+func (m GuildsModel) CurrentDetailCmd() (GuildsModel, tea.Cmd) {
+	return m.currentDetailCmd()
+}
+
+func (m GuildsModel) renderDetailReply(node replyNode, selected bool, width int) string {
+	indentW := node.Depth * 3
+	cardWidth := width - 2 - indentW
+	if cardWidth < 4 {
+		cardWidth = 4
+	}
+	innerWidth := cardWidth - 2
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+	header := theme.Highlight.Render("@" + node.Reply.AuthorUsername)
+	if node.ParentUsername != "" {
+		header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
+	}
+	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false))
+	body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if cardWidth > 0 {
+		boxStyle = boxStyle.Width(cardWidth)
+	}
+	card := boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
+	if indentW > 0 {
+		return lipgloss.NewStyle().MarginLeft(indentW).Render(card)
+	}
+	return card
+}
+
+func (m GuildsModel) renderCompactPost(p model.Post, selected bool, width int) string {
+	username := "@" + p.AuthorUsername
+	var preview string
+	if p.Title != "" {
+		preview = p.Title
+	} else {
+		preview = strings.TrimSpace(strings.SplitN(p.Content, "\n", 2)[0])
+	}
+	const sep = "  "
+	var indicatorAndName string
+	if selected {
+		indicatorAndName = theme.Highlight.Render("▶ " + username)
+	} else {
+		indicatorAndName = theme.Subtle.Render("  ") + theme.Base.Render(username)
+	}
+	prefixWidth := 2 + lipgloss.Width(username) + len(sep)
+	remaining := width - prefixWidth
+	if remaining > 1 {
+		preview = ansiTruncate(preview, remaining)
+	} else {
+		preview = ""
+	}
+	return indicatorAndName + theme.Subtle.Render(sep+preview)
+}
+
+// CompactListView returns the compact single-line guild post list for the Miller list pane.
+func (m GuildsModel) CompactListView(width, height int) string {
+	if !m.ready || m.fetching {
+		return theme.Subtle.Render("  loading…")
+	}
+	visible := m.visiblePosts()
+	if len(visible) == 0 {
+		return theme.Subtle.Render("  no posts")
+	}
+	headerLines := 0
+	var header string
+	if m.refreshing {
+		header = theme.Subtle.Render("  fetching new posts...")
+		headerLines = 1
+	}
+	n := len(visible)
+	listH := height - headerLines
+	if listH < 1 {
+		listH = 1
+	}
+	offset := m.postIndex - listH + 1
+	if offset < 0 {
+		offset = 0
+	}
+	if offset+listH > n {
+		offset = n - listH
+		if offset < 0 {
+			offset = 0
+		}
+	}
+	end := offset + listH
+	if end > n {
+		end = n
+	}
+	lines := make([]string, 0, end-offset+headerLines)
+	if header != "" {
+		lines = append(lines, header)
+	}
+	for i := offset; i < end; i++ {
+		lines = append(lines, m.renderCompactPost(visible[i], i == m.postIndex, width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// DetailView returns the full guild post card + threaded replies for the Miller reading pane.
+func (m GuildsModel) DetailView(width, height int) string {
+	if !m.ready {
+		return theme.Subtle.Render("  loading…")
+	}
+	visible := m.visiblePosts()
+	if len(visible) == 0 {
+		return theme.Subtle.Render("  no posts")
+	}
+	if m.postIndex >= len(visible) {
+		return theme.Subtle.Render("  select a post")
+	}
+	p := visible[m.postIndex]
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	_, watched := m.watchedPostIDs[p.ID]
+
+	postSelected := m.threadReplyIndex < 0
+	card := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0)
+
+	var parts []string
+	startLines := []int{0}
+	lineCount := lipgloss.Height(card)
+	parts = append(parts, card)
+
+	if m.threadLoading {
+		parts = append(parts, theme.Subtle.Render("  loading replies…"))
+	} else {
+		for i, node := range m.threadFlatTree {
+			rendered := m.renderDetailReply(node, i == m.threadReplyIndex, width)
+			startLines = append(startLines, lineCount)
+			lineCount += lipgloss.Height(rendered)
+			parts = append(parts, rendered)
+		}
+	}
+	if m.panel.IsActive() {
+		parts = append(parts, m.panel.View())
+	}
+
+	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	if lineCount <= height {
+		return fullContent
+	}
+
+	selectedItem := m.threadReplyIndex + 1
+	offset := 0
+	if selectedItem >= 0 && selectedItem < len(startLines) {
+		offset = startLines[selectedItem]
+	}
+	if offset+height > lineCount {
+		offset = lineCount - height
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	allLines := strings.Split(fullContent, "\n")
+	end := offset + height
+	if end > len(allLines) {
+		end = len(allLines)
+	}
+	return strings.Join(allLines[offset:end], "\n")
 }

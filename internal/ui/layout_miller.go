@@ -35,7 +35,7 @@ func (l MillerLayout) View(a App) string {
 	var contentPane, hdrRow string
 	if a.active == screenFeed {
 		listW := millerListWidth
-		detailW := contentW - listW - 1 // -1 for the │ separator
+		detailW := contentW - listW - 1
 
 		listHdr := l.renderColumnHeader("posts", a.focus == focusList, listW)
 		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW)
@@ -46,6 +46,34 @@ func (l MillerLayout) View(a App) string {
 		listSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
 		detailP := lipgloss.NewStyle().Width(detailW).Height(contentH).MaxHeight(contentH).
 			Render(a.feed.DetailView(detailW, contentH))
+		contentPane = lipgloss.JoinHorizontal(lipgloss.Top, listP, listSep, detailP)
+	} else if a.active == screenGuilds && a.guilds.IsViewingGuildPosts() {
+		listW := millerListWidth
+		detailW := contentW - listW - 1
+
+		listHdr := l.renderColumnHeader("posts", a.focus == focusList, listW)
+		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW)
+		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr)
+
+		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
+			Render(a.guilds.CompactListView(listW, contentH))
+		listSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
+		detailP := lipgloss.NewStyle().Width(detailW).Height(contentH).MaxHeight(contentH).
+			Render(a.guilds.DetailView(detailW, contentH))
+		contentPane = lipgloss.JoinHorizontal(lipgloss.Top, listP, listSep, detailP)
+	} else if a.active == screenTopics && a.topics.IsViewingTopicPosts() {
+		listW := millerListWidth
+		detailW := contentW - listW - 1
+
+		listHdr := l.renderColumnHeader("posts", a.focus == focusList, listW)
+		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW)
+		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr)
+
+		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
+			Render(a.topics.CompactListView(listW, contentH))
+		listSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
+		detailP := lipgloss.NewStyle().Width(detailW).Height(contentH).MaxHeight(contentH).
+			Render(a.topics.DetailView(detailW, contentH))
 		contentPane = lipgloss.JoinHorizontal(lipgloss.Top, listP, listSep, detailP)
 	} else {
 		contentHdr := l.renderColumnHeader(l.screenTitle(a), a.focus != focusMenu, contentW)
@@ -188,33 +216,49 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 		return a, nil, false
 	}
 
-	// List pane focused (Feed 3-pane or other screens).
+	// List pane focused (Feed/Guilds/Topics 3-pane or other screens).
 	if a.focus == focusList {
 		switch msg.String() {
 		case "h", "left":
 			a.focus = focusMenu
 			return a, nil, true
 		case "l", "right", "enter":
-			if a.active == screenFeed {
+			if a.active == screenFeed ||
+				(a.active == screenGuilds && a.guilds.IsViewingGuildPosts()) ||
+				(a.active == screenTopics && a.topics.IsViewingTopicPosts()) {
 				a.focus = focusDetail
 				return a, nil, true
 			}
-}
+		}
 		return a, nil, false
 	}
 
-	// Reading pane focused (Feed 3-pane only).
+	// Reading pane focused (3-pane Miller).
 	if a.focus == focusDetail {
 		switch msg.String() {
 		case "h", "left":
 			a.focus = focusList
 			return a, nil, true
 		case "j", "down":
-			return a, func() tea.Msg { return screens.FeedDetailNavMsg{Delta: +1} }, true
+			switch a.active {
+			case screenGuilds:
+				return a, func() tea.Msg { return screens.GuildThreadNavMsg{Delta: +1} }, true
+			case screenTopics:
+				return a, func() tea.Msg { return screens.TopicThreadNavMsg{Delta: +1} }, true
+			default:
+				return a, func() tea.Msg { return screens.FeedDetailNavMsg{Delta: +1} }, true
+			}
 		case "k", "up":
-			return a, func() tea.Msg { return screens.FeedDetailNavMsg{Delta: -1} }, true
+			switch a.active {
+			case screenGuilds:
+				return a, func() tea.Msg { return screens.GuildThreadNavMsg{Delta: -1} }, true
+			case screenTopics:
+				return a, func() tea.Msg { return screens.TopicThreadNavMsg{Delta: -1} }, true
+			default:
+				return a, func() tea.Msg { return screens.FeedDetailNavMsg{Delta: -1} }, true
+			}
 		}
-		// enter, r, n, etc. fall through to DelegateUpdate → feed.Update
+		// enter, r, n, etc. fall through to DelegateUpdate
 		return a, nil, false
 	}
 

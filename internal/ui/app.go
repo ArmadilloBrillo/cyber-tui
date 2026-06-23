@@ -1176,6 +1176,22 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 		a.guilds = a.guilds.SetGuildPosts(msg.posts, msg.cursor)
+		var detailCmd tea.Cmd
+		a.guilds, detailCmd = a.guilds.CurrentDetailCmd()
+		if detailCmd != nil {
+			return a, detailCmd, true
+		}
+		return a, nil, true
+
+	case screens.LoadGuildThreadMsg:
+		return a, a.loadGuildThreadCmd(msg.PostID), true
+
+	case screens.GuildThreadRepliesMsg:
+		a.guilds, _ = a.guilds.Update(msg)
+		return a, nil, true
+
+	case screens.GuildThreadNavMsg:
+		a.guilds, _ = a.guilds.Update(msg)
 		return a, nil, true
 
 	case screens.LoadMoreGuildPostsMsg:
@@ -1275,6 +1291,22 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case topicPostsLoadedMsg:
 		a.topics = a.topics.SetTopicPosts(msg.posts, msg.cursor)
+		var detailCmd tea.Cmd
+		a.topics, detailCmd = a.topics.CurrentDetailCmd()
+		if detailCmd != nil {
+			return a, detailCmd, true
+		}
+		return a, nil, true
+
+	case screens.LoadTopicThreadMsg:
+		return a, a.loadTopicThreadCmd(msg.PostID), true
+
+	case screens.TopicThreadRepliesMsg:
+		a.topics, _ = a.topics.Update(msg)
+		return a, nil, true
+
+	case screens.TopicThreadNavMsg:
+		a.topics, _ = a.topics.Update(msg)
 		return a, nil, true
 
 	case screens.LoadMoreTopicPostsMsg:
@@ -2251,6 +2283,26 @@ func (a *App) loadFeedDetailCmd(postID string) tea.Cmd {
 			return screens.FeedDetailRepliesMsg{PostID: postID}
 		}
 		return screens.FeedDetailRepliesMsg{PostID: postID, Replies: replies}
+	}
+}
+
+func (a *App) loadGuildThreadCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		replies, err := a.client.GetPostReplies(postID)
+		if err != nil {
+			return screens.GuildThreadRepliesMsg{PostID: postID}
+		}
+		return screens.GuildThreadRepliesMsg{PostID: postID, Replies: replies}
+	}
+}
+
+func (a *App) loadTopicThreadCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		replies, err := a.client.GetPostReplies(postID)
+		if err != nil {
+			return screens.TopicThreadRepliesMsg{PostID: postID}
+		}
+		return screens.TopicThreadRepliesMsg{PostID: postID, Replies: replies}
 	}
 }
 
