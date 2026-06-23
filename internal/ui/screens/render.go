@@ -95,6 +95,7 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 		boxStyle = boxStyle.Width(width - 2)
 	}
 
+	body = strings.TrimRight(body, "\n")
 	rows := []string{header}
 	if badges != "" {
 		rows = append(rows, badges)
@@ -102,7 +103,10 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 	if p.Title != "" {
 		rows = append(rows, theme.Highlight.Render(p.Title))
 	}
-	rows = append(rows, body, fmt.Sprintf("\n%s", topics))
+	rows = append(rows, body)
+	if topics != "" {
+		rows = append(rows, "\n"+topics)
+	}
 	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
