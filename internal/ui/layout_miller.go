@@ -8,11 +8,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
+	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-const millerSidebarWidth = 18 // nav pane (17 chars) + "│" separator (1 char)
-const millerListWidth = 42    // compact post list pane width in 3-pane Feed view
+const millerSidebarWidth = 18  // nav pane (17 chars) + "│" separator (1 char)
+const millerListWidth = 42     // compact post list pane width in 3-pane Feed view
+const millerHeaderHeight = 1   // column title row at the top of the layout
 
 // MillerLayout renders a left navigation sidebar alongside the active screen.
 type MillerLayout struct{}
@@ -22,14 +24,23 @@ func (l MillerLayout) View(a App) string {
 		return a.login.View()
 	}
 
-	contentH := a.height - 1 // full height minus bottom bar
+	contentH := a.height - 1 - millerHeaderHeight // full height minus bottom bar and column header
 	contentW := a.width - millerSidebarWidth
 	navPane := lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(l.renderNav(a))
 
-	var contentPane string
+	// Column header row — active column title in accent, others muted.
+	navHdr := l.renderColumnHeader("spaces", a.focus == focusMenu, millerSidebarWidth-1)
+	colSep := theme.Subtle.Render("│")
+
+	var contentPane, hdrRow string
 	if a.active == screenFeed {
 		listW := millerListWidth
 		detailW := contentW - listW - 1 // -1 for the │ separator
+
+		listHdr := l.renderColumnHeader("posts", a.focus == focusList, listW)
+		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW)
+		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr)
+
 		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
 			Render(a.feed.CompactListView(listW, contentH))
 		listSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
@@ -37,11 +48,14 @@ func (l MillerLayout) View(a App) string {
 			Render(a.feed.DetailView(detailW, contentH))
 		contentPane = lipgloss.JoinHorizontal(lipgloss.Top, listP, listSep, detailP)
 	} else {
+		contentHdr := l.renderColumnHeader(l.screenTitle(a), a.focus != focusMenu, contentW)
+		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, contentHdr)
 		contentPane = lipgloss.NewStyle().Width(contentW).Height(contentH).MaxHeight(contentH).Render(l.renderContent(a))
 	}
 
 	sep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
 	base := lipgloss.JoinVertical(lipgloss.Left,
+		hdrRow,
 		lipgloss.JoinHorizontal(lipgloss.Top, navPane, sep, contentPane),
 		l.renderBottomBar(a),
 	)
@@ -185,7 +199,7 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 				a.focus = focusDetail
 				return a, nil, true
 			}
-		}
+}
 		return a, nil, false
 	}
 
@@ -195,8 +209,12 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 		case "h", "left":
 			a.focus = focusList
 			return a, nil, true
+		case "j", "down":
+			return a, func() tea.Msg { return screens.FeedDetailNavMsg{Delta: +1} }, true
+		case "k", "up":
+			return a, func() tea.Msg { return screens.FeedDetailNavMsg{Delta: -1} }, true
 		}
-		// All other keys (enter, r, j, k, etc.) fall through to the feed screen.
+		// enter, r, n, etc. fall through to DelegateUpdate → feed.Update
 		return a, nil, false
 	}
 
@@ -260,19 +278,16 @@ func (l MillerLayout) HasFocusedInput(a App) bool {
 func (l MillerLayout) ContentWidth(termWidth int) int { return termWidth - millerSidebarWidth }
 
 // ContentHeight inflates the height sent to screens so their viewport (which subtracts
-// theme.ChromeHeight = 3) fills the content pane exactly. Miller layout only uses 1 chrome
-// row (the status bar), so we add back the 2 rows that TabsLayout would have used for the
-// tab bar and separator.
+// theme.ChromeHeight = 3) fills the content pane exactly. Miller layout uses 2 chrome rows
+// (column header + status bar), so we add back only 1 of the 2 rows TabsLayout uses.
 func (l MillerLayout) ContentHeight(termHeight int) int {
-	return termHeight + theme.TabBarHeight + theme.SeparatorHeight
+	return termHeight + theme.TabBarHeight
 }
 
 func (l MillerLayout) renderNav(a App) string {
 	navW := millerSidebarWidth - 1 // leave 1 col for the "│" separator
-	header := lipgloss.NewStyle().Width(navW).Render(theme.Title.Render("spaces"))
-	sep := theme.Subtle.Render(strings.Repeat("─", navW))
 
-	rows := []string{header, sep}
+	var rows []string
 	for _, t := range menuTabs {
 		label := t.label
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
@@ -291,6 +306,41 @@ func (l MillerLayout) renderNav(a App) string {
 		rows = append(rows, row)
 	}
 	return strings.Join(rows, "\n")
+}
+
+func (l MillerLayout) renderColumnHeader(title string, active bool, width int) string {
+	if active {
+		return theme.Highlight.Width(width).Render(title)
+	}
+	return theme.Subtle.Width(width).Render(title)
+}
+
+func (l MillerLayout) screenTitle(a App) string {
+	switch a.active {
+	case screenFeed:
+		return "posts"
+	case screenNotifications:
+		return "notifs"
+	case screenJournal:
+		return "journal"
+	case screenBookmarks:
+		return "bookmarks"
+	case screenGuilds:
+		return "guilds"
+	case screenTopics:
+		return "topics"
+	case screenProfile:
+		return "profile"
+	case screenSettings:
+		return "settings"
+	case screenCMail:
+		return "c-mail"
+	case screenChatrooms:
+		return "chat"
+	case screenPostDetail:
+		return "thread"
+	}
+	return ""
 }
 
 func (l MillerLayout) renderContent(a App) string {
@@ -356,7 +406,7 @@ func (l MillerLayout) screenHints(a App) []hint {
 	case focusMenu:
 		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-8", "jump"}, {"?", "more"}}
 	case focusDetail:
-		return []hint{{"h/←", "list"}, {"↵", "thread"}, {"r", "reply"}, {"n", "post"}}
+		return []hint{{"h/←", "list"}, {"j/k", "replies"}, {"↵", "thread"}, {"r", "reply"}}
 	default: // focusList
 		return append([]hint{{"h/←", "menu"}, {"→/↵", "preview"}}, TabsLayout{}.screenHints(a)...)
 	}

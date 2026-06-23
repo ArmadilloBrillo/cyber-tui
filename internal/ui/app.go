@@ -562,9 +562,24 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
 		var detailCmd tea.Cmd
 		a.feed, detailCmd = a.feed.CurrentDetailCmd()
+		// In Miller layout the compact list is 1 row per post; auto-fill if the
+		// initial page is shorter than the column height.
+		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
+			compactH := a.height - 2 // header row + status bar
+			if a.feed.PostCount() < compactH {
+				return a, tea.Batch(detailCmd, a.loadFeedPageCmd(msg.cursor)), true
+			}
+		}
 		return a, detailCmd, true
 	case feedPageMsg:
 		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
+		// Keep auto-filling until the compact list column is full.
+		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
+			compactH := a.height - 2
+			if a.feed.PostCount() < compactH {
+				return a, a.loadFeedPageCmd(msg.cursor), true
+			}
+		}
 		return a, nil, true
 	case screens.RefreshFeedMsg:
 		return a, a.loadFeedCmd(), true
@@ -573,6 +588,9 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.LoadFeedDetailMsg:
 		return a, a.loadFeedDetailCmd(msg.PostID), true
 	case screens.FeedDetailRepliesMsg:
+		a.feed, _ = a.feed.Update(msg)
+		return a, nil, true
+	case screens.FeedDetailNavMsg:
 		a.feed, _ = a.feed.Update(msg)
 		return a, nil, true
 	case screens.ShowPostMsg:

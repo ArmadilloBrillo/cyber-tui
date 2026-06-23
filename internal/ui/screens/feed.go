@@ -37,6 +37,10 @@ type FeedDetailRepliesMsg struct {
 	Replies []model.Reply
 }
 
+// FeedDetailNavMsg is emitted by the Miller layout when the user presses j/k in
+// focusDetail, so the reading pane navigates between the post and its replies.
+type FeedDetailNavMsg struct{ Delta int }
+
 // SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
 type SubmitNewPostMsg struct {
 	Content  string
@@ -74,14 +78,17 @@ type FeedModel struct {
 	filterNSFW        bool
 
 	// Miller reading pane: replies for the currently selected post.
-	detailPostID  string
-	detailReplies []model.Reply
-	detailLoading bool
+	detailPostID    string
+	detailReplies   []model.Reply
+	detailFlatTree  []replyNode // DFS-ordered tree built from detailReplies
+	detailReplyIndex int        // -1 = post selected; 0+ = index into detailFlatTree
+	detailLoading   bool
 }
 
 func NewFeedModel() FeedModel {
 	return FeedModel{
-		panel: NewPostComposePanel(0),
+		panel:            NewPostComposePanel(0),
+		detailReplyIndex: -1,
 	}
 }
 
@@ -314,7 +321,20 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		if m.selectedIndex < len(visible) && visible[m.selectedIndex].ID == msg.PostID {
 			m.detailPostID = msg.PostID
 			m.detailReplies = msg.Replies
+			m.detailFlatTree = buildReplyTree(msg.Replies, 3)
+			m.detailReplyIndex = -1
 			m.detailLoading = false
+		}
+		return m, nil
+
+	case FeedDetailNavMsg:
+		maxIdx := len(m.detailFlatTree) - 1
+		m.detailReplyIndex += msg.Delta
+		if m.detailReplyIndex < -1 {
+			m.detailReplyIndex = -1
+		}
+		if m.detailReplyIndex > maxIdx {
+			m.detailReplyIndex = maxIdx
 		}
 		return m, nil
 
@@ -560,6 +580,8 @@ func (m FeedModel) currentDetailCmd() (FeedModel, tea.Cmd) {
 	m.detailPostID = postID
 	m.detailLoading = true
 	m.detailReplies = nil
+	m.detailFlatTree = nil
+	m.detailReplyIndex = -1
 	return m, func() tea.Msg { return LoadFeedDetailMsg{PostID: postID} }
 }
 
@@ -569,29 +591,45 @@ func (m FeedModel) CurrentDetailCmd() (FeedModel, tea.Cmd) {
 	return m.currentDetailCmd()
 }
 
-// renderDetailReply renders a single reply below the post card in the reading pane.
-func (m FeedModel) renderDetailReply(r model.Reply, width int) string {
-	header := theme.Subtle.Render("  ↳ ") +
-		theme.Highlight.Render("@"+r.AuthorUsername) +
-		theme.Subtle.Render("  "+displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, true))
-	innerWidth := width - 4
+// renderDetailReply renders a reply in the Miller reading pane using the same tree-aware
+// card style as the post-detail screen: depth indentation, parent back-reference, active border.
+func (m FeedModel) renderDetailReply(node replyNode, selected bool, width int) string {
+	indentW := node.Depth * 3
+	cardWidth := width - 2 - indentW
+	if cardWidth < 4 {
+		cardWidth = 4
+	}
+	innerWidth := cardWidth - 2
 	if innerWidth < 1 {
 		innerWidth = 1
 	}
-	body := strings.TrimRight(markdown.Render(r.Content, innerWidth), "\n")
-	body = "    " + strings.ReplaceAll(body, "\n", "\n    ")
-	return lipgloss.JoinVertical(lipgloss.Left, header, body)
+
+	header := theme.Highlight.Render("@" + node.Reply.AuthorUsername)
+	if node.ParentUsername != "" {
+		header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
+	}
+	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false))
+
+	body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
+
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if cardWidth > 0 {
+		boxStyle = boxStyle.Width(cardWidth)
+	}
+	card := boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
+	if indentW > 0 {
+		return lipgloss.NewStyle().MarginLeft(indentW).Render(card)
+	}
+	return card
 }
 
 // renderCompactPost renders a single-line summary of a post for the Miller compact list pane.
-// Format: "▶ @username  title_or_first_line" (selected) or "  @username  title_or_first_line".
+// Selected: "▶ @username" in accent + preview in subtle.
+// Unselected: "  @username" in base colour + preview in subtle.
 func (m FeedModel) renderCompactPost(p model.Post, selected bool, width int) string {
-	indicator := "  "
-	style := theme.Subtle
-	if selected {
-		indicator = "▶ "
-		style = theme.Highlight
-	}
 	username := "@" + p.AuthorUsername
 	var preview string
 	if p.Title != "" {
@@ -599,16 +637,30 @@ func (m FeedModel) renderCompactPost(p model.Post, selected bool, width int) str
 	} else {
 		preview = strings.TrimSpace(strings.SplitN(p.Content, "\n", 2)[0])
 	}
-	prefix := indicator + username + "  "
-	remaining := width - lipgloss.Width(prefix)
+
+	const sep = "  "
+	var indicatorAndName string
+	if selected {
+		indicatorAndName = theme.Highlight.Render("▶ " + username)
+	} else {
+		indicatorAndName = theme.Subtle.Render("  ") + theme.Base.Render(username)
+	}
+	prefixWidth := 2 + lipgloss.Width(username) + len(sep) // indicator + username + separator
+	remaining := width - prefixWidth
 	if remaining > 1 {
-		// ansi.Truncate handles multi-byte runes correctly
 		preview = ansiTruncate(preview, remaining)
 	} else {
 		preview = ""
 	}
-	return style.Render(prefix + preview)
+	return indicatorAndName + theme.Subtle.Render(sep+preview)
 }
+
+// IsAtTop reports whether the first post is selected (used by the Miller layout to suppress
+// pull-to-refresh when navigating the compact list).
+func (m FeedModel) IsAtTop() bool { return m.selectedIndex == 0 }
+
+// PostCount returns the number of currently visible posts (respects NSFW filter).
+func (m FeedModel) PostCount() int { return len(m.visiblePosts()) }
 
 // ansiTruncate truncates s to at most maxWidth terminal columns, appending "…" if truncated.
 // Operates on plain text (no ANSI codes in post titles or raw content first lines).
@@ -630,31 +682,49 @@ func (m FeedModel) CompactListView(width, height int) string {
 	if len(visible) == 0 {
 		return theme.Subtle.Render("  no posts")
 	}
+
+	// When refreshing, reserve the first row for the status message and push
+	// posts down by one row, matching the behaviour of the tabbed layout.
+	headerLines := 0
+	var header string
+	if m.refreshing {
+		header = theme.Subtle.Render("  fetching new posts...")
+		headerLines = 1
+	}
+
 	n := len(visible)
+	listH := height - headerLines
+	if listH < 1 {
+		listH = 1
+	}
 	// Sticky scroll: keep selectedIndex visible, scrolling so it stays at the bottom of the window.
-	offset := m.selectedIndex - height + 1
+	offset := m.selectedIndex - listH + 1
 	if offset < 0 {
 		offset = 0
 	}
-	if offset+height > n {
-		offset = n - height
+	if offset+listH > n {
+		offset = n - listH
 		if offset < 0 {
 			offset = 0
 		}
 	}
-	end := offset + height
+	end := offset + listH
 	if end > n {
 		end = n
 	}
 	lines := make([]string, 0, end-offset)
+	if header != "" {
+		lines = append(lines, header)
+	}
 	for i := offset; i < end; i++ {
 		lines = append(lines, m.renderCompactPost(visible[i], i == m.selectedIndex, width))
 	}
 	return strings.Join(lines, "\n")
 }
 
-// DetailView returns the full post card + replies for the Miller reading pane.
-// The post body is rendered without truncation (maxBodyLines = 0).
+// DetailView returns the full post card + threaded replies for the Miller reading pane.
+// The post body is rendered without truncation (maxBodyLines = 0). The selected item
+// (post or reply, determined by detailReplyIndex) is scrolled into view.
 func (m FeedModel) DetailView(width, height int) string {
 	if !m.ready {
 		return theme.Subtle.Render("  loading…")
@@ -669,20 +739,55 @@ func (m FeedModel) DetailView(width, height int) string {
 	p := visible[m.selectedIndex]
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	card := RenderPost(p, true, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0)
 
-	parts := []string{card}
+	// Render all items and track each item's start line for scroll computation.
+	postSelected := m.detailReplyIndex < 0
+	card := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0)
+
+	var parts []string
+	startLines := []int{0} // startLines[0] = post start line (always 0)
+	lineCount := lipgloss.Height(card)
+	parts = append(parts, card)
+
 	if m.detailLoading {
 		parts = append(parts, theme.Subtle.Render("  loading replies…"))
 	} else {
-		for _, r := range m.detailReplies {
-			parts = append(parts, m.renderDetailReply(r, width))
+		for i, node := range m.detailFlatTree {
+			rendered := m.renderDetailReply(node, i == m.detailReplyIndex, width)
+			startLines = append(startLines, lineCount)
+			lineCount += lipgloss.Height(rendered)
+			parts = append(parts, rendered)
 		}
 	}
 	if m.panel.IsActive() {
 		parts = append(parts, m.panel.View())
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+
+	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	if lineCount <= height {
+		return fullContent
+	}
+
+	// Scroll to keep the selected item at the top of the visible window.
+	// selectedItem: 0 = post, 1+ = reply[i]
+	selectedItem := m.detailReplyIndex + 1
+	offset := 0
+	if selectedItem >= 0 && selectedItem < len(startLines) {
+		offset = startLines[selectedItem]
+	}
+	if offset+height > lineCount {
+		offset = lineCount - height
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	allLines := strings.Split(fullContent, "\n")
+	end := offset + height
+	if end > len(allLines) {
+		end = len(allLines)
+	}
+	return strings.Join(allLines[offset:end], "\n")
 }
 
 func (m FeedModel) View() string {
