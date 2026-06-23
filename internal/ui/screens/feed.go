@@ -70,6 +70,7 @@ type FeedModel struct {
 	loading           bool
 	fetching          bool           // true while the initial (or tab-switch) load is in flight
 	refreshing        bool           // true while re-fetching newest posts (up at top)
+	loaded            bool           // true once the first page has successfully loaded
 	exhausted         bool           // true once API returned an empty cursor
 	relaxed           bool           // true = blank line between posts (relaxed density)
 	loc               *time.Location // timezone for timestamp display; nil = UTC
@@ -114,6 +115,8 @@ func ParseTopics(s string) []string {
 	return out
 }
 
+func (m FeedModel) IsLoaded() bool { return m.loaded }
+
 func (m FeedModel) SetFetching() FeedModel {
 	m.fetching = true
 	m.err = nil
@@ -136,6 +139,7 @@ func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	m.loaded = true
 	m.selectedIndex = 0
 	if prevID != "" {
 		for i, p := range m.visiblePosts() {

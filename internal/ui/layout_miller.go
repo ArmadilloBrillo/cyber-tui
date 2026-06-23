@@ -153,8 +153,11 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 			if a.active != screenLogin {
 				a.cmail = a.cmail.CancelSubscription()
 				a.active = screenFeed
-				a.feed = a.feed.SetFetching()
-				return a, a.loadFeedCmd(), true
+				if !a.feed.IsLoaded() {
+					a.feed = a.feed.SetFetching()
+					return a, a.loadFeedCmd(), true
+				}
+				return a, nil, true
 			}
 		case "2":
 			if a.active != screenLogin {
