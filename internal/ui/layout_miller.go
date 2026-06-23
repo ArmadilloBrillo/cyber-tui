@@ -12,6 +12,7 @@ import (
 )
 
 const millerSidebarWidth = 18 // nav pane (17 chars) + "│" separator (1 char)
+const millerListWidth = 42    // compact post list pane width in 3-pane Feed view
 
 // MillerLayout renders a left navigation sidebar alongside the active screen.
 type MillerLayout struct{}
@@ -24,7 +25,20 @@ func (l MillerLayout) View(a App) string {
 	contentH := a.height - 1 // full height minus bottom bar
 	contentW := a.width - millerSidebarWidth
 	navPane := lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(l.renderNav(a))
-	contentPane := lipgloss.NewStyle().Width(contentW).Height(contentH).MaxHeight(contentH).Render(l.renderContent(a))
+
+	var contentPane string
+	if a.active == screenFeed {
+		listW := millerListWidth
+		detailW := contentW - listW - 1 // -1 for the │ separator
+		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
+			Render(a.feed.CompactListView(listW, contentH))
+		listSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
+		detailP := lipgloss.NewStyle().Width(detailW).Height(contentH).MaxHeight(contentH).
+			Render(a.feed.DetailView(detailW, contentH))
+		contentPane = lipgloss.JoinHorizontal(lipgloss.Top, listP, listSep, detailP)
+	} else {
+		contentPane = lipgloss.NewStyle().Width(contentW).Height(contentH).MaxHeight(contentH).Render(l.renderContent(a))
+	}
 
 	sep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
 	base := lipgloss.JoinVertical(lipgloss.Left,
@@ -160,11 +174,32 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 		return a, nil, false
 	}
 
-	// Content pane focused: h/left returns to nav.
-	if msg.String() == "h" || msg.String() == "left" {
-		a.focus = focusMenu
-		return a, nil, true
+	// List pane focused (Feed 3-pane or other screens).
+	if a.focus == focusList {
+		switch msg.String() {
+		case "h", "left":
+			a.focus = focusMenu
+			return a, nil, true
+		case "l", "right", "enter":
+			if a.active == screenFeed {
+				a.focus = focusDetail
+				return a, nil, true
+			}
+		}
+		return a, nil, false
 	}
+
+	// Reading pane focused (Feed 3-pane only).
+	if a.focus == focusDetail {
+		switch msg.String() {
+		case "h", "left":
+			a.focus = focusList
+			return a, nil, true
+		}
+		// All other keys (enter, r, j, k, etc.) fall through to the feed screen.
+		return a, nil, false
+	}
+
 	return a, nil, false
 }
 
@@ -317,10 +352,14 @@ func (l MillerLayout) renderNotification(a App) string {
 }
 
 func (l MillerLayout) screenHints(a App) []hint {
-	if a.focus == focusMenu {
+	switch a.focus {
+	case focusMenu:
 		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-8", "jump"}, {"?", "more"}}
+	case focusDetail:
+		return []hint{{"h/←", "list"}, {"↵", "thread"}, {"r", "reply"}, {"n", "post"}}
+	default: // focusList
+		return append([]hint{{"h/←", "menu"}, {"→/↵", "preview"}}, TabsLayout{}.screenHints(a)...)
 	}
-	return append([]hint{{"h/←", "menu"}}, TabsLayout{}.screenHints(a)...)
 }
 
 func (l MillerLayout) renderStatusBar(a App) string {

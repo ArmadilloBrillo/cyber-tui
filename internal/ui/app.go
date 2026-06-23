@@ -42,8 +42,9 @@ const (
 type focusTarget int
 
 const (
-	focusMenu focusTarget = iota
-	focusList             // reserved for future list navigation
+	focusMenu   focusTarget = iota
+	focusList               // list pane (compact post list in 3-pane Miller)
+	focusDetail             // reading pane (full post view in 3-pane Miller)
 )
 
 // availableThemes is the ordered list of selectable themes shown in the picker.

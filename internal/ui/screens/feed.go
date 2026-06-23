@@ -512,7 +512,100 @@ func (m FeedModel) buildContent() (string, []int) {
 func (m FeedModel) renderPost(p model.Post, selected bool) string {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
+}
+
+// renderCompactPost renders a single-line summary of a post for the Miller compact list pane.
+// Format: "▶ @username  title_or_first_line" (selected) or "  @username  title_or_first_line".
+func (m FeedModel) renderCompactPost(p model.Post, selected bool, width int) string {
+	indicator := "  "
+	style := theme.Subtle
+	if selected {
+		indicator = "▶ "
+		style = theme.Highlight
+	}
+	username := "@" + p.AuthorUsername
+	var preview string
+	if p.Title != "" {
+		preview = p.Title
+	} else {
+		preview = strings.TrimSpace(strings.SplitN(p.Content, "\n", 2)[0])
+	}
+	prefix := indicator + username + "  "
+	remaining := width - lipgloss.Width(prefix)
+	if remaining > 1 {
+		// ansi.Truncate handles multi-byte runes correctly
+		preview = ansiTruncate(preview, remaining)
+	} else {
+		preview = ""
+	}
+	return style.Render(prefix + preview)
+}
+
+// ansiTruncate truncates s to at most maxWidth terminal columns, appending "…" if truncated.
+// Operates on plain text (no ANSI codes in post titles or raw content first lines).
+func ansiTruncate(s string, maxWidth int) string {
+	runes := []rune(s)
+	if len(runes) <= maxWidth {
+		return s
+	}
+	return string(runes[:maxWidth-1]) + "…"
+}
+
+// CompactListView returns the compact single-line post list for the Miller reading pane.
+// It calculates a sticky-scroll window of height rows without storing extra state.
+func (m FeedModel) CompactListView(width, height int) string {
+	if !m.ready || m.fetching {
+		return theme.Subtle.Render("  loading…")
+	}
+	visible := m.visiblePosts()
+	if len(visible) == 0 {
+		return theme.Subtle.Render("  no posts")
+	}
+	n := len(visible)
+	// Sticky scroll: keep selectedIndex visible, scrolling so it stays at the bottom of the window.
+	offset := m.selectedIndex - height + 1
+	if offset < 0 {
+		offset = 0
+	}
+	if offset+height > n {
+		offset = n - height
+		if offset < 0 {
+			offset = 0
+		}
+	}
+	end := offset + height
+	if end > n {
+		end = n
+	}
+	lines := make([]string, 0, end-offset)
+	for i := offset; i < end; i++ {
+		lines = append(lines, m.renderCompactPost(visible[i], i == m.selectedIndex, width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// DetailView returns the full post card for the Miller reading pane.
+// The selected post is rendered without body truncation (maxBodyLines = 0).
+func (m FeedModel) DetailView(width, height int) string {
+	if !m.ready {
+		return theme.Subtle.Render("  loading…")
+	}
+	visible := m.visiblePosts()
+	if len(visible) == 0 {
+		return theme.Subtle.Render("  no posts")
+	}
+	if m.selectedIndex >= len(visible) {
+		return theme.Subtle.Render("  select a post")
+	}
+	p := visible[m.selectedIndex]
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	_, watched := m.watchedPostIDs[p.ID]
+	card := RenderPost(p, true, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0)
+	if m.panel.IsActive() {
+		return lipgloss.JoinVertical(lipgloss.Left, card, m.panel.View())
+	}
+	return card
 }
 
 func (m FeedModel) View() string {

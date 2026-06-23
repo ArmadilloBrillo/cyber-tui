@@ -418,7 +418,7 @@ func (m TopicsModel) renderTopicItem(index int) string {
 func (m TopicsModel) renderPostItem(p model.Post, selected bool) string {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
 }
 
 func (m TopicsModel) refreshContent() TopicsModel {
