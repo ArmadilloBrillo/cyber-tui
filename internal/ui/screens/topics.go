@@ -36,7 +36,11 @@ type TopicThreadRepliesMsg struct {
 	Replies []model.Reply
 }
 
-type TopicThreadNavMsg struct{ Delta int }
+type TopicThreadNavMsg struct {
+	Delta      int
+	PaneHeight int
+	PaneWidth  int
+}
 
 // Internal view state for the Topics screen
 type topicsView int
@@ -67,11 +71,12 @@ type TopicsModel struct {
 	loaded      bool
 
 	// Miller 3-pane thread state
-	threadPostID    string
-	threadReplies   []model.Reply
-	threadFlatTree  []replyNode
-	threadReplyIndex int
-	threadLoading   bool
+	threadPostID       string
+	threadReplies      []model.Reply
+	threadFlatTree     []replyNode
+	threadReplyIndex   int
+	threadScrollOffset int
+	threadLoading      bool
 
 	// Shared
 	viewport    viewport.Model
@@ -225,20 +230,15 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			m.threadReplies = msg.Replies
 			m.threadFlatTree = buildReplyTree(msg.Replies, 3)
 			m.threadReplyIndex = -1
+			m.threadScrollOffset = 0
 			m.threadLoading = false
 		}
 		return m, nil
 
 	case TopicThreadNavMsg:
-		max := len(m.threadFlatTree) - 1
-		next := m.threadReplyIndex + msg.Delta
-		if next < -1 {
-			next = -1
+		if msg.PaneHeight > 0 && msg.PaneWidth > 0 {
+			m = m.pageThreadNav(msg.Delta, msg.PaneHeight, msg.PaneWidth)
 		}
-		if next > max {
-			next = max
-		}
-		m.threadReplyIndex = next
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -572,6 +572,7 @@ func (m TopicsModel) currentDetailCmd() (TopicsModel, tea.Cmd) {
 	m.threadReplies = nil
 	m.threadFlatTree = nil
 	m.threadReplyIndex = -1
+	m.threadScrollOffset = 0
 	return m, func() tea.Msg { return LoadTopicThreadMsg{PostID: postID} }
 }
 
@@ -679,6 +680,35 @@ func (m TopicsModel) CompactListView(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
+// pageThreadNav implements pager-style scrolling for the Miller detail pane.
+func (m TopicsModel) pageThreadNav(delta, paneH, paneW int) TopicsModel {
+	visible := m.visiblePosts()
+	if m.postIndex >= len(visible) {
+		return m
+	}
+	p := visible[m.postIndex]
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	_, watched := m.watchedPostIDs[p.ID]
+
+	postCard := RenderPost(p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0)
+	postH := lipgloss.Height(postCard)
+
+	replyStarts := make([]int, len(m.threadFlatTree))
+	replyHeights := make([]int, len(m.threadFlatTree))
+	pos := postH
+	for i, node := range m.threadFlatTree {
+		replyStarts[i] = pos
+		rendered := m.renderDetailReply(node, false, paneW)
+		replyHeights[i] = lipgloss.Height(rendered)
+		pos += replyHeights[i]
+	}
+
+	m.threadReplyIndex, m.threadScrollOffset = millerPageNav(
+		delta, paneH, postH, replyStarts, replyHeights, m.threadReplyIndex, m.threadScrollOffset,
+	)
+	return m
+}
+
 // DetailView returns the full topic post card + threaded replies for the Miller reading pane.
 func (m TopicsModel) DetailView(width, height int) string {
 	if !m.ready {
@@ -715,27 +745,7 @@ func (m TopicsModel) DetailView(width, height int) string {
 	}
 
 	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	if lineCount <= height {
-		return fullContent
-	}
-
-	selectedItem := m.threadReplyIndex + 1
-	offset := 0
-	if selectedItem >= 0 && selectedItem < len(startLines) {
-		offset = startLines[selectedItem]
-	}
-	if offset+height > lineCount {
-		offset = lineCount - height
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	allLines := strings.Split(fullContent, "\n")
-	end := offset + height
-	if end > len(allLines) {
-		end = len(allLines)
-	}
-	return strings.Join(allLines[offset:end], "\n")
+	return sliceContent(fullContent, m.threadScrollOffset, height, lineCount)
 }
 
 // --- Helpers ---

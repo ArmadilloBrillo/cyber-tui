@@ -12,7 +12,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-const millerSidebarWidth = 18  // nav pane (17 chars) + "│" separator (1 char)
+const millerSidebarWidth = 22  // nav pane (21 chars) + "│" separator (1 char)
 const millerListWidth = 42     // compact post list pane width in 3-pane Feed view
 const millerHeaderHeight = 1   // column title row at the top of the layout
 
@@ -235,6 +235,8 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 
 	// Reading pane focused (3-pane Miller).
 	if a.focus == focusDetail {
+		paneH := a.height - 1 - millerHeaderHeight
+		paneW := (a.width - millerSidebarWidth) - millerListWidth - 1
 		switch msg.String() {
 		case "h", "left":
 			a.focus = focusList
@@ -242,20 +244,26 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 		case "j", "down":
 			switch a.active {
 			case screenGuilds:
-				return a, func() tea.Msg { return screens.GuildThreadNavMsg{Delta: +1} }, true
+				ph, pw := paneH, paneW
+				return a, func() tea.Msg { return screens.GuildThreadNavMsg{Delta: +1, PaneHeight: ph, PaneWidth: pw} }, true
 			case screenTopics:
-				return a, func() tea.Msg { return screens.TopicThreadNavMsg{Delta: +1} }, true
+				ph, pw := paneH, paneW
+				return a, func() tea.Msg { return screens.TopicThreadNavMsg{Delta: +1, PaneHeight: ph, PaneWidth: pw} }, true
 			default:
-				return a, func() tea.Msg { return screens.FeedDetailNavMsg{Delta: +1} }, true
+				ph, pw := paneH, paneW
+				return a, func() tea.Msg { return screens.FeedDetailNavMsg{Delta: +1, PaneHeight: ph, PaneWidth: pw} }, true
 			}
 		case "k", "up":
 			switch a.active {
 			case screenGuilds:
-				return a, func() tea.Msg { return screens.GuildThreadNavMsg{Delta: -1} }, true
+				ph, pw := paneH, paneW
+				return a, func() tea.Msg { return screens.GuildThreadNavMsg{Delta: -1, PaneHeight: ph, PaneWidth: pw} }, true
 			case screenTopics:
-				return a, func() tea.Msg { return screens.TopicThreadNavMsg{Delta: -1} }, true
+				ph, pw := paneH, paneW
+				return a, func() tea.Msg { return screens.TopicThreadNavMsg{Delta: -1, PaneHeight: ph, PaneWidth: pw} }, true
 			default:
-				return a, func() tea.Msg { return screens.FeedDetailNavMsg{Delta: -1} }, true
+				ph, pw := paneH, paneW
+				return a, func() tea.Msg { return screens.FeedDetailNavMsg{Delta: -1, PaneHeight: ph, PaneWidth: pw} }, true
 			}
 		}
 		// enter, r, n, etc. fall through to DelegateUpdate

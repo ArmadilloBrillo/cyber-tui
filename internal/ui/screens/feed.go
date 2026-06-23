@@ -38,8 +38,13 @@ type FeedDetailRepliesMsg struct {
 }
 
 // FeedDetailNavMsg is emitted by the Miller layout when the user presses j/k in
-// focusDetail, so the reading pane navigates between the post and its replies.
-type FeedDetailNavMsg struct{ Delta int }
+// focusDetail. PaneHeight and PaneWidth are the detail column dimensions so the
+// handler can implement pager-style line-by-line scrolling.
+type FeedDetailNavMsg struct {
+	Delta      int
+	PaneHeight int
+	PaneWidth  int
+}
 
 // SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
 type SubmitNewPostMsg struct {
@@ -78,11 +83,12 @@ type FeedModel struct {
 	filterNSFW        bool
 
 	// Miller reading pane: replies for the currently selected post.
-	detailPostID    string
-	detailReplies   []model.Reply
-	detailFlatTree  []replyNode // DFS-ordered tree built from detailReplies
-	detailReplyIndex int        // -1 = post selected; 0+ = index into detailFlatTree
-	detailLoading   bool
+	detailPostID     string
+	detailReplies    []model.Reply
+	detailFlatTree   []replyNode // DFS-ordered tree built from detailReplies
+	detailReplyIndex int         // -1 = post selected; 0+ = index into detailFlatTree
+	detailScrollOffset int       // raw line offset for pager scrolling in the detail pane
+	detailLoading    bool
 }
 
 func NewFeedModel() FeedModel {
@@ -323,18 +329,14 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			m.detailReplies = msg.Replies
 			m.detailFlatTree = buildReplyTree(msg.Replies, 3)
 			m.detailReplyIndex = -1
+			m.detailScrollOffset = 0
 			m.detailLoading = false
 		}
 		return m, nil
 
 	case FeedDetailNavMsg:
-		maxIdx := len(m.detailFlatTree) - 1
-		m.detailReplyIndex += msg.Delta
-		if m.detailReplyIndex < -1 {
-			m.detailReplyIndex = -1
-		}
-		if m.detailReplyIndex > maxIdx {
-			m.detailReplyIndex = maxIdx
+		if msg.PaneHeight > 0 && msg.PaneWidth > 0 {
+			m = m.pageDetailNav(msg.Delta, msg.PaneHeight, msg.PaneWidth)
 		}
 		return m, nil
 
@@ -582,6 +584,7 @@ func (m FeedModel) currentDetailCmd() (FeedModel, tea.Cmd) {
 	m.detailReplies = nil
 	m.detailFlatTree = nil
 	m.detailReplyIndex = -1
+	m.detailScrollOffset = 0
 	return m, func() tea.Msg { return LoadFeedDetailMsg{PostID: postID} }
 }
 
@@ -722,6 +725,35 @@ func (m FeedModel) CompactListView(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
+// pageDetailNav implements pager-style scrolling for the Miller detail pane.
+func (m FeedModel) pageDetailNav(delta, paneH, paneW int) FeedModel {
+	visible := m.visiblePosts()
+	if m.selectedIndex >= len(visible) {
+		return m
+	}
+	p := visible[m.selectedIndex]
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	_, watched := m.watchedPostIDs[p.ID]
+
+	postCard := RenderPost(p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0)
+	postH := lipgloss.Height(postCard)
+
+	replyStarts := make([]int, len(m.detailFlatTree))
+	replyHeights := make([]int, len(m.detailFlatTree))
+	pos := postH
+	for i, node := range m.detailFlatTree {
+		replyStarts[i] = pos
+		rendered := m.renderDetailReply(node, false, paneW)
+		replyHeights[i] = lipgloss.Height(rendered)
+		pos += replyHeights[i]
+	}
+
+	m.detailReplyIndex, m.detailScrollOffset = millerPageNav(
+		delta, paneH, postH, replyStarts, replyHeights, m.detailReplyIndex, m.detailScrollOffset,
+	)
+	return m
+}
+
 // DetailView returns the full post card + threaded replies for the Miller reading pane.
 // The post body is rendered without truncation (maxBodyLines = 0). The selected item
 // (post or reply, determined by detailReplyIndex) is scrolled into view.
@@ -764,30 +796,7 @@ func (m FeedModel) DetailView(width, height int) string {
 	}
 
 	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	if lineCount <= height {
-		return fullContent
-	}
-
-	// Scroll to keep the selected item at the top of the visible window.
-	// selectedItem: 0 = post, 1+ = reply[i]
-	selectedItem := m.detailReplyIndex + 1
-	offset := 0
-	if selectedItem >= 0 && selectedItem < len(startLines) {
-		offset = startLines[selectedItem]
-	}
-	if offset+height > lineCount {
-		offset = lineCount - height
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	allLines := strings.Split(fullContent, "\n")
-	end := offset + height
-	if end > len(allLines) {
-		end = len(allLines)
-	}
-	return strings.Join(allLines[offset:end], "\n")
+	return sliceContent(fullContent, m.detailScrollOffset, height, lineCount)
 }
 
 func (m FeedModel) View() string {
