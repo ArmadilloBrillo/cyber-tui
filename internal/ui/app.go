@@ -856,6 +856,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageViewer = msg.imageViewer
 		a.layoutName = msg.layoutName
 		a.layout = layoutFromName(msg.layoutName)
+		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
 		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.layoutName)
 		a.broadcastConfig()
