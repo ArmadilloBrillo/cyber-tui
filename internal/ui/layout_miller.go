@@ -32,14 +32,22 @@ func (l MillerLayout) View(a App) string {
 	navHdr := l.renderColumnHeader("spaces", a.focus == focusMenu, millerSidebarWidth-1)
 	colSep := theme.Subtle.Render("│")
 
+	logo := lipgloss.NewStyle().
+		Background(theme.ColorGreen).
+		Foreground(theme.ColorBackground).
+		Bold(true).
+		Padding(0, 1).
+		Render(a.logoText)
+	logoW := lipgloss.Width(logo)
+
 	var contentPane, hdrRow string
 	if a.active == screenFeed {
 		listW := millerListWidth
 		detailW := contentW - listW - 1
 
 		listHdr := l.renderColumnHeader("posts", a.focus == focusList, listW)
-		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW)
-		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr)
+		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW-logoW)
+		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr) + logo
 
 		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
 			Render(a.feed.CompactListView(listW, contentH))
@@ -52,8 +60,8 @@ func (l MillerLayout) View(a App) string {
 		detailW := contentW - listW - 1
 
 		listHdr := l.renderColumnHeader("posts (◆ "+a.guilds.ActiveGuildName()+")", a.focus == focusList, listW)
-		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW)
-		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr)
+		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW-logoW)
+		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr) + logo
 
 		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
 			Render(a.guilds.CompactListView(listW, contentH))
@@ -66,8 +74,8 @@ func (l MillerLayout) View(a App) string {
 		detailW := contentW - listW - 1
 
 		listHdr := l.renderColumnHeader("posts (# "+a.topics.ActiveTopicName()+")", a.focus == focusList, listW)
-		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW)
-		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr)
+		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW-logoW)
+		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr) + logo
 
 		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
 			Render(a.topics.CompactListView(listW, contentH))
@@ -76,8 +84,8 @@ func (l MillerLayout) View(a App) string {
 			Render(a.topics.DetailView(detailW, contentH))
 		contentPane = lipgloss.JoinHorizontal(lipgloss.Top, listP, listSep, detailP)
 	} else {
-		contentHdr := l.renderColumnHeader(l.screenTitle(a), a.focus != focusMenu, contentW)
-		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, contentHdr)
+		contentHdr := l.renderColumnHeader(l.screenTitle(a), a.focus != focusMenu, contentW-logoW)
+		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, contentHdr) + logo
 		contentPane = lipgloss.NewStyle().Width(contentW).Height(contentH).MaxHeight(contentH).Render(l.renderContent(a))
 	}
 
