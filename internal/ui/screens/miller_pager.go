@@ -34,12 +34,35 @@ func millerPageNav(delta, paneH, postH int, replyStarts, replyHeights []int, rep
 		return v
 	}
 
+	// revealBelow scrolls the minimum amount to make an item visible when it is
+	// partially or fully off-screen below the current viewport.
+	revealBelow := func(itemStart, itemH int) int {
+		itemEnd := itemStart + itemH - 1
+		if itemH <= paneH {
+			return clamp(itemEnd - paneH + 1) // align bottom to viewport bottom
+		}
+		return clamp(itemStart) // taller than pane — show from top
+	}
+
+	// revealAbove scrolls the minimum amount to make an item visible when its
+	// top is hidden above the current viewport.
+	revealAbove := func(itemStart, itemH int) int {
+		if itemH <= paneH {
+			return clamp(itemStart) // align top to viewport top
+		}
+		return clamp(itemStart + itemH - paneH) // taller — align bottom to viewport bottom
+	}
+
 	if delta > 0 {
 		if replyIndex == -1 {
 			viewBottom := scrollOffset + paneH - 1
 			if viewBottom >= postH-1 && len(replyStarts) > 0 {
 				newReplyIndex = 0
-				newScrollOffset = clamp(replyStarts[0])
+				reply0End := replyStarts[0] + replyHeights[0] - 1
+				if reply0End > viewBottom {
+					newScrollOffset = revealBelow(replyStarts[0], replyHeights[0])
+				}
+				// else: reply 0 already visible — keep scrollOffset
 			} else {
 				newScrollOffset = clamp(scrollOffset + 1)
 			}
@@ -50,7 +73,11 @@ func millerPageNav(delta, paneH, postH int, replyStarts, replyHeights []int, rep
 				newScrollOffset = clamp(scrollOffset + 1)
 			} else if replyIndex < len(replyStarts)-1 {
 				newReplyIndex = replyIndex + 1
-				newScrollOffset = clamp(replyStarts[newReplyIndex])
+				nextEnd := replyStarts[newReplyIndex] + replyHeights[newReplyIndex] - 1
+				if nextEnd > viewBottom {
+					newScrollOffset = revealBelow(replyStarts[newReplyIndex], replyHeights[newReplyIndex])
+				}
+				// else: next item already visible — keep scrollOffset
 			}
 		}
 	} else {
@@ -70,11 +97,10 @@ func millerPageNav(delta, paneH, postH int, replyStarts, replyHeights []int, rep
 					prevStart = replyStarts[newReplyIndex]
 					prevH = replyHeights[newReplyIndex]
 				}
-				if prevH <= paneH {
-					newScrollOffset = clamp(prevStart)
-				} else {
-					newScrollOffset = clamp(prevStart + prevH - paneH)
+				if prevStart < scrollOffset {
+					newScrollOffset = revealAbove(prevStart, prevH)
 				}
+				// else: previous item's top is visible — keep scrollOffset
 			}
 		}
 	}
@@ -97,9 +123,6 @@ func sliceContent(fullContent string, offset, height, lineCount int) string {
 		offset = 0
 	}
 	lines := strings.Split(fullContent, "\n")
-	end := offset + height
-	if end > len(lines) {
-		end = len(lines)
-	}
+	end := min(offset+height, len(lines))
 	return strings.Join(lines[offset:end], "\n")
 }
