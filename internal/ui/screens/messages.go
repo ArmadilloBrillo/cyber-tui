@@ -70,6 +70,7 @@ type SaveSettingsMsg struct {
 	Timezone       string
 	ImageViewer    string
 	LayoutName     string // "tabs" or "miller"
+	RemoteChanged  bool   // true when API-managed fields differ from the last saved baseline
 }
 
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark

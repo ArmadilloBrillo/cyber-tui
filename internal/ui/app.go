@@ -833,8 +833,10 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		iv := msg.ImageViewer
 		ln := msg.LayoutName
 		return a, func() tea.Msg {
-			if err := a.client.UpdateSettings(s); err != nil {
-				return actionErrMsg{err}
+			if msg.RemoteChanged {
+				if err := a.client.UpdateSettings(s); err != nil {
+					return actionErrMsg{err}
+				}
 			}
 			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
