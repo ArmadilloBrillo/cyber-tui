@@ -833,8 +833,10 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		iv := msg.ImageViewer
 		ln := msg.LayoutName
 		return a, func() tea.Msg {
-			if err := a.client.UpdateSettings(s); err != nil {
-				return actionErrMsg{err}
+			if msg.RemoteChanged {
+				if err := a.client.UpdateSettings(s); err != nil {
+					return actionErrMsg{err}
+				}
 			}
 			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
@@ -854,6 +856,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageViewer = msg.imageViewer
 		a.layoutName = msg.layoutName
 		a.layout = layoutFromName(msg.layoutName)
+		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
 		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.layoutName)
 		a.broadcastConfig()

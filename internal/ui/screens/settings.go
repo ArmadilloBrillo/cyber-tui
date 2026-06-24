@@ -400,8 +400,9 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				tz := m.timezone
 				iv := m.imageViewer
 				ln := m.layoutName
+				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, LayoutName: ln}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, LayoutName: ln, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
