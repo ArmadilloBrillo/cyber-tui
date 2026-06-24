@@ -552,6 +552,9 @@ func (m TopicsModel) GetFocusedURLs() []string {
 // IsViewingTopicPosts reports whether the topic post list is currently shown (3-pane applies).
 func (m TopicsModel) IsViewingTopicPosts() bool { return m.view == viewTopicPosts }
 
+// ActiveTopicName returns the slug of the currently active topic.
+func (m TopicsModel) ActiveTopicName() string { return m.activeTopic }
+
 // IsAtTop reports whether the first post is selected.
 func (m TopicsModel) IsAtTop() bool { return m.postIndex == 0 }
 
