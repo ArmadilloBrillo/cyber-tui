@@ -976,6 +976,14 @@ func (m GuildsModel) GetFocusedURLs() []string {
 // IsViewingGuildPosts reports whether the guild post list is currently shown (3-pane applies).
 func (m GuildsModel) IsViewingGuildPosts() bool { return m.view == viewGuildPosts }
 
+// ActiveGuildName returns the display name of the active guild, falling back to the slug if detail has not yet loaded.
+func (m GuildsModel) ActiveGuildName() string {
+	if m.guildDetailLoaded {
+		return m.activeGuildDetail.Name
+	}
+	return m.activeGuild
+}
+
 // IsAtTop reports whether the first post is selected (used to suppress pull-to-refresh in Miller).
 func (m GuildsModel) IsAtTop() bool { return m.postIndex == 0 }
 

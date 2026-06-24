@@ -51,7 +51,7 @@ func (l MillerLayout) View(a App) string {
 		listW := millerListWidth
 		detailW := contentW - listW - 1
 
-		listHdr := l.renderColumnHeader("posts", a.focus == focusList, listW)
+		listHdr := l.renderColumnHeader("posts (◆ "+a.guilds.ActiveGuildName()+")", a.focus == focusList, listW)
 		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW)
 		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr)
 
@@ -65,7 +65,7 @@ func (l MillerLayout) View(a App) string {
 		listW := millerListWidth
 		detailW := contentW - listW - 1
 
-		listHdr := l.renderColumnHeader("posts", a.focus == focusList, listW)
+		listHdr := l.renderColumnHeader("posts (# "+a.topics.ActiveTopicName()+")", a.focus == focusList, listW)
 		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW)
 		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr)
 
