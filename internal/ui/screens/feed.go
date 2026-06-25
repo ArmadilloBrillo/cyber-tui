@@ -348,6 +348,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	case FeedDetailDebounceMsg:
 		visible := m.visiblePosts()
 		if m.selectedIndex < len(visible) && visible[m.selectedIndex].ID == msg.PostID {
+			m.detailLoading = true
 			return m, func() tea.Msg { return LoadFeedDetailMsg{PostID: msg.PostID} }
 		}
 		return m, nil
@@ -599,7 +600,7 @@ func (m FeedModel) currentDetailCmd() (FeedModel, tea.Cmd) {
 		return m, nil
 	}
 	m.detailPostID = postID
-	m.detailLoading = true
+	m.detailLoading = false
 	m.detailReplies = nil
 	m.detailFlatTree = nil
 	m.detailReplyIndex = -1

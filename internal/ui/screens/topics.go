@@ -36,6 +36,13 @@ type TopicThreadRepliesMsg struct {
 	Replies []model.Reply
 }
 
+// TopicThreadDebounceMsg is the delayed message emitted after topicThreadDebounceDelay
+// when the selected post changes. The fetch only proceeds if PostID still matches
+// the current selection, dropping stale ticks from rapid navigation.
+type TopicThreadDebounceMsg struct{ PostID string }
+
+const topicThreadDebounceDelay = time.Second
+
 type TopicThreadNavMsg struct {
 	Delta      int
 	PaneHeight int
@@ -232,6 +239,14 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			m.threadReplyIndex = -1
 			m.threadScrollOffset = 0
 			m.threadLoading = false
+		}
+		return m, nil
+
+	case TopicThreadDebounceMsg:
+		visible := m.visiblePosts()
+		if m.postIndex < len(visible) && visible[m.postIndex].ID == msg.PostID {
+			m.threadLoading = true
+			return m, func() tea.Msg { return LoadTopicThreadMsg{PostID: msg.PostID} }
 		}
 		return m, nil
 
@@ -561,7 +576,32 @@ func (m TopicsModel) IsAtTop() bool { return m.postIndex == 0 }
 // PostCount returns the number of currently visible topic posts.
 func (m TopicsModel) PostCount() int { return len(m.visiblePosts()) }
 
+// currentDetailCmd clears the detail pane immediately and starts a debounce timer.
+// The API fetch only fires if the selection hasn't changed by the time the timer expires,
+// avoiding a flood of calls when the user scrolls quickly through the post list.
 func (m TopicsModel) currentDetailCmd() (TopicsModel, tea.Cmd) {
+	visible := m.visiblePosts()
+	if m.postIndex >= len(visible) {
+		return m, nil
+	}
+	postID := visible[m.postIndex].ID
+	if postID == m.threadPostID {
+		return m, nil
+	}
+	m.threadPostID = postID
+	m.threadLoading = false
+	m.threadReplies = nil
+	m.threadFlatTree = nil
+	m.threadReplyIndex = -1
+	m.threadScrollOffset = 0
+	return m, tea.Tick(topicThreadDebounceDelay, func(time.Time) tea.Msg {
+		return TopicThreadDebounceMsg{PostID: postID}
+	})
+}
+
+// CurrentDetailCmd is exported so app.go can trigger the initial detail load when topic posts first arrive.
+// Loads immediately without debounce.
+func (m TopicsModel) CurrentDetailCmd() (TopicsModel, tea.Cmd) {
 	visible := m.visiblePosts()
 	if m.postIndex >= len(visible) {
 		return m, nil
@@ -577,11 +617,6 @@ func (m TopicsModel) currentDetailCmd() (TopicsModel, tea.Cmd) {
 	m.threadReplyIndex = -1
 	m.threadScrollOffset = 0
 	return m, func() tea.Msg { return LoadTopicThreadMsg{PostID: postID} }
-}
-
-// CurrentDetailCmd is exported so app.go can trigger the initial detail load when topic posts first arrive.
-func (m TopicsModel) CurrentDetailCmd() (TopicsModel, tea.Cmd) {
-	return m.currentDetailCmd()
 }
 
 func (m TopicsModel) renderDetailReply(node replyNode, selected bool, width int) string {
