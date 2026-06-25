@@ -998,6 +998,9 @@ func (m GuildsModel) GetFocusedURLs() []string {
 // IsViewingGuildPosts reports whether the guild post list is currently shown (3-pane applies).
 func (m GuildsModel) IsViewingGuildPosts() bool { return m.view == viewGuildPosts }
 
+func (m GuildsModel) IsCompactListActive() bool { return m.IsViewingGuildPosts() }
+func (m GuildsModel) ListTitle() string          { return "posts (◆ " + m.ActiveGuildName() + ")" }
+
 // ActiveGuildName returns the display name of the active guild, falling back to the slug if detail has not yet loaded.
 func (m GuildsModel) ActiveGuildName() string {
 	if m.guildDetailLoaded {

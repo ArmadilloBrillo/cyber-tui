@@ -577,6 +577,9 @@ func (m TopicsModel) IsViewingTopicPosts() bool { return m.view == viewTopicPost
 // ActiveTopicName returns the slug of the currently active topic.
 func (m TopicsModel) ActiveTopicName() string { return m.activeTopic }
 
+func (m TopicsModel) IsCompactListActive() bool { return m.IsViewingTopicPosts() }
+func (m TopicsModel) ListTitle() string          { return "posts (# " + m.ActiveTopicName() + ")" }
+
 // IsAtTop reports whether the first post is selected.
 func (m TopicsModel) IsAtTop() bool { return m.postIndex == 0 }
 
