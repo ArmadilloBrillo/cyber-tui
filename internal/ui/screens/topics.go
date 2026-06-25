@@ -79,6 +79,7 @@ type TopicsModel struct {
 
 	// Miller 3-pane thread state
 	threadPostID       string
+	maxThreadDepth     int
 	threadReplies      []model.Reply
 	threadFlatTree     []replyNode
 	threadReplyIndex   int
@@ -216,6 +217,12 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 		if m.ready {
 			m = m.refreshContent()
 		}
+		if msg.MaxThreadDepth != m.maxThreadDepth {
+			m.maxThreadDepth = msg.MaxThreadDepth
+			if len(m.threadReplies) > 0 {
+				m.threadFlatTree = buildReplyTree(m.threadReplies, m.effectiveMaxDepth())
+			}
+		}
 		return m, nil
 
 	case BookmarkedIDsMsg:
@@ -235,7 +242,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 	case TopicThreadRepliesMsg:
 		if msg.PostID == m.threadPostID {
 			m.threadReplies = msg.Replies
-			m.threadFlatTree = buildReplyTree(msg.Replies, 3)
+			m.threadFlatTree = buildReplyTree(msg.Replies, m.effectiveMaxDepth())
 			m.threadReplyIndex = -1
 			m.threadScrollOffset = 0
 			m.threadLoading = false
@@ -575,6 +582,16 @@ func (m TopicsModel) IsAtTop() bool { return m.postIndex == 0 }
 
 // PostCount returns the number of currently visible topic posts.
 func (m TopicsModel) PostCount() int { return len(m.visiblePosts()) }
+
+// PostsNextCursor returns the pagination cursor for the next page of topic posts.
+func (m TopicsModel) PostsNextCursor() string { return m.nextCursor }
+
+func (m TopicsModel) effectiveMaxDepth() int {
+	if m.maxThreadDepth <= 0 {
+		return 3
+	}
+	return m.maxThreadDepth
+}
 
 // currentDetailCmd clears the detail pane immediately and starts a debounce timer.
 // The API fetch only fires if the selection hasn't changed by the time the timer expires,
