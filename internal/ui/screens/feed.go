@@ -728,6 +728,9 @@ func ansiTruncate(s string, maxWidth int) string {
 	return string(runes[:maxWidth-1]) + "…"
 }
 
+func (m FeedModel) IsCompactListActive() bool { return true }
+func (m FeedModel) ListTitle() string          { return "posts" }
+
 // CompactListView returns the compact single-line post list for the Miller reading pane.
 // It calculates a sticky-scroll window of height rows without storing extra state.
 func (m FeedModel) CompactListView(width, height int) string {

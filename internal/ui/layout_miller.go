@@ -19,6 +19,30 @@ const millerHeaderHeight = 1   // column title row at the top of the layout
 // MillerLayout renders a left navigation sidebar alongside the active screen.
 type MillerLayout struct{}
 
+// NeedsCompactAutoFill returns the minimum item count to fill the compact list
+// column. App uses this after each page load to decide whether to fetch more.
+func (l MillerLayout) NeedsCompactAutoFill(termHeight int) int {
+	return termHeight - 2 // millerHeaderHeight + status bar
+}
+
+// activeCompactRenderer returns the active screen as a CompactListRenderer if it
+// currently supports 3-pane display, or nil for single-pane screens.
+func (l MillerLayout) activeCompactRenderer(a App) CompactListRenderer {
+	var r CompactListRenderer
+	switch a.active {
+	case screenFeed:
+		r = a.feed
+	case screenGuilds:
+		r = a.guilds
+	case screenTopics:
+		r = a.topics
+	}
+	if r != nil && r.IsCompactListActive() {
+		return r
+	}
+	return nil
+}
+
 func (l MillerLayout) View(a App) string {
 	if a.active == screenLogin {
 		return a.login.View()
@@ -41,47 +65,19 @@ func (l MillerLayout) View(a App) string {
 	logoW := lipgloss.Width(logo)
 
 	var contentPane, hdrRow string
-	if a.active == screenFeed {
+	if r := l.activeCompactRenderer(a); r != nil {
 		listW := millerListWidth
 		detailW := contentW - listW - 1
 
-		listHdr := l.renderColumnHeader("posts", a.focus == focusList, listW)
+		listHdr := l.renderColumnHeader(r.ListTitle(), a.focus == focusList, listW)
 		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW-logoW)
 		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr) + logo
 
 		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
-			Render(a.feed.CompactListView(listW, contentH))
+			Render(r.CompactListView(listW, contentH))
 		listSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
 		detailP := lipgloss.NewStyle().Width(detailW).Height(contentH).MaxHeight(contentH).
-			Render(a.feed.DetailView(detailW, contentH))
-		contentPane = lipgloss.JoinHorizontal(lipgloss.Top, listP, listSep, detailP)
-	} else if a.active == screenGuilds && a.guilds.IsViewingGuildPosts() {
-		listW := millerListWidth
-		detailW := contentW - listW - 1
-
-		listHdr := l.renderColumnHeader("posts (◆ "+a.guilds.ActiveGuildName()+")", a.focus == focusList, listW)
-		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW-logoW)
-		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr) + logo
-
-		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
-			Render(a.guilds.CompactListView(listW, contentH))
-		listSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
-		detailP := lipgloss.NewStyle().Width(detailW).Height(contentH).MaxHeight(contentH).
-			Render(a.guilds.DetailView(detailW, contentH))
-		contentPane = lipgloss.JoinHorizontal(lipgloss.Top, listP, listSep, detailP)
-	} else if a.active == screenTopics && a.topics.IsViewingTopicPosts() {
-		listW := millerListWidth
-		detailW := contentW - listW - 1
-
-		listHdr := l.renderColumnHeader("posts (# "+a.topics.ActiveTopicName()+")", a.focus == focusList, listW)
-		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW-logoW)
-		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr) + logo
-
-		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
-			Render(a.topics.CompactListView(listW, contentH))
-		listSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
-		detailP := lipgloss.NewStyle().Width(detailW).Height(contentH).MaxHeight(contentH).
-			Render(a.topics.DetailView(detailW, contentH))
+			Render(r.DetailView(detailW, contentH))
 		contentPane = lipgloss.JoinHorizontal(lipgloss.Top, listP, listSep, detailP)
 	} else {
 		contentHdr := l.renderColumnHeader(l.screenTitle(a), a.focus != focusMenu, contentW-logoW)
@@ -234,9 +230,7 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 			a.focus = focusMenu
 			return a, nil, true
 		case "l", "right", "enter":
-			if a.active == screenFeed ||
-				(a.active == screenGuilds && a.guilds.IsViewingGuildPosts()) ||
-				(a.active == screenTopics && a.topics.IsViewingTopicPosts()) {
+			if l.activeCompactRenderer(a) != nil {
 				a.focus = focusDetail
 				return a, nil, true
 			}
@@ -284,35 +278,9 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 	return a, nil, false
 }
 
+// DelegateUpdate routes a tea.Msg to the currently active screen model.
 func (l MillerLayout) DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
-	var cmd tea.Cmd
-	switch a.active {
-	case screenLogin:
-		a.login, cmd = a.login.Update(msg)
-	case screenFeed:
-		a.feed, cmd = a.feed.Update(msg)
-	case screenChatrooms:
-		a.chatrooms, cmd = a.chatrooms.Update(msg)
-	case screenCMail:
-		a.cmail, cmd = a.cmail.Update(msg)
-	case screenProfile:
-		a.profile, cmd = a.profile.Update(msg)
-	case screenPostDetail:
-		a.postDetail, cmd = a.postDetail.Update(msg)
-	case screenNotifications:
-		a.notifications, cmd = a.notifications.Update(msg)
-	case screenSettings:
-		a.settingsScreen, cmd = a.settingsScreen.Update(msg)
-	case screenBookmarks:
-		a.bookmarks, cmd = a.bookmarks.Update(msg)
-	case screenGuilds:
-		a.guilds, cmd = a.guilds.Update(msg)
-	case screenTopics:
-		a.topics, cmd = a.topics.Update(msg)
-	case screenJournal:
-		a.journal, cmd = a.journal.Update(msg)
-	}
-	return a, cmd
+	return delegateScreenUpdate(msg, a)
 }
 
 func (l MillerLayout) HasFocusedInput(a App) bool {

@@ -10,51 +10,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
-	"github.com/ragnar/cyber-tui/internal/version"
 )
-
-var renderedVersionLine = theme.Subtle.Render("version " + version.Version + " (" + version.Commit + ")")
-
-// menuTabs is the ordered list of navigable screens.
-var menuTabs = []struct {
-	label string
-	s     screen
-}{
-	{"feed", screenFeed},
-	{"notifications", screenNotifications},
-	{"journal", screenJournal},
-	{"bookmarks", screenBookmarks},
-	{"guilds", screenGuilds},
-	{"topics", screenTopics},
-	{"profile", screenProfile},
-	{"settings", screenSettings},
-}
-
-// hint is a compact key+description pair shown in the status bar and help modal.
-type hint struct{ key, desc string }
-
-// sbStyle returns a bare style with the status-bar background.
-func sbStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Background(theme.ColorDimGreen)
-}
-
-// renderHints formats a []hint slice as a compact styled string.
-func renderHints(hints []hint) string {
-	key := sbStyle().Foreground(theme.ColorCyan).Bold(true)
-	desc := sbStyle().Foreground(theme.ColorWhite)
-	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
-	parts := make([]string, 0, len(hints)*3)
-	for i, h := range hints {
-		if i > 0 {
-			parts = append(parts, sep)
-		}
-		parts = append(parts, key.Render(h.key))
-		if h.desc != "" {
-			parts = append(parts, desc.Render(" "+h.desc))
-		}
-	}
-	return strings.Join(parts, "")
-}
 
 // hintRows converts hints to modal row strings, skipping the "?" entry.
 // "↑↓" is expanded to "↑↓ / j/k" so the modal documents both navigation styles.
@@ -73,119 +29,10 @@ func hintRows(hints []hint, rowFn func(string, string) string) []string {
 	return rows
 }
 
-// overlayCenter composites fg centered over bg using ANSI-aware string splicing.
-// Each line of fg replaces the corresponding characters in bg at the centered
-// position, preserving ANSI colour codes on both sides of the splice point.
-func overlayCenter(bg, fg string, bgW, bgH int) string {
-	fgW := lipgloss.Width(fg)
-	fgLines := strings.Split(fg, "\n")
-	fgH := len(fgLines)
-	bgLines := strings.Split(bg, "\n")
-
-	xOff := (bgW - fgW) / 2
-	yOff := (bgH - fgH) / 2
-	if xOff < 0 {
-		xOff = 0
-	}
-	if yOff < 0 {
-		yOff = 0
-	}
-
-	result := make([]string, len(bgLines))
-	copy(result, bgLines)
-
-	for i, fgLine := range fgLines {
-		bi := yOff + i
-		if bi < 0 || bi >= len(result) {
-			continue
-		}
-		bgLine := result[bi]
-		// Pad the background line if it's shorter than the splice end point.
-		bgLineW := ansi.StringWidth(bgLine)
-		needed := xOff + fgW
-		if bgLineW < needed {
-			bgLine += strings.Repeat(" ", needed-bgLineW)
-		}
-		left := ansi.Truncate(bgLine, xOff, "")
-		right := ansi.TruncateLeft(bgLine, xOff+fgW, "")
-		result[bi] = left + fgLine + right
-	}
-	return strings.Join(result, "\n")
-}
-
-// themeIndex returns the index of name in availableThemes, defaulting to 0.
-func themeIndex(name string) int {
-	for i, t := range availableThemes {
-		if t == name {
-			return i
-		}
-	}
-	return 0
-}
-
-// tabIndexOf returns the index of a.active within menuTabs, defaulting to 0.
-func tabIndexOf(a App) int {
-	for i, t := range menuTabs {
-		if t.s == a.active {
-			return i
-		}
-	}
-	return 0
-}
-
-// navigateTabBy computes the App state and load command for moving delta steps
-// through menuTabs from the current active screen.
-func navigateTabBy(a App, delta int) (App, tea.Cmd) {
-	if a.active == screenCMail {
-		a.cmail = a.cmail.CancelSubscription()
-	}
-	idx := (tabIndexOf(a) + delta + len(menuTabs)) % len(menuTabs)
-	a.active = menuTabs[idx].s
-	switch a.active {
-	case screenFeed:
-		if !a.feed.IsLoaded() {
-			a.feed = a.feed.SetFetching()
-			return a, a.loadFeedCmd()
-		}
-		return a, nil
-	case screenChatrooms:
-		return a, a.loadRoomsCmd()
-	case screenCMail:
-		return a, a.loadConvsCmd()
-	case screenProfile:
-		return a, a.loadProfileCmd()
-	case screenNotifications:
-		a.notifications = a.notifications.SetFetching()
-		return a, a.loadNotifsCmd()
-	case screenSettings:
-		return a, nil
-	case screenBookmarks:
-		if !a.bookmarks.IsLoaded() {
-			a.bookmarks = a.bookmarks.SetFetching()
-			return a, a.loadBookmarksCmd("")
-		}
-		return a, nil
-	case screenGuilds:
-		if !a.guilds.IsLoaded() {
-			a.guilds = a.guilds.SetFetching()
-			return a, a.loadGuildsCmd("")
-		}
-		return a, nil
-	case screenTopics:
-		if !a.topics.IsLoaded() {
-			a.topics = a.topics.SetFetching()
-			return a, a.loadTopicsCmd()
-		}
-		return a, nil
-	case screenJournal:
-		a.journal = a.journal.SetFetching()
-		return a, a.loadJournalCmd()
-	}
-	return a, nil
-}
-
 // TabsLayout implements the classic horizontal tab bar layout.
 type TabsLayout struct{}
+
+func (l TabsLayout) NeedsCompactAutoFill(termHeight int) int { return 0 }
 
 // View renders the full terminal output for the tabs layout.
 func (l TabsLayout) View(a App) string {
@@ -337,34 +184,7 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 
 // DelegateUpdate routes a tea.Msg to the currently active screen model.
 func (l TabsLayout) DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
-	var cmd tea.Cmd
-	switch a.active {
-	case screenLogin:
-		a.login, cmd = a.login.Update(msg)
-	case screenFeed:
-		a.feed, cmd = a.feed.Update(msg)
-	case screenChatrooms:
-		a.chatrooms, cmd = a.chatrooms.Update(msg)
-	case screenCMail:
-		a.cmail, cmd = a.cmail.Update(msg)
-	case screenProfile:
-		a.profile, cmd = a.profile.Update(msg)
-	case screenPostDetail:
-		a.postDetail, cmd = a.postDetail.Update(msg)
-	case screenNotifications:
-		a.notifications, cmd = a.notifications.Update(msg)
-	case screenSettings:
-		a.settingsScreen, cmd = a.settingsScreen.Update(msg)
-	case screenBookmarks:
-		a.bookmarks, cmd = a.bookmarks.Update(msg)
-	case screenGuilds:
-		a.guilds, cmd = a.guilds.Update(msg)
-	case screenTopics:
-		a.topics, cmd = a.topics.Update(msg)
-	case screenJournal:
-		a.journal, cmd = a.journal.Update(msg)
-	}
-	return a, cmd
+	return delegateScreenUpdate(msg, a)
 }
 
 // HasFocusedInput returns true when the active screen has a focused text input.
@@ -388,7 +208,7 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 	return false
 }
 
-func (l TabsLayout) ContentWidth(termWidth int) int  { return termWidth }
+func (l TabsLayout) ContentWidth(termWidth int) int   { return termWidth }
 func (l TabsLayout) ContentHeight(termHeight int) int { return termHeight }
 
 func (l TabsLayout) renderTabBar(a App) string {

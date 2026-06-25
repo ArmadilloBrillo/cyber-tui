@@ -562,23 +562,16 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
 		var detailCmd tea.Cmd
 		a.feed, detailCmd = a.feed.CurrentDetailCmd()
-		// In Miller layout the compact list is 1 row per post; auto-fill if the
-		// initial page is shorter than the column height.
-		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
-			compactH := a.height - 2 // header row + status bar
-			if a.feed.PostCount() < compactH {
-				return a, tea.Batch(detailCmd, a.loadFeedPageCmd(msg.cursor)), true
-			}
+		// Auto-fill the compact list column if the initial page is shorter than it.
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.feed.PostCount() < min {
+			return a, tea.Batch(detailCmd, a.loadFeedPageCmd(msg.cursor)), true
 		}
 		return a, detailCmd, true
 	case feedPageMsg:
 		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
 		// Keep auto-filling until the compact list column is full.
-		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
-			compactH := a.height - 2
-			if a.feed.PostCount() < compactH {
-				return a, a.loadFeedPageCmd(msg.cursor), true
-			}
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.feed.PostCount() < min {
+			return a, a.loadFeedPageCmd(msg.cursor), true
 		}
 		return a, nil, true
 	case screens.RefreshFeedMsg:
@@ -861,19 +854,18 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
-		if _, isMiller := a.layout.(MillerLayout); isMiller {
-			compactH := a.height - 2
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
 			var cmds []tea.Cmd
-			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < compactH {
+			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < min {
 				cmds = append(cmds, a.loadFeedPageCmd(cursor))
 			}
 			if a.guilds.IsViewingGuildPosts() {
-				if cursor := a.guilds.PostsNextCursor(); cursor != "" && a.guilds.PostCount() < compactH {
+				if cursor := a.guilds.PostsNextCursor(); cursor != "" && a.guilds.PostCount() < min {
 					cmds = append(cmds, a.loadGuildPostsPageCmd(a.guilds.ActiveGuild(), cursor))
 				}
 			}
 			if a.topics.IsViewingTopicPosts() {
-				if cursor := a.topics.PostsNextCursor(); cursor != "" && a.topics.PostCount() < compactH {
+				if cursor := a.topics.PostsNextCursor(); cursor != "" && a.topics.PostCount() < min {
 					cmds = append(cmds, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), cursor))
 				}
 			}
@@ -1201,11 +1193,8 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.guilds = a.guilds.SetGuildPosts(msg.posts, msg.cursor)
 		var detailCmd tea.Cmd
 		a.guilds, detailCmd = a.guilds.CurrentDetailCmd()
-		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
-			compactH := a.height - 2
-			if a.guilds.PostCount() < compactH {
-				return a, tea.Batch(detailCmd, a.loadGuildPostsPageCmd(msg.slug, msg.cursor)), true
-			}
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.guilds.PostCount() < min {
+			return a, tea.Batch(detailCmd, a.loadGuildPostsPageCmd(msg.slug, msg.cursor)), true
 		}
 		if detailCmd != nil {
 			return a, detailCmd, true
@@ -1231,11 +1220,8 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 		a.guilds = a.guilds.AppendGuildPosts(msg.posts, msg.cursor)
-		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
-			compactH := a.height - 2
-			if a.guilds.PostCount() < compactH {
-				return a, a.loadGuildPostsPageCmd(msg.slug, msg.cursor), true
-			}
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.guilds.PostCount() < min {
+			return a, a.loadGuildPostsPageCmd(msg.slug, msg.cursor), true
 		}
 		return a, nil, true
 
@@ -1328,11 +1314,8 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.topics = a.topics.SetTopicPosts(msg.posts, msg.cursor)
 		var detailCmd tea.Cmd
 		a.topics, detailCmd = a.topics.CurrentDetailCmd()
-		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
-			compactH := a.height - 2
-			if a.topics.PostCount() < compactH {
-				return a, tea.Batch(detailCmd, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor)), true
-			}
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.topics.PostCount() < min {
+			return a, tea.Batch(detailCmd, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor)), true
 		}
 		if detailCmd != nil {
 			return a, detailCmd, true
@@ -1355,11 +1338,8 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case topicPostsPageMsg:
 		a.topics = a.topics.AppendTopicPosts(msg.posts, msg.cursor)
-		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
-			compactH := a.height - 2
-			if a.topics.PostCount() < compactH {
-				return a, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor), true
-			}
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.topics.PostCount() < min {
+			return a, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor), true
 		}
 		return a, nil, true
 
