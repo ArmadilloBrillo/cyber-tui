@@ -246,7 +246,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 		visible := m.visiblePosts()
 		if m.postIndex < len(visible) && visible[m.postIndex].ID == msg.PostID {
 			m.threadLoading = true
-			return m, func() tea.Msg { return LoadTopicThreadMsg{PostID: msg.PostID} }
+			return m, func() tea.Msg { return LoadTopicThreadMsg(msg) }
 		}
 		return m, nil
 

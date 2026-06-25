@@ -349,7 +349,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		visible := m.visiblePosts()
 		if m.selectedIndex < len(visible) && visible[m.selectedIndex].ID == msg.PostID {
 			m.detailLoading = true
-			return m, func() tea.Msg { return LoadFeedDetailMsg{PostID: msg.PostID} }
+			return m, func() tea.Msg { return LoadFeedDetailMsg(msg) }
 		}
 		return m, nil
 

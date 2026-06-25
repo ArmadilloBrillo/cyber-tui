@@ -385,7 +385,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 		visible := m.visiblePosts()
 		if m.postIndex < len(visible) && visible[m.postIndex].ID == msg.PostID {
 			m.threadLoading = true
-			return m, func() tea.Msg { return LoadGuildThreadMsg{PostID: msg.PostID} }
+			return m, func() tea.Msg { return LoadGuildThreadMsg(msg) }
 		}
 		return m, nil
 
