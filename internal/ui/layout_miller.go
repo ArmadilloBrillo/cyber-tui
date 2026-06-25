@@ -13,11 +13,22 @@ import (
 )
 
 const millerSidebarWidth = 22  // nav pane (21 chars) + "│" separator (1 char)
-const millerListWidth = 42     // compact post list pane width in 3-pane Feed view
+const millerListWidth = 52     // compact post list pane width in 3-pane Feed view
 const millerHeaderHeight = 1   // column title row at the top of the layout
 
 // MillerLayout renders a left navigation sidebar alongside the active screen.
 type MillerLayout struct{}
+
+// paneWidths returns the list and detail column widths for the given content area.
+// Both columns shrink proportionally as the terminal narrows, using the same ratio
+// as the preferred widths at a normal (120-col) terminal (52:45 ≈ 54:46). Add a
+// similar method to any future multi-pane layout to keep its collapsing logic
+// self-contained.
+func (l MillerLayout) paneWidths(contentW int) (listW, detailW int) {
+	listW = min(millerListWidth, contentW*54/100)
+	detailW = max(0, contentW-listW-1)
+	return
+}
 
 // NeedsCompactAutoFill returns the minimum item count to fill the compact list
 // column. App uses this after each page load to decide whether to fetch more.
@@ -66,8 +77,7 @@ func (l MillerLayout) View(a App) string {
 
 	var contentPane, hdrRow string
 	if r := l.activeCompactRenderer(a); r != nil {
-		listW := millerListWidth
-		detailW := contentW - listW - 1
+		listW, detailW := l.paneWidths(contentW)
 
 		listHdr := l.renderColumnHeader(r.ListTitle(), a.focus == focusList, listW)
 		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW-logoW)
@@ -241,7 +251,7 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 	// Reading pane focused (3-pane Miller).
 	if a.focus == focusDetail {
 		paneH := a.height - 1 - millerHeaderHeight
-		paneW := (a.width - millerSidebarWidth) - millerListWidth - 1
+		_, paneW := l.paneWidths(a.width - millerSidebarWidth)
 		switch msg.String() {
 		case "h", "left":
 			a.focus = focusList
