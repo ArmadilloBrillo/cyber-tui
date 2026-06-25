@@ -46,6 +46,13 @@ type FeedDetailNavMsg struct {
 	PaneWidth  int
 }
 
+// FeedDetailDebounceMsg is the delayed message emitted after feedDetailDebounceDelay
+// when the selected post changes. The fetch only proceeds if PostID still matches
+// the current selection, dropping stale ticks from rapid navigation.
+type FeedDetailDebounceMsg struct{ PostID string }
+
+const feedDetailDebounceDelay = time.Second
+
 // SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
 type SubmitNewPostMsg struct {
 	Content  string
@@ -338,6 +345,13 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case FeedDetailDebounceMsg:
+		visible := m.visiblePosts()
+		if m.selectedIndex < len(visible) && visible[m.selectedIndex].ID == msg.PostID {
+			return m, func() tea.Msg { return LoadFeedDetailMsg{PostID: msg.PostID} }
+		}
+		return m, nil
+
 	case FeedDetailNavMsg:
 		if msg.PaneHeight > 0 && msg.PaneWidth > 0 {
 			m = m.pageDetailNav(msg.Delta, msg.PaneHeight, msg.PaneWidth)
@@ -572,8 +586,9 @@ func (m FeedModel) renderPost(p model.Post, selected bool) string {
 	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
 }
 
-// currentDetailCmd emits LoadFeedDetailMsg for the currently selected post and marks
-// the detail pane as loading. Returns the updated model and the command to run.
+// currentDetailCmd clears the detail pane immediately and starts a debounce timer.
+// The API fetch only fires if the selection hasn't changed by the time the timer expires,
+// avoiding a flood of calls when the user scrolls quickly through the post list.
 func (m FeedModel) currentDetailCmd() (FeedModel, tea.Cmd) {
 	visible := m.visiblePosts()
 	if m.selectedIndex >= len(visible) {
@@ -581,7 +596,29 @@ func (m FeedModel) currentDetailCmd() (FeedModel, tea.Cmd) {
 	}
 	postID := visible[m.selectedIndex].ID
 	if postID == m.detailPostID {
-		return m, nil // already loaded/loading this post
+		return m, nil
+	}
+	m.detailPostID = postID
+	m.detailLoading = true
+	m.detailReplies = nil
+	m.detailFlatTree = nil
+	m.detailReplyIndex = -1
+	m.detailScrollOffset = 0
+	return m, tea.Tick(feedDetailDebounceDelay, func(time.Time) tea.Msg {
+		return FeedDetailDebounceMsg{PostID: postID}
+	})
+}
+
+// CurrentDetailCmd is exported so app.go can trigger the initial detail load after
+// the feed's first page arrives. Loads immediately without debounce.
+func (m FeedModel) CurrentDetailCmd() (FeedModel, tea.Cmd) {
+	visible := m.visiblePosts()
+	if m.selectedIndex >= len(visible) {
+		return m, nil
+	}
+	postID := visible[m.selectedIndex].ID
+	if postID == m.detailPostID {
+		return m, nil
 	}
 	m.detailPostID = postID
 	m.detailLoading = true
@@ -590,12 +627,6 @@ func (m FeedModel) currentDetailCmd() (FeedModel, tea.Cmd) {
 	m.detailReplyIndex = -1
 	m.detailScrollOffset = 0
 	return m, func() tea.Msg { return LoadFeedDetailMsg{PostID: postID} }
-}
-
-// CurrentDetailCmd is exported so app.go can trigger the initial detail load after
-// the feed's first page arrives.
-func (m FeedModel) CurrentDetailCmd() (FeedModel, tea.Cmd) {
-	return m.currentDetailCmd()
 }
 
 // renderDetailReply renders a reply in the Miller reading pane using the same tree-aware
