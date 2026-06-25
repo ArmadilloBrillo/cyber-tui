@@ -861,6 +861,26 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
+		if _, isMiller := a.layout.(MillerLayout); isMiller {
+			compactH := a.height - 2
+			var cmds []tea.Cmd
+			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < compactH {
+				cmds = append(cmds, a.loadFeedPageCmd(cursor))
+			}
+			if a.guilds.IsViewingGuildPosts() {
+				if cursor := a.guilds.PostsNextCursor(); cursor != "" && a.guilds.PostCount() < compactH {
+					cmds = append(cmds, a.loadGuildPostsPageCmd(a.guilds.ActiveGuild(), cursor))
+				}
+			}
+			if a.topics.IsViewingTopicPosts() {
+				if cursor := a.topics.PostsNextCursor(); cursor != "" && a.topics.PostCount() < compactH {
+					cmds = append(cmds, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), cursor))
+				}
+			}
+			if len(cmds) > 0 {
+				return a, tea.Batch(cmds...), true
+			}
+		}
 		return a, nil, true
 
 	case wanderTickMsg:

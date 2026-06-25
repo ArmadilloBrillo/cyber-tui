@@ -97,6 +97,7 @@ type FeedModel struct {
 	detailReplyIndex int         // -1 = post selected; 0+ = index into detailFlatTree
 	detailScrollOffset int       // raw line offset for pager scrolling in the detail pane
 	detailLoading    bool
+	maxThreadDepth   int
 }
 
 func NewFeedModel() FeedModel {
@@ -317,6 +318,12 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				m = m.refreshContent()
 			}
 		}
+		if msg.MaxThreadDepth != m.maxThreadDepth {
+			m.maxThreadDepth = msg.MaxThreadDepth
+			if len(m.detailReplies) > 0 {
+				m.detailFlatTree = buildReplyTree(m.detailReplies, m.effectiveMaxDepth())
+			}
+		}
 		return m, nil
 
 	case BookmarkedIDsMsg:
@@ -338,7 +345,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		if m.selectedIndex < len(visible) && visible[m.selectedIndex].ID == msg.PostID {
 			m.detailPostID = msg.PostID
 			m.detailReplies = msg.Replies
-			m.detailFlatTree = buildReplyTree(msg.Replies, 3)
+			m.detailFlatTree = buildReplyTree(msg.Replies, m.effectiveMaxDepth())
 			m.detailReplyIndex = -1
 			m.detailScrollOffset = 0
 			m.detailLoading = false
@@ -700,6 +707,16 @@ func (m FeedModel) IsAtTop() bool { return m.selectedIndex == 0 }
 
 // PostCount returns the number of currently visible posts (respects NSFW filter).
 func (m FeedModel) PostCount() int { return len(m.visiblePosts()) }
+
+// NextCursor returns the pagination cursor for the next page of feed posts.
+func (m FeedModel) NextCursor() string { return m.nextCursor }
+
+func (m FeedModel) effectiveMaxDepth() int {
+	if m.maxThreadDepth <= 0 {
+		return 3
+	}
+	return m.maxThreadDepth
+}
 
 // ansiTruncate truncates s to at most maxWidth terminal columns, appending "…" if truncated.
 // Operates on plain text (no ANSI codes in post titles or raw content first lines).

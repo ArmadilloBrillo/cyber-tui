@@ -131,6 +131,7 @@ type GuildsModel struct {
 
 	// Miller reading pane: replies for the currently selected guild post.
 	threadPostID       string
+	maxThreadDepth     int
 	threadReplies      []model.Reply
 	threadFlatTree     []replyNode
 	threadReplyIndex   int
@@ -353,6 +354,12 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 		if m.ready {
 			m = m.refreshContent()
 		}
+		if msg.MaxThreadDepth != m.maxThreadDepth {
+			m.maxThreadDepth = msg.MaxThreadDepth
+			if len(m.threadReplies) > 0 {
+				m.threadFlatTree = buildReplyTree(m.threadReplies, m.effectiveMaxDepth())
+			}
+		}
 		return m, nil
 
 	case BookmarkedIDsMsg:
@@ -374,7 +381,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 		if m.postIndex < len(visible) && visible[m.postIndex].ID == msg.PostID {
 			m.threadPostID = msg.PostID
 			m.threadReplies = msg.Replies
-			m.threadFlatTree = buildReplyTree(msg.Replies, 3)
+			m.threadFlatTree = buildReplyTree(msg.Replies, m.effectiveMaxDepth())
 			m.threadReplyIndex = -1
 			m.threadScrollOffset = 0
 			m.threadLoading = false
@@ -1004,6 +1011,16 @@ func (m GuildsModel) IsAtTop() bool { return m.postIndex == 0 }
 
 // PostCount returns the number of currently visible guild posts.
 func (m GuildsModel) PostCount() int { return len(m.visiblePosts()) }
+
+// PostsNextCursor returns the pagination cursor for the next page of guild posts.
+func (m GuildsModel) PostsNextCursor() string { return m.nextCursor }
+
+func (m GuildsModel) effectiveMaxDepth() int {
+	if m.maxThreadDepth <= 0 {
+		return 3
+	}
+	return m.maxThreadDepth
+}
 
 // currentDetailCmd clears the detail pane immediately and starts a debounce timer.
 // The API fetch only fires if the selection hasn't changed by the time the timer expires,
