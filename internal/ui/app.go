@@ -1181,6 +1181,12 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.guilds = a.guilds.SetGuildPosts(msg.posts, msg.cursor)
 		var detailCmd tea.Cmd
 		a.guilds, detailCmd = a.guilds.CurrentDetailCmd()
+		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
+			compactH := a.height - 2
+			if a.guilds.PostCount() < compactH {
+				return a, tea.Batch(detailCmd, a.loadGuildPostsPageCmd(msg.slug, msg.cursor)), true
+			}
+		}
 		if detailCmd != nil {
 			return a, detailCmd, true
 		}
@@ -1205,6 +1211,12 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 		a.guilds = a.guilds.AppendGuildPosts(msg.posts, msg.cursor)
+		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
+			compactH := a.height - 2
+			if a.guilds.PostCount() < compactH {
+				return a, a.loadGuildPostsPageCmd(msg.slug, msg.cursor), true
+			}
+		}
 		return a, nil, true
 
 	case screens.RefreshGuildPostsMsg:
@@ -1296,6 +1308,12 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.topics = a.topics.SetTopicPosts(msg.posts, msg.cursor)
 		var detailCmd tea.Cmd
 		a.topics, detailCmd = a.topics.CurrentDetailCmd()
+		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
+			compactH := a.height - 2
+			if a.topics.PostCount() < compactH {
+				return a, tea.Batch(detailCmd, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor)), true
+			}
+		}
 		if detailCmd != nil {
 			return a, detailCmd, true
 		}
@@ -1317,6 +1335,12 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case topicPostsPageMsg:
 		a.topics = a.topics.AppendTopicPosts(msg.posts, msg.cursor)
+		if _, isMiller := a.layout.(MillerLayout); isMiller && msg.cursor != "" {
+			compactH := a.height - 2
+			if a.topics.PostCount() < compactH {
+				return a, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor), true
+			}
+		}
 		return a, nil, true
 
 	case screens.RefreshTopicPostsMsg:
@@ -1608,6 +1632,7 @@ func (a *App) refreshViewports() {
 	a.notifications, _ = a.notifications.Update(msg)
 	a.bookmarks, _ = a.bookmarks.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
+	a.guilds, _ = a.guilds.Update(msg)
 	a.journal, _ = a.journal.Update(msg)
 }
 

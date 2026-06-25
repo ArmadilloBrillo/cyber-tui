@@ -70,6 +70,13 @@ type GuildThreadNavMsg struct {
 	PaneWidth  int
 }
 
+// GuildThreadDebounceMsg is the delayed message emitted after guildThreadDebounceDelay
+// when the selected post changes. The fetch only proceeds if PostID still matches
+// the current selection, dropping stale ticks from rapid navigation.
+type GuildThreadDebounceMsg struct{ PostID string }
+
+const guildThreadDebounceDelay = time.Second
+
 // guildsConfirm tracks whether a join/leave confirmation prompt is active.
 type guildsConfirm int
 
@@ -371,6 +378,14 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			m.threadReplyIndex = -1
 			m.threadScrollOffset = 0
 			m.threadLoading = false
+		}
+		return m, nil
+
+	case GuildThreadDebounceMsg:
+		visible := m.visiblePosts()
+		if m.postIndex < len(visible) && visible[m.postIndex].ID == msg.PostID {
+			m.threadLoading = true
+			return m, func() tea.Msg { return LoadGuildThreadMsg(msg) }
 		}
 		return m, nil
 
@@ -990,7 +1005,32 @@ func (m GuildsModel) IsAtTop() bool { return m.postIndex == 0 }
 // PostCount returns the number of currently visible guild posts.
 func (m GuildsModel) PostCount() int { return len(m.visiblePosts()) }
 
+// currentDetailCmd clears the detail pane immediately and starts a debounce timer.
+// The API fetch only fires if the selection hasn't changed by the time the timer expires,
+// avoiding a flood of calls when the user scrolls quickly through the post list.
 func (m GuildsModel) currentDetailCmd() (GuildsModel, tea.Cmd) {
+	visible := m.visiblePosts()
+	if m.postIndex >= len(visible) {
+		return m, nil
+	}
+	postID := visible[m.postIndex].ID
+	if postID == m.threadPostID {
+		return m, nil
+	}
+	m.threadPostID = postID
+	m.threadLoading = false
+	m.threadReplies = nil
+	m.threadFlatTree = nil
+	m.threadReplyIndex = -1
+	m.threadScrollOffset = 0
+	return m, tea.Tick(guildThreadDebounceDelay, func(time.Time) tea.Msg {
+		return GuildThreadDebounceMsg{PostID: postID}
+	})
+}
+
+// CurrentDetailCmd is exported so app.go can trigger the initial detail load when guild posts first arrive.
+// Loads immediately without debounce.
+func (m GuildsModel) CurrentDetailCmd() (GuildsModel, tea.Cmd) {
 	visible := m.visiblePosts()
 	if m.postIndex >= len(visible) {
 		return m, nil
@@ -1006,11 +1046,6 @@ func (m GuildsModel) currentDetailCmd() (GuildsModel, tea.Cmd) {
 	m.threadReplyIndex = -1
 	m.threadScrollOffset = 0
 	return m, func() tea.Msg { return LoadGuildThreadMsg{PostID: postID} }
-}
-
-// CurrentDetailCmd is exported so app.go can trigger the initial detail load when guild posts first arrive.
-func (m GuildsModel) CurrentDetailCmd() (GuildsModel, tea.Cmd) {
-	return m.currentDetailCmd()
 }
 
 func (m GuildsModel) renderDetailReply(node replyNode, selected bool, width int) string {
