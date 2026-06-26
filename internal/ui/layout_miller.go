@@ -65,7 +65,6 @@ func (l MillerLayout) View(a App) string {
 
 	contentH := a.height - 1 - millerHeaderHeight // full height minus bottom bar and column header
 	contentW := a.width - millerSidebarWidth
-	navPane := lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(l.renderNav(a))
 
 	// Column header row — active column title in accent, others muted.
 	navHdr := l.renderColumnHeader("spaces", a.focus == focusMenu, millerSidebarWidth-1)
@@ -79,9 +78,16 @@ func (l MillerLayout) View(a App) string {
 		Render(a.logoText)
 	logoW := lipgloss.Width(logo)
 
-	var contentPane, hdrRow string
+	var contentPane, hdrRow, composeBar string
 	if r := l.activeCompactRenderer(a); r != nil {
 		listW, detailW := l.paneWidths(contentW)
+
+		// If compose panel is active, pull it out of DetailView and render it as a
+		// full-width bar spanning the list and detail columns (above the status bar).
+		if cc, ok := r.(CompactComposer); ok && cc.ComposeActive() {
+			contentH = max(0, contentH-cc.ComposeHeight())
+			composeBar = cc.ComposeView(contentW)
+		}
 
 		listHdr := l.renderColumnHeader(r.ListTitle(), a.focus == focusList, listW)
 		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW-logoW)
@@ -99,12 +105,21 @@ func (l MillerLayout) View(a App) string {
 		contentPane = lipgloss.NewStyle().Width(contentW).Height(contentH).MaxHeight(contentH).Render(l.renderContent(a))
 	}
 
+	// navPane and sep use the (possibly compose-reduced) contentH.
+	navPane := lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(l.renderNav(a))
 	sep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
-	base := lipgloss.JoinVertical(lipgloss.Left,
-		hdrRow,
-		lipgloss.JoinHorizontal(lipgloss.Top, navPane, sep, contentPane),
-		l.renderBottomBar(a),
-	)
+	mainRow := lipgloss.JoinHorizontal(lipgloss.Top, navPane, sep, contentPane)
+
+	var base string
+	if composeBar != "" {
+		panelH := lipgloss.Height(composeBar)
+		composeSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", panelH), "\n"))
+		sideBlank := lipgloss.NewStyle().Width(millerSidebarWidth - 1).Render("")
+		composeRow := lipgloss.JoinHorizontal(lipgloss.Top, sideBlank, composeSep, composeBar)
+		base = lipgloss.JoinVertical(lipgloss.Left, hdrRow, mainRow, composeRow, l.renderBottomBar(a))
+	} else {
+		base = lipgloss.JoinVertical(lipgloss.Left, hdrRow, mainRow, l.renderBottomBar(a))
+	}
 
 	if a.themePickerOpen {
 		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
@@ -298,9 +313,6 @@ func (l MillerLayout) DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
 }
 
 func (l MillerLayout) HasFocusedInput(a App) bool {
-	if a.focus == focusMenu {
-		return false
-	}
 	switch a.active {
 	case screenChatrooms:
 		return a.chatrooms.InputFocused()

@@ -300,7 +300,9 @@ func (m FeedModel) ensureSelectedVisible() FeedModel {
 }
 
 // ComposeActive reports whether the new-post compose panel is open.
-func (m FeedModel) ComposeActive() bool { return m.panel.IsActive() }
+func (m FeedModel) ComposeActive() bool            { return m.panel.IsActive() }
+func (m FeedModel) ComposeHeight() int             { return m.panel.PanelHeight() }
+func (m FeedModel) ComposeView(width int) string   { return m.panel.SetWidth(width).View() }
 
 func (m FeedModel) Init() tea.Cmd { return nil }
 
@@ -847,10 +849,6 @@ func (m FeedModel) DetailView(width, height int) string {
 			parts = append(parts, rendered)
 		}
 	}
-	if m.panel.IsActive() {
-		parts = append(parts, m.panel.SetWidth(width).View())
-	}
-
 	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return sliceContent(fullContent, m.detailScrollOffset, height, lineCount)
 }

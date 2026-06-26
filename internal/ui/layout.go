@@ -41,6 +41,16 @@ type CompactListRenderer interface {
 	DetailView(width, height int) string
 }
 
+// CompactComposer is an optional extension of CompactListRenderer for screens that have
+// a compose panel. In Miller mode the layout pulls the panel out of DetailView and
+// renders it as a full-width row spanning the list and detail columns, making it clear
+// the user is composing a new post rather than a reply.
+type CompactComposer interface {
+	ComposeActive() bool
+	ComposeHeight() int           // total rows the panel occupies (for contentH budget)
+	ComposeView(width int) string // panel rendered at the given spanning width
+}
+
 // menuTabs is the ordered list of navigable screens.
 var menuTabs = []struct {
 	label string
