@@ -848,7 +848,7 @@ func (m FeedModel) DetailView(width, height int) string {
 		}
 	}
 	if m.panel.IsActive() {
-		parts = append(parts, m.panel.View())
+		parts = append(parts, m.panel.SetWidth(width).View())
 	}
 
 	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
