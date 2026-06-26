@@ -13,20 +13,24 @@ import (
 )
 
 const millerSidebarWidth = 22  // nav pane (21 chars) + "│" separator (1 char)
-const millerListWidth = 52     // compact post list pane width in 3-pane Feed view
+const millerListMaxWidth = 70  // hard cap on the list pane; above this, excess goes to the detail pane
 const millerHeaderHeight = 1   // column title row at the top of the layout
 
 // MillerLayout renders a left navigation sidebar alongside the active screen.
 type MillerLayout struct{}
 
 // paneWidths returns the list and detail column widths for the given content area.
-// Both columns shrink proportionally as the terminal narrows, using the same ratio
-// as the preferred widths at a normal (120-col) terminal (52:45 ≈ 54:46). Add a
-// similar method to any future multi-pane layout to keep its collapsing logic
-// self-contained.
+// The detail pane is pinned at its preferred width (45); the list takes remaining
+// space and collapses first when narrowing. Above millerListMaxWidth the excess
+// goes to the detail pane. Add a similar method to any future multi-pane layout
+// to keep its collapsing logic self-contained.
 func (l MillerLayout) paneWidths(contentW int) (listW, detailW int) {
-	listW = min(millerListWidth, contentW*54/100)
-	detailW = max(0, contentW-listW-1)
+	const preferredDetailW = 45 // detail width at ~120-col terminal (98 contentW - 52 list - 1 sep)
+	detailW = min(preferredDetailW, max(0, contentW*46/100))
+	listW = min(millerListMaxWidth, max(0, contentW-detailW-1))
+	if listW == millerListMaxWidth {
+		detailW = max(0, contentW-listW-1)
+	}
 	return
 }
 
@@ -61,7 +65,6 @@ func (l MillerLayout) View(a App) string {
 
 	contentH := a.height - 1 - millerHeaderHeight // full height minus bottom bar and column header
 	contentW := a.width - millerSidebarWidth
-	navPane := lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(l.renderNav(a))
 
 	// Column header row — active column title in accent, others muted.
 	navHdr := l.renderColumnHeader("spaces", a.focus == focusMenu, millerSidebarWidth-1)
@@ -75,9 +78,16 @@ func (l MillerLayout) View(a App) string {
 		Render(a.logoText)
 	logoW := lipgloss.Width(logo)
 
-	var contentPane, hdrRow string
+	var contentPane, hdrRow, composeBar string
 	if r := l.activeCompactRenderer(a); r != nil {
 		listW, detailW := l.paneWidths(contentW)
+
+		// If compose panel is active, pull it out of DetailView and render it as a
+		// full-width bar spanning the list and detail columns (above the status bar).
+		if cc, ok := r.(CompactComposer); ok && cc.ComposeActive() {
+			contentH = max(0, contentH-cc.ComposeHeight())
+			composeBar = cc.ComposeView(contentW)
+		}
 
 		listHdr := l.renderColumnHeader(r.ListTitle(), a.focus == focusList, listW)
 		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW-logoW)
@@ -95,12 +105,21 @@ func (l MillerLayout) View(a App) string {
 		contentPane = lipgloss.NewStyle().Width(contentW).Height(contentH).MaxHeight(contentH).Render(l.renderContent(a))
 	}
 
+	// navPane and sep use the (possibly compose-reduced) contentH.
+	navPane := lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(l.renderNav(a))
 	sep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
-	base := lipgloss.JoinVertical(lipgloss.Left,
-		hdrRow,
-		lipgloss.JoinHorizontal(lipgloss.Top, navPane, sep, contentPane),
-		l.renderBottomBar(a),
-	)
+	mainRow := lipgloss.JoinHorizontal(lipgloss.Top, navPane, sep, contentPane)
+
+	var base string
+	if composeBar != "" {
+		panelH := lipgloss.Height(composeBar)
+		composeSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", panelH), "\n"))
+		sideBlank := lipgloss.NewStyle().Width(millerSidebarWidth - 1).Render("")
+		composeRow := lipgloss.JoinHorizontal(lipgloss.Top, sideBlank, composeSep, composeBar)
+		base = lipgloss.JoinVertical(lipgloss.Left, hdrRow, mainRow, composeRow, l.renderBottomBar(a))
+	} else {
+		base = lipgloss.JoinVertical(lipgloss.Left, hdrRow, mainRow, l.renderBottomBar(a))
+	}
 
 	if a.themePickerOpen {
 		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
@@ -294,9 +313,6 @@ func (l MillerLayout) DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
 }
 
 func (l MillerLayout) HasFocusedInput(a App) bool {
-	if a.focus == focusMenu {
-		return false
-	}
 	switch a.active {
 	case screenChatrooms:
 		return a.chatrooms.InputFocused()

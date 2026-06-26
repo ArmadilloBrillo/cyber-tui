@@ -175,7 +175,9 @@ func (m GuildsModel) visiblePosts() []model.Post {
 }
 
 // ComposeActive reports whether the new-thread compose panel is open.
-func (m GuildsModel) ComposeActive() bool { return m.panel.IsActive() }
+func (m GuildsModel) ComposeActive() bool            { return m.panel.IsActive() }
+func (m GuildsModel) ComposeHeight() int             { return m.panel.PanelHeight() }
+func (m GuildsModel) ComposeView(width int) string   { return m.panel.SetWidth(width).View() }
 
 // ActiveGuild returns the slug of the guild whose posts are currently displayed, or "" when in list view.
 func (m GuildsModel) ActiveGuild() string { return m.activeGuild }
@@ -1230,10 +1232,6 @@ func (m GuildsModel) DetailView(width, height int) string {
 			parts = append(parts, rendered)
 		}
 	}
-	if m.panel.IsActive() {
-		parts = append(parts, m.panel.View())
-	}
-
 	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return sliceContent(fullContent, m.threadScrollOffset, height, lineCount)
 }
