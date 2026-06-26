@@ -13,20 +13,24 @@ import (
 )
 
 const millerSidebarWidth = 22  // nav pane (21 chars) + "│" separator (1 char)
-const millerListWidth = 52     // compact post list pane width in 3-pane Feed view
+const millerListMaxWidth = 70  // hard cap on the list pane; above this, excess goes to the detail pane
 const millerHeaderHeight = 1   // column title row at the top of the layout
 
 // MillerLayout renders a left navigation sidebar alongside the active screen.
 type MillerLayout struct{}
 
 // paneWidths returns the list and detail column widths for the given content area.
-// Both columns shrink proportionally as the terminal narrows, using the same ratio
-// as the preferred widths at a normal (120-col) terminal (52:45 ≈ 54:46). Add a
-// similar method to any future multi-pane layout to keep its collapsing logic
-// self-contained.
+// The detail pane is pinned at its preferred width (45); the list takes remaining
+// space and collapses first when narrowing. Above millerListMaxWidth the excess
+// goes to the detail pane. Add a similar method to any future multi-pane layout
+// to keep its collapsing logic self-contained.
 func (l MillerLayout) paneWidths(contentW int) (listW, detailW int) {
-	listW = min(millerListWidth, contentW*54/100)
-	detailW = max(0, contentW-listW-1)
+	const preferredDetailW = 45 // detail width at ~120-col terminal (98 contentW - 52 list - 1 sep)
+	detailW = min(preferredDetailW, max(0, contentW*46/100))
+	listW = min(millerListMaxWidth, max(0, contentW-detailW-1))
+	if listW == millerListMaxWidth {
+		detailW = max(0, contentW-listW-1)
+	}
 	return
 }
 
