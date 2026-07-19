@@ -2,7 +2,7 @@ module github.com/ragnar/cyber-tui
 
 go 1.25.0
 
-toolchain go1.25.10
+toolchain go1.25.12
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0
@@ -14,8 +14,8 @@ require (
 	github.com/mattn/go-runewidth v0.0.19
 	github.com/muesli/termenv v0.16.0
 	github.com/yuin/goldmark v1.8.2
-	golang.org/x/image v0.42.0
-	golang.org/x/text v0.38.0
+	golang.org/x/image v0.44.0
+	golang.org/x/text v0.40.0
 )
 
 require (
