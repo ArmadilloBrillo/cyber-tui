@@ -7,7 +7,7 @@
       "actorUsername": "era",
       "targetId": "ZJXYZ2EeP27Eb5iWJHEU",
       "targetType": "post",
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "read": false,
       "createdAt": "2026-04-17T01:38:58.898Z"
     },
@@ -18,7 +18,7 @@
       "actorUsername": "7spires",
       "targetId": "5OmvmzSL4snAfZLiXNKq",
       "targetType": "post",
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "read": false,
       "createdAt": "2026-04-17T00:15:22.051Z"
     },
@@ -33,13 +33,13 @@
         "authorUsername": "landon",
         "replyId": "A2kSSnHIex1ii8Gpkgui"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "read": false,
       "createdAt": "2026-04-16T23:05:39.045Z"
     },
     {
       "id": "cRuu7siNW0B8EylpRv3b",
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "type": "bookmark",
       "actorId": "gdu7QLtd2mdudlhMfYWYbngqfMZ2",
       "actorUsername": "dang",
@@ -62,7 +62,7 @@
         "authorUsername": "landon",
         "replyId": "JB6qYtLs70Rq98clqFim"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "read": false,
       "createdAt": "2026-04-16T22:13:58.086Z"
     },
@@ -77,7 +77,7 @@
         "authorUsername": "landon",
         "replyId": "lHLOWjmKUjQmLlP7ZCBm"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "read": false,
       "createdAt": "2026-04-16T21:59:11.445Z"
     },
@@ -92,7 +92,7 @@
         "authorUsername": "landon",
         "replyId": "b42KVZDqXCZI36qiUw9Y"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "read": false,
       "createdAt": "2026-04-16T21:59:04.740Z"
     },
@@ -109,7 +109,7 @@
         "isGuildThread": true,
         "threadId": "Vf9s1FrzbYuKkD8zdTgW"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T21:30:39.369Z",
       "read": true
     },
@@ -124,7 +124,7 @@
         "authorUsername": "genghis_khan",
         "replyId": "7YReP8o0sREqLYEVv9xp"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T18:34:11.675Z",
       "read": true
     },
@@ -139,7 +139,7 @@
         "authorUsername": "7spires",
         "replyId": "gyOVj6FpOizITrPF4WJl"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T18:02:44.931Z",
       "read": true
     },
@@ -154,7 +154,7 @@
         "authorUsername": "7spires",
         "replyId": "kB7ZYy6O8AwRI6IQc9Gt"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T18:02:19.471Z",
       "read": true
     },
@@ -165,7 +165,7 @@
       "actorUsername": "genghis_khan",
       "targetId": "VlH4ErHnYNeaFe0L6rJy",
       "targetType": "post",
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T18:00:54.196Z",
       "read": true
     },
@@ -180,7 +180,7 @@
         "authorUsername": "default_hacktip",
         "replyId": "rF3o5D9lEJJOnsUZ4Mtp"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T17:12:57.350Z",
       "read": true
     },
@@ -195,7 +195,7 @@
         "authorUsername": "landon",
         "replyId": "MT5bwKZGnXrv6nCEkKbH"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T16:15:01.322Z",
       "read": true
     },
@@ -210,7 +210,7 @@
         "authorUsername": "landon",
         "replyId": "zSIX4s36MwFusazWDFzS"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T16:13:07.526Z",
       "read": true
     },
@@ -225,7 +225,7 @@
         "authorUsername": "default_hacktip",
         "replyId": "xQ6CtBppViiX2zLcjTEU"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T16:12:10.401Z",
       "read": true
     },
@@ -240,7 +240,7 @@
         "authorUsername": "landon",
         "replyId": "9uHo0WdAkHT25M0eUBD8"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T16:07:58.282Z",
       "read": true
     },
@@ -255,13 +255,13 @@
         "authorUsername": "landon",
         "replyId": "gxeZYDcU6eJnN8HJ3dPV"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T16:04:45.759Z",
       "read": true
     },
     {
       "id": "PDRJgrML0OlkyUHpv1KZ",
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "type": "reply",
       "actorId": "5vzCvkEyQQS0aje32X6TP0mfWpm2",
       "actorUsername": "mikozdov",
@@ -286,7 +286,7 @@
         "authorUsername": "cindospen",
         "replyId": "cw7GxLp6hHxNQ52VVG5m"
       },
-      "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "userId": "REDACTED_FIREBASE_UID_28_CHARS",
       "createdAt": "2026-04-16T15:50:52.979Z",
       "read": true
     }
