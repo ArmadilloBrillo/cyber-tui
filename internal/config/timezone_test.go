@@ -85,3 +85,12 @@ func TestAvailableTimezones_AllParseable(t *testing.T) {
 		}
 	}
 }
+
+func TestParseTimezoneLabel_MalformedFallsBackToUTC(t *testing.T) {
+	for _, label := range []string{"X", "UT", "EST", "UTC+", "UTC+abc", "UTC+5:xx", "UTC-"} {
+		loc := config.ParseTimezoneLabel(label)
+		if loc != time.UTC {
+			t.Errorf("ParseTimezoneLabel(%q) = %v, want time.UTC", label, loc)
+		}
+	}
+}
