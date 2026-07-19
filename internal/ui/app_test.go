@@ -408,3 +408,35 @@ func TestFriendlyErr_404IsSoftened(t *testing.T) {
 		t.Errorf("friendlyErr(non-api) = %q, want raw text", got)
 	}
 }
+
+// --- routeURL: ephemeral (SSH) sessions must not drive host side effects ---
+
+func TestRouteURL_EphemeralBlocksExternalOpen(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+	got, _ := a.routeURL("https://example.com/page")
+	if got.notifyText != "Opening links is disabled in SSH sessions" {
+		t.Errorf("notifyText = %q, want SSH-disabled banner", got.notifyText)
+	}
+}
+
+func TestRouteURL_EphemeralBlocksUnparsableURLFallback(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+	got, _ := a.routeURL(":not-a-url")
+	if got.notifyText != "Opening links is disabled in SSH sessions" {
+		t.Errorf("notifyText = %q, want SSH-disabled banner", got.notifyText)
+	}
+}
+
+func TestRouteURL_EphemeralAllowsInternalProfileNav(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+	got, cmd := a.routeURL("https://cyberspace.online/u/somebody")
+	if got.notifyText != "" {
+		t.Errorf("notifyText = %q, want empty (internal nav must not be blocked)", got.notifyText)
+	}
+	if cmd == nil {
+		t.Error("cmd = nil, want profile load command")
+	}
+}
