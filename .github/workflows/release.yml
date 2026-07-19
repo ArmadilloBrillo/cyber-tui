@@ -10,6 +10,9 @@ on:
         description: "Tag to release (e.g. v0.4.1.1)"
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   release:
     name: build and release
@@ -17,19 +20,23 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Resolve ref
         id: ref
+        env:
+          # Passed through env so the shell never evaluates the raw input
+          # (workflow_dispatch inputs are attacker-influenced text).
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            SHA=$(git rev-list -n1 "refs/tags/${{ github.event.inputs.tag }}" 2>/dev/null \
-              || git rev-list -n1 "${{ github.event.inputs.tag }}")
+            SHA=$(git rev-list -n1 "refs/tags/$INPUT_TAG" 2>/dev/null \
+              || git rev-list -n1 "$INPUT_TAG")
             echo "sha=$SHA" >> $GITHUB_OUTPUT
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=$INPUT_TAG" >> $GITHUB_OUTPUT
           else
             echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
             echo "tag=$(git describe --tags --exact-match)" >> $GITHUB_OUTPUT
@@ -41,14 +48,16 @@ jobs:
           git merge-base --is-ancestor ${{ steps.ref.outputs.sha }} origin/main \
             || { echo "Tag is not on main — release aborted."; exit 1; }
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
 
       - name: Set build variables
         id: vars
+        env:
+          TAG: ${{ steps.ref.outputs.tag }}
         run: |
-          echo "version=${{ steps.ref.outputs.tag }}" >> $GITHUB_OUTPUT
+          echo "version=$TAG" >> $GITHUB_OUTPUT
           echo "commit=$(git rev-parse --short ${{ steps.ref.outputs.sha }})" >> $GITHUB_OUTPUT
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
@@ -64,7 +73,12 @@ jobs:
           GOOS=linux  GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/cyber-tui-linux-arm64   ./cmd/cyber-tui
           GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/cyber-tui-windows-amd64.exe ./cmd/cyber-tui
 
-      - uses: softprops/action-gh-release@v2
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ steps.ref.outputs.tag }}
           files: dist/*
