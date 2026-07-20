@@ -144,7 +144,8 @@ type App struct {
 	pendingReplyID string
 
 	// polledUnreadCount is the single source of truth for the tab badge unread count.
-	// It is synced from: initial/page load, 60-second poll, m/M key, and enter on a notification.
+	// It is synced from: 60-second server poll, m/M key, and enter on a notification.
+	// Never overwrite with the local list count — the server count is always authoritative.
 	polledUnreadCount int
 
 	// settings holds the user's preferences fetched from GET /v1/settings on login.
@@ -2412,11 +2413,9 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case notifsLoadedMsg:
 		a.notifications = a.notifications.SetNotifs(msg.notifs, msg.cursor)
-		a.polledUnreadCount = a.notifications.UnreadCount()
 		return a, nil, true
 	case notifsPageMsg:
 		a.notifications = a.notifications.AppendNotifs(msg.notifs, msg.cursor)
-		a.polledUnreadCount = a.notifications.UnreadCount()
 		return a, nil, true
 	case screens.RefreshNotifsMsg:
 		return a, a.loadNotifsCmd(), true
@@ -2470,7 +2469,7 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	case unreadCountMsg:
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count
-		if msg.count > prev {
+		if msg.count > prev && !a.notifications.HasPaginated() {
 			return a, a.loadNotifsCmd(), true
 		}
 		return a, nil, true

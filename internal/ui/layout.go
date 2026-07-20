@@ -176,8 +176,11 @@ func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 	case screenProfile:
 		return a, a.loadProfileCmd()
 	case screenNotifications:
-		a.notifications = a.notifications.SetFetching()
-		return a, a.loadNotifsCmd()
+		if !a.notifications.HasPaginated() {
+			a.notifications = a.notifications.SetFetching()
+			return a, a.loadNotifsCmd()
+		}
+		return a, nil
 	case screenSettings:
 		return a, nil
 	case screenBookmarks:
