@@ -1,10 +1,10 @@
 {
   "data": {
-    "userId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+    "userId": "REDACTED_FIREBASE_UID_28_CHARS",
     "username": "ragnar",
     "isBanned": false,
     "createdAt": "2025-11-22T07:07:18.652Z",
-    "serialNumber": 3889,
+    "serialNumber": 1234,
     "isSupporter": true,
     "supporterIcon": "pi",
     "profilePictureUrl": "https://i.postimg.cc/0NNfKkb6/norse-compass-128.jpg",
@@ -19,8 +19,8 @@
     "followersCount": 35,
     "followingCount": 45,
     "locationName": "Treading water",
-    "locationLatitude": 34.14662391970458,
-    "locationLongitude": -43.10446581340194,
+    "locationLatitude": 12.3456789,
+    "locationLongitude": -12.3456789,
     "updatedAt": "2026-04-15T06:57:43.631Z",
     "lastActiveAt": "2026-04-16T06:14:56.233Z"
   }

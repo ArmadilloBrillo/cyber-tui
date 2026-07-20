@@ -1690,6 +1690,9 @@ func (a App) handleOpenURL(urls []string) (App, tea.Cmd) {
 func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 	parsed, err := neturl.Parse(rawURL)
 	if err != nil {
+		if a.ephemeral {
+			return a.notify(notifyInfo, "Opening links is disabled in SSH sessions")
+		}
 		return a, openExternalURL(rawURL)
 	}
 	if parsed.Host == "cyberspace.online" || parsed.Host == "www.cyberspace.online" {
@@ -1698,6 +1701,11 @@ func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 			a.profileReturn = a.active
 			return a, a.loadUserProfileCmd(parts[1])
 		}
+	}
+	// Ephemeral (SSH-hosted) sessions must never launch host processes or make
+	// the host fetch remote-chosen URLs (browser spawn / SSRF).
+	if a.ephemeral {
+		return a.notify(notifyInfo, "Opening links is disabled in SSH sessions")
 	}
 	if urlutil.IsImageURL(rawURL) &&
 		a.graphicsProtocol != imgview.ProtocolNone &&
