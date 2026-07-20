@@ -143,7 +143,7 @@ func TestMockGetFeed_ReturnsEmptyCursor(t *testing.T) {
 
 func TestMockCreatePost_ReturnsPost(t *testing.T) {
 	m := newMock()
-	post, err := m.CreatePost("hello matrix", "", []string{"test"}, false, false)
+	post, err := m.CreatePost("hello matrix", "", "", []string{"test"}, false, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestMockCreatePost_ReturnsPost(t *testing.T) {
 
 func TestMockCreatePost_TitleAndFlags(t *testing.T) {
 	m := newMock()
-	post, err := m.CreatePost("body text", "My Title", []string{"test"}, true, true)
+	post, err := m.CreatePost("body text", "My Title", "", []string{"test"}, true, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -635,7 +635,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
 	case screens.SubmitReplyMsg:
@@ -1235,7 +1235,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadRepliesCmd(msg.Post.ID), true
 
 	case screens.SubmitGuildPostMsg:
-		return a, a.createGuildPostCmd(msg.Slug, msg.Content, msg.Title, msg.Topics), true
+		return a, a.createGuildPostCmd(msg.Slug, msg.Content, msg.Title, msg.PostSlug, msg.Topics), true
 
 	case guildPostCreatedMsg:
 		return a, a.loadGuildPostsCmd(msg.slug), true
@@ -1800,9 +1800,9 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		// Initialise the RTDB client from the rtdbToken (best effort).
+		// Initialise the RTDB client using the URL returned by the API (best effort).
 		if hc, ok := a.client.(*api.HTTPClient); ok {
-			_ = hc.InitRTDB(tokens.RTDBToken)
+			_ = hc.InitRTDB(tokens.RTDBToken, tokens.RTDBUrl)
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
@@ -1839,7 +1839,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 			return screens.LoginErrMsg{Err: err}
 		}
 		if hc, ok := a.client.(*api.HTTPClient); ok {
-			_ = hc.InitRTDB(tokens.RTDBToken)
+			_ = hc.InitRTDB(tokens.RTDBToken, tokens.RTDBUrl)
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
@@ -2352,9 +2352,9 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	}
 }
 
-func (a *App) createPostCmd(content, title string, topics []string, isPublic, isNSFW bool) tea.Cmd {
+func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, title, topics, isPublic, isNSFW)
+		_, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW)
 		if err != nil {
 			return actionErrMsg{err}
 		}
@@ -2481,7 +2481,7 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 func (a *App) loadNotifsCmd() tea.Cmd {
 	unreadOnly := a.notifications.ShowUnreadOnly()
 	return func() tea.Msg {
-		notifs, cursor, err := a.client.GetNotifications("", unreadOnly)
+		notifs, cursor, err := a.client.GetNotifications("", unreadOnly, nil)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -2492,7 +2492,7 @@ func (a *App) loadNotifsCmd() tea.Cmd {
 func (a *App) loadNotifsPageCmd(cursor string) tea.Cmd {
 	unreadOnly := a.notifications.ShowUnreadOnly()
 	return func() tea.Msg {
-		notifs, nextCursor, err := a.client.GetNotifications(cursor, unreadOnly)
+		notifs, nextCursor, err := a.client.GetNotifications(cursor, unreadOnly, nil)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -2731,9 +2731,9 @@ func (a *App) loadGuildPostsPageCmd(slug, cursor string) tea.Cmd {
 	}
 }
 
-func (a *App) createGuildPostCmd(slug, content, title string, topics []string) tea.Cmd {
+func (a *App) createGuildPostCmd(slug, content, title, postSlug string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreateGuildPost(slug, content, title, topics)
+		_, err := a.client.CreateGuildPost(slug, content, title, postSlug, topics)
 		if err != nil {
 			return actionErrMsg{err}
 		}
@@ -2855,7 +2855,7 @@ func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 // Published notes have no title, are private, and not marked NSFW.
 func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, "", topics, false, false)
+		_, err := a.client.CreatePost(content, "", "", topics, false, false)
 		if err != nil {
 			return actionErrMsg{err}
 		}

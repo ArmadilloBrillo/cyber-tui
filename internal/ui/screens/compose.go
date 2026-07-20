@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -9,6 +10,23 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
+
+// ValidateSlug returns nil for empty slugs (server will generate one) and for
+// valid custom slugs. A valid slug is lowercase letters, digits, and hyphens only, max 60 chars.
+func ValidateSlug(s string) error {
+	if s == "" {
+		return nil
+	}
+	if len([]rune(s)) > 60 {
+		return fmt.Errorf("slug too long (max 60 chars)")
+	}
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+			return fmt.Errorf("slug: only a-z, 0-9, hyphens allowed")
+		}
+	}
+	return nil
+}
 
 const (
 	composeMinLines = 3
@@ -248,6 +266,7 @@ type postField int
 
 const (
 	postFieldTitle postField = iota
+	postFieldSlug
 	postFieldBody
 	postFieldTopics
 	postFieldPublic
@@ -261,8 +280,10 @@ const (
 // toggles the public and NSFW checkboxes.
 type PostComposePanel struct {
 	titleInput  textinput.Model
+	slugInput   textinput.Model
 	textarea    textarea.Model
 	topicsInput textinput.Model
+	slugError   string
 	isPublic    bool
 	isNSFW      bool
 	focus       postField
@@ -276,6 +297,11 @@ func NewPostComposePanel(width int) PostComposePanel {
 	ti.Placeholder = "title (optional)"
 	ti.Prompt = "" // the row label acts as the prompt
 
+	sl := textinput.New()
+	sl.Placeholder = "slug (optional — a-z 0-9 hyphens, max 60)"
+	sl.Prompt = ""
+	sl.CharLimit = 60
+
 	ta := textarea.New()
 	ta.CharLimit = 32768
 	ta.ShowLineNumbers = false
@@ -287,6 +313,7 @@ func NewPostComposePanel(width int) PostComposePanel {
 
 	m := PostComposePanel{
 		titleInput:  ti,
+		slugInput:   sl,
 		textarea:    ta,
 		topicsInput: top,
 		bodyLines:   composeMinLines,
@@ -301,11 +328,14 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.isPublic = defaultPublic
 	m.isNSFW = false
 	m.titleInput.SetValue("")
+	m.slugInput.SetValue("")
+	m.slugError = ""
 	m.topicsInput.SetValue("tui")
 	m.textarea.SetValue("")
 	m.bodyLines = composeMinLines
 	m.textarea.SetHeight(composeMinLines)
 	m.textarea.Blur()
+	m.slugInput.Blur()
 	m.topicsInput.Blur()
 	return m, m.titleInput.Focus()
 }
@@ -316,6 +346,9 @@ func (m PostComposePanel) Close() PostComposePanel {
 	m.focus = postFieldTitle
 	m.titleInput.SetValue("")
 	m.titleInput.Blur()
+	m.slugInput.SetValue("")
+	m.slugInput.Blur()
+	m.slugError = ""
 	m.textarea.SetValue("")
 	m.textarea.Blur()
 	m.topicsInput.Blur()
@@ -325,13 +358,14 @@ func (m PostComposePanel) Close() PostComposePanel {
 func (m PostComposePanel) IsActive() bool     { return m.active }
 func (m PostComposePanel) Content() string    { return m.textarea.Value() }
 func (m PostComposePanel) TitleValue() string { return strings.TrimSpace(m.titleInput.Value()) }
+func (m PostComposePanel) SlugValue() string  { return strings.TrimSpace(m.slugInput.Value()) }
 func (m PostComposePanel) TopicsRaw() string  { return m.topicsInput.Value() }
 func (m PostComposePanel) IsPublic() bool     { return m.isPublic }
 func (m PostComposePanel) IsNSFW() bool       { return m.isNSFW }
 
 // PanelHeight returns the total terminal rows the panel renders:
-// 2 (border) + 1 (title row) + 1 (sep) + bodyLines + 1 (sep) + 1 (topics row).
-func (m PostComposePanel) PanelHeight() int { return m.bodyLines + 6 }
+// 2 (border) + 1 (title row) + 1 (slug row) + 1 (sep) + bodyLines + 1 (sep) + 1 (topics row).
+func (m PostComposePanel) PanelHeight() int { return m.bodyLines + 7 }
 
 // SetWidth resizes all inner inputs to fit the new panel width.
 func (m PostComposePanel) SetWidth(w int) PostComposePanel {
@@ -341,7 +375,7 @@ func (m PostComposePanel) SetWidth(w int) PostComposePanel {
 		innerW = 1
 	}
 	const (
-		labelW   = 7  // "title  " or "topics "
+		labelW   = 7  // "title  " or "topics " or "slug   "
 		togglesW = 22 // "  [x] public  [ ] nsfw"
 		cursorW  = 1  // textinput.View() renders Width+1 (cursor always occupies one extra slot)
 	)
@@ -350,6 +384,7 @@ func (m PostComposePanel) SetWidth(w int) PostComposePanel {
 		titleInputW = 1
 	}
 	m.titleInput.Width = titleInputW
+	m.slugInput.Width = titleInputW
 
 	topicsInputW := innerW - labelW - togglesW - cursorW
 	if topicsInputW < 1 {
@@ -365,6 +400,8 @@ func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
 	switch m.focus {
 	case postFieldTitle:
 		m.titleInput.Blur()
+	case postFieldSlug:
+		m.slugInput.Blur()
 	case postFieldBody:
 		m.textarea.Blur()
 	case postFieldTopics:
@@ -374,6 +411,8 @@ func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
 	switch m.focus {
 	case postFieldTitle:
 		return m, m.titleInput.Focus()
+	case postFieldSlug:
+		return m, m.slugInput.Focus()
 	case postFieldBody:
 		return m, m.textarea.Focus()
 	case postFieldTopics:
@@ -414,6 +453,15 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "ctrl+s":
+			if err := ValidateSlug(m.SlugValue()); err != nil {
+				m.slugError = err.Error()
+				m.focus = postFieldSlug
+				m.titleInput.Blur()
+				m.textarea.Blur()
+				m.topicsInput.Blur()
+				cmd := m.slugInput.Focus()
+				return m, cmd
+			}
 			content := m.textarea.Value()
 			return m, func() tea.Msg { return ComposeSubmitMsg{Content: content} }
 		case "esc":
@@ -446,6 +494,20 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.titleInput, cmd = m.titleInput.Update(msg)
+		return m, cmd
+	case postFieldSlug:
+		if km, ok := msg.(tea.KeyMsg); ok {
+			filtered, keep := filterAmbiguousKeyMsg(km)
+			if !keep {
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.slugInput, cmd = m.slugInput.Update(filtered)
+			m.slugError = "" // clear error on any edit
+			return m, cmd
+		}
+		var cmd tea.Cmd
+		m.slugInput, cmd = m.slugInput.Update(msg)
 		return m, cmd
 	case postFieldBody:
 		if km, ok := msg.(tea.KeyMsg); ok {
@@ -492,6 +554,8 @@ func (m PostComposePanel) View() string {
 	// without having to reconstruct the panel.
 	m.titleInput.TextStyle = theme.Base
 	m.titleInput.PlaceholderStyle = theme.Subtle
+	m.slugInput.TextStyle = theme.Base
+	m.slugInput.PlaceholderStyle = theme.Subtle
 	m.topicsInput.TextStyle = theme.Base
 	m.topicsInput.PlaceholderStyle = theme.Subtle
 	m.textarea.FocusedStyle.Text = theme.Base
@@ -524,6 +588,15 @@ func (m PostComposePanel) View() string {
 	}
 	titleRow := titleStyle.Render("title  ") + m.titleInput.View()
 
+	slugStyle := inactive
+	if m.focus == postFieldSlug {
+		slugStyle = active
+	}
+	slugRow := slugStyle.Render("slug   ") + m.slugInput.View()
+	if m.slugError != "" {
+		slugRow += "  " + theme.Error.Render("← "+m.slugError)
+	}
+
 	topicsStyle := inactive
 	if m.focus == postFieldTopics {
 		topicsStyle = active
@@ -551,6 +624,7 @@ func (m PostComposePanel) View() string {
 
 	inner := lipgloss.JoinVertical(lipgloss.Left,
 		titleRow,
+		slugRow,
 		sep,
 		m.textarea.View(),
 		sep,

@@ -19,7 +19,7 @@ type Client interface {
 	// Feed — pass empty cursor for first page; use returned cursor for next page.
 	// Returns empty next-cursor when there are no more pages.
 	GetFeed(cursor string) ([]model.Post, string, error)
-	CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error)
+	CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error)
 	// GetPost fetches a single post by ID (used when jumping from a notification).
 	GetPost(postID string) (model.Post, error)
 
@@ -61,7 +61,9 @@ type Client interface {
 	// Notifications — cursor-paginated; mark-read methods are fire-and-forget.
 	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.
 	// Set unreadOnly to true to request only unread notifications from the server.
-	GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error)
+	// Pass non-nil types to filter by notification type (e.g. []string{"reply","bookmark"});
+	// pass nil for all types.
+	GetNotifications(cursor string, unreadOnly bool, types []string) ([]model.Notification, string, error)
 	// GetUnreadNotificationCount returns the server-side count of unread notifications.
 	// The value is cached for ~5 s on the server side.
 	GetUnreadNotificationCount() (int, error)
@@ -93,7 +95,8 @@ type Client interface {
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetGuildPosts(slug string, cursor string) ([]model.Post, string, error)
 	// CreateGuildPost creates a new thread in a guild. Caller must be a member.
-	CreateGuildPost(slug, content, title string, topics []string) (model.Post, error)
+	// postSlug is optional; pass empty string for server-generated slug.
+	CreateGuildPost(slug, content, title, postSlug string, topics []string) (model.Post, error)
 	// GetGuildMembers returns paginated members for a guild, oldest-joined first.
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetGuildMembers(slug, cursor string) ([]model.GuildMember, string, error)

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,6 +31,7 @@ type SSEEvent struct {
 // Client is a low-level Firebase RTDB HTTP client.
 type Client struct {
 	baseURL      string
+	mu           sync.RWMutex
 	token        string
 	httpClient   *http.Client // short-timeout client for Get/Put
 	streamClient *http.Client // zero-timeout client for SSE streams
@@ -191,12 +193,23 @@ func (c *Client) readSSE(ctx context.Context, r io.Reader, ch chan<- SSEEvent) {
 	}
 }
 
+// SetToken replaces the auth token. Called after a token refresh to keep an
+// open client current without tearing down the connection.
+func (c *Client) SetToken(token string) {
+	c.mu.Lock()
+	c.token = token
+	c.mu.Unlock()
+}
+
 // buildURL constructs the full Firebase REST URL including the .json suffix and auth token.
 func (c *Client) buildURL(path string, params url.Values) string {
 	if params == nil {
 		params = url.Values{}
 	}
-	params.Set("auth", c.token)
+	c.mu.RLock()
+	tok := c.token
+	c.mu.RUnlock()
+	params.Set("auth", tok)
 
 	path = strings.TrimRight(path, "/")
 	return c.baseURL + path + ".json?" + params.Encode()

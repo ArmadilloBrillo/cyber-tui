@@ -2,11 +2,12 @@ package model
 
 import "time"
 
-// Tokens holds the three tokens returned by POST /v1/auth/login.
+// Tokens holds the tokens returned by POST /v1/auth/login and POST /v1/auth/refresh.
 type Tokens struct {
 	IDToken      string
 	RefreshToken string
 	RTDBToken    string
+	RTDBUrl      string // regional Firebase RTDB URL returned by the API; use this, never derive it
 }
 
 type User struct {
@@ -177,31 +178,35 @@ type Topic struct {
 
 // Guild maps to the shape returned by GET /v1/guilds and GET /v1/guilds/:slug.
 // IsMember and Role are only populated by the single-guild endpoint.
+// ProfilePictureUrl is captured for future rendering; not currently displayed in the TUI.
 type Guild struct {
-	ID              string
-	Name            string
-	Slug            string
-	Icon            string
-	Bio             string
-	MemberCount     int
-	FounderUsername string
-	CreatedAt       time.Time
-	IsMember        bool
-	Role            string // "founder", "member", or ""
-	Link            string
-	LinkText        string
+	ID                string
+	Name              string
+	Slug              string
+	Icon              string
+	Bio               string
+	MemberCount       int
+	FounderUsername   string
+	CreatedAt         time.Time
+	IsMember          bool
+	Role              string // "founder", "member", or ""
+	Link              string
+	LinkText          string
+	ProfilePictureUrl string
 }
 
 // GuildMember represents a single membership returned by GET /v1/guilds/:slug/members.
+// ProfilePictureUrl is captured for future rendering; not currently displayed in the TUI.
 type GuildMember struct {
-	MembershipID string
-	GuildID      string
-	GuildSlug    string
-	UserID       string
-	Username     string
-	Role         string // "founder" or "member"
-	JoinedAt     time.Time
-	DisplayName  string
+	MembershipID      string
+	GuildID           string
+	GuildSlug         string
+	UserID            string
+	Username          string
+	Role              string // "founder" or "member"
+	JoinedAt          time.Time
+	DisplayName       string
+	ProfilePictureUrl string
 }
 
 // Note is a private note visible only to the author.
@@ -257,4 +262,8 @@ type Notification struct {
 	ThreadAuthorUsername string // set for thread_reply; the original thread's author
 	GuildName            string // guild display name (seen on guild_new_thread)
 	GuildSlug            string // guild handle from metadata.guildSlug; set on guild reply/post notifications (with isGuildThread)
+	PostSlug             string // slug of the target post; enables deep-link and richer descriptions (v0.7+)
+	PostAuthorUsername   string // author of the target post; used with PostSlug for navigation (v0.7+)
+	PostContent          string // non-empty for post_mention; the text that mentioned you (v0.7+)
+	ReplyContent         string // non-empty for reply_mention; the reply text that mentioned you (v0.7+)
 }

@@ -120,7 +120,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 
 | Type | Purpose |
 |---|---|
-| `Tokens` | IDToken, RefreshToken, RTDBToken returned from login |
+| `Tokens` | IDToken, RefreshToken, RTDBToken, RTDBUrl returned from login |
 | `User` | Profile (ID, username, displayName, email, bio, websiteUrl, websiteName, websiteImageUrl, pinnedPostID, locationName, locationLatitude, locationLongitude) |
 | `Post` | Feed item (ID, authorID, authorUsername, content, title, slug, guildID, guildSlug, isGuildThread, topics, repliesCount, bookmarksCount, isPublic, isNSFW, deleted, createdAt) |
 | `Watch` | Thread-watch record (ID, PostID, CreatedAt) — returned by GET /v1/watches |
@@ -131,11 +131,11 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `Room` | Public chatroom (ID, name, description, member count) |
 | `NotificationPrefs` | Notification subscription toggles (bookmark, reply, poke) |
 | `Settings` | All user preferences (notifications, content filters, display options) |
-| `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName) |
+| `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName, postSlug, postAuthorUsername, postContent, replyContent) |
 | `Bookmark` | Saved post or reply (ID, type, postID/replyID, content snapshot, author, createdAt) |
 | `Topic` | Tag with post count (slug, postCount) |
-| `Guild` | Guild community (ID, name, slug, icon, bio, memberCount, founderUsername, createdAt, isMember, role, link, linkText) |
-| `GuildMember` | Guild membership record (membershipID, guildID, guildSlug, userID, username, role, joinedAt, displayName) |
+| `Guild` | Guild community (ID, name, slug, icon, bio, memberCount, founderUsername, createdAt, isMember, role, link, linkText, profilePictureUrl) |
+| `GuildMember` | Guild membership record (membershipID, guildID, guildSlug, userID, username, role, joinedAt, displayName, profilePictureUrl) |
 | `Follow` | Follow relationship (ID, followerID, followedID, followerUsername, followedUsername, createdAt) |
 | `Note` | Private journal note (ID, authorID, content, topics, revisionNumber, deleted, createdAt) |
 | `NoteRevision` | Single historical revision of a note (revisionNumber, content, topics, createdAt) |
@@ -155,7 +155,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Group | Methods |
 |---|---|
 | Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()` |
-| Feed | `GetFeed(cursor)`, `CreatePost(content, title, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)` |
+| Feed | `GetFeed(cursor)`, `CreatePost(content, title, slug, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)` |
 | Thread watching | `GetWatches(cursor)`, `WatchPost(postID)`, `UnwatchPost(postID)` |
 | Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)` |
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
@@ -163,9 +163,10 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Follows | `GetFollowing(cursor)`, `GetFollowers(cursor)`, `GetUserFollows(userID, followType, cursor)`, `Follow(followedID)`, `Unfollow(followID)` |
 | Settings | `GetSettings()`, `UpdateSettings(update)` |
 | Rooms | `GetRooms()`, `GetRoomMessages(roomID, limit)`, `SendRoomMessage(roomID, body)` |
-| Notifications | `GetNotifications(cursor)`, `MarkNotificationRead(id)`, `MarkAllNotificationsRead()` |
+| Notifications | `GetNotifications(cursor, unreadOnly, types)`, `GetUnreadNotificationCount()`, `MarkNotificationRead(id)`, `MarkAllNotificationsRead()` |
 | Bookmarks | `GetBookmarks(cursor)`, `CreateBookmark(postID, replyID)`, `DeleteBookmark(id)` |
 | Topics | `GetTopics(cursor)`, `GetTopicPosts(slug, cursor)` |
+| Guilds | `GetGuilds(cursor)`, `GetGuild(slug)`, `GetGuildPosts(slug, cursor)`, `CreateGuildPost(slug, content, title, postSlug, topics)`, `GetGuildMembers(slug, cursor)`, `JoinGuild(slug)`, `LeaveGuild(slug)` |
 | Notes | `GetNotes(cursor)`, `GetNote(noteID)`, `GetNoteRevision(noteID, revision)`, `GetNoteRevisions(noteID, cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
 | Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
 
@@ -256,20 +257,11 @@ Firebase Realtime Database client. Communicates with RTDB using its REST API and
 | `Put(ctx, path, val)` | method | Marshals val to JSON and PUTs it |
 | `Subscribe(ctx, path, params)` | method | Opens SSE stream; returns `<-chan SSEEvent` |
 
-Internal: `readSSE(ctx, reader, ch)` parses the SSE wire format and forwards events; `buildURL(path, params)` constructs authenticated URLs.
-
-#### `jwt.go`
-
-| Identifier | Kind | Purpose |
-|---|---|---|
-| `ParseRTDBToken(token)` | func | Decodes RTDB JWT (no signature verify), extracts "aud" (Firebase project ID) |
-| `BaseURL(projectID)` | func | Returns `https://{projectID}-default-rtdb.firebaseio.com` |
-
-Used by `HTTPClient.InitRTDB` immediately after login to derive the RTDB base URL from the RTDB JWT.
+Internal: `readSSE(ctx, reader, ch)` parses the SSE wire format and forwards events; `buildURL(path, params)` constructs authenticated URLs under `mu.RLock()`; `SetToken(token)` replaces the auth token under `mu.Lock()` (called by `HTTPClient.applyRefresh` on token refresh).
 
 #### `client_test.go`
 
-Tests for RTDB REST operations, SSE parsing, and JWT decoding.
+Tests for RTDB REST operations, SSE parsing, and `SetToken` token-update behaviour.
 
 ---
 
@@ -523,13 +515,17 @@ Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNo
 Reusable multi-line text editor embedded in Feed, PostDetail, Profile, and C-Mail.
 
 - Built on `bubbles/textarea`
-- Enter inserts a paragraph break (`\n\n`); ctrl+s or alt+enter emits `ComposeSubmitMsg`; ESC emits `ComposeCancelMsg`
+- Enter inserts a paragraph break (`\n\n`); ctrl+s emits `ComposeSubmitMsg`; ESC emits `ComposeCancelMsg`
 - Auto-expands from `composeMinLines=3` to `composeMaxLines=8` as content grows
 - Character limit and placeholder text are configurable per embedding screen
 - Active/inactive border styling (cyan when focused, dimmed otherwise)
 
-Key types: `ComposeModel`, `ComposeSubmitMsg` (Content), `ComposeCancelMsg`  
-Key methods: `Open(ctx, placeholder)`, `OpenWithContent(ctx, placeholder, content)`, `SetCharLimit(n)`, `SetWidth(w)`, `IsActive()`, `Content()`, `Close()`
+`PostComposePanel` is a unified single-box compose panel for new posts (title, optional slug, body, topics, public/nsfw). Tab cycles through all fields. The `slug` field accepts `[a-z0-9-]` up to 60 chars; an invalid value blocks submit, focuses the slug field, and shows a red inline error. Empty slug is silently omitted from the wire (server generates one).
+
+Key types: `ComposeModel`, `ComposeSubmitMsg` (Content), `ComposeCancelMsg`, `PostComposePanel`  
+Key methods (`ComposeModel`): `Open(ctx, placeholder)`, `OpenWithContent(ctx, placeholder, content)`, `SetCharLimit(n)`, `SetWidth(w)`, `IsActive()`, `Content()`, `Close()`  
+Key methods (`PostComposePanel`): `Open(defaultPublic)`, `Close()`, `TitleValue()`, `SlugValue()`, `TopicsRaw()`, `IsPublic()`, `IsNSFW()`, `PanelHeight()`, `SetWidth(w)`  
+Key functions: `ValidateSlug(s string) error`
 
 #### `timeutil.go`
 

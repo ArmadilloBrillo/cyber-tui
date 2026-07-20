@@ -31,10 +31,11 @@ type ShowGuildPostMsg struct{ Post model.Post }
 
 // SubmitGuildPostMsg is emitted when the user submits a new thread from the guild posts view.
 type SubmitGuildPostMsg struct {
-	Slug    string
-	Content string
-	Title   string
-	Topics  []string
+	Slug     string // guild slug
+	PostSlug string // optional custom post slug; empty = server-generated
+	Content  string
+	Title    string
+	Topics   []string
 }
 
 // LoadGuildMembersMsg is emitted when the user requests the member list for a guild.
@@ -424,13 +425,14 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			return m, nil
 		}
 		title := m.panel.TitleValue()
+		postSlug := m.panel.SlugValue()
 		topics := ParseTopics(m.panel.TopicsRaw())
 		content := msg.Content
 		slug := m.activeGuild
 		m.panel = m.panel.Close()
 		m = m.refreshContent()
 		return m, func() tea.Msg {
-			return SubmitGuildPostMsg{Slug: slug, Content: content, Title: title, Topics: topics}
+			return SubmitGuildPostMsg{Slug: slug, PostSlug: postSlug, Content: content, Title: title, Topics: topics}
 		}
 
 	case ComposeCancelMsg:

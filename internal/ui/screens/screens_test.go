@@ -643,6 +643,50 @@ func TestFeed_ComposeSubmit_EmitsSubmitNewPostMsg(t *testing.T) {
 	}
 }
 
+func TestValidateSlug_AcceptsValidSlugs(t *testing.T) {
+	cases := []struct {
+		slug string
+		ok   bool
+	}{
+		{"", true},
+		{"my-post", true},
+		{"post123", true},
+		{"a-b-c-1-2-3", true},
+		{"My-Post", false},       // uppercase
+		{"my post", false},       // space
+		{"my_post", false},       // underscore
+		{string(make([]rune, 61)), false}, // too long
+	}
+	for _, tc := range cases {
+		err := screens.ValidateSlug(tc.slug)
+		if tc.ok && err != nil {
+			t.Errorf("ValidateSlug(%q) = %v, want nil", tc.slug, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("ValidateSlug(%q) = nil, want error", tc.slug)
+		}
+	}
+}
+
+func TestFeed_ComposeSubmit_SlugPassedInMsg(t *testing.T) {
+	m := makeFeed()
+	// open compose
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	// submit — slug input is empty by default, so Slug should be ""
+	_, cmd := m.Update(screens.ComposeSubmitMsg{Content: "test content"})
+	if cmd == nil {
+		t.Fatal("expected a command")
+	}
+	msg := cmd()
+	snp, ok := msg.(screens.SubmitNewPostMsg)
+	if !ok {
+		t.Fatalf("expected SubmitNewPostMsg, got %T", msg)
+	}
+	if snp.Slug != "" {
+		t.Errorf("expected empty Slug when not entered, got %q", snp.Slug)
+	}
+}
+
 func TestFeed_P_EmitsShowUserProfileMsg(t *testing.T) {
 	m := makeFeed()
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})

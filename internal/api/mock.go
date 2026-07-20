@@ -217,7 +217,7 @@ func (m *MockClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	}, nil
 }
 
-func (m *MockClient) CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
+func (m *MockClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
 	return model.Post{
 		ID:             "new-1",
 		AuthorID:       mockUsers[0].ID,
@@ -314,7 +314,7 @@ func (m *MockClient) GetGuildPosts(slug string, cursor string) ([]model.Post, st
 	return nil, "", nil
 }
 
-func (m *MockClient) CreateGuildPost(slug, content, title string, topics []string) (model.Post, error) {
+func (m *MockClient) CreateGuildPost(slug, content, title, postSlug string, topics []string) (model.Post, error) {
 	return model.Post{}, nil
 }
 
@@ -331,7 +331,7 @@ func (m *MockClient) GetWatches(cursor string) ([]model.Watch, string, error) {
 func (m *MockClient) WatchPost(postID string) error   { return nil }
 func (m *MockClient) UnwatchPost(postID string) error { return nil }
 
-func (m *MockClient) GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error) {
+func (m *MockClient) GetNotifications(cursor string, unreadOnly bool, types []string) ([]model.Notification, string, error) {
 	if !unreadOnly {
 		return mockNotifications, "", nil
 	}
