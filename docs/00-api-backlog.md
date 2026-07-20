@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.5.1) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.7) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -74,6 +74,58 @@ Notes:
 | `profilePictureUrl` on Guild / GuildMember | v0.4.1 adds this field to the guild list response and the member list response. Not in model types or wire layer. Low value for a TUI but keeps model in sync. | Low |
 | Guild join (`POST /v1/guilds/:slug/join`) | Now an official API endpoint. One guild per user; 409 if already in one. | **Done** |
 | Guild leave (`POST /v1/guilds/:slug/leave`) | Now an official API endpoint. Founders get 403 — must use web. | **Done** |
+
+### C-Mail (new in v0.7)
+
+C-Mail REST API is now fully documented. Previously a "coming soon" placeholder. Real-time reading uses Firebase RTDB SSE (same as cIRC). `conversationId` is derived server-side — never computed by the client.
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `POST /v1/cmail` | POST | Start or get a conversation by `recipientUsername` or `recipientId` (idempotent) | Medium |
+| `GET /v1/cmail` | GET | List conversations (unread first, then newest activity first) | Medium |
+| `GET /v1/cmail/:conversationId` | GET | Load message history (paginated, oldest-first, `before` cursor) | Medium |
+| `POST /v1/cmail/:conversationId` | POST | Send a message (supports slash commands) | Medium |
+| `POST /v1/cmail/:conversationId/read` | POST | Mark conversation as read (reset unread count) | Medium |
+| RTDB `dm_messages/<conversationId>` | SSE | Subscribe to real-time new messages | Medium |
+| RTDB `user_conversations/<uid>` | SSE | Subscribe to live conversation list / unread updates | Medium |
+
+Notes:
+- `POST /v1/cmail` returns 200 for existing conversation, 201 for new.
+- Rate limits: 15 sends/min, 300/day, 150/hour; 5 start/min, 50/day, 30/hour; 60 mark-read/min.
+- Blocked in either direction returns 403.
+
+### cIRC (new in v0.7)
+
+cIRC REST API is now fully documented. A room is addressed by its `roomId` (slug, e.g. `general`). Real-time reading uses Firebase RTDB SSE.
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `GET /v1/circ` | GET | List rooms available to you (sorted by `sortOrder`, then newest activity) | Medium |
+| `GET /v1/circ/:roomId` | GET | Load room message history (paginated, oldest-first, `before` cursor) | Medium |
+| `POST /v1/circ/:roomId` | POST | Send a message to a room (supports slash commands) | Medium |
+| `POST /v1/circ/:roomId/read` | POST | Mark room as read (drives "new messages" indicator) | Medium |
+| RTDB `chat_messages/<roomId>` | SSE | Subscribe to real-time new messages | Medium |
+
+Notes:
+- Each room message includes `isChatAdmin` flag.
+- Rate limits: 15 sends/min, 300/day, 150/hour; 60 mark-read/min.
+- 403 if room isn't available to you.
+
+### Search (new in v0.7)
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `GET /v1/search?q=<query>&type=all` | GET | Full-text search across users, posts, and replies | Medium |
+
+Notes:
+- `type=all` returns up to 8 hits per group (users/posts/replies), no pagination.
+- `type=posts|replies|users` returns paginated results; use `page` (0-based) for pagination; `cursor` in response is next page number or null.
+- User hits include guild fields, follower/post counts; reply hits include `parentPostAuthor`/`parentPostContent` context.
+- Rate limit: 30/min. Missing `q` → 400 VALIDATION_ERROR.
+
+### Commands (new in v0.7)
+
+Both cIRC and C-Mail support IRC-style slash commands expanded server-side: `/me`, `/poke`, `/hug`, `/hi5`, `/slap` (with optional `[@user]`), `/dice <notation>`, `/8ball <question>`, `/fortune`, `/help`. Malformed commands return 400. No client-side handling needed — server stores expanded result.
 
 ### Thread Watching (new in v0.5.1)
 
