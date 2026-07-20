@@ -50,6 +50,7 @@ type NotificationsModel struct {
 	refreshing     bool
 	exhausted      bool
 	nextCursor     string
+	hasPaginated   bool
 	showUnreadOnly bool
 	err            error
 	relaxed        bool
@@ -80,6 +81,7 @@ func (m NotificationsModel) SetNotifs(notifs []model.Notification, cursor string
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	m.hasPaginated = false
 	m.selectedIndex = 0
 	if m.ready {
 		m = m.refreshContent()
@@ -92,6 +94,7 @@ func (m NotificationsModel) AppendNotifs(notifs []model.Notification, cursor str
 	m.notifs = append(m.notifs, notifs...)
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
+	m.hasPaginated = true
 	m.loading = false
 	m.fetching = false
 	if m.ready {
@@ -133,6 +136,9 @@ func (m NotificationsModel) SetLocation(loc *time.Location) NotificationsModel {
 
 // ShowUnreadOnly reports whether the screen is currently filtering to unread-only.
 func (m NotificationsModel) ShowUnreadOnly() bool { return m.showUnreadOnly }
+
+// HasPaginated reports whether the user has loaded pages beyond the first.
+func (m NotificationsModel) HasPaginated() bool { return m.hasPaginated }
 
 // UnreadCount returns the number of unread notifications in the current page.
 func (m NotificationsModel) UnreadCount() int {

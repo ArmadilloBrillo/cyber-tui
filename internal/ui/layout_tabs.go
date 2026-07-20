@@ -114,8 +114,11 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenNotifications
-			a.notifications = a.notifications.SetFetching()
-			return a, a.loadNotifsCmd(), true
+			if !a.notifications.HasPaginated() {
+				a.notifications = a.notifications.SetFetching()
+				return a, a.loadNotifsCmd(), true
+			}
+			return a, nil, true
 		}
 	case "3":
 		if a.active != screenLogin {
