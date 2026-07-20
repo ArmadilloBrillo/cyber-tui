@@ -975,6 +975,33 @@ func TestNotifs_UnreadCount(t *testing.T) {
 	}
 }
 
+func TestNotifs_HasPaginated_FalseByDefault(t *testing.T) {
+	m := initNotifs(nil)
+	if m.HasPaginated() {
+		t.Error("expected HasPaginated false after SetNotifs")
+	}
+}
+
+func TestNotifs_AppendNotifs_SetsPaginated(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	extra := []model.Notification{makeNotif("n2", "poke", "", false)}
+	m = m.AppendNotifs(extra, "cursor-next")
+	if !m.HasPaginated() {
+		t.Error("expected HasPaginated true after AppendNotifs")
+	}
+}
+
+func TestNotifs_SetNotifs_ClearsPaginated(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	m = m.AppendNotifs(notifs, "c")
+	m = m.SetNotifs(notifs, "")
+	if m.HasPaginated() {
+		t.Error("expected HasPaginated false after SetNotifs")
+	}
+}
+
 func TestNotifs_IsReady(t *testing.T) {
 	m := NewNotificationsModel()
 	if m.IsReady() {
