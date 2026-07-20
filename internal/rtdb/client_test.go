@@ -2,7 +2,6 @@ package rtdb_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,76 +11,6 @@ import (
 
 	"github.com/ragnar/cyber-tui/internal/rtdb"
 )
-
-// --- JWT tests ---
-
-func makeJWT(claims map[string]any) string {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	payload, _ := json.Marshal(claims)
-	mid := base64.RawURLEncoding.EncodeToString(payload)
-	return header + "." + mid + ".fakesig"
-}
-
-func TestParseRTDBToken_Valid(t *testing.T) {
-	token := makeJWT(map[string]any{"aud": "my-project-123", "sub": "uid1"})
-	got, err := rtdb.ParseRTDBToken(token)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "my-project-123" {
-		t.Errorf("projectID = %q, want %q", got, "my-project-123")
-	}
-}
-
-func TestParseRTDBToken_MalformedToken(t *testing.T) {
-	cases := []struct{ name, token string }{
-		{"empty", ""},
-		{"one part", "abc"},
-		{"two parts", "abc.def"},
-		{"bad base64", "abc.!!!.sig"},
-		{"bad JSON", "abc." + base64.RawURLEncoding.EncodeToString([]byte(`notjson`)) + ".sig"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := rtdb.ParseRTDBToken(tc.token)
-			if err == nil {
-				t.Error("expected error, got nil")
-			}
-		})
-	}
-}
-
-func TestParseRTDBToken_MissingAud(t *testing.T) {
-	token := makeJWT(map[string]any{"sub": "uid1"})
-	_, err := rtdb.ParseRTDBToken(token)
-	if err == nil {
-		t.Error("expected error for missing aud")
-	}
-}
-
-func TestParseRTDBToken_RejectsHostInjectingAud(t *testing.T) {
-	for _, aud := range []string{
-		"evil.com/",
-		"proj.firebaseio.com",
-		"a@b",
-		"proj id",
-		"proj:8080",
-		"../proj",
-	} {
-		token := makeJWT(map[string]any{"aud": aud, "sub": "uid1"})
-		if _, err := rtdb.ParseRTDBToken(token); err == nil {
-			t.Errorf("expected error for aud %q, got nil", aud)
-		}
-	}
-}
-
-func TestBaseURL(t *testing.T) {
-	got := rtdb.BaseURL("my-project")
-	want := "https://my-project-default-rtdb.firebaseio.com"
-	if got != want {
-		t.Errorf("BaseURL = %q, want %q", got, want)
-	}
-}
 
 // --- Get tests ---
 
@@ -161,6 +90,36 @@ func TestPut_ServerError(t *testing.T) {
 	err := c.Put(context.Background(), "/path", map[string]string{"x": "y"})
 	if err == nil {
 		t.Error("expected error on 403, got nil")
+	}
+}
+
+// --- SetToken tests ---
+
+func TestSetToken_UpdatesAuthParam(t *testing.T) {
+	var lastAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastAuth = r.URL.Query().Get("auth")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"k":"v"}`)
+	}))
+	defer srv.Close()
+
+	c := rtdb.NewForTesting(srv.URL, "old-token", srv.Client())
+
+	if _, err := c.Get(context.Background(), "/path", nil); err != nil {
+		t.Fatal(err)
+	}
+	if lastAuth != "old-token" {
+		t.Errorf("initial auth = %q, want old-token", lastAuth)
+	}
+
+	c.SetToken("new-token")
+
+	if _, err := c.Get(context.Background(), "/path", nil); err != nil {
+		t.Fatal(err)
+	}
+	if lastAuth != "new-token" {
+		t.Errorf("after SetToken auth = %q, want new-token", lastAuth)
 	}
 }
 

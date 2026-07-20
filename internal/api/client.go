@@ -53,6 +53,7 @@ type loginResponseData struct {
 	IDToken      string `json:"idToken"`
 	RefreshToken string `json:"refreshToken"`
 	RTDBToken    string `json:"rtdbToken"`
+	RTDBUrl      string `json:"rtdbUrl"`
 }
 
 type refreshRequest struct {
@@ -62,6 +63,7 @@ type refreshRequest struct {
 type refreshResponseData struct {
 	IDToken   string `json:"idToken"`
 	RTDBToken string `json:"rtdbToken"`
+	RTDBUrl   string `json:"rtdbUrl"`
 }
 
 type wireAttachment struct {
@@ -176,18 +178,19 @@ type wireTopic struct {
 }
 
 type wireGuild struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Slug            string `json:"slug"`
-	Icon            string `json:"icon"`
-	Bio             string `json:"bio"`
-	MemberCount     int    `json:"memberCount"`
-	FounderUsername string `json:"founderUsername"`
-	CreatedAt       string `json:"createdAt"`
-	IsMember        bool   `json:"isMember"`
-	Role            string `json:"role"`
-	Link            string `json:"link"`
-	LinkText        string `json:"linkText"`
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Slug              string `json:"slug"`
+	Icon              string `json:"icon"`
+	Bio               string `json:"bio"`
+	MemberCount       int    `json:"memberCount"`
+	FounderUsername   string `json:"founderUsername"`
+	CreatedAt         string `json:"createdAt"`
+	IsMember          bool   `json:"isMember"`
+	Role              string `json:"role"`
+	Link              string `json:"link"`
+	LinkText          string `json:"linkText"`
+	ProfilePictureUrl string `json:"profilePictureUrl"`
 }
 
 type wireGuildMember struct {
@@ -206,6 +209,7 @@ type createGuildPostRequest struct {
 	Content string   `json:"content"`
 	Title   string   `json:"title,omitempty"`
 	Topics  []string `json:"topics"`
+	Slug    string   `json:"slug,omitempty"`
 }
 
 type createBookmarkRequest struct {
@@ -248,6 +252,7 @@ type createPostRequest struct {
 	Topics   []string `json:"topics"`
 	IsPublic bool     `json:"isPublic"`
 	IsNSFW   bool     `json:"isNSFW"`
+	Slug     string   `json:"slug,omitempty"`
 }
 
 type createPostResponseData struct {
@@ -271,6 +276,9 @@ type wireNotificationMetadata struct {
 	AuthorUsername string `json:"authorUsername"`
 	GuildName      string `json:"guildName"`
 	GuildSlug      string `json:"guildSlug"`
+	PostSlug       string `json:"postSlug"`
+	PostContent    string `json:"postContent"`
+	ReplyContent   string `json:"replyContent"`
 }
 
 type wireNotification struct {
@@ -384,11 +392,17 @@ func (c *HTTPClient) snapshotTokens() model.Tokens {
 	return c.tokens
 }
 
-func (c *HTTPClient) applyRefresh(idToken, rtdbToken string) {
+func (c *HTTPClient) applyRefresh(idToken, rtdbToken, rtdbUrl string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.tokens.IDToken = idToken
 	c.tokens.RTDBToken = rtdbToken
+	if rtdbUrl != "" {
+		c.tokens.RTDBUrl = rtdbUrl
+	}
+	if c.rtdbClient != nil {
+		c.rtdbClient.SetToken(rtdbToken)
+	}
 }
 
 // NewHTTPClient creates a production HTTPClient with a 15-second timeout.
@@ -405,22 +419,18 @@ func NewHTTPClientForTesting(baseURL string, hc *http.Client) *HTTPClient {
 	return &HTTPClient{baseURL: baseURL, httpClient: hc}
 }
 
-// InitRTDB parses the rtdbToken to derive the Firebase project ID, constructs
-// an rtdb.Client, and stores it for use by DM/chat methods. Called after login.
-func (c *HTTPClient) InitRTDB(rtdbToken string) error {
-	projectID, err := rtdb.ParseRTDBToken(rtdbToken)
-	if err != nil {
-		if c.isDebug() {
-			// Never log token material; the parse error alone is enough to diagnose.
-			fmt.Printf("[rtdb debug] InitRTDB: parse rtdb token failed: %v\n", err)
-		}
-		return fmt.Errorf("api: parse rtdb token: %w", err)
+// InitRTDB initialises the Firebase RTDB client using the URL and token returned
+// by the login/refresh response. rtdbUrl must be the value from the API response —
+// it must not be derived from the token, as the regional URL format differs from
+// what JWT-based derivation would produce.
+func (c *HTTPClient) InitRTDB(rtdbToken, rtdbUrl string) error {
+	if rtdbUrl == "" {
+		return fmt.Errorf("api: InitRTDB: rtdbUrl is empty")
 	}
-	baseURL := rtdb.BaseURL(projectID)
 	if c.isDebug() {
-		fmt.Printf("[rtdb debug] InitRTDB: projectID=%q baseURL=%q\n", projectID, baseURL)
+		fmt.Printf("[rtdb debug] InitRTDB: url=%q\n", rtdbUrl)
 	}
-	c.rtdbClient = rtdb.New(baseURL, rtdbToken)
+	c.rtdbClient = rtdb.New(rtdbUrl, rtdbToken)
 	return nil
 }
 
@@ -542,7 +552,7 @@ func (c *HTTPClient) refresh() error {
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return err
 	}
-	c.applyRefresh(data.IDToken, data.RTDBToken)
+	c.applyRefresh(data.IDToken, data.RTDBToken, data.RTDBUrl)
 	return nil
 }
 
@@ -738,6 +748,10 @@ func wireNotificationToModel(w wireNotification) model.Notification {
 		ThreadAuthorUsername: w.Metadata.AuthorUsername,
 		GuildName:            w.Metadata.GuildName,
 		GuildSlug:            w.Metadata.GuildSlug,
+		PostSlug:             w.Metadata.PostSlug,
+		PostAuthorUsername:   w.Metadata.AuthorUsername,
+		PostContent:          w.Metadata.PostContent,
+		ReplyContent:         w.Metadata.ReplyContent,
 	}
 }
 
@@ -752,32 +766,34 @@ func wireTopicToModel(w wireTopic) model.Topic {
 func wireGuildToModel(w wireGuild) model.Guild {
 	sanitize.Strings(&w)
 	return model.Guild{
-		ID:              w.ID,
-		Name:            w.Name,
-		Slug:            w.Slug,
-		Icon:            w.Icon,
-		Bio:             w.Bio,
-		MemberCount:     w.MemberCount,
-		FounderUsername: w.FounderUsername,
-		CreatedAt:       parseTime(w.CreatedAt),
-		IsMember:        w.IsMember,
-		Role:            w.Role,
-		Link:            w.Link,
-		LinkText:        w.LinkText,
+		ID:                w.ID,
+		Name:              w.Name,
+		Slug:              w.Slug,
+		Icon:              w.Icon,
+		Bio:               w.Bio,
+		MemberCount:       w.MemberCount,
+		FounderUsername:   w.FounderUsername,
+		CreatedAt:         parseTime(w.CreatedAt),
+		IsMember:          w.IsMember,
+		Role:              w.Role,
+		Link:              w.Link,
+		LinkText:          w.LinkText,
+		ProfilePictureUrl: w.ProfilePictureUrl,
 	}
 }
 
 func wireGuildMemberToModel(w wireGuildMember) model.GuildMember {
 	sanitize.Strings(&w)
 	return model.GuildMember{
-		MembershipID: w.MembershipID,
-		GuildID:      w.GuildID,
-		GuildSlug:    w.GuildSlug,
-		UserID:       w.UserID,
-		Username:     w.Username,
-		Role:         w.Role,
-		JoinedAt:     parseTime(w.JoinedAt),
-		DisplayName:  w.DisplayName,
+		MembershipID:      w.MembershipID,
+		GuildID:           w.GuildID,
+		GuildSlug:         w.GuildSlug,
+		UserID:            w.UserID,
+		Username:          w.Username,
+		Role:              w.Role,
+		JoinedAt:          parseTime(w.JoinedAt),
+		DisplayName:       w.DisplayName,
+		ProfilePictureUrl: w.ProfilePictureURL,
 	}
 }
 
@@ -814,6 +830,7 @@ func (c *HTTPClient) Login(email, password string) (model.Tokens, error) {
 		IDToken:      data.IDToken,
 		RefreshToken: data.RefreshToken,
 		RTDBToken:    data.RTDBToken,
+		RTDBUrl:      data.RTDBUrl,
 	}
 	c.setTokens(t)
 	return t, nil
@@ -901,13 +918,14 @@ func (c *HTTPClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	return all, nil
 }
 
-func (c *HTTPClient) CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
+func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
 	env, err := c.doJSON("POST", "/v1/posts", createPostRequest{
 		Content:  content,
 		Title:    title,
 		Topics:   topics,
 		IsPublic: isPublic,
 		IsNSFW:   isNSFW,
+		Slug:     slug,
 	})
 	if err != nil {
 		return model.Post{}, err
@@ -1049,10 +1067,13 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 
 // --- Notifications ---
 
-func (c *HTTPClient) GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error) {
+func (c *HTTPClient) GetNotifications(cursor string, unreadOnly bool, types []string) ([]model.Notification, string, error) {
 	path := "/v1/notifications?limit=20"
 	if unreadOnly {
 		path += "&read=false"
+	}
+	if len(types) > 0 {
+		path += "&type=" + url.QueryEscape(strings.Join(types, ","))
 	}
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
@@ -1213,7 +1234,7 @@ func (c *HTTPClient) LeaveGuild(slug string) error {
 	return err
 }
 
-func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []string) (model.Post, error) {
+func (c *HTTPClient) CreateGuildPost(slug, content, title, postSlug string, topics []string) (model.Post, error) {
 	if topics == nil {
 		topics = []string{}
 	}
@@ -1221,6 +1242,7 @@ func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []strin
 		Content: content,
 		Title:   title,
 		Topics:  topics,
+		Slug:    postSlug,
 	})
 	if err != nil {
 		return model.Post{}, err

@@ -44,6 +44,7 @@ Ordered roughly by implementation effort / priority.
 | `model.Post` fields | `Title`, `Slug`, `GuildID`, `GuildSlug`, `IsGuildThread` | **Done** — feature 28 |
 | `POST /v1/posts` signature | Extended: `CreatePost(content, title, topics, isPublic, isNSFW)` | **Done** — feature 28 |
 | `GET /v1/users/:username/posts/:slug` | Slug-based post lookup not in Client interface. Useful for deep-linking; not needed for core navigation. | Low |
+| `POST /v1/posts` — optional `slug` field (v0.7) | Custom slug (`a-z0-9-`, max 60 chars); server generates one if omitted. Compose panel (`PostComposePanel`) now includes a slug field with inline validation; empty slug is silently omitted from the wire. Same applies to `POST /v1/guilds/:slug/posts`. | **Done** — v0.7 alignment |
 
 ### Guilds (new in v0.4)
 
@@ -65,13 +66,13 @@ Notes:
 - Notification metadata for guild **replies/posts** uses `metadata.guildSlug` + `metadata.isGuildThread: true` (observed 2026-06-03), **not** `metadata.guildName`. The client decodes `guildSlug` and shows `in #<slug>` on `reply`/`thread_reply`/`new_post_*` (prefers slug over the rarer `guildName`). As of API **v0.5.0** the server documents the notification object and its `metadata` keys (incl. `guildSlug`, `guildName`, `isGuildThread`, `threadId`, `postSlug`, `authorUsername`), closing the earlier doc gap; the client's slug-preference behavior matches the documented schema.
 - The `isMember` / `role` fields on `GET /v1/guilds/:slug` were broken in v0.4 but are **fixed in v0.4.1** (verified 2026-06-01 — see Resolved Issues). The `GetGuild()` client method could now be called to read accurate membership state, though the current `User.GuildSlug` approach also works.
 - Join/leave are now official v0.4.1 API endpoints. Any authenticated user can also create a guild thread without being a member (explicitly stated in v0.4.1 spec).
-- v0.4.1 adds `profilePictureUrl` to both the guild list response and the guild members list response. The `Guild` and `GuildMember` model types and wire layer do not yet carry this field.
+- v0.4.1 adds `profilePictureUrl` to both the guild list response and the guild members list response. `Guild` and `GuildMember` model types and wire layer now carry this field (v0.7 alignment); rendering is deferred until imgview support lands in the guild list.
 
 ### Guilds (new in v0.4.1)
 
 | Area | Description | Priority |
 |---|---|---|
-| `profilePictureUrl` on Guild / GuildMember | v0.4.1 adds this field to the guild list response and the member list response. Not in model types or wire layer. Low value for a TUI but keeps model in sync. | Low |
+| `profilePictureUrl` on Guild / GuildMember | v0.4.1 adds this field to the guild list response and the member list response. Captured in model and wire layer; rendering deferred (no imgview in guild list yet). | **Done** — v0.7 alignment |
 | Guild join (`POST /v1/guilds/:slug/join`) | Now an official API endpoint. One guild per user; 409 if already in one. | **Done** |
 | Guild leave (`POST /v1/guilds/:slug/leave`) | Now an official API endpoint. Founders get 403 — must use web. | **Done** |
 
@@ -148,7 +149,7 @@ Notes:
 
 | Area | Description | Priority |
 |---|---|---|
-| `type` filter on `GET /v1/notifications` | `?type=reply,reply_mention` — comma-separated list of notification types to fetch. Not currently used; could power a future "filter by type" UX. | Low |
+| `type` filter on `GET /v1/notifications` | `?type=reply,reply_mention` — comma-separated list of notification types to fetch. API param is wired (`GetNotifications(..., types []string)`); pass `nil` for all types. UI filter control (multi-select / cycling) is deferred. | Low — UI deferred |
 
 ### Replies
 
@@ -202,6 +203,8 @@ Notes:
 | `GET /v1/notes/:id/revisions` | Note revision history — journal `h` key; feature 25 | 2026-04-17 |
 | `PATCH /v1/notes/:id` | Server-side 500 bug resolved in API v0.4. Note editing and revision history fully operational. | 2026-05-29 |
 | `POST /v1/posts` (extended) | `CreatePost` now accepts `title`, `isPublic`, `isNSFW`. `Post` model gained `Title`, `Slug`, `GuildID`, `GuildSlug`, `IsGuildThread`. Title rendered in feed/detail/profile/bookmarks. Feature 28. | 2026-05-29 |
+| Login / refresh — `rtdbUrl` (v0.7) | Login and token-refresh responses now return `rtdbUrl` (e.g. `https://…europe-west1.firebasedatabase.app`). Previously the RTDB URL was derived from the JWT's project ID, producing the wrong `firebaseio.com` regional domain. `Tokens` model gains `RTDBUrl`; `InitRTDB()` now takes the URL from the API response; `applyRefresh()` also updates `rtdbClient.token` via `SetToken()`. | 2026-07-20 |
+| Notification metadata — `postContent` / `replyContent` (v0.7) | `post_mention` and `reply_mention` notifications now carry `postContent` and `replyContent` inline, eliminating the need for a follow-up `GET /v1/posts/:id` round trip. `Notification` model gains `PostSlug`, `PostAuthorUsername`, `PostContent`, `ReplyContent`; content preview is rendered inline in the notification list row. | 2026-07-20 |
 | `GET /v1/guilds/:slug/members` | Guild member list — paginated, oldest-joined first; `m` from guild posts view; `enter` navigates to profile. Feature 29. | 2026-05-30 |
 | `GET /v1/guilds/:slug` (join/leave flow) | Guild detail (`isMember`, `role`) fetched alongside thread list. `J` to join, `l` to leave with y/n confirmation and membership hint bar. Feature 29. | 2026-06-01 |
 | `POST /v1/guilds/:slug/join` | Join guild — `J` key in guild thread feed with confirmation prompt; success banner "✓ Joined #name". Feature 29. | 2026-06-01 |

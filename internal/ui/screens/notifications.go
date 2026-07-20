@@ -27,10 +27,14 @@ type MarkAllNotifsReadMsg struct{}
 // NotifID is included so the app can mark the notification read as part of the same action.
 // ReplyID is non-empty for reply/thread_reply notifications; the app uses it to scroll
 // PostDetail to the specific reply after replies have loaded.
+// PostSlug and AuthorUsername come from v0.7 notification metadata and are threaded
+// through for future use (slug-based navigation, pre-fetched display).
 type ShowNotificationPostMsg struct {
-	PostID  string
-	NotifID string
-	ReplyID string
+	PostID         string
+	NotifID        string
+	ReplyID        string
+	PostSlug       string
+	AuthorUsername string
 }
 
 type NotificationsModel struct {
@@ -312,8 +316,9 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 			// Optimistically mark as read and navigate to post.
 			m = m.MarkRead(n.ID)
 			notifID, postID, replyID := n.ID, n.TargetID, n.ReplyID
+			slug, author := n.PostSlug, n.PostAuthorUsername
 			return m, func() tea.Msg {
-				return ShowNotificationPostMsg{PostID: postID, NotifID: notifID, ReplyID: replyID}
+				return ShowNotificationPostMsg{PostID: postID, NotifID: notifID, ReplyID: replyID, PostSlug: slug, AuthorUsername: author}
 			}
 		case "p":
 			if len(visible) > 0 && m.selectedIndex < len(visible) {
@@ -559,6 +564,23 @@ func (m NotificationsModel) renderNotif(n model.Notification, selected bool) str
 		}
 	} else {
 		line = left
+	}
+
+	// For mention types, show an inline content preview so the user can read
+	// what mentioned them without navigating away. PostContent is set for
+	// post_mention; ReplyContent for reply_mention (v0.7+ metadata).
+	mentionContent := n.PostContent
+	if mentionContent == "" {
+		mentionContent = n.ReplyContent
+	}
+	if mentionContent != "" && innerWidth > 4 {
+		flat := strings.ReplaceAll(mentionContent, "\n", " ")
+		maxLen := innerWidth - 2 // room for "> " prefix
+		r := []rune(flat)
+		if len(r) > maxLen {
+			flat = string(r[:maxLen-1]) + "…"
+		}
+		line += "\n" + theme.Subtle.Render("> "+flat)
 	}
 
 	boxStyle := theme.Border

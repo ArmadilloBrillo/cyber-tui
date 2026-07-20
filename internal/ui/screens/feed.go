@@ -57,6 +57,7 @@ const feedDetailDebounceDelay = time.Second
 type SubmitNewPostMsg struct {
 	Content  string
 	Title    string // empty = no title
+	Slug     string // empty = server-generated
 	Topics   []string
 	IsPublic bool
 	IsNSFW   bool
@@ -386,12 +387,13 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	case ComposeSubmitMsg:
 		content := msg.Content
 		title := m.panel.TitleValue()
+		slug := m.panel.SlugValue()
 		topics := ParseTopics(m.panel.TopicsRaw())
 		isPublic := m.panel.IsPublic()
 		isNSFW := m.panel.IsNSFW()
 		m = m.closeCompose()
 		return m, func() tea.Msg {
-			return SubmitNewPostMsg{Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
+			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
 		}
 
 	case ComposeCancelMsg:

@@ -224,7 +224,7 @@ func TestHTTPCreatePost_SendsAllFields(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass") //nolint:errcheck
 
-	post, err := c.CreatePost("body text", "My Title", []string{"cyber"}, true, true)
+	post, err := c.CreatePost("body text", "My Title", "", []string{"cyber"}, true, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -653,7 +653,7 @@ func TestHTTPGetNotifications_ParsesNotifs(t *testing.T) {
 		}, "next-cursor")
 	})))
 	c.LoginWithRefreshToken("tok")
-	notifs, cursor, err := c.GetNotifications("", false)
+	notifs, cursor, err := c.GetNotifications("", false, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -690,7 +690,7 @@ func TestHTTPGetNotifications_CursorInURL(t *testing.T) {
 		writeOKWithCursor(t, w, []map[string]any{}, "")
 	})))
 	c.LoginWithRefreshToken("tok")
-	c.GetNotifications("cursor-abc", false)
+	c.GetNotifications("cursor-abc", false, nil)
 	if !strings.Contains(capturedURL, "cursor=cursor-abc") {
 		t.Errorf("expected cursor in URL, got: %s", capturedURL)
 	}
@@ -703,7 +703,7 @@ func TestHTTPGetNotifications_UnreadOnlyParam(t *testing.T) {
 		writeOKWithCursor(t, w, []map[string]any{}, "")
 	})))
 	c.LoginWithRefreshToken("tok")
-	c.GetNotifications("", true)
+	c.GetNotifications("", true, nil)
 	if !strings.Contains(capturedURL, "read=false") {
 		t.Errorf("expected read=false in URL, got: %s", capturedURL)
 	}
@@ -716,9 +716,22 @@ func TestHTTPGetNotifications_AllDoesNotAddReadParam(t *testing.T) {
 		writeOKWithCursor(t, w, []map[string]any{}, "")
 	})))
 	c.LoginWithRefreshToken("tok")
-	c.GetNotifications("", false)
+	c.GetNotifications("", false, nil)
 	if strings.Contains(capturedURL, "read=") {
 		t.Errorf("expected no read param in URL, got: %s", capturedURL)
+	}
+}
+
+func TestHTTPGetNotifications_TypeFilterInURL(t *testing.T) {
+	var capturedURL string
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	})))
+	c.LoginWithRefreshToken("tok")
+	c.GetNotifications("", false, []string{"reply", "bookmark"})
+	if !strings.Contains(capturedURL, "type=reply%2Cbookmark") {
+		t.Errorf("expected type filter in URL, got: %s", capturedURL)
 	}
 }
 
