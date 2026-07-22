@@ -1,8 +1,10 @@
 package api_test
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -196,7 +198,7 @@ func TestMockGetRooms_RoomsHaveNames(t *testing.T) {
 
 func TestMockGetRoomMessages_ReturnsMessages(t *testing.T) {
 	m := newMock()
-	msgs, err := m.GetRoomMessages("r1", 20)
+	msgs, err := m.GetRoomMessages("r1", 20, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -209,6 +211,47 @@ func TestMockSendRoomMessage_NoError(t *testing.T) {
 	m := newMock()
 	if err := m.SendRoomMessage("r1", "hello room"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMockMarkRoomRead_NoError(t *testing.T) {
+	m := newMock()
+	if err := m.MarkRoomRead("r1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMockSubscribeRoom_DeliversMessageAndCloses(t *testing.T) {
+	m := newMock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch, subCancel, err := m.SubscribeRoom(ctx, "r1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer subCancel()
+	msg, ok := <-ch
+	if !ok {
+		t.Fatal("expected a message before channel close")
+	}
+	if msg.Body == "" {
+		t.Error("expected non-empty message body")
+	}
+}
+
+func TestMockGetRooms_ReturnsUpdatedFields(t *testing.T) {
+	m := newMock()
+	rooms, err := m.GetRooms()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, r := range rooms {
+		if r.Slug == "" {
+			t.Errorf("room %q has empty slug", r.Name)
+		}
+		if r.LastMessageAt.IsZero() {
+			t.Errorf("room %q has zero LastMessageAt", r.Name)
+		}
 	}
 }
 

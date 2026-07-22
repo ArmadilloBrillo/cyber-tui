@@ -337,6 +337,27 @@ type wirePatchSettings struct {
 	DefaultPublicPost bool                  `json:"defaultPublicPost"`
 }
 
+// --- CIRC wire types ---
+
+// wireRoom is a single entry from GET /v1/circ.
+type wireRoom struct {
+	ID            string `json:"id"`
+	Slug          string `json:"slug"`
+	Name          string `json:"name"`
+	LastMessageAt int64  `json:"lastMessageAt"` // epoch ms
+	SortOrder     int    `json:"sortOrder"`
+}
+
+// wireCircMessage is a single message from GET /v1/circ/:roomId.
+type wireCircMessage struct {
+	ID          string `json:"id"`
+	UserID      string `json:"userId"`
+	Username    string `json:"username"`
+	IsChatAdmin bool   `json:"isChatAdmin"`
+	Content     string `json:"content"`
+	Timestamp   int64  `json:"timestamp"` // epoch ms
+}
+
 // --- C-Mail wire types ---
 
 type wireCMailOtherUser struct {
@@ -375,6 +396,16 @@ type wireRTDBMessage struct {
 	Content        string  `json:"content"`
 	Timestamp      float64 `json:"timestamp"` // epoch ms as a Firebase number
 	Read           bool    `json:"read"`
+}
+
+// wireRTDBCircMessage is the Firebase shape for a CIRC chatroom message in /chat_messages/<roomId>/<msgId>.
+// Field names differ from DM messages (userId/username vs senderId/senderUsername).
+type wireRTDBCircMessage struct {
+	UserID      string  `json:"userId"`
+	Username    string  `json:"username"`
+	IsChatAdmin bool    `json:"isChatAdmin"`
+	Content     string  `json:"content"`
+	Timestamp   float64 `json:"timestamp"` // epoch ms as a Firebase number
 }
 
 // wireRTDBSSEData is the outer wrapper of a Firebase "put" SSE event's data field.
@@ -1309,18 +1340,119 @@ func (c *HTTPClient) CreateGuildPost(slug, content, title, postSlug string, topi
 	}, nil
 }
 
-// --- Chatrooms (RTDB stubs — pending feature/rtdb-chatrooms) ---
+// --- Chatrooms (CIRC) ---
 
+// GetRooms lists the chatrooms available to the caller via GET /v1/circ.
 func (c *HTTPClient) GetRooms() ([]model.Room, error) {
-	return nil, fmt.Errorf("not implemented: chatrooms use Firebase RTDB — see feature/rtdb-chatrooms")
+	env, err := c.doRequest("GET", "/v1/circ", nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireRoom
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]model.Room, len(wire))
+	for i, w := range wire {
+		out[i] = model.Room{
+			ID:            w.ID,
+			Slug:          w.Slug,
+			Name:          w.Name,
+			LastMessageAt: time.UnixMilli(w.LastMessageAt),
+			SortOrder:     w.SortOrder,
+		}
+	}
+	return out, nil
 }
 
-func (c *HTTPClient) GetRoomMessages(roomID string, limit int) ([]model.Message, error) {
-	return nil, fmt.Errorf("not implemented: chatrooms use Firebase RTDB — see feature/rtdb-chatrooms")
+// GetRoomMessages returns up to limit messages for roomID via GET /v1/circ/:roomId.
+// Pass before=0 for the latest page; pass a previous message timestamp for older pages.
+func (c *HTTPClient) GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error) {
+	path := "/v1/circ/" + url.PathEscape(roomID) + fmt.Sprintf("?limit=%d", limit)
+	if before > 0 {
+		path += fmt.Sprintf("&before=%d", before)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireCircMessage
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]model.Message, len(wire))
+	for i, w := range wire {
+		out[i] = model.Message{
+			ID:        w.ID,
+			From:      model.User{ID: w.UserID, Username: w.Username},
+			Body:      w.Content,
+			CreatedAt: time.UnixMilli(w.Timestamp),
+		}
+	}
+	return out, nil
 }
 
+// SendRoomMessage sends a message to a chatroom via POST /v1/circ/:roomId.
 func (c *HTTPClient) SendRoomMessage(roomID, body string) error {
-	return fmt.Errorf("not implemented: chatrooms use Firebase RTDB — see feature/rtdb-chatrooms")
+	_, err := c.doJSON("POST", "/v1/circ/"+url.PathEscape(roomID), map[string]string{"content": body})
+	return err
+}
+
+// MarkRoomRead resets the unread indicator for roomID via POST /v1/circ/:roomId/read.
+func (c *HTTPClient) MarkRoomRead(roomID string) error {
+	_, err := c.doRequest("POST", "/v1/circ/"+url.PathEscape(roomID)+"/read", nil)
+	return err
+}
+
+// SubscribeRoom opens a live RTDB SSE stream for the given chatroom.
+// New messages arrive on the returned channel; call cancel to close the stream.
+// The initial full-snapshot event is skipped — load history via GetRoomMessages instead.
+func (c *HTTPClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error) {
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	params := url.Values{
+		"orderBy":     {`"timestamp"`},
+		"limitToLast": {"50"},
+	}
+	sseEvents := r.Subscribe(ctx, "/chat_messages/"+roomID, params)
+	out := make(chan model.Message, 8)
+	go func() {
+		defer close(out)
+		for ev := range sseEvents {
+			if ev.Err != nil {
+				return
+			}
+			if ev.Event != "put" {
+				continue
+			}
+			var d wireRTDBSSEData
+			if err := json.Unmarshal(ev.Data, &d); err != nil {
+				continue
+			}
+			if d.Path == "/" {
+				// Initial full-snapshot; history is loaded via REST (GetRoomMessages).
+				continue
+			}
+			if len(d.Data) == 0 || string(d.Data) == "null" {
+				// Deletion event — skip.
+				continue
+			}
+			var wm wireRTDBCircMessage
+			if err := json.Unmarshal(d.Data, &wm); err != nil {
+				continue
+			}
+			msgID := strings.TrimPrefix(d.Path, "/")
+			select {
+			case out <- wireRTDBCircMessageToModel(msgID, wm):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
 }
 
 // --- Direct messages (C-Mail) ---
@@ -1338,6 +1470,16 @@ func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
 	return model.Message{
 		ID:        id,
 		From:      model.User{ID: wm.SenderID, Username: wm.SenderUsername},
+		Body:      wm.Content,
+		CreatedAt: time.UnixMilli(int64(wm.Timestamp)),
+	}
+}
+
+// wireRTDBCircMessageToModel converts a Firebase CIRC chatroom message to the model type.
+func wireRTDBCircMessageToModel(id string, wm wireRTDBCircMessage) model.Message {
+	return model.Message{
+		ID:        id,
+		From:      model.User{ID: wm.UserID, Username: wm.Username},
 		Body:      wm.Content,
 		CreatedAt: time.UnixMilli(int64(wm.Timestamp)),
 	}
@@ -1450,6 +1592,10 @@ func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 			}
 			if d.Path == "/" {
 				// Initial full-snapshot; history is loaded via REST (GetMessages).
+				continue
+			}
+			if len(d.Data) == 0 || string(d.Data) == "null" {
+				// Deletion event — skip.
 				continue
 			}
 			var wm wireRTDBMessage

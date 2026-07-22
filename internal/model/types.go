@@ -133,10 +133,11 @@ type Conversation struct {
 }
 
 type Room struct {
-	ID          string
-	Name        string
-	Description string
-	Members     int
+	ID            string
+	Slug          string
+	Name          string
+	LastMessageAt time.Time
+	SortOrder     int
 }
 
 // NotificationPrefs maps to the notifications sub-object in GET/PATCH /v1/settings.

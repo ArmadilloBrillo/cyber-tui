@@ -189,6 +189,43 @@ func listFooter(loading, exhausted bool) string {
 	return ""
 }
 
+// renderCircMessages renders a list of chatroom messages in IRC style:
+// <username>  message body                                     14:32
+// The timestamp is right-aligned; the username is highlighted.
+// Multi-line message bodies have continuation lines indented to align under the body.
+func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int) string {
+	if viewportWidth < 20 {
+		viewportWidth = 80
+	}
+	var sb strings.Builder
+	for _, msg := range msgs {
+		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
+		tsWidth := lipgloss.Width(ts)
+
+		// Styled prefix: <username>  (plain width = len(username) + 4)
+		styledPrefix := "<" + theme.Highlight.Render(msg.From.Username) + ">  "
+		rawPrefixWidth := len(msg.From.Username) + 4
+
+		body := strings.TrimRight(msg.Body, "\n")
+		lines := strings.Split(body, "\n")
+		indent := strings.Repeat(" ", rawPrefixWidth)
+
+		for i, line := range lines {
+			if i == 0 {
+				lineWidth := lipgloss.Width(line)
+				pad := viewportWidth - rawPrefixWidth - lineWidth - tsWidth
+				if pad < 1 {
+					pad = 1
+				}
+				sb.WriteString(styledPrefix + line + strings.Repeat(" ", pad) + theme.Subtle.Render(ts) + "\n")
+			} else {
+				sb.WriteString(indent + line + "\n")
+			}
+		}
+	}
+	return sb.String()
+}
+
 // renderChatMessages renders a list of chat messages as bordered bubbles sized
 // to their content (up to 75% of viewportWidth).
 // Messages from currentUser use ActiveBorder (cyan) and are right-aligned.

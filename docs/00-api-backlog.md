@@ -94,18 +94,20 @@ All REST endpoints and the RTDB SSE subscription are fully implemented. See `doc
 
 cIRC REST API is now fully documented. A room is addressed by its `roomId` (slug, e.g. `general`). Real-time reading uses Firebase RTDB SSE.
 
-| Endpoint | Method | Description | Priority |
+| Endpoint | Method | Description | Status |
 |---|---|---|---|
-| `GET /v1/circ` | GET | List rooms available to you (sorted by `sortOrder`, then newest activity) | Medium |
-| `GET /v1/circ/:roomId` | GET | Load room message history (paginated, oldest-first, `before` cursor) | Medium |
-| `POST /v1/circ/:roomId` | POST | Send a message to a room (supports slash commands) | Medium |
-| `POST /v1/circ/:roomId/read` | POST | Mark room as read (drives "new messages" indicator) | Medium |
-| RTDB `chat_messages/<roomId>` | SSE | Subscribe to real-time new messages | Medium |
+| `GET /v1/circ` | GET | List rooms available to you (sorted by `sortOrder`, then newest activity) | **Done** — feature 33 |
+| `GET /v1/circ/:roomId` | GET | Load room message history (paginated, oldest-first, `before` cursor) | **Done** — feature 33 |
+| `POST /v1/circ/:roomId` | POST | Send a message to a room (supports slash commands) | **Done** — feature 33 |
+| `POST /v1/circ/:roomId/read` | POST | Mark room as read (drives "new messages" indicator) | **Done** — feature 33 |
+| RTDB `chat_messages/<roomId>` | SSE | Subscribe to real-time new messages | **Done** — feature 33 |
 
 Notes:
-- Each room message includes `isChatAdmin` flag.
+- Each room message includes `isChatAdmin` flag (parsed but not currently displayed in TUI).
 - Rate limits: 15 sends/min, 300/day, 150/hour; 60 mark-read/min.
 - 403 if room isn't available to you.
+- Online-users list: API has no such endpoint — deferred.
+- Slash command rendering: server expands `/me`, `/poke`, `/dice` etc. server-side; no client-side preview yet.
 
 ### Search (new in v0.7)
 

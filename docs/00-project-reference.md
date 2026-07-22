@@ -8,7 +8,7 @@ Comprehensive map of every module, file, and artifact in this repository. Use th
 
 **cyber-tui** is a terminal user interface (TUI) client for [cyberspace.online](https://cyberspace.online) — a retro text-only social network. It is written in Go, using [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI event loop, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling, and [Wish](https://github.com/charmbracelet/wish) to optionally host the client over SSH.
 
-The client talks to the cyberspace.online REST API (current target v0.7; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages (SSE). See `docs/00-latest-api-reference.md` for the current API spec snapshot.
+The client talks to the cyberspace.online REST API (current target v0.7; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages and public chatrooms (SSE). See `docs/00-latest-api-reference.md` for the current API spec snapshot.
 
 ---
 
@@ -128,7 +128,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `ProfileUpdate` | Optional fields for PATCH /v1/users/me (all pointer types, includes new website/location fields) |
 | `Message` | DM/chat message (ID, from, body, createdAt) |
 | `Conversation` | 1-on-1 DM thread (ID, participants, messages, UnreadCount, LastMessage) |
-| `Room` | Public chatroom (ID, name, description, member count) |
+| `Room` | Public chatroom (ID, slug, name, lastMessageAt, sortOrder) |
 | `NotificationPrefs` | Notification subscription toggles (bookmark, reply, poke) |
 | `Settings` | All user preferences (notifications, content filters, display options) |
 | `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName, postSlug, postAuthorUsername, postContent, replyContent) |
@@ -169,6 +169,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Guilds | `GetGuilds(cursor)`, `GetGuild(slug)`, `GetGuildPosts(slug, cursor)`, `CreateGuildPost(slug, content, title, postSlug, topics)`, `GetGuildMembers(slug, cursor)`, `JoinGuild(slug)`, `LeaveGuild(slug)` |
 | Notes | `GetNotes(cursor)`, `GetNote(noteID)`, `GetNoteRevision(noteID, revision)`, `GetNoteRevisions(noteID, cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
 | Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `StartConversation(recipientUsername)`, `MarkCMailRead(convID)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
+| Chatrooms | `GetRooms()`, `GetRoomMessages(roomID, limit, before)`, `SendRoomMessage(roomID, body)`, `MarkRoomRead(roomID)`, `SubscribeRoom(ctx, roomID) <-chan model.Message` |
 
 #### `client.go`
 
@@ -193,7 +194,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 - `refresh()` — token refresh path; does not recurse
 - `wirePostToModel()`, `wireReplyToModel()`, `wireUserToModel()`, `wireSettingsToModel()`, `wireNotificationToModel()`, `wireNoteToModel()` — convert API JSON wire types to `model.*` types
 
-**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData` — match the JSON envelope shapes returned by the API.
+**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireRoom`, `wireCircMessage`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData` — match the JSON envelope shapes returned by the API.
 
 **Note:** `HTTPClient.tokens` is guarded by a `sync.Mutex`. Bubble Tea runs commands in concurrent goroutines, so reads in `doRequest` and writes in `Login`/`refresh` go through the token accessor methods (`idToken`, `setTokens`, `snapshotTokens`, `applyRefresh`). See `docs/30-security-hardening.md`.
 
@@ -453,9 +454,18 @@ Key internal types: `dmSubscription` (RTDB channel + cancel func), `dmSubscribed
 
 #### `chatrooms.go`
 
-Public chatroom browser and chat (UI complete; API integration deferred).
+Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integration including live RTDB SSE.
 
-- Two-pane layout matching C-Mail
+- Two-mode flow: `chatroomModeList` (full-width room cards) → `chatroomModeDetail` (header + message viewport + compose input); ESC returns to list
+- Room cards show name, `#slug` subtitle, and last-message timestamp (right-aligned)
+- IRC-style message rendering via `renderCircMessages` (see `render.go`): `<username>  body` with right-aligned timestamp
+- Subscribes to RTDB SSE stream via `api.Client.SubscribeRoom()` on room selection; cancelled on ESC or screen switch
+- `waitForRoomMsg(sub)` is the Bubble Tea Cmd pump (mirrors `waitForDM` in `cmail.go`)
+- `RoomOpenedMsg` is emitted on Enter; App calls `MarkRoomRead` fire-and-forget
+- `CancelSubscription()` is called by the layout on every key that navigates away
+
+Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`
+Key internal types: `roomSubscription` (RTDB channel + cancel func), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `circMsgsLoadedMsg`
 - Room selected with arrow keys or Enter; Enter in the input pane sends via `SendRoomMessageMsg`
 - App handles `SendRoomMessageMsg` → `api.Client.SendRoomMessage()`
 
@@ -651,13 +661,13 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `1` | Feed |
 | `2` | Notifications |
 | `3` | C-Mail (direct messages) |
-| `4` | Journal (private notes) |
-| `5` | Bookmarks |
-| `6` | Guilds |
-| `7` | Topics |
-| `8` | Profile |
-| `9` | Settings |
-| `←` / `→` | Cycle tabs left / right |
+| `4` | CIRC (public chatrooms) |
+| `5` | Journal (private notes) |
+| `6` | Bookmarks |
+| `7` | Guilds |
+| `8` | Topics |
+| `9` | Profile |
+| `←` / `→` | Cycle tabs left / right (includes Settings) |
 | `v` | Toggle dense / relaxed display |
 | `?` | Help modal |
 | `t` | Theme picker |

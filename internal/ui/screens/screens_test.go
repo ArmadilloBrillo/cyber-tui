@@ -12,7 +12,7 @@ import (
 // --- ChatroomsModel.InputFocused ---
 
 func TestChatroomsInputFocused_DefaultFalse(t *testing.T) {
-	m := screens.NewChatroomsModel()
+	m := screens.NewChatroomsModel("", nil)
 	if m.InputFocused() {
 		t.Error("input should not be focused on a freshly created ChatroomsModel")
 	}
@@ -173,5 +173,114 @@ func TestCMailSend_EmptyBodyNoCmd(t *testing.T) {
 			t.Error("expected no SendCMailMsg for empty body, got one")
 		}
 	}
+}
+
+// --- ChatroomsModel mode transition tests ---
+
+func sampleRooms() []model.Room {
+	return []model.Room{
+		{ID: "r1", Slug: "zion", Name: "Zion", LastMessageAt: time.Now().Add(-2 * time.Minute), SortOrder: 1},
+		{ID: "r2", Slug: "sprawl", Name: "Sprawl", LastMessageAt: time.Now().Add(-10 * time.Minute), SortOrder: 2},
+	}
+}
+
+func sendChatroomKey(m screens.ChatroomsModel, key string) (screens.ChatroomsModel, tea.Cmd) {
+	return m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+}
+
+func sendChatroomSpecialKey(m screens.ChatroomsModel, keyType tea.KeyType) (screens.ChatroomsModel, tea.Cmd) {
+	return m.Update(tea.KeyMsg{Type: keyType})
+}
+
+func TestChatrooms_DefaultIsListMode(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	if m.IsShowingDetail() {
+		t.Error("fresh ChatroomsModel should be in list mode")
+	}
+}
+
+func TestChatrooms_InputNotFocusedByDefault(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	if m.InputFocused() {
+		t.Error("input should not be focused before a room is selected")
+	}
+}
+
+func TestChatrooms_EnterOpensDetailMode(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	if !m.IsShowingDetail() {
+		t.Error("expected detail mode after Enter on a room")
+	}
+	if !m.InputFocused() {
+		t.Error("expected input to be focused after entering a room")
+	}
+}
+
+func TestChatrooms_EscReturnsToListMode(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	if !m.IsShowingDetail() {
+		t.Fatal("setup: expected detail mode after Enter")
+	}
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEsc)
+	if m.IsShowingDetail() {
+		t.Error("expected list mode after Esc in detail mode")
+	}
+	if m.InputFocused() {
+		t.Error("expected input to be blurred after returning to list mode")
+	}
+}
+
+func TestChatrooms_JKNavigateList(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomKey(m, "j")
+	// After j, should be at index 1 (can't inspect directly, but Enter should open r2)
+	m2, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+	if !m2.IsShowingDetail() {
+		t.Fatal("expected detail mode after Enter")
+	}
+	// The batch cmd fires loadRoomMessages, openRoomSubscription, and RoomOpenedMsg
+	if cmd == nil {
+		t.Error("expected a command batch after Enter on a room")
+	}
+}
+
+func TestChatrooms_Send_EmitsMessage(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // open room
+
+	for _, r := range "hello circ" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	_, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("expected a command after Enter with text")
+	}
+	msg := cmd()
+	sendMsg, ok := msg.(screens.SendRoomMessageMsg)
+	if !ok {
+		t.Fatalf("expected SendRoomMessageMsg, got %T", msg)
+	}
+	if sendMsg.Body != "hello circ" {
+		t.Errorf("expected body='hello circ', got %q", sendMsg.Body)
+	}
+	if sendMsg.RoomID != "r1" {
+		t.Errorf("expected roomID='r1', got %q", sendMsg.RoomID)
+	}
+}
+
+func TestChatrooms_AppendMessage(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+
+	msg := model.Message{ID: "x1", From: model.User{Username: "molly"}, Body: "test", CreatedAt: time.Now()}
+	_ = m.AppendMessage(msg)
+	// No panic = pass; state is internal but AppendMessage should not crash
 }
 

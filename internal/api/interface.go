@@ -53,10 +53,17 @@ type Client interface {
 	GetSettings() (model.Settings, error)
 	UpdateSettings(update model.Settings) error
 
-	// Chatrooms — NOTE: real impl uses Firebase RTDB with RTDBToken — pending feature/rtdb-chat
+	// Chatrooms — list/history/send via REST; real-time delivery via RTDB SSE.
 	GetRooms() ([]model.Room, error)
-	GetRoomMessages(roomID string, limit int) ([]model.Message, error)
+	// GetRoomMessages returns up to limit messages for roomID, oldest-first.
+	// Pass before=0 for the latest page; pass a previous timestamp cursor for older pages.
+	GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error)
 	SendRoomMessage(roomID, body string) error
+	// MarkRoomRead resets the "new messages" indicator for the caller.
+	MarkRoomRead(roomID string) error
+	// SubscribeRoom opens a live RTDB SSE stream for the given chatroom.
+	// Returns a channel of incoming messages and a cancel function.
+	SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error)
 
 	// Notifications — cursor-paginated; mark-read methods are fire-and-forget.
 	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.

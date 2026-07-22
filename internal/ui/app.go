@@ -215,7 +215,7 @@ func NewApp(client api.Client) App {
 		wanderLust:         false,
 		login:              screens.NewLoginModel(""),
 		feed:               screens.NewFeedModel(),
-		chatrooms:          screens.NewChatroomsModel(),
+		chatrooms:          screens.NewChatroomsModel("", client),
 		cmail:              screens.NewCMailModel("", client),
 		profile:            screens.NewProfileModel(),
 		postDetail:         screens.NewPostDetailModel(),
@@ -544,10 +544,12 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.tokens = msg.tokens
 		a.currentUser = msg.user
 		a.cmail = screens.NewCMailModel(msg.user.Username, a.client)
-		// Initialize the fresh model's viewports with the current terminal size.
+		a.chatrooms = screens.NewChatroomsModel(msg.user.Username, a.client)
+		// Initialize the fresh models' viewports with the current terminal size.
 		if a.width > 0 {
 			contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(a.width), Height: a.layout.ContentHeight(a.height)}
 			a.cmail, _ = a.cmail.Update(contentMsg)
+			a.chatrooms, _ = a.chatrooms.Update(contentMsg)
 		}
 		return a, a.afterLoginCmd(), true
 	case screens.LoginErrMsg:
@@ -688,6 +690,16 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
+	case roomMessageSentMsg:
+		sent := model.Message{
+			From:      model.User{Username: a.currentUser.Username},
+			Body:      msg.body,
+			CreatedAt: time.Now(),
+		}
+		a.chatrooms = a.chatrooms.AppendMessage(sent)
+		return a, nil, true
+	case screens.RoomOpenedMsg:
+		return a, a.markRoomReadCmd(msg.RoomID), true
 	}
 	return a, nil, false
 }
@@ -2317,11 +2329,23 @@ func (a *App) loadUserFollowersCmd(userID, cursor string) tea.Cmd {
 	}
 }
 
+type roomMessageSentMsg struct {
+	roomID string
+	body   string
+}
+
 func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.SendRoomMessage(roomID, body); err != nil {
 			return actionErrMsg{err}
 		}
+		return roomMessageSentMsg{roomID: roomID, body: body}
+	}
+}
+
+func (a *App) markRoomReadCmd(roomID string) tea.Cmd {
+	return func() tea.Msg {
+		_ = a.client.MarkRoomRead(roomID) // fire-and-forget
 		return nil
 	}
 }
