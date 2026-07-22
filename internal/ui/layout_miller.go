@@ -12,11 +12,9 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-const millerSidebarWidth = 22  // nav pane (21 chars) + "│" separator (1 char)
-const millerListMaxWidth = 70  // hard cap on the list pane; above this, excess goes to the detail pane
-const millerHeaderHeight = 1   // column title row at the top of the layout
+const millerListMaxWidth = 70 // hard cap on the list pane; above this, excess goes to the detail pane
 
-// MillerLayout renders a left navigation sidebar alongside the active screen.
+// MillerLayout renders a top tab bar above a split content area.
 type MillerLayout struct{}
 
 // paneWidths returns the list and detail column widths for the given content area.
@@ -25,7 +23,7 @@ type MillerLayout struct{}
 // goes to the detail pane. Add a similar method to any future multi-pane layout
 // to keep its collapsing logic self-contained.
 func (l MillerLayout) paneWidths(contentW int) (listW, detailW int) {
-	const preferredDetailW = 45 // detail width at ~120-col terminal (98 contentW - 52 list - 1 sep)
+	const preferredDetailW = 45 // detail width at ~120-col terminal
 	detailW = min(preferredDetailW, max(0, contentW*46/100))
 	listW = min(millerListMaxWidth, max(0, contentW-detailW-1))
 	if listW == millerListMaxWidth {
@@ -37,7 +35,7 @@ func (l MillerLayout) paneWidths(contentW int) (listW, detailW int) {
 // NeedsCompactAutoFill returns the minimum item count to fill the compact list
 // column. App uses this after each page load to decide whether to fetch more.
 func (l MillerLayout) NeedsCompactAutoFill(termHeight int) int {
-	return termHeight - 2 // millerHeaderHeight + status bar
+	return termHeight - theme.ChromeHeight // tab bar + column header + status bar
 }
 
 // activeCompactRenderer returns the active screen as a CompactListRenderer if it
@@ -63,11 +61,9 @@ func (l MillerLayout) View(a App) string {
 		return a.login.View()
 	}
 
-	contentH := a.height - 1 - millerHeaderHeight // full height minus bottom bar and column header
-	contentW := a.width - millerSidebarWidth
+	contentH := a.height - theme.ChromeHeight // tab bar + column header + status bar
+	contentW := a.width
 
-	// Column header row — active column title in accent, others muted.
-	navHdr := l.renderColumnHeader("spaces", a.focus == focusMenu, millerSidebarWidth-1)
 	colSep := theme.Subtle.Render("│")
 
 	logo := lipgloss.NewStyle().
@@ -77,6 +73,9 @@ func (l MillerLayout) View(a App) string {
 		Padding(0, 1).
 		Render(a.logoText)
 	logoW := lipgloss.Width(logo)
+
+	// focusMenu is treated as focusList in Miller (initial/reset state from app).
+	listFocused := a.focus == focusList || a.focus == focusMenu
 
 	var contentPane, hdrRow, composeBar string
 	if r := l.activeCompactRenderer(a); r != nil {
@@ -89,9 +88,9 @@ func (l MillerLayout) View(a App) string {
 			composeBar = cc.ComposeView(contentW)
 		}
 
-		listHdr := l.renderColumnHeader(r.ListTitle(), a.focus == focusList, listW)
+		listHdr := l.renderColumnHeader(r.ListTitle(), listFocused, listW)
 		detailHdr := l.renderColumnHeader("thread", a.focus == focusDetail, detailW-logoW)
-		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, listHdr, colSep, detailHdr) + logo
+		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, listHdr, colSep, detailHdr) + logo
 
 		listP := lipgloss.NewStyle().Width(listW).Height(contentH).MaxHeight(contentH).
 			Render(r.CompactListView(listW, contentH))
@@ -100,25 +99,16 @@ func (l MillerLayout) View(a App) string {
 			Render(r.DetailView(detailW, contentH))
 		contentPane = lipgloss.JoinHorizontal(lipgloss.Top, listP, listSep, detailP)
 	} else {
-		contentHdr := l.renderColumnHeader(l.screenTitle(a), a.focus != focusMenu, contentW-logoW)
-		hdrRow = lipgloss.JoinHorizontal(lipgloss.Top, navHdr, colSep, contentHdr) + logo
+		contentHdr := l.renderColumnHeader(l.screenTitle(a), true, contentW-logoW)
+		hdrRow = contentHdr + logo
 		contentPane = lipgloss.NewStyle().Width(contentW).Height(contentH).MaxHeight(contentH).Render(l.renderContent(a))
 	}
 
-	// navPane and sep use the (possibly compose-reduced) contentH.
-	navPane := lipgloss.NewStyle().Height(contentH).MaxHeight(contentH).Render(l.renderNav(a))
-	sep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", contentH), "\n"))
-	mainRow := lipgloss.JoinHorizontal(lipgloss.Top, navPane, sep, contentPane)
-
 	var base string
 	if composeBar != "" {
-		panelH := lipgloss.Height(composeBar)
-		composeSep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", panelH), "\n"))
-		sideBlank := lipgloss.NewStyle().Width(millerSidebarWidth - 1).Render("")
-		composeRow := lipgloss.JoinHorizontal(lipgloss.Top, sideBlank, composeSep, composeBar)
-		base = lipgloss.JoinVertical(lipgloss.Left, hdrRow, mainRow, composeRow, l.renderBottomBar(a))
+		base = lipgloss.JoinVertical(lipgloss.Left, l.renderTabBar(a), hdrRow, contentPane, composeBar, l.renderBottomBar(a))
 	} else {
-		base = lipgloss.JoinVertical(lipgloss.Left, hdrRow, mainRow, l.renderBottomBar(a))
+		base = lipgloss.JoinVertical(lipgloss.Left, l.renderTabBar(a), hdrRow, contentPane, l.renderBottomBar(a))
 	}
 
 	if a.themePickerOpen {
@@ -137,22 +127,15 @@ func (l MillerLayout) View(a App) string {
 		modalH := len(strings.Split(textModal, "\n"))
 		xOff := (a.width - modalW) / 2
 		yOff := (a.height - modalH) / 2
-		if xOff < 0 {
-			xOff = 0
-		}
-		if yOff < 0 {
-			yOff = 0
-		}
+		xOff = max(0, xOff)
+		yOff = max(0, yOff)
 		imgRow := yOff + 2
 		imgCol := xOff + 3
 		return composed + fmt.Sprintf("\x1b[%d;%dH%s\x1b[%d;1H", imgRow, imgCol, a.imageModalEncoded, a.height)
 	}
 	if a.imageNeedsCleanup && a.graphicsProtocol == imgview.ProtocolKitty {
 		modalH := a.imageModalRows + 2
-		yOff := (a.height - modalH) / 2
-		if yOff < 0 {
-			yOff = 0
-		}
+		yOff := max(0, (a.height-modalH)/2)
 		lines := strings.Split(base, "\n")
 		if yOff < len(lines) {
 			lines[yOff] = "\x1b_Ga=d,d=A\x1b\\" + lines[yOff]
@@ -163,104 +146,82 @@ func (l MillerLayout) View(a App) string {
 }
 
 func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
-	if a.focus == focusMenu {
-		switch msg.String() {
-		case "j", "down":
-			if a.active != screenLogin {
-				var cmd tea.Cmd
-				a, cmd = navigateTabBy(a, +1)
-				return a, cmd, true
+	// Tab switching always works regardless of which pane is focused.
+	switch msg.String() {
+	case "1":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenFeed
+			if !a.feed.IsLoaded() {
+				a.feed = a.feed.SetFetching()
+				return a, a.loadFeedCmd(), true
 			}
-		case "k", "up":
-			if a.active != screenLogin {
-				var cmd tea.Cmd
-				a, cmd = navigateTabBy(a, -1)
-				return a, cmd, true
-			}
-		case "l", "right", "enter":
-			if a.active != screenLogin {
-				a.focus = focusList
-				return a, nil, true
-			}
-		case "1":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenFeed
-				if !a.feed.IsLoaded() {
-					a.feed = a.feed.SetFetching()
-					return a, a.loadFeedCmd(), true
-				}
-				return a, nil, true
-			}
-		case "2":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenNotifications
-				if !a.notifications.HasPaginated() {
-					a.notifications = a.notifications.SetFetching()
-					return a, a.loadNotifsCmd(), true
-				}
-				return a, nil, true
-			}
-		case "3":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenJournal
-				a.journal = a.journal.SetFetching()
-				return a, a.loadJournalCmd(), true
-			}
-		case "4":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenBookmarks
-				if !a.bookmarks.IsLoaded() {
-					a.bookmarks = a.bookmarks.SetFetching()
-					return a, a.loadBookmarksCmd(""), true
-				}
-				return a, nil, true
-			}
-		case "5":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenGuilds
-				if !a.guilds.IsLoaded() {
-					a.guilds = a.guilds.SetFetching()
-					return a, a.loadGuildsCmd(""), true
-				}
-				return a, nil, true
-			}
-		case "6":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenTopics
-				if !a.topics.IsLoaded() {
-					a.topics = a.topics.SetFetching()
-					return a, a.loadTopicsCmd(), true
-				}
-				return a, nil, true
-			}
-		case "7":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenProfile
-				return a, a.loadProfileCmd(), true
-			}
-		case "8":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenSettings
-				return a, nil, true
-			}
+			return a, nil, true
 		}
-		return a, nil, false
+	case "2":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenNotifications
+			if !a.notifications.HasPaginated() {
+				a.notifications = a.notifications.SetFetching()
+				return a, a.loadNotifsCmd(), true
+			}
+			return a, nil, true
+		}
+	case "3":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenJournal
+			a.journal = a.journal.SetFetching()
+			return a, a.loadJournalCmd(), true
+		}
+	case "4":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenBookmarks
+			if !a.bookmarks.IsLoaded() {
+				a.bookmarks = a.bookmarks.SetFetching()
+				return a, a.loadBookmarksCmd(""), true
+			}
+			return a, nil, true
+		}
+	case "5":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenGuilds
+			if !a.guilds.IsLoaded() {
+				a.guilds = a.guilds.SetFetching()
+				return a, a.loadGuildsCmd(""), true
+			}
+			return a, nil, true
+		}
+	case "6":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenTopics
+			if !a.topics.IsLoaded() {
+				a.topics = a.topics.SetFetching()
+				return a, a.loadTopicsCmd(), true
+			}
+			return a, nil, true
+		}
+	case "7":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenProfile
+			return a, a.loadProfileCmd(), true
+		}
+	case "8":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.active = screenSettings
+			return a, nil, true
+		}
 	}
 
-	// List pane focused (Feed/Guilds/Topics 3-pane or other screens).
-	if a.focus == focusList {
+	// focusMenu is the app's initial/reset state; treat it as focusList in Miller.
+	if a.focus == focusMenu || a.focus == focusList {
 		switch msg.String() {
-		case "h", "left":
-			a.focus = focusMenu
-			return a, nil, true
 		case "l", "right", "enter":
 			if l.activeCompactRenderer(a) != nil {
 				a.focus = focusDetail
@@ -272,8 +233,8 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 
 	// Reading pane focused (3-pane Miller).
 	if a.focus == focusDetail {
-		paneH := a.height - 1 - millerHeaderHeight
-		_, paneW := l.paneWidths(a.width - millerSidebarWidth)
+		paneH := a.height - theme.ChromeHeight
+		_, paneW := l.paneWidths(a.width)
 		switch msg.String() {
 		case "h", "left":
 			a.focus = focusList
@@ -335,37 +296,33 @@ func (l MillerLayout) HasFocusedInput(a App) bool {
 	return false
 }
 
-func (l MillerLayout) ContentWidth(termWidth int) int { return termWidth - millerSidebarWidth }
+func (l MillerLayout) ContentWidth(termWidth int) int { return termWidth }
 
-// ContentHeight inflates the height sent to screens so their viewport (which subtracts
-// theme.ChromeHeight = 3) fills the content pane exactly. Miller layout uses 2 chrome rows
-// (column header + status bar), so we add back only 1 of the 2 rows TabsLayout uses.
-func (l MillerLayout) ContentHeight(termHeight int) int {
-	return termHeight + theme.TabBarHeight
-}
+// ContentHeight passes the terminal height unchanged; Miller now uses the same
+// 3-row chrome as TabsLayout (tab bar + column header + status bar = ChromeHeight).
+func (l MillerLayout) ContentHeight(termHeight int) int { return termHeight }
 
-func (l MillerLayout) renderNav(a App) string {
-	navW := millerSidebarWidth - 1 // leave 1 col for the "│" separator
-
-	var rows []string
+func (l MillerLayout) renderTabBar(a App) string {
+	var tabs string
 	for _, t := range menuTabs {
 		label := t.label
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
-			label = fmt.Sprintf("%s ●%d", label, a.polledUnreadCount)
+			label = fmt.Sprintf("%s (%d)", label, a.polledUnreadCount)
 		}
-		var row string
 		if a.active == t.s {
-			if a.focus == focusMenu {
-				row = theme.Highlight.Width(navW).Render("▶ " + label)
-			} else {
-				row = theme.Subtle.Width(navW).Render("▶ " + label)
-			}
+			tabs += theme.ActiveTab.Render(label)
 		} else {
-			row = theme.Subtle.Width(navW).Render("  " + label)
+			tabs += theme.Tab.Render(label)
 		}
-		rows = append(rows, row)
 	}
-	return strings.Join(rows, "\n")
+	logo := lipgloss.NewStyle().
+		Background(theme.ColorGreen).
+		Foreground(theme.ColorBackground).
+		Bold(true).
+		Padding(0, 1).
+		Render(a.logoText)
+	spacer := strings.Repeat(" ", max(0, a.width-lipgloss.Width(tabs)-lipgloss.Width(logo)))
+	return tabs + spacer + logo
 }
 
 func (l MillerLayout) renderColumnHeader(title string, active bool, width int) string {
@@ -463,12 +420,10 @@ func (l MillerLayout) renderNotification(a App) string {
 
 func (l MillerLayout) screenHints(a App) []hint {
 	switch a.focus {
-	case focusMenu:
-		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-8", "jump"}, {"?", "more"}}
 	case focusDetail:
 		return []hint{{"h/←", "list"}, {"j/k", "replies"}, {"↵", "thread"}, {"r", "reply"}}
-	default: // focusList
-		return append([]hint{{"h/←", "menu"}, {"→/↵", "preview"}}, TabsLayout{}.screenHints(a)...)
+	default: // focusList / focusMenu
+		return append([]hint{{"→/↵", "preview"}}, TabsLayout{}.screenHints(a)...)
 	}
 }
 
@@ -549,7 +504,7 @@ func (l MillerLayout) renderThemePicker(a App) string {
 	return theme.ActiveBorder.Render(body)
 }
 
-func (l MillerLayout) renderHelpModal(a App) string {
+func (l MillerLayout) renderHelpModal(_ App) string {
 	title := theme.Title.Render("shortcuts")
 	sectionStyle := theme.Subtle.Bold(true)
 	row := func(key, desc string) string {
@@ -559,10 +514,9 @@ func (l MillerLayout) renderHelpModal(a App) string {
 
 	globalSection := lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render("global"),
-		row("j/k", "move nav · select section"),
-		row("l / enter", "enter content pane"),
-		row("h", "return to nav pane"),
 		row("1-8", "jump to section"),
+		row("l / enter", "enter detail pane"),
+		row("h", "return to list pane"),
 		row("t", "theme"),
 		row("v", "density"),
 		row("o", "open url"),

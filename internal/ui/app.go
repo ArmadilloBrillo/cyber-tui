@@ -268,10 +268,7 @@ func (a App) WithSavedSession(s config.Config) App {
 	return a
 }
 
-func layoutFromName(name string) Layout {
-	if name == "miller" {
-		return MillerLayout{}
-	}
+func layoutFromName(_ string) Layout {
 	return TabsLayout{}
 }
 
