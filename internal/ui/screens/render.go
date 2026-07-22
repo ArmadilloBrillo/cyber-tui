@@ -189,14 +189,52 @@ func listFooter(loading, exhausted bool) string {
 	return ""
 }
 
-// renderChatMessages renders a list of chat messages (used by both CMail and Chatrooms).
-func renderChatMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int) string {
+// renderChatMessages renders a list of chat messages as bordered bubbles sized
+// to their content (up to 75% of viewportWidth).
+// Messages from currentUser use ActiveBorder (cyan) and are right-aligned.
+// Others use Border (dim green) on the left.
+// Pass currentUser="" to render all messages left-aligned (chatrooms).
+func renderChatMessages(msgs []model.Message, currentUser string, loc *time.Location, timeDisplayFormat string, viewportWidth int) string {
+	if viewportWidth < 8 {
+		viewportWidth = 80
+	}
+	// Maximum inner content width: 3/4 of viewport, minus 4 for border(2) + padding(2).
+	maxContentW := max(viewportWidth*3/4-4, 4)
+
 	var sb strings.Builder
 	for _, msg := range msgs {
-		ts := theme.Subtle.Render(displayTime(msg.CreatedAt, loc, timeDisplayFormat, true))
-		author := theme.Highlight.Render("@" + msg.From.Username)
-		body := markdown.Render(msg.Body, viewportWidth)
-		sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, ts, "  ", author, "  ", body) + "\n")
+		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
+		isMe := currentUser != "" && msg.From.Username == currentUser
+
+		var header string
+		if isMe {
+			header = theme.Subtle.Render(ts) + "  " + theme.Highlight.Render("@"+msg.From.Username)
+		} else {
+			header = theme.Highlight.Render("@"+msg.From.Username) + "  " + theme.Subtle.Render(ts)
+		}
+
+		// Natural inner width: widest of the header and each raw body line, capped at max.
+		naturalW := lipgloss.Width(header)
+		for line := range strings.SplitSeq(msg.Body, "\n") {
+			if w := lipgloss.Width(line); w > naturalW {
+				naturalW = w
+			}
+		}
+		naturalW = min(naturalW, maxContentW)
+
+		body := strings.TrimRight(markdown.Render(msg.Body, naturalW), "\n")
+		content := lipgloss.JoinVertical(lipgloss.Left, header, body)
+
+		if isMe {
+			bubble := theme.ActiveBorder.Render(content)
+			leftPad := strings.Repeat(" ", max(viewportWidth-naturalW-4, 0))
+			for line := range strings.SplitSeq(bubble, "\n") {
+				sb.WriteString(leftPad + line + "\n")
+			}
+		} else {
+			sb.WriteString(theme.Border.Render(content) + "\n")
+		}
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

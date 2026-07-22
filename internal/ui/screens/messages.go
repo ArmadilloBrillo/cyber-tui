@@ -57,6 +57,11 @@ type URLProvider interface {
 // the user presses 'p' on the highlighted item.
 type ShowUserProfileMsg struct{ Username string }
 
+// StartConversationMsg is emitted by any screen when the user presses 'c' on a
+// highlighted post, reply, notification, or profile to open (or create) a C-Mail
+// conversation with that user. App guards against self-DMs.
+type StartConversationMsg struct{ Username string }
+
 // BackFromProfileMsg is emitted by ProfileModel in read-only mode when ESC is pressed.
 type BackFromProfileMsg struct{}
 

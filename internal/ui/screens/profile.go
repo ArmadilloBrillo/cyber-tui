@@ -660,6 +660,11 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 				}
 				return m, func() tea.Msg { return FollowUserMsg{UserID: m.user.ID} }
 			}
+		case "c":
+			if m.readOnly {
+				username := m.user.Username
+				return m, func() tea.Msg { return StartConversationMsg{Username: username} }
+			}
 		}
 
 	// ComposeSubmitMsg arrives when Ctrl+S is pressed inside the bio compose box.

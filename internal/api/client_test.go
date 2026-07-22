@@ -1,12 +1,15 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -583,42 +586,206 @@ func newClientWithRTDB(t *testing.T, rtdbHandler http.Handler) (*api.HTTPClient,
 	return c, rtdbSrv
 }
 
-// TestHTTPGetMessages_ReturnsEmpty confirms the stub returns empty (server-side not ready).
-func TestHTTPGetMessages_ReturnsEmpty(t *testing.T) {
+// writeSSEEvent sends a single SSE event and flushes.
+func writeSSEEvent(w http.ResponseWriter, event, data string) {
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// TestHTTPSubscribeDMs_SkipsSnapshotDeliversMessages verifies that:
+// (a) the initial full-snapshot event (path="/") is skipped, and
+// (b) subsequent put events arrive on the channel.
+func TestHTTPSubscribeDMs_SkipsSnapshotDeliversMessages(t *testing.T) {
 	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
+		// Initial snapshot — must be skipped by SubscribeDMs.
+		writeSSEEvent(w, "put", `{"path":"/","data":{"msg0":{"senderId":"u1","senderUsername":"case","content":"old","timestamp":1700000000000,"read":false}}}`)
+		// New message — must arrive on channel.
+		writeSSEEvent(w, "put", `{"path":"/msg1","data":{"senderId":"u2","senderUsername":"molly_millions","content":"hello","timestamp":1700000001000,"read":false}}`)
 	}))
-	msgs, err := c.GetMessages("conv1", 50)
+
+	ch, cancel, err := c.SubscribeDMs(context.Background(), "conv1")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("SubscribeDMs error: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Errorf("len(msgs) = %d, want 0 (stub)", len(msgs))
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if msg.ID != "msg1" {
+			t.Errorf("msg.ID = %q, want msg1", msg.ID)
+		}
+		if msg.From.Username != "molly_millions" {
+			t.Errorf("msg.From.Username = %q, want molly_millions", msg.From.Username)
+		}
+		if msg.Body != "hello" {
+			t.Errorf("msg.Body = %q, want hello", msg.Body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
 	}
 }
 
-// TestHTTPSendMessage_NoOp confirms the stub does nothing (server-side not ready).
-func TestHTTPSendMessage_NoOp(t *testing.T) {
+// TestHTTPSubscribeDMs_CancelClosesChannel verifies that calling cancel stops the stream.
+func TestHTTPSubscribeDMs_CancelClosesChannel(t *testing.T) {
 	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("SendMessage stub should not make any HTTP request")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done() // hold open until client disconnects
 	}))
-	if err := c.SendMessage("conv1", "hi"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+
+	ch, cancel, err := c.SubscribeDMs(context.Background(), "conv1")
+	if err != nil {
+		t.Fatalf("SubscribeDMs error: %v", err)
+	}
+
+	cancel()
+
+	select {
+	case _, open := <-ch:
+		if open {
+			// Drain remaining events — channel should close shortly.
+			for range ch {
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("channel did not close after cancel")
 	}
 }
 
-// TestHTTPGetConversations_ReturnsEmpty confirms the stub returns empty (server-side not ready).
-func TestHTTPGetConversations_ReturnsEmpty(t *testing.T) {
-	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("GetConversations stub should not make any HTTP request")
-	}))
+// --- C-Mail REST tests ---
+
+func TestHTTPGetConversations_ParsesList(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, []map[string]any{
+			{
+				"conversationId": "c1",
+				"otherUser":      map[string]any{"userId": "u2", "username": "molly_millions"},
+				"lastMessage":    "we need to talk",
+				"lastMessageAt":  1700000000000,
+				"unreadCount":    2,
+			},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
 	convs, err := c.GetConversations()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(convs) != 0 {
-		t.Errorf("len(convs) = %d, want 0 (stub)", len(convs))
+	if len(convs) != 1 {
+		t.Fatalf("len(convs) = %d, want 1", len(convs))
+	}
+	if convs[0].ID != "c1" {
+		t.Errorf("ID = %q, want c1", convs[0].ID)
+	}
+	if len(convs[0].Participants) != 1 || convs[0].Participants[0].Username != "molly_millions" {
+		t.Errorf("participants mismatch: %+v", convs[0].Participants)
+	}
+	if convs[0].UnreadCount != 2 {
+		t.Errorf("UnreadCount = %d, want 2", convs[0].UnreadCount)
+	}
+	if convs[0].LastMessage != "we need to talk" {
+		t.Errorf("LastMessage = %q, want 'we need to talk'", convs[0].LastMessage)
+	}
+}
+
+func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail/c1" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if !strings.Contains(r.URL.RawQuery, "limit=50") {
+			t.Errorf("expected limit param, got: %s", r.URL.RawQuery)
+		}
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "senderId": "u1", "senderUsername": "case", "content": "hello", "timestamp": 1700000001000},
+			{"id": "m2", "senderId": "u2", "senderUsername": "molly_millions", "content": "hey", "timestamp": 1700000002000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetMessages("c1", 50)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+	}
+	if msgs[0].ID != "m1" || msgs[0].Body != "hello" || msgs[0].From.Username != "case" {
+		t.Errorf("msgs[0] mismatch: %+v", msgs[0])
+	}
+	if msgs[1].ID != "m2" || msgs[1].From.Username != "molly_millions" {
+		t.Errorf("msgs[1] mismatch: %+v", msgs[1])
+	}
+}
+
+func TestHTTPSendMessage_PostsContent(t *testing.T) {
+	var gotBody []byte
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail/c1" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		writeOK(t, w, map[string]string{"conversationId": "c1", "messageId": "m1"})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if err := c.SendMessage("c1", "hello there"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(gotBody), "hello there") {
+		t.Errorf("expected body to contain 'hello there', got: %s", gotBody)
+	}
+}
+
+func TestHTTPStartConversation_ReturnsConversation(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{
+			"conversationId": "c-new",
+			"otherUser":      map[string]any{"userId": "u2", "username": "wintermute"},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	conv, err := c.StartConversation("wintermute")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if conv.ID != "c-new" {
+		t.Errorf("ID = %q, want c-new", conv.ID)
+	}
+	if len(conv.Participants) != 1 || conv.Participants[0].Username != "wintermute" {
+		t.Errorf("participants mismatch: %+v", conv.Participants)
+	}
+}
+
+func TestHTTPMarkCMailRead_FiresRequest(t *testing.T) {
+	called := false
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail/c1/read" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		called = true
+		writeOK(t, w, nil)
+	})))
+	c.LoginWithRefreshToken("tok")
+	if err := c.MarkCMailRead("c1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("expected POST /v1/cmail/c1/read to be called")
 	}
 }
 

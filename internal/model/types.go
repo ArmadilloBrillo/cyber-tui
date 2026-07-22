@@ -124,9 +124,12 @@ type Message struct {
 }
 
 type Conversation struct {
-	ID           string
-	Participants []User
-	Messages     []Message
+	ID            string
+	Participants  []User
+	Messages      []Message
+	UnreadCount   int
+	LastMessage   string
+	LastMessageAt time.Time // timestamp of the most recent message; from API epoch-ms field
 }
 
 type Room struct {

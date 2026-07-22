@@ -150,7 +150,7 @@ func (m ChatroomsModel) renderMessages() string {
 	if len(m.messages) == 0 {
 		return theme.Subtle.Render("no messages yet")
 	}
-	return renderChatMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width)
+	return renderChatMessages(m.messages, "", m.location(), m.timeDisplayFormat, m.viewport.Width)
 }
 
 func (m ChatroomsModel) View() string {

@@ -78,22 +78,17 @@ Notes:
 
 ### C-Mail (new in v0.7)
 
-C-Mail REST API is now fully documented. Previously a "coming soon" placeholder. Real-time reading uses Firebase RTDB SSE (same as cIRC). `conversationId` is derived server-side — never computed by the client.
+All REST endpoints and the RTDB SSE subscription are fully implemented. See `docs/08-cmail.md` for details.
 
-| Endpoint | Method | Description | Priority |
+| Endpoint | Method | Description | Status |
 |---|---|---|---|
-| `POST /v1/cmail` | POST | Start or get a conversation by `recipientUsername` or `recipientId` (idempotent) | Medium |
-| `GET /v1/cmail` | GET | List conversations (unread first, then newest activity first) | Medium |
-| `GET /v1/cmail/:conversationId` | GET | Load message history (paginated, oldest-first, `before` cursor) | Medium |
-| `POST /v1/cmail/:conversationId` | POST | Send a message (supports slash commands) | Medium |
-| `POST /v1/cmail/:conversationId/read` | POST | Mark conversation as read (reset unread count) | Medium |
-| RTDB `dm_messages/<conversationId>` | SSE | Subscribe to real-time new messages | Medium |
-| RTDB `user_conversations/<uid>` | SSE | Subscribe to live conversation list / unread updates | Medium |
-
-Notes:
-- `POST /v1/cmail` returns 200 for existing conversation, 201 for new.
-- Rate limits: 15 sends/min, 300/day, 150/hour; 5 start/min, 50/day, 30/hour; 60 mark-read/min.
-- Blocked in either direction returns 403.
+| `POST /v1/cmail` | POST | Start or get a conversation by `recipientUsername` (idempotent) | **Done** — `StartConversation` |
+| `GET /v1/cmail` | GET | List conversations (unread first, then newest activity) | **Done** — `GetConversations`; populates `UnreadCount`, `LastMessage` |
+| `GET /v1/cmail/:conversationId` | GET | Load message history | **Done** — `GetMessages` |
+| `POST /v1/cmail/:conversationId` | POST | Send a message | **Done** — `SendMessage` |
+| `POST /v1/cmail/:conversationId/read` | POST | Mark conversation as read | **Done** — `MarkCMailRead`; called on conversation open |
+| RTDB `dm_messages/<conversationId>` | SSE | Real-time new messages | **Done** — `SubscribeDMs`; skips initial snapshot |
+| RTDB `user_conversations/<uid>` | SSE | Live conversation list / unread updates | Not implemented — REST list covers the use case at navigation time |
 
 ### cIRC (new in v0.7)
 

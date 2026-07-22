@@ -460,6 +460,12 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 			}
 			return m, nil
+		case "c":
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				username := visible[m.selectedIndex].AuthorUsername
+				return m, func() tea.Msg { return StartConversationMsg{Username: username} }
+			}
+			return m, nil
 		case "b":
 			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
 				postID := visible[m.selectedIndex].ID

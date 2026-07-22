@@ -147,11 +147,16 @@ type Client interface {
 	// DeleteNote soft-deletes all revisions of a note.
 	DeleteNote(noteID string) error
 
-	// Direct messages — backed by Firebase RTDB (see internal/rtdb).
+	// Direct messages (C-Mail) — list/history/send via REST; real-time delivery via RTDB SSE.
 	GetConversations() ([]model.Conversation, error)
 	GetMessages(conversationID string, limit int) ([]model.Message, error)
 	SendMessage(conversationID, body string) error
-	// SubscribeDMs opens a live SSE stream for the given conversation.
+	// StartConversation creates or retrieves a C-Mail conversation with recipientUsername.
+	// Returns 201 for a new conversation, 200 for an existing one (both return the conversation).
+	StartConversation(recipientUsername string) (model.Conversation, error)
+	// MarkCMailRead resets the unread count for the conversation.
+	MarkCMailRead(conversationID string) error
+	// SubscribeDMs opens a live RTDB SSE stream for the given conversation.
 	// Returns a channel of incoming messages and a cancel function.
 	// The channel is closed when cancel is called or the stream ends.
 	SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error)
