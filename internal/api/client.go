@@ -337,6 +337,52 @@ type wirePatchSettings struct {
 	DefaultPublicPost bool                  `json:"defaultPublicPost"`
 }
 
+// --- C-Mail wire types ---
+
+type wireCMailOtherUser struct {
+	UserID   string `json:"userId"`
+	Username string `json:"username"`
+}
+
+// wireCMailConversation is a single entry from GET /v1/cmail.
+type wireCMailConversation struct {
+	ConversationID string             `json:"conversationId"`
+	OtherUser      wireCMailOtherUser `json:"otherUser"`
+	LastMessage    string             `json:"lastMessage"`
+	LastMessageAt  int64              `json:"lastMessageAt"` // epoch ms
+	UnreadCount    int                `json:"unreadCount"`
+}
+
+// wireCMailMessage is a single message from GET /v1/cmail/:id.
+type wireCMailMessage struct {
+	ID             string `json:"id"`
+	SenderID       string `json:"senderId"`
+	SenderUsername string `json:"senderUsername"`
+	Content        string `json:"content"`
+	Timestamp      int64  `json:"timestamp"` // epoch ms
+}
+
+// wireCMailStartResponse is returned by POST /v1/cmail.
+type wireCMailStartResponse struct {
+	ConversationID string             `json:"conversationId"`
+	OtherUser      wireCMailOtherUser `json:"otherUser"`
+}
+
+// wireRTDBMessage is the Firebase shape for a DM message in /dm_messages/<convId>/<msgId>.
+type wireRTDBMessage struct {
+	SenderID       string  `json:"senderId"`
+	SenderUsername string  `json:"senderUsername"`
+	Content        string  `json:"content"`
+	Timestamp      float64 `json:"timestamp"` // epoch ms as a Firebase number
+	Read           bool    `json:"read"`
+}
+
+// wireRTDBSSEData is the outer wrapper of a Firebase "put" SSE event's data field.
+type wireRTDBSSEData struct {
+	Path string          `json:"path"`
+	Data json.RawMessage `json:"data"`
+}
+
 type envelope struct {
 	Data   json.RawMessage `json:"data"`
 	Cursor string          `json:"cursor"`
@@ -1277,31 +1323,148 @@ func (c *HTTPClient) SendRoomMessage(roomID, body string) error {
 	return fmt.Errorf("not implemented: chatrooms use Firebase RTDB — see feature/rtdb-chatrooms")
 }
 
-// --- Direct messages (C-Mail) via Firebase RTDB ---
-// NOTE: server-side RTDB paths are not yet finalised.
-// Full implementation is in git history (commit e41884a).
-// Wire types, rtdbOrErr, and wireRTDBMessageToModel are in that commit.
+// --- Direct messages (C-Mail) ---
 
-// GetConversations returns empty — server-side RTDB paths not yet finalised.
+// rtdbOrErr returns the RTDB client or an error if InitRTDB has not been called.
+func (c *HTTPClient) rtdbOrErr() (*rtdb.Client, error) {
+	if c.rtdbClient == nil {
+		return nil, fmt.Errorf("api: RTDB client not initialised (call InitRTDB after login)")
+	}
+	return c.rtdbClient, nil
+}
+
+// wireRTDBMessageToModel converts a Firebase DM message to the model type.
+func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
+	return model.Message{
+		ID:        id,
+		From:      model.User{ID: wm.SenderID, Username: wm.SenderUsername},
+		Body:      wm.Content,
+		CreatedAt: time.UnixMilli(int64(wm.Timestamp)),
+	}
+}
+
+// GetConversations lists the caller's C-Mail conversations via GET /v1/cmail.
+// Sorted: unread first, then most recently active.
 func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
-	return []model.Conversation{}, nil
+	env, err := c.doRequest("GET", "/v1/cmail", nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireCMailConversation
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]model.Conversation, len(wire))
+	for i, w := range wire {
+		out[i] = model.Conversation{
+			ID:            w.ConversationID,
+			Participants:  []model.User{{ID: w.OtherUser.UserID, Username: w.OtherUser.Username}},
+			UnreadCount:   w.UnreadCount,
+			LastMessage:   w.LastMessage,
+			LastMessageAt: time.UnixMilli(w.LastMessageAt),
+		}
+	}
+	return out, nil
 }
 
-// GetMessages returns empty — server-side RTDB paths not yet finalised.
+// GetMessages returns history for a conversation via GET /v1/cmail/:id.
+// Messages are returned oldest-first.
 func (c *HTTPClient) GetMessages(conversationID string, limit int) ([]model.Message, error) {
-	return []model.Message{}, nil
+	path := "/v1/cmail/" + url.PathEscape(conversationID) + fmt.Sprintf("?limit=%d", limit)
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireCMailMessage
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]model.Message, len(wire))
+	for i, w := range wire {
+		out[i] = model.Message{
+			ID:        w.ID,
+			From:      model.User{ID: w.SenderID, Username: w.SenderUsername},
+			Body:      w.Content,
+			CreatedAt: time.UnixMilli(w.Timestamp),
+		}
+	}
+	return out, nil
 }
 
-// SendMessage is a no-op — server-side RTDB paths not yet finalised.
+// SendMessage sends a C-Mail message via POST /v1/cmail/:id.
 func (c *HTTPClient) SendMessage(conversationID, body string) error {
-	return nil
+	_, err := c.doJSON("POST", "/v1/cmail/"+url.PathEscape(conversationID), map[string]string{"content": body})
+	return err
 }
 
-// SubscribeDMs returns an immediately-closed channel — server-side RTDB paths not yet finalised.
+// StartConversation creates or retrieves a C-Mail conversation with recipientUsername
+// via POST /v1/cmail. Returns 200 for an existing conversation, 201 for a new one.
+func (c *HTTPClient) StartConversation(recipientUsername string) (model.Conversation, error) {
+	env, err := c.doJSON("POST", "/v1/cmail", map[string]string{"recipientUsername": recipientUsername})
+	if err != nil {
+		return model.Conversation{}, err
+	}
+	var data wireCMailStartResponse
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return model.Conversation{}, err
+	}
+	return model.Conversation{
+		ID:           data.ConversationID,
+		Participants: []model.User{{ID: data.OtherUser.UserID, Username: data.OtherUser.Username}},
+	}, nil
+}
+
+// MarkCMailRead resets the unread count for conversationID via POST /v1/cmail/:id/read.
+func (c *HTTPClient) MarkCMailRead(conversationID string) error {
+	_, err := c.doRequest("POST", "/v1/cmail/"+url.PathEscape(conversationID)+"/read", nil)
+	return err
+}
+
+// SubscribeDMs opens a live RTDB SSE stream for the given conversation.
+// New messages arrive on the returned channel; call cancel to close the stream.
+// The initial full-snapshot event is skipped — load history via GetMessages instead.
 func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error) {
-	ch := make(chan model.Message)
-	close(ch)
-	return ch, func() {}, nil
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	params := url.Values{
+		"orderBy":     {`"timestamp"`},
+		"limitToLast": {"50"},
+	}
+	sseEvents := r.Subscribe(ctx, "/dm_messages/"+convID, params)
+	out := make(chan model.Message, 8)
+	go func() {
+		defer close(out)
+		for ev := range sseEvents {
+			if ev.Err != nil {
+				return
+			}
+			if ev.Event != "put" {
+				continue
+			}
+			var d wireRTDBSSEData
+			if err := json.Unmarshal(ev.Data, &d); err != nil {
+				continue
+			}
+			if d.Path == "/" {
+				// Initial full-snapshot; history is loaded via REST (GetMessages).
+				continue
+			}
+			var wm wireRTDBMessage
+			if err := json.Unmarshal(d.Data, &wm); err != nil {
+				continue
+			}
+			msgID := strings.TrimPrefix(d.Path, "/")
+			select {
+			case out <- wireRTDBMessageToModel(msgID, wm):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
 }
 
 // --- Follows ---

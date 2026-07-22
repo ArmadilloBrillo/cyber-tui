@@ -122,12 +122,17 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 		}
 	case "3":
 		if a.active != screenLogin {
+			a.active = screenCMail
+			return a, a.loadConvsCmd(), true
+		}
+	case "4":
+		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenJournal
 			a.journal = a.journal.SetFetching()
 			return a, a.loadJournalCmd(), true
 		}
-	case "4":
+	case "5":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenBookmarks
@@ -137,7 +142,7 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 			}
 			return a, nil, true
 		}
-	case "5":
+	case "6":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenGuilds
@@ -147,7 +152,7 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 			}
 			return a, nil, true
 		}
-	case "6":
+	case "7":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenTopics
@@ -157,13 +162,13 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 			}
 			return a, nil, true
 		}
-	case "7":
+	case "8":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenProfile
 			return a, a.loadProfileCmd(), true
 		}
-	case "8":
+	case "9":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
 			a.active = screenSettings
@@ -221,7 +226,8 @@ func (l TabsLayout) renderTabBar(a App) string {
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			label = fmt.Sprintf("%s (%d)", label, a.polledUnreadCount)
 		}
-		if a.active == t.s {
+		isActive := a.active == t.s && !(t.s == screenCMail && a.cmail.IsShowingDetail())
+		if isActive {
 			tabs += theme.ActiveTab.Render(label)
 		} else {
 			tabs += theme.Tab.Render(label)
@@ -365,22 +371,22 @@ func (l TabsLayout) screenHints(a App) []hint {
 		if a.feed.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "c-mail"}, more}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
 			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"esc", "back"}, more}
+		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "c-mail"}, {"esc", "back"}, more}
 	case screenProfile:
 		if a.profile.ComposeActive() {
 			return []hint{{"Ctrl+s", "save"}, {"Esc", "cancel"}, {"tab", "cycle"}}
 		}
 		if a.profile.IsReadOnly() {
-			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"tab", "cycle"}, more}
+			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"c", "c-mail"}, {"tab", "cycle"}, more}
 		}
 		return []hint{{"↑↓", "navigate"}, {"e", "edit"}, {"tab", "cycle"}, more}
 	case screenNotifications:
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, {"c", "c-mail"}, more}
 	case screenJournal:
 		if a.journal.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"Ctrl+s", "save"}, {"Ctrl+p", "publish"}, {"Esc", "cancel"}}
@@ -457,7 +463,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 
 	globalSection := lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render("global"),
-		row("1-7", "feed · notifs · journal · bookmarks · topics · profile · settings"),
+		row("1-9", "feed · notifs · c-mail · journal · bookmarks · guilds · topics · profile · settings"),
 		row("← →", "cycle tabs"),
 		row("t", "theme"),
 		row("v", "density"),
@@ -479,6 +485,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		} else {
 			localSection = section("feed",
 				row("p", "view profile"),
+				row("c", "start c-mail"),
 				row("d", "delete own"),
 			)
 		}
@@ -489,6 +496,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 			localSection = section("post detail",
 				row("d", "delete own"),
 				row("p", "view profile"),
+				row("c", "start c-mail"),
 			)
 		}
 	case screenProfile:
@@ -497,6 +505,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		} else if a.profile.IsReadOnly() {
 			localSection = section("profile",
 				row("enter", "open"),
+				row("c", "start c-mail"),
 			)
 		} else {
 			localSection = section("profile (own)",
@@ -507,6 +516,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		localSection = section("notifications",
 			row("M", "mark all read"),
 			row("p", "view profile"),
+			row("c", "start c-mail"),
 		)
 	case screenJournal:
 		if a.journal.ComposeActive() {

@@ -8,7 +8,7 @@ Comprehensive map of every module, file, and artifact in this repository. Use th
 
 **cyber-tui** is a terminal user interface (TUI) client for [cyberspace.online](https://cyberspace.online) — a retro text-only social network. It is written in Go, using [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI event loop, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling, and [Wish](https://github.com/charmbracelet/wish) to optionally host the client over SSH.
 
-The client talks to the cyberspace.online REST API (current target v0.4.1; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages. See `docs/00-latest-api-reference.md` for the current API spec snapshot.
+The client talks to the cyberspace.online REST API (current target v0.7; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages (SSE). See `docs/00-latest-api-reference.md` for the current API spec snapshot.
 
 ---
 
@@ -127,7 +127,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `Reply` | Comment on a post (ID, postID, authorID, authorUsername, content, parentReplyID, createdAt) |
 | `ProfileUpdate` | Optional fields for PATCH /v1/users/me (all pointer types, includes new website/location fields) |
 | `Message` | DM/chat message (ID, from, body, createdAt) |
-| `Conversation` | 1-on-1 DM thread (ID, participants, messages) |
+| `Conversation` | 1-on-1 DM thread (ID, participants, messages, UnreadCount, LastMessage) |
 | `Room` | Public chatroom (ID, name, description, member count) |
 | `NotificationPrefs` | Notification subscription toggles (bookmark, reply, poke) |
 | `Settings` | All user preferences (notifications, content filters, display options) |
@@ -168,7 +168,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Topics | `GetTopics(cursor)`, `GetTopicPosts(slug, cursor)` |
 | Guilds | `GetGuilds(cursor)`, `GetGuild(slug)`, `GetGuildPosts(slug, cursor)`, `CreateGuildPost(slug, content, title, postSlug, topics)`, `GetGuildMembers(slug, cursor)`, `JoinGuild(slug)`, `LeaveGuild(slug)` |
 | Notes | `GetNotes(cursor)`, `GetNote(noteID)`, `GetNoteRevision(noteID, revision)`, `GetNoteRevisions(noteID, cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
-| Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
+| Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `StartConversation(recipientUsername)`, `MarkCMailRead(convID)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
 
 #### `client.go`
 
@@ -193,7 +193,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 - `refresh()` — token refresh path; does not recurse
 - `wirePostToModel()`, `wireReplyToModel()`, `wireUserToModel()`, `wireSettingsToModel()`, `wireNotificationToModel()`, `wireNoteToModel()` — convert API JSON wire types to `model.*` types
 
-**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow` — match the JSON envelope shapes returned by the API.
+**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData` — match the JSON envelope shapes returned by the API.
 
 **Note:** `HTTPClient.tokens` is guarded by a `sync.Mutex`. Bubble Tea runs commands in concurrent goroutines, so reads in `doRequest` and writes in `Login`/`refresh` go through the token accessor methods (`idToken`, `setTokens`, `snapshotTokens`, `applyRefresh`). See `docs/30-security-hardening.md`.
 
@@ -306,7 +306,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 - Manages screen transitions (e.g., `ShowPostMsg` → navigate to PostDetail)
 - Broadcasts `SharedConfigMsg` to all screens on resize, theme change, or settings update
 - Renders tab bar, active screen, and status bar
-- Manages global shortcuts (`1`–`4` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `o` URL opener, `q`/`ctrl+c` quit)
+- Manages global shortcuts (`1`–`9` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `o` URL opener, `q`/`ctrl+c` quit)
 - Handles automatic token refresh on `ErrUnauthorized` responses
 - Surfaces transient errors via a **global notification banner** that replaces the status-bar row, colored by severity, and auto-dismisses after 4 s or on the next keypress (which still performs its normal action)
 - Runs background tick jobs: `schedulePollCmd` (60 s unread count), `scheduleWanderCmd` (1 h wander check)
@@ -441,12 +441,14 @@ Key types: `SettingsModel`, `SaveSettingsMsg`
 
 Direct messages (C-Mail) with live Firebase RTDB integration.
 
-- Two-pane layout: conversation list (left) + active conversation chat (right)
-- Subscribes to RTDB SSE stream via `api.Client.SubscribeDMs()` on conversation selection
+- Two-mode flow: `cmailModeList` (full-width conversation cards) → `cmailModeDetail` (history viewport + compose input); ESC returns to list
+- Subscribes to RTDB SSE stream via `api.Client.SubscribeDMs()` on conversation selection; cancelled on ESC or screen switch
 - `waitForDM(sub)` is a Bubble Tea `Cmd` that blocks on the subscription channel and returns each incoming message as a `tea.Msg`
-- `←`/`→` switch focus between panes; `j`/`k` navigate conversations; Enter sends a message
+- Other person's messages left-aligned; my messages right-aligned (driven by `currentUser` field)
+- `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history in detail mode
+- **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile emits `StartConversationMsg{Username}` (defined in `messages.go`); App calls `StartConversation(username)` via REST, then switches to C-Mail and opens the returned conversation in detail mode; self-DMs are dropped in the App handler
 
-Key types: `CMailModel`, `CMailFocus` (`FocusCMailLeft` / `FocusCMailRight`)  
+Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`
 Key internal types: `dmSubscription` (RTDB channel + cancel func), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `cmailMsgsLoadedMsg`
 
 #### `chatrooms.go`
@@ -648,11 +650,13 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 |---|---|
 | `1` | Feed |
 | `2` | Notifications |
-| `3` | Journal (private notes) |
-| `4` | Bookmarks |
-| `5` | Topics |
-| `6` | Profile |
-| `7` | Settings |
+| `3` | C-Mail (direct messages) |
+| `4` | Journal (private notes) |
+| `5` | Bookmarks |
+| `6` | Guilds |
+| `7` | Topics |
+| `8` | Profile |
+| `9` | Settings |
 | `←` / `→` | Cycle tabs left / right |
 | `v` | Toggle dense / relaxed display |
 | `?` | Help modal |
@@ -679,6 +683,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `enter` | Open post (Posts/Replies tabs) or view user profile (Following/Followers tabs) |
 | `e` | Edit profile (own profile, Info tab) |
 | `f` | Follow / unfollow (read-only profiles) |
+| `c` | Start C-Mail conversation (read-only profiles only) |
 | `esc` | Back to previous screen |
 
 ### Feed
@@ -692,6 +697,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `n` | New post |
 | `d` | Delete selected post (own posts only — prompts y/n) |
 | `p` | View author's profile |
+| `c` | Start C-Mail conversation with post author |
 | `w` | Watch / unwatch the selected thread |
 
 ### Post Detail
@@ -703,6 +709,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `r` | Reply to selected post or reply |
 | `d` | Delete selected post or reply (own content only — prompts y/n) |
 | `p` | View author's profile |
+| `c` | Start C-Mail conversation with focused author |
 | `w` | Watch / unwatch the thread (root post focused only; no-op on replies) |
 | `esc` | Back to feed |
 
@@ -727,15 +734,33 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `m` | Mark selected as read |
 | `M` | Mark all as read |
 | `1` | Toggle unread-only filter |
+| `c` | Start C-Mail conversation with notification actor |
 
 ### C-Mail
 
+**List mode**
+
 | Key | Action |
 |---|---|
-| `j` / `k` or `↓` / `↑` | Navigate conversations (left pane) |
-| `→` | Focus message input |
-| `←` | Focus conversation list |
-| `enter` | Send message |
+| `j` / `↓` | Next conversation |
+| `k` / `↑` | Previous conversation |
+| `enter` | Open conversation (detail mode) |
+
+**Detail mode**
+
+| Key | Action |
+|---|---|
+| `↑` | Scroll message history up |
+| `↓` | Scroll message history down |
+| `enter` | Send message (when input non-empty) |
+| `esc` | Return to list mode |
+| all other | Forwarded to compose input (`j`/`k` type normally) |
+
+**From other screens**
+
+| Key | Action |
+|---|---|
+| `c` | Start or open C-Mail conversation with highlighted user (feed, post detail, notifications, read-only profile) — self-DM is a no-op |
 
 ### Settings
 
@@ -797,7 +822,6 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 | Area | Status |
 |---|---|
 | **Chatrooms API** | UI fully built; REST integration deferred (server paths not finalized) |
-| **C-Mail REST** | Conversation list + history loaded from mock; RTDB subscribe wired; full path confirmed post-beta |
 | **HTTPClient thread safety** | Resolved: `tokens` is guarded by a `sync.Mutex` (see `docs/30-security-hardening.md`) |
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized |
 | **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |

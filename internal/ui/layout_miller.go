@@ -204,12 +204,17 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 			}
 		case "3":
 			if a.active != screenLogin {
+				a.active = screenCMail
+				return a, a.loadConvsCmd(), true
+			}
+		case "4":
+			if a.active != screenLogin {
 				a.cmail = a.cmail.CancelSubscription()
 				a.active = screenJournal
 				a.journal = a.journal.SetFetching()
 				return a, a.loadJournalCmd(), true
 			}
-		case "4":
+		case "5":
 			if a.active != screenLogin {
 				a.cmail = a.cmail.CancelSubscription()
 				a.active = screenBookmarks
@@ -219,7 +224,7 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 				}
 				return a, nil, true
 			}
-		case "5":
+		case "6":
 			if a.active != screenLogin {
 				a.cmail = a.cmail.CancelSubscription()
 				a.active = screenGuilds
@@ -229,7 +234,7 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 				}
 				return a, nil, true
 			}
-		case "6":
+		case "7":
 			if a.active != screenLogin {
 				a.cmail = a.cmail.CancelSubscription()
 				a.active = screenTopics
@@ -239,13 +244,13 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 				}
 				return a, nil, true
 			}
-		case "7":
+		case "8":
 			if a.active != screenLogin {
 				a.cmail = a.cmail.CancelSubscription()
 				a.active = screenProfile
 				return a, a.loadProfileCmd(), true
 			}
-		case "8":
+		case "9":
 			if a.active != screenLogin {
 				a.cmail = a.cmail.CancelSubscription()
 				a.active = screenSettings
@@ -353,8 +358,9 @@ func (l MillerLayout) renderNav(a App) string {
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			label = fmt.Sprintf("%s ●%d", label, a.polledUnreadCount)
 		}
+		isActive := a.active == t.s && !(t.s == screenCMail && a.cmail.IsShowingDetail())
 		var row string
-		if a.active == t.s {
+		if isActive {
 			if a.focus == focusMenu {
 				row = theme.Highlight.Width(navW).Render("▶ " + label)
 			} else {
@@ -464,7 +470,7 @@ func (l MillerLayout) renderNotification(a App) string {
 func (l MillerLayout) screenHints(a App) []hint {
 	switch a.focus {
 	case focusMenu:
-		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-8", "jump"}, {"?", "more"}}
+		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-9", "jump"}, {"?", "more"}}
 	case focusDetail:
 		return []hint{{"h/←", "list"}, {"j/k", "replies"}, {"↵", "thread"}, {"r", "reply"}}
 	default: // focusList
@@ -562,7 +568,7 @@ func (l MillerLayout) renderHelpModal(a App) string {
 		row("j/k", "move nav · select section"),
 		row("l / enter", "enter content pane"),
 		row("h", "return to nav pane"),
-		row("1-8", "jump to section"),
+		row("1-9", "jump to section"),
 		row("t", "theme"),
 		row("v", "density"),
 		row("o", "open url"),

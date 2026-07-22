@@ -544,6 +544,11 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.tokens = msg.tokens
 		a.currentUser = msg.user
 		a.cmail = screens.NewCMailModel(msg.user.Username, a.client)
+		// Initialize the fresh model's viewports with the current terminal size.
+		if a.width > 0 {
+			contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(a.width), Height: a.layout.ContentHeight(a.height)}
+			a.cmail, _ = a.cmail.Update(contentMsg)
+		}
 		return a, a.afterLoginCmd(), true
 	case screens.LoginErrMsg:
 		var cmd tea.Cmd
@@ -697,6 +702,30 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
+	case cmailMessageSentMsg:
+		sent := model.Message{
+			From:      model.User{Username: a.currentUser.Username},
+			Body:      msg.body,
+			CreatedAt: time.Now(),
+		}
+		a.cmail = a.cmail.AppendMessage(sent)
+		return a, nil, true
+	case screens.CMailConvSelectedMsg:
+		return a, a.markCMailReadCmd(msg.ConversationID), true
+	case screens.StartConversationMsg:
+		if msg.Username == "" || msg.Username == a.currentUser.Username {
+			return a, nil, true
+		}
+		return a, a.startConversationCmd(msg.Username), true
+	case conversationStartedMsg:
+		a.active = screenCMail
+		a.cmail = a.cmail.SetActiveConversation(msg.conv)
+		convID := msg.conv.ID
+		return a, tea.Batch(
+			a.loadConvsCmd(),
+			a.cmail.ConvOpenCmds(convID),
+			func() tea.Msg { return screens.CMailConvSelectedMsg{ConversationID: convID} },
+		), true
 	}
 	return a, nil, false
 }
@@ -1877,6 +1906,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.loadWatchesPageCmd(""),
 		a.loadTopicsCmd(),
 		a.loadProfileCmd(),
+		a.loadConvsCmd(),
 		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
 		a.loadSettingsCmd(),
@@ -1896,6 +1926,11 @@ type feedPageMsg struct {
 }
 type roomsLoadedMsg struct{ rooms []model.Room }
 type convsLoadedMsg struct{ convs []model.Conversation }
+type cmailMessageSentMsg struct {
+	convID string
+	body   string
+}
+type conversationStartedMsg struct{ conv model.Conversation }
 type profileLoadedMsg struct{ user model.User }
 type userProfileLoadedMsg struct {
 	user        model.User
@@ -2296,6 +2331,23 @@ func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 		if err := a.client.SendMessage(convID, body); err != nil {
 			return actionErrMsg{err}
 		}
+		return cmailMessageSentMsg{convID: convID, body: body}
+	}
+}
+
+func (a App) startConversationCmd(username string) tea.Cmd {
+	return func() tea.Msg {
+		conv, err := a.client.StartConversation(username)
+		if err != nil {
+			return actionErrMsg{err}
+		}
+		return conversationStartedMsg{conv: conv}
+	}
+}
+
+func (a *App) markCMailReadCmd(convID string) tea.Cmd {
+	return func() tea.Msg {
+		_ = a.client.MarkCMailRead(convID)
 		return nil
 	}
 }

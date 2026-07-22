@@ -332,6 +332,12 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 				return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 			}
 			return m, nil
+		case "c":
+			if len(visible) > 0 && m.selectedIndex < len(visible) {
+				username := visible[m.selectedIndex].Actor.Username
+				return m, func() tea.Msg { return StartConversationMsg{Username: username} }
+			}
+			return m, nil
 		}
 	}
 

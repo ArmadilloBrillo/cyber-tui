@@ -2,6 +2,8 @@ package screens
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -14,15 +16,19 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-// cmailLocalChrome accounts for the header row and bordered input box below the viewport.
-const cmailLocalChrome = 3
-
-// CMailFocus identifies which pane of the C-Mail screen has keyboard focus.
-type CMailFocus int
+// cmailMode identifies whether the screen is in list or detail mode.
+type cmailMode int
 
 const (
-	FocusCMailLeft  CMailFocus = iota // conversation list pane
-	FocusCMailRight                   // chat + input pane
+	cmailModeList   cmailMode = iota // full-width conversation list
+	cmailModeDetail                   // full-width history + input
+)
+
+// Rows consumed by the detail view's header and input box (outside the history viewport).
+const (
+	cmailDetailHeaderRows = 1 // "@otheruser · c-mail" header
+	cmailInputRows        = 3 // bordered textinput: 1 content + 2 border rows
+	cmailDetailChrome     = cmailDetailHeaderRows + cmailInputRows
 )
 
 // dmSubscription holds the live RTDB channel and its cancellation function.
@@ -56,21 +62,24 @@ func waitForDM(sub *dmSubscription) tea.Cmd {
 }
 
 // CMailModel is the screen model for C-Mail (private 1-on-1 conversations).
+// It operates in two modes: a full-width conversation list (list mode) and a
+// full-width message history with compose input (detail mode).
 type CMailModel struct {
 	conversations []model.Conversation
 	activeConv    *model.Conversation
-	viewport      viewport.Model
+	listVP        viewport.Model // scrolls the conversation list in list mode
+	viewport      viewport.Model // scrolls message history in detail mode
 	input         textinput.Model
 	ready         bool
 	err           error
 	currentUser   string
 
-	focusPane         CMailFocus
-	selectedConv      int            // index into conversations
-	sidebarWidth      int            // inner content width, computed on WindowSizeMsg
-	width             int            // terminal width, stored for View()
-	loc               *time.Location // timezone for timestamp display; nil = UTC
-	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
+	mode         cmailMode
+	selectedConv int            // index into conversations
+	width        int            // terminal width
+	height       int            // terminal height
+	loc          *time.Location // timezone for timestamp display; nil = UTC
+	timeDisplayFormat string    // "datetime", "relative", "unix", or "swatch"
 
 	// DM subscription state — managed entirely within CMailModel.
 	client       api.Client
@@ -84,17 +93,21 @@ type SendCMailMsg struct {
 	Body           string
 }
 
-// NewCMailModel creates a new CMailModel for the given authenticated user.
-// Pass nil for client when using the mock or in tests.
-func NewCMailModel(currentUser string, client api.Client) CMailModel {
-	input := textinput.New()
-	input.Placeholder = "compose c-mail..."
+// CMailConvSelectedMsg is emitted when the user opens a conversation.
+// App uses it to call MarkCMailRead on the server.
+type CMailConvSelectedMsg struct {
+	ConversationID string
+}
 
+// NewCMailModel creates a new CMailModel for the given authenticated user.
+func NewCMailModel(currentUser string, client api.Client) CMailModel {
+	inp := textinput.New()
+	inp.Placeholder = "compose c-mail..."
 	return CMailModel{
-		input:       input,
+		input:       inp,
 		currentUser: currentUser,
 		client:      client,
-		focusPane:   FocusCMailLeft,
+		mode:        cmailModeList,
 	}
 }
 
@@ -113,7 +126,6 @@ func (m CMailModel) CancelSubscription() CMailModel {
 	return m.cancelDMSub()
 }
 
-// openDMSubscriptionCmd starts a live RTDB stream for convID.
 func (m CMailModel) openDMSubscriptionCmd(convID string) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
@@ -128,7 +140,6 @@ func (m CMailModel) openDMSubscriptionCmd(convID string) tea.Cmd {
 	}
 }
 
-// loadConvMessagesCmd fetches message history for a conversation.
 func (m CMailModel) loadConvMessagesCmd(convID string) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
@@ -143,49 +154,58 @@ func (m CMailModel) loadConvMessagesCmd(convID string) tea.Cmd {
 	}
 }
 
-// SetError stores an error to display in the C-Mail view.
+// SetError stores an error to display.
 func (m CMailModel) SetError(err error) CMailModel {
 	m.err = err
 	return m
 }
 
-// SetConversations replaces the conversation list, clamping the selection cursor if needed.
+// SetConversations replaces the conversation list, clamping the cursor if needed.
 func (m CMailModel) SetConversations(convs []model.Conversation) CMailModel {
 	m.conversations = convs
 	m.err = nil
 	if len(convs) > 0 && m.selectedConv >= len(convs) {
 		m.selectedConv = len(convs) - 1
 	}
+	if m.ready {
+		m.listVP.SetContent(m.renderConvCards())
+	}
 	return m
 }
 
 // SetActiveConversation opens a specific conversation (used by external callers).
+// Cancels any existing DM subscription and sets activeConvID so that the
+// dmSubscribedMsg / cmailMsgsLoadedMsg handlers accept the new conversation's results.
 func (m CMailModel) SetActiveConversation(conv model.Conversation) CMailModel {
+	m = m.cancelDMSub()
+	m.activeConvID = conv.ID
 	m.activeConv = &conv
+	m.mode = cmailModeDetail
+	m.input.Focus()
 	if m.ready {
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
 	}
-	m.input.Focus()
-	m.focusPane = FocusCMailRight
 	return m
 }
 
-// InputFocused reports whether the message input is currently active.
-// Used by the app to prevent arrow keys from navigating tabs while typing.
-func (m CMailModel) InputFocused() bool { return m.input.Focused() }
+// ConvOpenCmds returns the batch command to load message history and open the
+// live RTDB subscription for convID. Call after SetActiveConversation.
+func (m CMailModel) ConvOpenCmds(convID string) tea.Cmd {
+	return tea.Batch(m.loadConvMessagesCmd(convID), m.openDMSubscriptionCmd(convID))
+}
 
-// FocusPane returns the currently focused pane.
-func (m CMailModel) FocusPane() CMailFocus { return m.focusPane }
+// InputFocused returns true in detail mode to prevent tab-navigation key capture.
+func (m CMailModel) InputFocused() bool { return m.mode == cmailModeDetail }
 
-// SelectedConv returns the index of the highlighted conversation in the list.
+// IsShowingDetail reports whether the detail view (history + input) is active.
+func (m CMailModel) IsShowingDetail() bool { return m.mode == cmailModeDetail }
+
+// SelectedConv returns the cursor index in the conversation list.
 func (m CMailModel) SelectedConv() int { return m.selectedConv }
 
-// HasActiveConv reports whether a conversation is currently open in the chat pane.
-func (m CMailModel) HasActiveConv() bool { return m.activeConv != nil }
-
-// SidebarWidth returns the computed inner content width of the conversation list pane.
-func (m CMailModel) SidebarWidth() int { return m.sidebarWidth }
+// HasActiveConv reports whether the detail view is currently open.
+func (m CMailModel) HasActiveConv() bool { return m.mode == cmailModeDetail }
 
 func (m CMailModel) Init() tea.Cmd { return textinput.Blink }
 
@@ -193,33 +213,34 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		m.sidebarWidth = clamp(msg.Width/4, 20, 32)
-		h := msg.Height - theme.ChromeHeight - cmailLocalChrome
-		// sidebarOuter = sidebarWidth + 4 (border 2 + padding 2); gap = 2
-		vpWidth := msg.Width - m.sidebarWidth - 6
+		m.height = msg.Height
+		listH := msg.Height - theme.ChromeHeight
+		detailH := msg.Height - theme.ChromeHeight - cmailDetailChrome
 		if !m.ready {
-			m.viewport = viewport.New(vpWidth, h)
+			m.listVP = viewport.New(msg.Width, listH)
+			m.viewport = viewport.New(msg.Width, detailH)
+			m.listVP.SetContent(m.renderConvCards())
 			m.ready = true
 		} else {
-			m.viewport.Width = vpWidth
-			m.viewport.Height = h
+			m.listVP.Width = msg.Width
+			m.listVP.Height = listH
+			m.viewport.Width = msg.Width
+			m.viewport.Height = detailH
+			m.listVP.SetContent(m.renderConvCards())
+			if m.activeConv != nil {
+				m.viewport.SetContent(m.renderMessages())
+			}
 		}
-		// input sits inside its own border (border 2 + padding 2 = 4 chars overhead)
-		m.input.Width = vpWidth - 4
-		if m.activeConv != nil {
-			m.viewport.SetContent(m.renderMessages())
-			m.viewport.GotoBottom()
-		}
+		m.input.Width = msg.Width - 4
 
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m = m.SetLocation(msg.Loc)
 		return m, nil
 
-	// --- DM subscription messages ---
+	// --- DM subscription lifecycle ---
 
 	case dmSubscribedMsg:
-		// Stale guard: ignore if the user navigated away before subscription connected.
 		if msg.convID != m.activeConvID {
 			msg.sub.cancel()
 			return m, nil
@@ -248,20 +269,28 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		m.err = msg.err
 		return m, nil
 
-	// --- Key input ---
+	// --- Keyboard ---
 
 	case tea.KeyMsg:
-		switch m.focusPane {
-		case FocusCMailLeft:
+		switch m.mode {
+		case cmailModeList:
 			switch msg.String() {
 			case "up", "k":
 				if m.selectedConv > 0 {
 					m.selectedConv--
+					if m.ready {
+						m.listVP.SetContent(m.renderConvCards())
+						m = m.ensureConvVisible()
+					}
 				}
 				return m, nil
 			case "down", "j":
 				if m.selectedConv < len(m.conversations)-1 {
 					m.selectedConv++
+					if m.ready {
+						m.listVP.SetContent(m.renderConvCards())
+						m = m.ensureConvVisible()
+					}
 				}
 				return m, nil
 			case "enter":
@@ -270,28 +299,35 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 					m = m.cancelDMSub()
 					m.activeConvID = conv.ID
 					m.activeConv = &conv
+					m.mode = cmailModeDetail
+					m.input.Focus()
 					if m.ready {
 						m.viewport.SetContent(m.renderMessages())
 						m.viewport.GotoBottom()
 					}
-					m.input.Focus()
-					m.focusPane = FocusCMailRight
+					convID := conv.ID
 					return m, tea.Batch(
 						m.loadConvMessagesCmd(conv.ID),
 						m.openDMSubscriptionCmd(conv.ID),
+						func() tea.Msg { return CMailConvSelectedMsg{ConversationID: convID} },
 					)
 				}
 				return m, nil
-			case "tab":
-				m.focusPane = FocusCMailRight
-				m.input.Focus()
-				return m, nil
 			}
 
-		case FocusCMailRight:
+		case cmailModeDetail:
 			switch msg.String() {
+			case "esc":
+				m = m.cancelDMSub()
+				m.mode = cmailModeList
+				m.activeConv = nil
+				m.input.Blur()
+				if m.ready {
+					m.listVP.SetContent(m.renderConvCards())
+				}
+				return m, nil
 			case "enter":
-				if m.input.Focused() && m.activeConv != nil {
+				if m.activeConv != nil {
 					val := m.input.Value()
 					if val != "" {
 						m.input.Reset()
@@ -301,33 +337,35 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 						}
 					}
 				}
-			case "esc":
-				if m.input.Focused() {
-					m.input.Blur()
-				} else {
-					m.focusPane = FocusCMailLeft
-				}
 				return m, nil
-			case "tab":
-				m.input.Blur()
-				m.focusPane = FocusCMailLeft
+			case "up":
+				m.viewport.ScrollUp(1)
+				return m, nil
+			case "down":
+				m.viewport.ScrollDown(1)
 				return m, nil
 			}
 		}
 	}
 
-	if km, ok := msg.(tea.KeyMsg); ok {
-		km, ok = filterAmbiguousKeyMsg(km)
-		if !ok {
-			return m, nil
+	// In detail mode pass remaining key input to the text input.
+	if m.mode == cmailModeDetail {
+		if km, ok := msg.(tea.KeyMsg); ok {
+			km, ok = filterAmbiguousKeyMsg(km)
+			if !ok {
+				return m, nil
+			}
+			msg = km
 		}
-		msg = km
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
 	}
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
+
+	// In list mode pass non-key messages (e.g. mouse scroll) to the list viewport.
 	var vpCmd tea.Cmd
-	m.viewport, vpCmd = m.viewport.Update(msg)
-	return m, tea.Batch(cmd, vpCmd)
+	m.listVP, vpCmd = m.listVP.Update(msg)
+	return m, vpCmd
 }
 
 func (m CMailModel) otherParticipant(conv model.Conversation) string {
@@ -339,39 +377,86 @@ func (m CMailModel) otherParticipant(conv model.Conversation) string {
 	return "unknown"
 }
 
-func (m CMailModel) renderConvList() string {
-	out := theme.Title.Render("c-mail") + "\n\n"
+// cmailCardHeight is the number of terminal lines each conversation card occupies:
+// top border + 2 content rows + bottom border = 4 (Padding(0,1) adds no vertical rows).
+// The trailing "\n" in renderConvCards terminates the line; the next card follows immediately.
+const cmailCardHeight = 4
+
+// ensureConvVisible adjusts listVP.YOffset so the selected conversation card is in the visible area.
+func (m CMailModel) ensureConvVisible() CMailModel {
+	cardTop := m.selectedConv * cmailCardHeight
+	cardBot := cardTop + cmailCardHeight - 1
+	if cardTop < m.listVP.YOffset {
+		m.listVP.YOffset = cardTop
+	} else if cardBot >= m.listVP.YOffset+m.listVP.Height {
+		m.listVP.YOffset = cardBot - m.listVP.Height + 1
+	}
+	return m
+}
+
+// renderConvCards builds the conversation list content for listVP.
+// Each conversation is a full-width bordered card, active border on the selected row.
+func (m CMailModel) renderConvCards() string {
 	if len(m.conversations) == 0 {
 		if m.err != nil {
-			return out + theme.Subtle.Render("couldn't load conversations")
+			return theme.Subtle.Render("couldn't load conversations")
 		}
-		return out + theme.Subtle.Render("no conversations yet")
+		return theme.Subtle.Render("no conversations yet")
 	}
-	maxPreview := m.sidebarWidth - 4
-	if maxPreview < 4 {
-		maxPreview = 4
-	}
+
+	innerWidth := max(m.width-4, 1) // border 2 + padding 2
+
+	var sb strings.Builder
 	for i, c := range m.conversations {
-		nameStyle := theme.Subtle
-		if i == m.selectedConv {
-			nameStyle = theme.Highlight
-		}
 		other := m.otherParticipant(c)
-		out += nameStyle.Render("@"+other) + "\n"
-		if len(c.Messages) > 0 {
-			last := c.Messages[len(c.Messages)-1]
-			out += theme.Subtle.Render("  "+truncate(last.Body, maxPreview)) + "\n"
+
+		// Left side: @username
+		nameStr := theme.Highlight.Render("@" + other)
+
+		// Right side: date  (N)
+		var rightParts []string
+		if !c.LastMessageAt.IsZero() {
+			rightParts = append(rightParts, theme.Subtle.Render(displayTime(c.LastMessageAt, m.location(), m.timeDisplayFormat, true)))
 		}
-		out += "\n"
+		if c.UnreadCount > 0 {
+			rightParts = append(rightParts, theme.Highlight.Render(fmt.Sprintf("(%d)", c.UnreadCount)))
+		}
+		rightStr := strings.Join(rightParts, "  ")
+
+		gap := innerWidth - lipgloss.Width(nameStr) - lipgloss.Width(rightStr)
+		var headerLine string
+		if gap > 0 {
+			headerLine = nameStr + strings.Repeat(" ", gap) + rightStr
+		} else {
+			headerLine = nameStr
+		}
+
+		// Preview: first line of LastMessage, falling back to loaded messages.
+		preview := c.LastMessage
+		if preview == "" && len(c.Messages) > 0 {
+			preview = c.Messages[len(c.Messages)-1].Body
+		}
+		previewLine := theme.Subtle.Render(truncate(preview, innerWidth))
+
+		content := lipgloss.JoinVertical(lipgloss.Left, headerLine, previewLine)
+
+		boxStyle := theme.Border
+		if i == m.selectedConv {
+			boxStyle = theme.ActiveBorder
+		}
+		if m.width > 4 {
+			boxStyle = boxStyle.Width(m.width - 2)
+		}
+		sb.WriteString(boxStyle.Render(content) + "\n")
 	}
-	return out
+	return sb.String()
 }
 
 func (m CMailModel) renderMessages() string {
 	if m.activeConv == nil || len(m.activeConv.Messages) == 0 {
 		return theme.Subtle.Render("no messages")
 	}
-	return renderChatMessages(m.activeConv.Messages, m.location(), m.timeDisplayFormat, m.viewport.Width)
+	return renderChatMessages(m.activeConv.Messages, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width)
 }
 
 func (m CMailModel) location() *time.Location {
@@ -387,13 +472,16 @@ func (m CMailModel) SetLocation(loc *time.Location) CMailModel {
 	}
 	m.loc = loc
 	if m.ready {
-		m.viewport.SetContent(m.renderMessages())
+		m.listVP.SetContent(m.renderConvCards())
+		if m.activeConv != nil {
+			m.viewport.SetContent(m.renderMessages())
+		}
 	}
 	return m
 }
 
 // SetConversationMessages replaces the message history for the active conversation.
-// No-op if convID doesn't match the currently open conversation.
+// No-op if convID doesn't match.
 func (m CMailModel) SetConversationMessages(convID string, msgs []model.Message) CMailModel {
 	if m.activeConv == nil || m.activeConv.ID != convID {
 		return m
@@ -425,44 +513,24 @@ func (m CMailModel) AppendMessage(msg model.Message) CMailModel {
 }
 
 func (m CMailModel) View() string {
-	listBorder := theme.Border
-	if m.focusPane == FocusCMailLeft {
-		listBorder = theme.ActiveBorder
-	}
-	convList := listBorder.Width(m.sidebarWidth).Render(m.renderConvList())
-
-	var chatArea string
-	if m.activeConv == nil {
-		chatArea = theme.Subtle.Render("\n  select a conversation")
-	} else {
-		other := m.otherParticipant(*m.activeConv)
-		header := theme.Title.Render("@" + other)
-
-		inputBorder := theme.Border
-		if m.focusPane == FocusCMailRight {
-			inputBorder = theme.ActiveBorder
+	switch m.mode {
+	case cmailModeDetail:
+		if !m.ready {
+			return ""
 		}
-		inputBox := inputBorder.Render(m.input.View())
-
-		chatArea = lipgloss.JoinVertical(lipgloss.Left,
-			header,
-			m.viewport.View(),
-			inputBox,
-		)
+		other := ""
+		if m.activeConv != nil {
+			other = m.otherParticipant(*m.activeConv)
+		}
+		header := theme.Title.Render("@" + other + "  ·  c-mail")
+		inputBox := theme.ActiveBorder.Render(m.input.View())
+		return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), inputBox)
+	default: // cmailModeList
+		if !m.ready {
+			return theme.Subtle.Render("loading c-mail…")
+		}
+		return m.listVP.View()
 	}
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, convList, "  ", chatArea)
-}
-
-// clamp returns v clamped to [lo, hi].
-func clamp(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }
 
 // truncate shortens s to at most max terminal columns, appending "…" if cut.

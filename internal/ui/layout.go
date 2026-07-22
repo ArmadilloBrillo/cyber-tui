@@ -58,6 +58,7 @@ var menuTabs = []struct {
 }{
 	{"feed", screenFeed},
 	{"notifications", screenNotifications},
+	{"c-mail", screenCMail},
 	{"journal", screenJournal},
 	{"bookmarks", screenBookmarks},
 	{"guilds", screenGuilds},

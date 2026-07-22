@@ -420,8 +420,10 @@ func (m *MockClient) SendRoomMessage(roomID, body string) error {
 func (m *MockClient) GetConversations() ([]model.Conversation, error) {
 	return []model.Conversation{
 		{
-			ID:           "c1",
-			Participants: []model.User{mockUsers[0], mockUsers[1]},
+			ID:            "c1",
+			Participants:  []model.User{mockUsers[0], mockUsers[1]},
+			LastMessage:   "we need to talk about the job",
+			LastMessageAt: time.Now().Add(-1 * time.Hour),
 			Messages: []model.Message{
 				{ID: "dm1", From: mockUsers[1], Body: "we need to talk about the job", CreatedAt: time.Now().Add(-1 * time.Hour)},
 			},
@@ -459,6 +461,17 @@ func (m *MockClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 		}
 	}()
 	return ch, cancel, nil
+}
+
+func (m *MockClient) StartConversation(recipientUsername string) (model.Conversation, error) {
+	return model.Conversation{
+		ID:           "c-new",
+		Participants: []model.User{{Username: recipientUsername}},
+	}, nil
+}
+
+func (m *MockClient) MarkCMailRead(conversationID string) error {
+	return nil
 }
 
 var mockFollowing = []model.Follow{

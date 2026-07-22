@@ -500,6 +500,17 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				username = m.post.AuthorUsername
 			}
 			return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+		case "c":
+			if m.post.ID == "" {
+				return m, nil
+			}
+			var username string
+			if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
+				username = m.flatTree[m.selectedReply].Reply.AuthorUsername
+			} else {
+				username = m.post.AuthorUsername
+			}
+			return m, func() tea.Msg { return StartConversationMsg{Username: username} }
 		case "b":
 			if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
 				replyID := m.flatTree[m.selectedReply].Reply.ID
