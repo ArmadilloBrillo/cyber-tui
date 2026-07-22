@@ -690,14 +690,6 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
-	case roomMessageSentMsg:
-		sent := model.Message{
-			From:      model.User{Username: a.currentUser.Username},
-			Body:      msg.body,
-			CreatedAt: time.Now(),
-		}
-		a.chatrooms = a.chatrooms.AppendMessage(sent)
-		return a, nil, true
 	case screens.RoomOpenedMsg:
 		return a, a.markRoomReadCmd(msg.RoomID), true
 	}
@@ -714,14 +706,6 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
-	case cmailMessageSentMsg:
-		sent := model.Message{
-			From:      model.User{Username: a.currentUser.Username},
-			Body:      msg.body,
-			CreatedAt: time.Now(),
-		}
-		a.cmail = a.cmail.AppendMessage(sent)
-		return a, nil, true
 	case screens.CMailConvSelectedMsg:
 		return a, a.markCMailReadCmd(msg.ConversationID), true
 	case screens.StartConversationMsg:
@@ -1841,7 +1825,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		}
 		// Initialise the RTDB client using the URL returned by the API (best effort).
 		if hc, ok := a.client.(*api.HTTPClient); ok {
-			_ = hc.InitRTDB(tokens.RTDBToken, tokens.RTDBUrl)
+			_ = hc.InitRTDB(tokens.IDToken, tokens.RTDBUrl)
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
@@ -1878,7 +1862,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 			return screens.LoginErrMsg{Err: err}
 		}
 		if hc, ok := a.client.(*api.HTTPClient); ok {
-			_ = hc.InitRTDB(tokens.RTDBToken, tokens.RTDBUrl)
+			_ = hc.InitRTDB(tokens.IDToken, tokens.RTDBUrl)
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
@@ -1938,10 +1922,6 @@ type feedPageMsg struct {
 }
 type roomsLoadedMsg struct{ rooms []model.Room }
 type convsLoadedMsg struct{ convs []model.Conversation }
-type cmailMessageSentMsg struct {
-	convID string
-	body   string
-}
 type conversationStartedMsg struct{ conv model.Conversation }
 type profileLoadedMsg struct{ user model.User }
 type userProfileLoadedMsg struct {
@@ -2329,17 +2309,12 @@ func (a *App) loadUserFollowersCmd(userID, cursor string) tea.Cmd {
 	}
 }
 
-type roomMessageSentMsg struct {
-	roomID string
-	body   string
-}
-
 func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.SendRoomMessage(roomID, body); err != nil {
 			return actionErrMsg{err}
 		}
-		return roomMessageSentMsg{roomID: roomID, body: body}
+		return nil
 	}
 }
 
@@ -2355,7 +2330,7 @@ func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 		if err := a.client.SendMessage(convID, body); err != nil {
 			return actionErrMsg{err}
 		}
-		return cmailMessageSentMsg{convID: convID, body: body}
+		return nil
 	}
 }
 

@@ -478,7 +478,7 @@ func (c *HTTPClient) applyRefresh(idToken, rtdbToken, rtdbUrl string) {
 		c.tokens.RTDBUrl = rtdbUrl
 	}
 	if c.rtdbClient != nil {
-		c.rtdbClient.SetToken(rtdbToken)
+		c.rtdbClient.SetToken(idToken)
 	}
 }
 
@@ -496,18 +496,20 @@ func NewHTTPClientForTesting(baseURL string, hc *http.Client) *HTTPClient {
 	return &HTTPClient{baseURL: baseURL, httpClient: hc}
 }
 
-// InitRTDB initialises the Firebase RTDB client using the URL and token returned
-// by the login/refresh response. rtdbUrl must be the value from the API response —
+// InitRTDB initialises the Firebase RTDB client using the URL from the login/refresh
+// response and the user's ID token. rtdbUrl must be the value from the API response —
 // it must not be derived from the token, as the regional URL format differs from
-// what JWT-based derivation would produce.
-func (c *HTTPClient) InitRTDB(rtdbToken, rtdbUrl string) error {
+// what JWT-based derivation would produce. idToken (not the API's rtdbToken field,
+// which is a custom token for signInWithCustomToken) is what Firebase RTDB's REST/SSE
+// auth query parameter actually accepts.
+func (c *HTTPClient) InitRTDB(idToken, rtdbUrl string) error {
 	if rtdbUrl == "" {
 		return fmt.Errorf("api: InitRTDB: rtdbUrl is empty")
 	}
 	if c.isDebug() {
 		fmt.Printf("[rtdb debug] InitRTDB: url=%q\n", rtdbUrl)
 	}
-	c.rtdbClient = rtdb.New(rtdbUrl, rtdbToken)
+	c.rtdbClient = rtdb.New(rtdbUrl, idToken)
 	return nil
 }
 

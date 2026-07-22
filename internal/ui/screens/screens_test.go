@@ -269,8 +269,8 @@ func TestChatrooms_Send_EmitsMessage(t *testing.T) {
 	if sendMsg.Body != "hello circ" {
 		t.Errorf("expected body='hello circ', got %q", sendMsg.Body)
 	}
-	if sendMsg.RoomID != "r1" {
-		t.Errorf("expected roomID='r1', got %q", sendMsg.RoomID)
+	if sendMsg.RoomID != "zion" {
+		t.Errorf("expected roomID='zion', got %q", sendMsg.RoomID)
 	}
 }
 

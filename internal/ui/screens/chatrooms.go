@@ -338,7 +338,7 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 					val := m.input.Value()
 					if val != "" {
 						m.input.Reset()
-						roomID := m.activeRoom.ID
+						roomID := m.activeRoom.Slug
 						return m, func() tea.Msg {
 							return SendRoomMessageMsg{RoomID: roomID, Body: val}
 						}
