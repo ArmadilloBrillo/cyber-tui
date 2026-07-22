@@ -416,7 +416,7 @@ func TestSettings_WanderGroup_Visible(t *testing.T) {
 func TestSettings_WanderToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
-	m.cursor = 12 // wander mode item (index shifted by added layout item)
+	m.cursor = 11 // wander mode item
 	m, _ = m.Update(keyMsg("enter"))
 	if m.wanderLust {
 		t.Error("toggling wander mode should flip wanderLust to false")
