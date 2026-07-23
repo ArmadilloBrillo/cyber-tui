@@ -191,12 +191,15 @@ func listFooter(loading, exhausted bool) string {
 
 // renderCircMessages renders a list of chatroom messages in IRC style:
 // <username>  message body                                     14:32
-// The timestamp is right-aligned; the username is highlighted.
-// Multi-line message bodies have continuation lines indented to align under the body.
+// The timestamp is right-aligned on the message's last line; the username is
+// highlighted. Bodies word-wrap to fit viewportWidth, with room reserved on
+// every wrapped line for the timestamp column so long messages never push it
+// off-screen; continuation lines are indented to align under the body.
 func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int) string {
 	if viewportWidth < 20 {
 		viewportWidth = 80
 	}
+	const tsGap = 2 // minimum space between the wrapped text and the timestamp
 	var sb strings.Builder
 	for _, msg := range msgs {
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
@@ -205,21 +208,23 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 		// Styled prefix: <username>  (plain width = len(username) + 4)
 		styledPrefix := "<" + theme.Highlight.Render(msg.From.Username) + ">  "
 		rawPrefixWidth := len(msg.From.Username) + 4
-
-		body := strings.TrimRight(msg.Body, "\n")
-		lines := strings.Split(body, "\n")
 		indent := strings.Repeat(" ", rawPrefixWidth)
 
+		bodyWidth := max(viewportWidth-rawPrefixWidth-tsWidth-tsGap, 10)
+
+		body := strings.TrimRight(msg.Body, "\n")
+		lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(body), "\n")
+		last := len(lines) - 1
+
 		for i, line := range lines {
+			prefix := indent
 			if i == 0 {
-				lineWidth := lipgloss.Width(line)
-				pad := viewportWidth - rawPrefixWidth - lineWidth - tsWidth
-				if pad < 1 {
-					pad = 1
-				}
-				sb.WriteString(styledPrefix + line + strings.Repeat(" ", pad) + theme.Subtle.Render(ts) + "\n")
+				prefix = styledPrefix
+			}
+			if i == last {
+				sb.WriteString(prefix + line + strings.Repeat(" ", tsGap) + theme.Subtle.Render(ts) + "\n")
 			} else {
-				sb.WriteString(indent + line + "\n")
+				sb.WriteString(prefix + line + "\n")
 			}
 		}
 	}
