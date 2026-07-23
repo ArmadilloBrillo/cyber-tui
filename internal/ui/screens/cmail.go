@@ -33,6 +33,7 @@ const (
 
 // dmSubscription holds the live RTDB channel and its cancellation function.
 type dmSubscription struct {
+	ConvID string
 	C      <-chan model.Message
 	cancel context.CancelFunc
 }
@@ -43,7 +44,8 @@ type dmSubscribedMsg struct {
 	sub    *dmSubscription
 }
 type dmReceivedMsg struct{ msg model.Message }
-type dmStreamClosedMsg struct{}
+type dmStreamClosedMsg struct{ convID string }
+type dmReconnectedMsg struct{ sub *dmSubscription }
 type cmailMsgsLoadedMsg struct {
 	convID string
 	msgs   []model.Message
@@ -54,12 +56,16 @@ type cmailOlderMsgsLoadedMsg struct {
 }
 type cmailErrMsg struct{ err error }
 
+// CMailReconnectedMsg is emitted after the live RTDB stream is successfully
+// re-established following an idToken expiry. App uses it to show a toast.
+type CMailReconnectedMsg struct{}
+
 // waitForDM blocks on the subscription channel and returns the next message as a tea.Cmd.
 func waitForDM(sub *dmSubscription) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-sub.C
 		if !ok {
-			return dmStreamClosedMsg{}
+			return dmStreamClosedMsg{convID: sub.ConvID}
 		}
 		return dmReceivedMsg{msg: msg}
 	}
@@ -144,7 +150,26 @@ func (m CMailModel) openDMSubscriptionCmd(convID string) tea.Cmd {
 		if err != nil {
 			return cmailErrMsg{err}
 		}
-		return dmSubscribedMsg{convID: convID, sub: &dmSubscription{C: ch, cancel: cancel}}
+		return dmSubscribedMsg{convID: convID, sub: &dmSubscription{ConvID: convID, C: ch, cancel: cancel}}
+	}
+}
+
+// reconnectConvCmd refreshes the session token and reopens the RTDB subscription
+// for convID after the live stream closed (typically an idToken expiry).
+func (m CMailModel) reconnectConvCmd(convID string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		if err := client.RefreshSession(); err != nil {
+			return cmailErrMsg{err}
+		}
+		ch, cancel, err := client.SubscribeDMs(context.Background(), convID)
+		if err != nil {
+			return cmailErrMsg{err}
+		}
+		return dmReconnectedMsg{sub: &dmSubscription{ConvID: convID, C: ch, cancel: cancel}}
 	}
 }
 
@@ -213,6 +238,7 @@ func (m CMailModel) SetActiveConversation(conv model.Conversation) CMailModel {
 	m.mode = cmailModeDetail
 	m.historyExhausted = false
 	m.loadingHistory = false
+	m.err = nil
 	m.input.Focus()
 	if m.ready {
 		m.viewport.SetContent(m.renderMessages())
@@ -306,11 +332,29 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		return m, nil
 
 	case dmStreamClosedMsg:
+		if msg.convID != m.activeConvID {
+			return m, nil // stale event from an already-abandoned subscription
+		}
 		m.dmSub = nil
-		return m, nil
+		if m.mode != cmailModeDetail || m.activeConv == nil {
+			return m, nil
+		}
+		return m, m.reconnectConvCmd(m.activeConv.ID)
+
+	case dmReconnectedMsg:
+		if msg.sub.ConvID != m.activeConvID {
+			msg.sub.cancel()
+			return m, nil
+		}
+		m.dmSub = msg.sub
+		return m, tea.Batch(waitForDM(m.dmSub), func() tea.Msg { return CMailReconnectedMsg{} })
 
 	case cmailErrMsg:
 		m.err = msg.err
+		m.loadingHistory = false
+		if m.ready && m.mode == cmailModeDetail {
+			m.viewport.SetContent(m.renderMessages())
+		}
 		return m, nil
 
 	// --- Keyboard ---
@@ -347,6 +391,7 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 					m.mode = cmailModeDetail
 					m.historyExhausted = false
 					m.loadingHistory = false
+					m.err = nil
 					m.input.Focus()
 					if m.ready {
 						m.viewport.SetContent(m.renderMessages())
@@ -508,6 +553,9 @@ func (m CMailModel) renderConvCards() string {
 
 func (m CMailModel) renderMessages() string {
 	if m.activeConv == nil || len(m.activeConv.Messages) == 0 {
+		if m.err != nil {
+			return theme.Subtle.Render("couldn't load messages")
+		}
 		return theme.Subtle.Render("no messages")
 	}
 	return renderChatMessages(m.activeConv.Messages, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width)
@@ -543,6 +591,7 @@ func (m CMailModel) SetConversationMessages(convID string, msgs []model.Message)
 	conv := *m.activeConv
 	conv.Messages = msgs
 	m.activeConv = &conv
+	m.err = nil
 	if m.ready {
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
@@ -559,6 +608,7 @@ func (m CMailModel) AppendMessage(msg model.Message) CMailModel {
 	conv := *m.activeConv
 	conv.Messages = append(conv.Messages, msg)
 	m.activeConv = &conv
+	m.err = nil
 	if m.ready {
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
@@ -574,6 +624,7 @@ func (m CMailModel) PrependMessages(convID string, msgs []model.Message) CMailMo
 	if m.activeConv == nil || m.activeConv.ID != convID {
 		return m
 	}
+	m.err = nil
 	if len(msgs) == 0 {
 		m.historyExhausted = true
 		return m

@@ -205,9 +205,16 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
 		tsWidth := lipgloss.Width(ts)
 
-		// Styled prefix: <username>  (plain width = len(username) + 4)
-		styledPrefix := "<" + theme.Highlight.Render(msg.From.Username) + ">  "
-		rawPrefixWidth := len(msg.From.Username) + 4
+		adminTag := ""
+		adminTagWidth := 0
+		if msg.IsChatAdmin {
+			adminTag = " " + theme.Highlight.Render("[admin]")
+			adminTagWidth = len(" [admin]")
+		}
+
+		// Styled prefix: <username>[ [admin]]  (plain width = len(username) + tag + 4)
+		styledPrefix := "<" + theme.Highlight.Render(msg.From.Username) + adminTag + ">  "
+		rawPrefixWidth := len(msg.From.Username) + adminTagWidth + 4
 		indent := strings.Repeat(" ", rawPrefixWidth)
 
 		bodyWidth := max(viewportWidth-rawPrefixWidth-tsWidth-tsGap, 10)

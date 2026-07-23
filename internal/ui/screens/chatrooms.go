@@ -36,6 +36,7 @@ const roomCardHeight = 4
 
 // roomSubscription holds the live RTDB channel and its cancellation function.
 type roomSubscription struct {
+	RoomID string
 	C      <-chan model.Message
 	cancel context.CancelFunc
 }
@@ -46,7 +47,8 @@ type roomSubscribedMsg struct {
 	sub    *roomSubscription
 }
 type roomReceivedMsg struct{ msg model.Message }
-type roomStreamClosedMsg struct{}
+type roomStreamClosedMsg struct{ roomID string }
+type roomReconnectedMsg struct{ sub *roomSubscription }
 type circMsgsLoadedMsg struct {
 	roomID string
 	msgs   []model.Message
@@ -57,12 +59,16 @@ type circOlderMsgsLoadedMsg struct {
 }
 type circErrMsg struct{ err error }
 
+// RoomReconnectedMsg is emitted after the live RTDB stream is successfully
+// re-established following an idToken expiry. App uses it to show a toast.
+type RoomReconnectedMsg struct{}
+
 // waitForRoomMsg blocks on the subscription channel and returns the next message as a tea.Cmd.
 func waitForRoomMsg(sub *roomSubscription) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-sub.C
 		if !ok {
-			return roomStreamClosedMsg{}
+			return roomStreamClosedMsg{roomID: sub.RoomID}
 		}
 		return roomReceivedMsg{msg: msg}
 	}
@@ -90,6 +96,7 @@ type ChatroomsModel struct {
 	sub          *roomSubscription
 	currentUser  string
 	client       api.Client
+	err          error // last message-load/subscribe failure for the active room; cleared on success
 
 	// History pagination state for the active room, reset on open.
 	historyExhausted bool // true once an older-page fetch returns zero messages
@@ -144,7 +151,26 @@ func (m ChatroomsModel) openRoomSubscriptionCmd(roomID string) tea.Cmd {
 		if err != nil {
 			return circErrMsg{err}
 		}
-		return roomSubscribedMsg{roomID: roomID, sub: &roomSubscription{C: ch, cancel: cancel}}
+		return roomSubscribedMsg{roomID: roomID, sub: &roomSubscription{RoomID: roomID, C: ch, cancel: cancel}}
+	}
+}
+
+// reconnectRoomCmd refreshes the session token and reopens the RTDB subscription
+// for roomID after the live stream closed (typically an idToken expiry).
+func (m ChatroomsModel) reconnectRoomCmd(roomID string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		if err := client.RefreshSession(); err != nil {
+			return circErrMsg{err}
+		}
+		ch, cancel, err := client.SubscribeRoom(context.Background(), roomID)
+		if err != nil {
+			return circErrMsg{err}
+		}
+		return roomReconnectedMsg{sub: &roomSubscription{RoomID: roomID, C: ch, cancel: cancel}}
 	}
 }
 
@@ -198,6 +224,7 @@ func (m ChatroomsModel) SetRooms(rooms []model.Room) ChatroomsModel {
 // AppendMessage adds a live incoming message to the currently open room.
 func (m ChatroomsModel) AppendMessage(msg model.Message) ChatroomsModel {
 	m.messages = append(m.messages, msg)
+	m.err = nil
 	if m.ready {
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
@@ -211,6 +238,7 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 		return m
 	}
 	m.messages = msgs
+	m.err = nil
 	if m.ready {
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
@@ -226,6 +254,7 @@ func (m ChatroomsModel) PrependMessages(roomID string, msgs []model.Message) Cha
 	if m.activeRoom == nil || m.activeRoom.Slug != roomID {
 		return m
 	}
+	m.err = nil
 	if len(msgs) == 0 {
 		m.historyExhausted = true
 		return m
@@ -320,10 +349,29 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		return m, nil
 
 	case roomStreamClosedMsg:
+		if msg.roomID != m.activeRoomID {
+			return m, nil // stale event from an already-abandoned subscription
+		}
 		m.sub = nil
-		return m, nil
+		if m.mode != chatroomModeDetail || m.activeRoom == nil {
+			return m, nil
+		}
+		return m, m.reconnectRoomCmd(m.activeRoom.Slug)
+
+	case roomReconnectedMsg:
+		if msg.sub.RoomID != m.activeRoomID {
+			msg.sub.cancel()
+			return m, nil
+		}
+		m.sub = msg.sub
+		return m, tea.Batch(waitForRoomMsg(m.sub), func() tea.Msg { return RoomReconnectedMsg{} })
 
 	case circErrMsg:
+		m.err = msg.err
+		m.loadingHistory = false
+		if m.ready && m.mode == chatroomModeDetail {
+			m.viewport.SetContent(m.renderMessages())
+		}
 		return m, nil
 
 	// --- Keyboard ---
@@ -360,6 +408,7 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 					m.mode = chatroomModeDetail
 					m.historyExhausted = false
 					m.loadingHistory = false
+					m.err = nil
 					m.input.Focus()
 					if m.ready {
 						m.viewport.SetContent(m.renderMessages())
@@ -489,6 +538,9 @@ func (m ChatroomsModel) renderRoomCards() string {
 
 func (m ChatroomsModel) renderMessages() string {
 	if len(m.messages) == 0 {
+		if m.err != nil {
+			return theme.Subtle.Render("couldn't load messages")
+		}
 		return theme.Subtle.Render("no messages yet")
 	}
 	return renderCircMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width)

@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/screens"
 )
 
 func keyMsg(key string) tea.KeyMsg {
@@ -438,5 +439,31 @@ func TestRouteURL_EphemeralAllowsInternalProfileNav(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Error("cmd = nil, want profile load command")
+	}
+}
+
+// --- Live-stream reconnect toasts ---
+
+func TestHandleChatrooms_RoomReconnected_ShowsToast(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.Update(screens.RoomReconnectedMsg{})
+	got := m.(App)
+	if got.notifyText != "reconnected to live chat" {
+		t.Errorf("notifyText = %q, want reconnect banner", got.notifyText)
+	}
+	if got.notifyLevel != notifyInfo {
+		t.Errorf("notifyLevel = %v, want notifyInfo", got.notifyLevel)
+	}
+}
+
+func TestHandleCMail_ConvReconnected_ShowsToast(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.Update(screens.CMailReconnectedMsg{})
+	got := m.(App)
+	if got.notifyText != "reconnected to live chat" {
+		t.Errorf("notifyText = %q, want reconnect banner", got.notifyText)
+	}
+	if got.notifyLevel != notifyInfo {
+		t.Errorf("notifyLevel = %v, want notifyInfo", got.notifyLevel)
 	}
 }

@@ -47,7 +47,9 @@ Full-width message history viewport + fixed compose input at bottom:
 - Other person's messages: left-aligned (`@username  timestamp` header, then body)
 - My messages: right-aligned (`timestamp  @me` header, then body)
 
-**Scroll-to-load history**: scrolling to the top of the loaded messages (`↑`) automatically fetches the next older page (`GetMessages(conversationID, 50, before)`, `before` = the oldest loaded message's timestamp) and prepends it, preserving scroll position. The header shows `(loading history…)` while a page is in flight. Stops once a fetch returns no messages.
+**Scroll-to-load history**: scrolling to the top of the loaded messages (`↑`) automatically fetches the next older page (`GetMessages(conversationID, 50, before)`, `before` = the oldest loaded message's timestamp) and prepends it, preserving scroll position. The header shows `(loading history…)` while a page is in flight. Stops once a fetch returns no messages. If a fetch fails, `loadingHistory` resets so a retry is possible on the next scroll-to-top, and the viewport shows "couldn't load messages" instead of a misleading "no messages" if nothing has loaded yet.
+
+**Live-stream reconnect**: the Firebase `idToken` backing the RTDB subscription expires hourly. When the stream closes while a conversation is still open, the app calls `api.Client.RefreshSession()` and reopens the subscription automatically, showing a brief "reconnected to live chat" notification. A single reconnect attempt is made; if it fails, the conversation is left without live updates until the user leaves and re-enters.
 
 ---
 
@@ -141,6 +143,7 @@ The subscription is opened when a conversation is selected (Enter in list mode) 
 | `StartConversation` | `(recipientUsername string) (model.Conversation, error)` | POST to REST; idempotent |
 | `MarkCMailRead` | `(convID string) error` | POST to REST; called when a conversation is opened |
 | `SubscribeDMs` | `(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error)` | RTDB SSE; skips initial snapshot |
+| `RefreshSession` | `() error` | Proactively refreshes the idToken (shared across all screens); used to reconnect a live RTDB subscription after it closes |
 
 ### App-Level Wiring
 

@@ -1,11 +1,13 @@
 package screens_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 )
@@ -418,5 +420,149 @@ func TestCMail_PrependMessages_EmptyMarksExhausted(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected no further history-load command once history is exhausted")
 	}
+}
+
+// --- Load-failure handling ---
+
+// alwaysFailClient wraps a working MockClient but fails every message-history
+// fetch, for exercising the "couldn't load messages" error state.
+type alwaysFailClient struct {
+	*api.MockClient
+}
+
+func (c *alwaysFailClient) GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error) {
+	return nil, errors.New("boom")
+}
+
+func (c *alwaysFailClient) GetMessages(convID string, limit int, before int64) ([]model.Message, error) {
+	return nil, errors.New("boom")
+}
+
+// flakyOlderPageClient succeeds on the initial page (before == 0) but fails
+// every older-page fetch, for exercising the loadingHistory stuck-true bug fix.
+type flakyOlderPageClient struct {
+	*api.MockClient
+}
+
+func (c *flakyOlderPageClient) GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error) {
+	if before > 0 {
+		return nil, errors.New("boom")
+	}
+	return c.MockClient.GetRoomMessages(roomID, limit, before)
+}
+
+func (c *flakyOlderPageClient) GetMessages(convID string, limit int, before int64) ([]model.Message, error) {
+	if before > 0 {
+		return nil, errors.New("boom")
+	}
+	return c.MockClient.GetMessages(convID, limit, before)
+}
+
+func TestChatrooms_LoadOlderFailure_ResetsLoadingHistory(t *testing.T) {
+	client := &flakyOlderPageClient{MockClient: api.NewMockClient()}
+	m := screens.NewChatroomsModel("neuromancer", client)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
+	})
+
+	m, cmd := sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Fatal("expected a history-load command when scrolling up at the top")
+	}
+	m, _ = m.Update(cmd()) // circErrMsg — must reset loadingHistory, not leave it stuck
+
+	_, cmd = sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Error("expected loadingHistory to reset after a failed load, allowing a retry")
+	}
+}
+
+func TestChatrooms_View_ShowsErrorWhenInitialLoadFails(t *testing.T) {
+	client := &alwaysFailClient{MockClient: api.NewMockClient()}
+	m := screens.NewChatroomsModel("neuromancer", client)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("expected a command batch after Enter")
+	}
+	for _, resolved := range resolveMsgs(cmd) {
+		m, _ = m.Update(resolved)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "couldn't load messages") {
+		t.Errorf("expected error state in view, got: %q", view)
+	}
+}
+
+func TestCMail_LoadOlderFailure_ResetsLoadingHistory(t *testing.T) {
+	client := &flakyOlderPageClient{MockClient: api.NewMockClient()}
+	m := screens.NewCMailModel("neuromancer", client)
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m, cmd := sendSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Fatal("expected a history-load command when scrolling up at the top")
+	}
+	m, _ = m.Update(cmd()) // cmailErrMsg — must reset loadingHistory, not leave it stuck
+
+	_, cmd = sendSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Error("expected loadingHistory to reset after a failed load, allowing a retry")
+	}
+}
+
+func TestCMail_View_ShowsErrorWhenInitialLoadFails(t *testing.T) {
+	client := &alwaysFailClient{MockClient: api.NewMockClient()}
+	m := screens.NewCMailModel("neuromancer", client)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	// A conversation with no pre-loaded messages, so the failing initial fetch
+	// is what determines the detail view's content.
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neuromancer"}, {Username: "molly"}}},
+	})
+	m, cmd := sendSpecialKey(m, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("expected a command batch after Enter")
+	}
+	for _, resolved := range resolveMsgs(cmd) {
+		m, _ = m.Update(resolved)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "couldn't load messages") {
+		t.Errorf("expected error state in view, got: %q", view)
+	}
+}
+
+// resolveMsgs executes cmd and flattens one level of tea.BatchMsg into the
+// individual resulting messages, without recursively executing whatever
+// commands those messages' own Update() calls return (some of those, like
+// waitForRoomMsg, block on a live channel and must not run in a unit test).
+func resolveMsgs(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if msg == nil {
+		return nil
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			if m := c(); m != nil {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	return []tea.Msg{msg}
 }
 

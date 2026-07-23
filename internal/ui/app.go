@@ -692,6 +692,9 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
 	case screens.RoomOpenedMsg:
 		return a, a.markRoomReadCmd(msg.RoomID), true
+	case screens.RoomReconnectedMsg:
+		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
+		return a, cmd, true
 	}
 	return a, nil, false
 }
@@ -722,6 +725,9 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.cmail.ConvOpenCmds(convID),
 			func() tea.Msg { return screens.CMailConvSelectedMsg{ConversationID: convID} },
 		), true
+	case screens.CMailReconnectedMsg:
+		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
+		return a, cmd, true
 	}
 	return a, nil, false
 }
