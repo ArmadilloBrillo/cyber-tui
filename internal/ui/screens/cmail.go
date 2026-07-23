@@ -268,6 +268,21 @@ func (m CMailModel) InputFocused() bool { return m.mode == cmailModeDetail }
 // IsShowingDetail reports whether the detail view (history + input) is active.
 func (m CMailModel) IsShowingDetail() bool { return m.mode == cmailModeDetail }
 
+// GetFocusedURLs returns URLs found across all currently loaded messages in
+// the open conversation, for the 'o' / ctrl+o open-link shortcut. Reachable
+// via ctrl+o even while the compose input is focused, which it always is in
+// detail mode (there's no separate browsing vs. composing sub-mode here).
+func (m CMailModel) GetFocusedURLs() []string {
+	if m.mode != cmailModeDetail || m.activeConv == nil {
+		return nil
+	}
+	var urls []string
+	for _, msg := range m.activeConv.Messages {
+		urls = append(urls, extractURLs(msg.Body)...)
+	}
+	return dedupeURLs(urls)
+}
+
 // SelectedConv returns the cursor index in the conversation list.
 func (m CMailModel) SelectedConv() int { return m.selectedConv }
 

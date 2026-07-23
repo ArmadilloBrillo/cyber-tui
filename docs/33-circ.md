@@ -56,6 +56,7 @@ Long bodies word-wrap to fit the terminal width; continuation lines are indented
 | `↑` / `↓` | Scroll messages (detail mode) |
 | `Enter` | Send message (detail mode) |
 | `Esc` | Return to room list |
+| `ctrl+o` | Open URLs/images from the loaded room history (detail mode). Plain `o` — the shortcut used everywhere else in the TUI — can't reach this here: the compose input is focused for the entire detail view (not a transient sub-mode like Feed's reply box), so `o` always gets typed into the message instead. `ctrl+o` is exempted from the focused-input gate specifically for this. |
 
 ## API integration
 
@@ -96,7 +97,7 @@ The real-time subscription mirrors the C-Mail pattern exactly:
 
 | File | Role |
 |---|---|
-| `internal/ui/screens/chatrooms.go` | Screen model (two-mode UX, SSE subscription) |
+| `internal/ui/screens/chatrooms.go` | Screen model (two-mode UX, SSE subscription); `GetFocusedURLs` (`URLProvider`) |
 | `internal/ui/screens/render.go` | `renderCircMessages` (IRC-style format); `renderActionLine`, `renderSystemNotice` |
 | `internal/api/interface.go` | `GetRooms`, `GetRoomMessages`, `SendRoomMessage` (returns reply text for `/help`), `MarkRoomRead`, `SubscribeRoom` |
 | `internal/api/client.go` | HTTP + RTDB SSE implementations |

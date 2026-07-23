@@ -679,6 +679,8 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `?` | Help modal |
 | `t` | Theme picker |
 | `z` | Timezone picker |
+| `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused |
+| `ctrl+o` | Same as `o`, but reaches the handler even while a compose input is focused — the only way to open links in CIRC/C-Mail, since their input is focused for the entire detail view, not just a transient compose sub-mode |
 | `q` / `ctrl+c` | Quit |
 
 ### Login
@@ -771,6 +773,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `↓` | Scroll message history down |
 | `enter` | Send message (when input non-empty) |
 | `esc` | Return to list mode |
+| `ctrl+o` | Open URLs/images found across the loaded conversation (plain `o` is captured by the compose input) |
 | all other | Forwarded to compose input (`j`/`k` type normally) |
 
 **From other screens**
@@ -778,6 +781,27 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | Key | Action |
 |---|---|
 | `c` | Start or open C-Mail conversation with highlighted user (feed, post detail, notifications, read-only profile) — self-DM is a no-op |
+
+### CIRC
+
+**List mode**
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | Next room |
+| `k` / `↑` | Previous room |
+| `enter` | Open room (detail mode) |
+
+**Detail mode**
+
+| Key | Action |
+|---|---|
+| `↑` | Scroll message history up (reaching the top loads older history) |
+| `↓` | Scroll message history down |
+| `enter` | Send message (when input non-empty) |
+| `esc` | Return to list mode |
+| `ctrl+o` | Open URLs/images found across the loaded room history (plain `o` is captured by the compose input) |
+| all other | Forwarded to compose input |
 
 ### Settings
 

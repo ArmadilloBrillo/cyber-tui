@@ -209,6 +209,21 @@ func (m ChatroomsModel) InputFocused() bool { return m.mode == chatroomModeDetai
 // IsShowingDetail reports whether the detail view is active.
 func (m ChatroomsModel) IsShowingDetail() bool { return m.mode == chatroomModeDetail }
 
+// GetFocusedURLs returns URLs found across all currently loaded messages in
+// the open room, for the 'o' / ctrl+o open-link shortcut. Reachable via
+// ctrl+o even while the compose input is focused, which it always is in
+// detail mode (there's no separate browsing vs. composing sub-mode here).
+func (m ChatroomsModel) GetFocusedURLs() []string {
+	if m.mode != chatroomModeDetail {
+		return nil
+	}
+	var urls []string
+	for _, msg := range m.messages {
+		urls = append(urls, extractURLs(msg.Body)...)
+	}
+	return dedupeURLs(urls)
+}
+
 // SetRooms replaces the room list.
 func (m ChatroomsModel) SetRooms(rooms []model.Room) ChatroomsModel {
 	m.rooms = rooms

@@ -486,12 +486,17 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		return model.(App), cmd, true
 	}
 	// When a screen has a focused text input, let it consume all keys.
-	// ctrl+c is kept as a hard escape hatch.
+	// ctrl+c is kept as a hard escape hatch; ctrl+o reaches the open-link
+	// shortcut too, since plain 'o' is unreachable while chatting (CIRC/
+	// C-Mail's compose input is focused for the entire detail view, not just
+	// a transient sub-mode like Feed's reply box).
 	if a.activeScreenHasFocusedInput() {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
 		}
-		return a, nil, false // fall through to delegateUpdate
+		if m.String() != "ctrl+o" {
+			return a, nil, false // fall through to delegateUpdate
+		}
 	}
 	switch m.String() {
 	case "t":
@@ -522,7 +527,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.helpModalOpen = true
 			return a, nil, true
 		}
-	case "o":
+	case "o", "ctrl+o":
 		if a.active != screenLogin {
 			app, cmd := a.handleOpenURL(a.getFocusedURLs())
 			return app, cmd, true
@@ -1697,6 +1702,10 @@ func (a App) getFocusedURLs() []string {
 		p = a.topics
 	case screenJournal:
 		p = a.journal
+	case screenChatrooms:
+		p = a.chatrooms
+	case screenCMail:
+		p = a.cmail
 	}
 	if p == nil {
 		return nil

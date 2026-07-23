@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/api"
@@ -206,6 +207,43 @@ func TestHandleKeys_O_MultipleURLs_OpensPicker(t *testing.T) {
 	}
 	if a2.urlPickerCursor != 0 {
 		t.Errorf("picker cursor should start at 0, got %d", a2.urlPickerCursor)
+	}
+}
+
+// setupChatroomsDetailWithURL opens a room in detail mode with one message
+// containing a URL, so InputFocused() is true — the state that makes plain
+// 'o' unreachable and ctrl+o necessary.
+func setupChatroomsDetailWithURL(a App) App {
+	a.active = screenChatrooms
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	cm = cm.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "check https://example.com", CreatedAt: time.Now()},
+	})
+	a.chatrooms = cm
+	return a
+}
+
+func TestHandleKeys_CtrlO_ReachesOpenLink_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if !consumed {
+		t.Error("expected ctrl+o to be consumed even while chatrooms input is focused")
+	}
+}
+
+func TestHandleKeys_O_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	_, _, consumed := a.handleKeys(keyMsg("o"))
+	if consumed {
+		t.Error("expected plain 'o' to NOT be consumed while chatrooms input is focused — it must still type into the compose box")
 	}
 }
 

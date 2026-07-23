@@ -75,6 +75,7 @@ Full-width message history viewport + fixed compose input at bottom:
 | `↑` | Scroll message history up |
 | `↓` | Scroll message history down |
 | `Esc` | Return to list mode; cancel RTDB subscription |
+| `ctrl+o` | Open URLs/images from the loaded conversation. Plain `o` can't reach this here — the compose input is focused for the entire detail view, so `o` always types into the message instead; `ctrl+o` is exempted from the focused-input gate specifically for this. |
 | all other | Forwarded to compose input (`j`/`k` type normally) |
 
 ---
@@ -98,6 +99,7 @@ Full-width message history viewport + fixed compose input at bottom:
 | `SelectedConv() int` | Cursor index in conversation list |
 | `InputFocused() bool` | True in detail mode (compose input focused) |
 | `TotalUnread() int` | Sum of `UnreadCount` across all conversations, for the tab-bar badge |
+| `GetFocusedURLs() []string` | URLs across all loaded messages in the open conversation (`URLProvider`); nil outside detail mode |
 
 ---
 

@@ -287,6 +287,33 @@ func TestChatrooms_AppendMessage(t *testing.T) {
 	// No panic = pass; state is internal but AppendMessage should not crash
 }
 
+// --- Open-link shortcut (o / ctrl+o) ---
+
+func TestChatrooms_GetFocusedURLs_NilInListMode(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	// still in list mode: no room open, nothing to expose
+	if urls := m.GetFocusedURLs(); urls != nil {
+		t.Errorf("expected nil URLs in list mode, got %v", urls)
+	}
+}
+
+func TestChatrooms_GetFocusedURLs_AggregatesLoadedMessagesAndDedupes(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // opens "zion"
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "check https://example.com/one", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "bob"}, Body: "no links here", CreatedAt: time.Now()},
+		{ID: "m3", From: model.User{Username: "molly"}, Body: "also https://example.com/one and https://example.com/two", CreatedAt: time.Now()},
+	})
+
+	urls := m.GetFocusedURLs()
+	if len(urls) != 2 {
+		t.Fatalf("expected 2 deduped URLs, got %d: %v", len(urls), urls)
+	}
+}
+
 // --- /help reply as a local system message ---
 
 func TestChatrooms_AppendSystemMessage_RendersLocally(t *testing.T) {
@@ -433,6 +460,34 @@ func sampleConvWithMessage() []model.Conversation {
 				{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
 			},
 		},
+	}
+}
+
+func TestCMail_GetFocusedURLs_NilInListMode(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m = m.SetConversations(sampleConvWithMessage())
+	if urls := m.GetFocusedURLs(); urls != nil {
+		t.Errorf("expected nil URLs in list mode, got %v", urls)
+	}
+}
+
+func TestCMail_GetFocusedURLs_AggregatesLoadedMessages(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m = m.SetConversations([]model.Conversation{
+		{
+			ID:           "c1",
+			Participants: []model.User{{Username: "neuromancer"}, {Username: "molly"}},
+			Messages: []model.Message{
+				{ID: "m1", From: model.User{Username: "molly"}, Body: "check https://example.com/one", CreatedAt: time.Now()},
+				{ID: "m2", From: model.User{Username: "neuromancer"}, Body: "no links here", CreatedAt: time.Now()},
+			},
+		},
+	})
+	m, _ = sendSpecialKey(m, tea.KeyEnter) // opens "c1"
+
+	urls := m.GetFocusedURLs()
+	if len(urls) != 1 || urls[0] != "https://example.com/one" {
+		t.Errorf("expected [https://example.com/one], got %v", urls)
 	}
 }
 
