@@ -363,7 +363,9 @@ func (l MillerLayout) renderNav(a App) string {
 				label = fmt.Sprintf("%s ●%d", label, n)
 			}
 		}
-		isActive := a.active == t.s && !(t.s == screenCMail && a.cmail.IsShowingDetail())
+		isActive := a.active == t.s &&
+			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
+			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())
 		var row string
 		if isActive {
 			if a.focus == focusMenu {

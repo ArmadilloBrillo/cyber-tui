@@ -239,7 +239,9 @@ func (l TabsLayout) renderTabBar(a App) string {
 				label = fmt.Sprintf("%s (%d)", label, n)
 			}
 		}
-		isActive := a.active == t.s && !(t.s == screenCMail && a.cmail.IsShowingDetail())
+		isActive := a.active == t.s &&
+			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
+			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())
 		if isActive {
 			tabs += theme.ActiveTab.Render(label)
 		} else {
