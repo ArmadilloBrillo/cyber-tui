@@ -616,6 +616,21 @@ func (m CMailModel) AppendMessage(msg model.Message) CMailModel {
 	return m
 }
 
+// AppendSystemMessage adds a local-only notice (e.g. a /help reply) to the
+// currently open conversation. Never sent to the server. No-op if convID
+// doesn't match the active conversation.
+func (m CMailModel) AppendSystemMessage(convID, text string) CMailModel {
+	if m.activeConv == nil || m.activeConv.ID != convID {
+		return m
+	}
+	return m.AppendMessage(model.Message{
+		From:      model.User{Username: "system"},
+		Body:      text,
+		CreatedAt: time.Now(),
+		IsSystem:  true,
+	})
+}
+
 // PrependMessages inserts an older page of history above the currently loaded
 // messages, preserving the user's scroll position rather than jumping.
 // No-op if convID doesn't match the active conversation.

@@ -287,6 +287,70 @@ func TestChatrooms_AppendMessage(t *testing.T) {
 	// No panic = pass; state is internal but AppendMessage should not crash
 }
 
+// --- /help reply as a local system message ---
+
+func TestChatrooms_AppendSystemMessage_RendersLocally(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi", CreatedAt: time.Now()},
+	})
+
+	m = m.AppendSystemMessage("zion", "Commands: /me, /dice, /help")
+
+	view := m.View()
+	if !strings.Contains(view, "Commands: /me, /dice, /help") {
+		t.Errorf("expected the system reply in the view, got: %q", view)
+	}
+	if strings.Contains(view, "<system>") {
+		t.Errorf("expected no username bracket for a system message, got: %q", view)
+	}
+}
+
+func TestChatrooms_AppendSystemMessage_WrongRoomIsNoOp(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // opens "zion"
+
+	m = m.AppendSystemMessage("sprawl", "should not appear")
+
+	view := m.View()
+	if strings.Contains(view, "should not appear") {
+		t.Error("expected AppendSystemMessage to no-op for a non-active room")
+	}
+}
+
+func TestCMail_AppendSystemMessage_RendersLocally(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m = m.AppendSystemMessage("c1", "Commands: /me, /dice, /help")
+
+	view := m.View()
+	if !strings.Contains(view, "Commands: /me, /dice, /help") {
+		t.Errorf("expected the system reply in the view, got: %q", view)
+	}
+}
+
+func TestCMail_AppendSystemMessage_WrongConvIsNoOp(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter) // opens "c1"
+
+	m = m.AppendSystemMessage("c2", "should not appear")
+
+	view := m.View()
+	if strings.Contains(view, "should not appear") {
+		t.Error("expected AppendSystemMessage to no-op for a non-active conversation")
+	}
+}
+
 // --- History pagination (load-more on scroll-to-top) ---
 
 func TestChatrooms_UpAtTop_TriggersHistoryLoadThenGuards(t *testing.T) {

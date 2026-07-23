@@ -122,6 +122,7 @@ type Message struct {
 	Body        string
 	CreatedAt   time.Time
 	IsChatAdmin bool // CIRC only: true when From was a chat admin at send time
+	IsSystem    bool // local-only notice (e.g. a /help reply); never sent to or stored by the server
 }
 
 type Conversation struct {

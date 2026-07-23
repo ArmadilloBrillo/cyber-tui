@@ -232,6 +232,21 @@ func (m ChatroomsModel) AppendMessage(msg model.Message) ChatroomsModel {
 	return m
 }
 
+// AppendSystemMessage adds a local-only notice (e.g. a /help reply) to the
+// currently open room. Never sent to the server. No-op if roomID doesn't
+// match the active room.
+func (m ChatroomsModel) AppendSystemMessage(roomID, text string) ChatroomsModel {
+	if m.activeRoom == nil || m.activeRoom.Slug != roomID {
+		return m
+	}
+	return m.AppendMessage(model.Message{
+		From:      model.User{Username: "system"},
+		Body:      text,
+		CreatedAt: time.Now(),
+		IsSystem:  true,
+	})
+}
+
 // SetMessages replaces the message history for the active room.
 func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) ChatroomsModel {
 	if m.activeRoom == nil || m.activeRoom.Slug != roomID {

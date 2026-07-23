@@ -25,6 +25,12 @@ CIRC provides access to the cyberspace.online public chatrooms via tab **4** in 
 - **Live-stream reconnect**: the Firebase `idToken` backing the RTDB subscription expires hourly. When the stream closes while a room is still open, the app refreshes the session and reopens the subscription automatically, showing a brief "reconnected to live chat" notification. A single reconnect attempt is made; if it fails, the room is left without live updates until the user leaves and re-enters (same as before this fix).
 - **Admin badge**: messages sent by a chat admin (`isChatAdmin` from the API) show a `[admin]` tag next to the username.
 
+### Slash commands
+
+The server expands IRC-style slash commands (`/me`, `/poke`/`/hug`/`/hi5`/`/slap`, `/dice`, `/8ball`, `/fortune`) before storing/broadcasting the message — whatever the user types is sent verbatim as `content`, and the expanded text comes back through the normal message pipeline, so these already work with no client-side handling. A malformed command (e.g. bad `/dice` notation) returns `400 VALIDATION_ERROR`, surfaced through the existing send-error toast.
+
+`/help` is different: it posts no message — the server returns the command list only in the synchronous send response (`{ "data": { "reply": "…" } }`). The client captures this and appends it as a **local-only system notice** (`model.Message.IsSystem`) directly into the viewport — rendered without a username bracket, admin badge, or timestamp column, prefixed with `*** ` (`renderSystemNotice` in `render.go`). It's never sent to or stored by the server, so it only exists for the current session and disappears if the room is reopened.
+
 ### Message format
 
 ```
@@ -77,7 +83,8 @@ The real-time subscription mirrors the C-Mail pattern exactly:
 ## Known limitations
 
 - **No online-users list**: The API does not expose an endpoint for listing users currently online in a room. The right panel from the original design was deferred.
-- **No slash command preview**: The API supports IRC-style commands (`/me`, `/poke`, `/dice`, etc.) expanded server-side, but the TUI has no client-side rendering for them yet.
+- **No client-side slash-command validation/autocomplete**: the server validates and expands commands; the client just sends whatever was typed and shows whatever comes back (or the `400` error if malformed).
+- **No distinct styling for expanded action messages**: `/me`-style output isn't detected/styled differently (e.g. italicized) from a normal message, since the exact server-side expansion format isn't documented — would need confirming with the API first.
 - **Exhaustion heuristic is coarse**: an older-page fetch that returns zero messages marks history as exhausted for the session; a page that returns fewer than the requested limit but more than zero is not treated as exhausted, so the very last page may trigger one extra (empty) round-trip.
 - **No unread/"new messages" indicator**: unlike C-Mail, room list cards and the tab bar show no unread badge. `GET /v1/circ`'s documented response fields don't include one, even though `POST /v1/circ/:roomId/read` is described as driving a "new messages indicator" server-side — would need confirming with the API before this can be built.
 - **Reconnect has no retry/backoff**: a single reconnect attempt is made when the live stream closes; if that attempt itself fails, the room stays without live updates until the user leaves and re-enters.
@@ -88,10 +95,10 @@ The real-time subscription mirrors the C-Mail pattern exactly:
 |---|---|
 | `internal/ui/screens/chatrooms.go` | Screen model (two-mode UX, SSE subscription) |
 | `internal/ui/screens/render.go` | `renderCircMessages` (IRC-style format) |
-| `internal/api/interface.go` | `GetRooms`, `GetRoomMessages`, `SendRoomMessage`, `MarkRoomRead`, `SubscribeRoom` |
+| `internal/api/interface.go` | `GetRooms`, `GetRoomMessages`, `SendRoomMessage` (returns reply text for `/help`), `MarkRoomRead`, `SubscribeRoom` |
 | `internal/api/client.go` | HTTP + RTDB SSE implementations |
-| `internal/api/mock.go` | Mock implementations for development/testing |
-| `internal/model/types.go` | `model.Room` struct; `model.Message.IsChatAdmin` |
+| `internal/api/mock.go` | Mock implementations for development/testing; canned `/help` reply |
+| `internal/model/types.go` | `model.Room` struct; `model.Message.IsChatAdmin`, `IsSystem` |
 | `internal/ui/app.go` | `handleChatrooms`, `sendRoomMessageCmd`, `markRoomReadCmd` |
 | `internal/ui/layout.go` | `menuTabs` (circ at index 3, key `4`) |
 | `internal/ui/layout_tabs.go` | Key `4` binding, cancel wiring, hints, breadcrumbs |

@@ -8,6 +8,10 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 )
 
+// mockHelpReply mirrors the /help reply documented in the API's command table.
+const mockHelpReply = "Commands: /me <action> · /poke /hug /hi5 /slap [@user] · " +
+	"/dice <notation> · /8ball <question> · /fortune · /help"
+
 // MockClient implements Client with static fake data.
 // Used during development before the real API is available.
 type MockClient struct {
@@ -420,8 +424,11 @@ func (m *MockClient) GetRoomMessages(roomID string, limit int, before int64) ([]
 	}, nil
 }
 
-func (m *MockClient) SendRoomMessage(roomID, body string) error {
-	return nil
+func (m *MockClient) SendRoomMessage(roomID, body string) (string, error) {
+	if body == "/help" {
+		return mockHelpReply, nil
+	}
+	return "", nil
 }
 
 func (m *MockClient) MarkRoomRead(roomID string) error {
@@ -476,8 +483,11 @@ func (m *MockClient) GetMessages(conversationID string, limit int, before int64)
 	}, nil
 }
 
-func (m *MockClient) SendMessage(conversationID, body string) error {
-	return nil
+func (m *MockClient) SendMessage(conversationID, body string) (string, error) {
+	if body == "/help" {
+		return mockHelpReply, nil
+	}
+	return "", nil
 }
 
 // SubscribeDMs returns a channel that delivers one fake incoming message after

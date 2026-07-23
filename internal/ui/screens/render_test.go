@@ -119,3 +119,57 @@ func TestRenderCircMessages_AdminBadgeWrapsCorrectly(t *testing.T) {
 		t.Errorf("expected timestamp %q on last line, got %q", ts, last)
 	}
 }
+
+// TestRenderCircMessages_SystemNotice confirms a /help-style local reply
+// renders without a username bracket or trailing timestamp column, and still
+// respects the viewport width when wrapped.
+func TestRenderCircMessages_SystemNotice(t *testing.T) {
+	const width = 40
+	sys := model.Message{
+		Body:      "Commands: /me <action> · /poke /hug /hi5 /slap [@user] · /dice · /8ball · /fortune · /help",
+		IsSystem:  true,
+		CreatedAt: circMsgTime,
+	}
+	regular := circMsg("bob", "hi")
+
+	out := renderCircMessages([]model.Message{sys, regular}, time.UTC, "datetime", width)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+
+	if !strings.HasPrefix(lines[0], "***") {
+		t.Errorf("expected the system notice to start with '***', got: %q", lines[0])
+	}
+	if strings.Contains(out, "<system>") || strings.Contains(out, "<>") {
+		t.Errorf("expected no username bracket for a system notice, got: %q", out)
+	}
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w > width {
+			t.Errorf("line %d width %d exceeds viewport width %d: %q", i, w, width, l)
+		}
+	}
+	found := false
+	for _, l := range lines {
+		if strings.Contains(l, "bob") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected the regular message after the system notice to still render")
+	}
+}
+
+// TestRenderChatMessages_SystemNotice confirms a /help-style local reply in
+// C-Mail renders as a plain notice, not a bidirectional bubble.
+func TestRenderChatMessages_SystemNotice(t *testing.T) {
+	const width = 60
+	sys := model.Message{Body: "Commands: /me, /dice, /help", IsSystem: true, CreatedAt: circMsgTime}
+	out := renderChatMessages([]model.Message{sys}, "neuromancer", time.UTC, "datetime", width)
+
+	if !strings.Contains(out, "Commands: /me, /dice, /help") {
+		t.Errorf("expected the system reply text in the output, got: %q", out)
+	}
+	for i, l := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if w := lipgloss.Width(l); w > width {
+			t.Errorf("line %d width %d exceeds viewport width %d: %q", i, w, width, l)
+		}
+	}
+}

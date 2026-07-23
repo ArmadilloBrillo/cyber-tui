@@ -695,6 +695,9 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.RoomReconnectedMsg:
 		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
+	case roomCommandReplyMsg:
+		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, msg.reply)
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -728,6 +731,9 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.CMailReconnectedMsg:
 		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
+	case cmailCommandReplyMsg:
+		a.cmail = a.cmail.AppendSystemMessage(msg.convID, msg.reply)
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -1928,6 +1934,18 @@ type feedPageMsg struct {
 }
 type roomsLoadedMsg struct{ rooms []model.Room }
 type convsLoadedMsg struct{ convs []model.Conversation }
+
+// roomCommandReplyMsg/cmailCommandReplyMsg carry a reply-only slash command's
+// text (e.g. /help) back from the send response, for local display only —
+// nothing was posted, so nothing arrives via the RTDB subscription.
+type roomCommandReplyMsg struct {
+	roomID string
+	reply  string
+}
+type cmailCommandReplyMsg struct {
+	convID string
+	reply  string
+}
 type conversationStartedMsg struct{ conv model.Conversation }
 type profileLoadedMsg struct{ user model.User }
 type userProfileLoadedMsg struct {
@@ -2317,8 +2335,12 @@ func (a *App) loadUserFollowersCmd(userID, cursor string) tea.Cmd {
 
 func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	return func() tea.Msg {
-		if err := a.client.SendRoomMessage(roomID, body); err != nil {
+		reply, err := a.client.SendRoomMessage(roomID, body)
+		if err != nil {
 			return actionErrMsg{err}
+		}
+		if reply != "" {
+			return roomCommandReplyMsg{roomID: roomID, reply: reply}
 		}
 		return nil
 	}
@@ -2333,8 +2355,12 @@ func (a *App) markRoomReadCmd(roomID string) tea.Cmd {
 
 func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 	return func() tea.Msg {
-		if err := a.client.SendMessage(convID, body); err != nil {
+		reply, err := a.client.SendMessage(convID, body)
+		if err != nil {
 			return actionErrMsg{err}
+		}
+		if reply != "" {
+			return cmailCommandReplyMsg{convID: convID, reply: reply}
 		}
 		return nil
 	}

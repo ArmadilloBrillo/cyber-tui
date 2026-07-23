@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -465,5 +466,37 @@ func TestHandleCMail_ConvReconnected_ShowsToast(t *testing.T) {
 	}
 	if got.notifyLevel != notifyInfo {
 		t.Errorf("notifyLevel = %v, want notifyInfo", got.notifyLevel)
+	}
+}
+
+// --- /help reply routed to a local system message ---
+
+func TestHandleChatrooms_CommandReply_AppendsSystemMessage(t *testing.T) {
+	a := loggedInApp()
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+
+	m, _ := a.Update(roomCommandReplyMsg{roomID: "zion", reply: "Commands: /me, /dice, /help"})
+	got := m.(App)
+	if view := got.chatrooms.View(); !strings.Contains(view, "Commands: /me, /dice, /help") {
+		t.Errorf("expected the /help reply in the chatrooms view, got: %q", view)
+	}
+}
+
+func TestHandleCMail_CommandReply_AppendsSystemMessage(t *testing.T) {
+	a := loggedInApp()
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+
+	m, _ := a.Update(cmailCommandReplyMsg{convID: "c1", reply: "Commands: /me, /dice, /help"})
+	got := m.(App)
+	if view := got.cmail.View(); !strings.Contains(view, "Commands: /me, /dice, /help") {
+		t.Errorf("expected the /help reply in the c-mail view, got: %q", view)
 	}
 }

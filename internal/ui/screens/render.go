@@ -202,6 +202,10 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 	const tsGap = 2 // minimum space between the wrapped text and the timestamp
 	var sb strings.Builder
 	for _, msg := range msgs {
+		if msg.IsSystem {
+			sb.WriteString(renderSystemNotice(msg.Body, viewportWidth))
+			continue
+		}
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
 		tsWidth := lipgloss.Width(ts)
 
@@ -238,6 +242,30 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 	return sb.String()
 }
 
+// renderSystemNotice renders a local-only notice (e.g. a /help reply) as a
+// muted, word-wrapped block prefixed with "*** " — distinct from real chat
+// messages: no username bracket/bubble, no timestamp column, since it was
+// never sent to or stored by the server.
+func renderSystemNotice(body string, viewportWidth int) string {
+	if viewportWidth < 10 {
+		viewportWidth = 80
+	}
+	const prefix = "*** "
+	bodyWidth := max(viewportWidth-len(prefix), 10)
+	indent := strings.Repeat(" ", len(prefix))
+
+	lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(strings.TrimRight(body, "\n")), "\n")
+	var sb strings.Builder
+	for i, line := range lines {
+		p := indent
+		if i == 0 {
+			p = prefix
+		}
+		sb.WriteString(theme.Subtle.Render(p+line) + "\n")
+	}
+	return sb.String()
+}
+
 // renderChatMessages renders a list of chat messages as bordered bubbles sized
 // to their content (up to 75% of viewportWidth).
 // Messages from currentUser use ActiveBorder (cyan) and are right-aligned.
@@ -252,6 +280,11 @@ func renderChatMessages(msgs []model.Message, currentUser string, loc *time.Loca
 
 	var sb strings.Builder
 	for _, msg := range msgs {
+		if msg.IsSystem {
+			sb.WriteString(renderSystemNotice(msg.Body, viewportWidth))
+			sb.WriteString("\n")
+			continue
+		}
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
 		isMe := currentUser != "" && msg.From.Username == currentUser
 

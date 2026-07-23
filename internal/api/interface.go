@@ -62,7 +62,9 @@ type Client interface {
 	// GetRoomMessages returns up to limit messages for roomID, oldest-first.
 	// Pass before=0 for the latest page; pass a previous timestamp cursor for older pages.
 	GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error)
-	SendRoomMessage(roomID, body string) error
+	// SendRoomMessage returns the server's reply text for reply-only commands
+	// (e.g. /help, which posts no message); empty for normal sends.
+	SendRoomMessage(roomID, body string) (string, error)
 	// MarkRoomRead resets the "new messages" indicator for the caller.
 	MarkRoomRead(roomID string) error
 	// SubscribeRoom opens a live RTDB SSE stream for the given chatroom.
@@ -163,7 +165,9 @@ type Client interface {
 	// GetMessages returns up to limit messages for conversationID, oldest-first.
 	// Pass before=0 for the latest page; pass a previous message's timestamp for older pages.
 	GetMessages(conversationID string, limit int, before int64) ([]model.Message, error)
-	SendMessage(conversationID, body string) error
+	// SendMessage returns the server's reply text for reply-only commands
+	// (e.g. /help, which posts no message); empty for normal sends.
+	SendMessage(conversationID, body string) (string, error)
 	// StartConversation creates or retrieves a C-Mail conversation with recipientUsername.
 	// Returns 201 for a new conversation, 200 for an existing one (both return the conversation).
 	StartConversation(recipientUsername string) (model.Conversation, error)

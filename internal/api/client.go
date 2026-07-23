@@ -1403,9 +1403,18 @@ func (c *HTTPClient) GetRoomMessages(roomID string, limit int, before int64) ([]
 }
 
 // SendRoomMessage sends a message to a chatroom via POST /v1/circ/:roomId.
-func (c *HTTPClient) SendRoomMessage(roomID, body string) error {
-	_, err := c.doJSON("POST", "/v1/circ/"+url.PathEscape(roomID), map[string]string{"content": body})
-	return err
+// Returns the server's reply text for reply-only commands (e.g. /help, which
+// posts no message); empty for normal sends.
+func (c *HTTPClient) SendRoomMessage(roomID, body string) (string, error) {
+	env, err := c.doJSON("POST", "/v1/circ/"+url.PathEscape(roomID), map[string]string{"content": body})
+	if err != nil {
+		return "", err
+	}
+	var data struct {
+		Reply string `json:"reply"`
+	}
+	_ = json.Unmarshal(env.Data, &data)
+	return data.Reply, nil
 }
 
 // MarkRoomRead resets the unread indicator for roomID via POST /v1/circ/:roomId/read.
@@ -1547,10 +1556,19 @@ func (c *HTTPClient) GetMessages(conversationID string, limit int, before int64)
 	return out, nil
 }
 
-// SendMessage sends a C-Mail message via POST /v1/cmail/:id.
-func (c *HTTPClient) SendMessage(conversationID, body string) error {
-	_, err := c.doJSON("POST", "/v1/cmail/"+url.PathEscape(conversationID), map[string]string{"content": body})
-	return err
+// SendMessage sends a C-Mail message via POST /v1/cmail/:id. Returns the
+// server's reply text for reply-only commands (e.g. /help, which posts no
+// message); empty for normal sends.
+func (c *HTTPClient) SendMessage(conversationID, body string) (string, error) {
+	env, err := c.doJSON("POST", "/v1/cmail/"+url.PathEscape(conversationID), map[string]string{"content": body})
+	if err != nil {
+		return "", err
+	}
+	var data struct {
+		Reply string `json:"reply"`
+	}
+	_ = json.Unmarshal(env.Data, &data)
+	return data.Reply, nil
 }
 
 // StartConversation creates or retrieves a C-Mail conversation with recipientUsername

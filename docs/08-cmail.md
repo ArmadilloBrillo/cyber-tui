@@ -51,6 +51,8 @@ Full-width message history viewport + fixed compose input at bottom:
 
 **Live-stream reconnect**: the Firebase `idToken` backing the RTDB subscription expires hourly. When the stream closes while a conversation is still open, the app calls `api.Client.RefreshSession()` and reopens the subscription automatically, showing a brief "reconnected to live chat" notification. A single reconnect attempt is made; if it fails, the conversation is left without live updates until the user leaves and re-enters.
 
+**Slash commands**: like CIRC, the server expands `/me`, `/poke`/`/hug`/`/hi5`/`/slap`, `/dice`, `/8ball`, and `/fortune` server-side — these already work with no client changes. `/help` posts no message; its reply is captured from the send response and appended as a local-only system notice (`model.Message.IsSystem`, rendered via `renderSystemNotice` — no bubble, no border, just a muted `*** `-prefixed block). It's never sent to or stored by the server.
+
 ---
 
 ## Key Bindings
@@ -139,7 +141,7 @@ The subscription is opened when a conversation is selected (Enter in list mode) 
 |---|---|---|
 | `GetConversations` | `() ([]model.Conversation, error)` | Populates `UnreadCount`, `LastMessage`, and `LastMessageAt` from wire response |
 | `GetMessages` | `(convID string, limit int, before int64) ([]model.Message, error)` | Returns oldest-first; pass `before=0` for the latest page, or a previous message's timestamp for older pages |
-| `SendMessage` | `(convID, body string) error` | POST to REST endpoint |
+| `SendMessage` | `(convID, body string) (string, error)` | POST to REST endpoint; returns the reply text for reply-only commands (`/help`), empty otherwise |
 | `StartConversation` | `(recipientUsername string) (model.Conversation, error)` | POST to REST; idempotent |
 | `MarkCMailRead` | `(convID string) error` | POST to REST; called when a conversation is opened |
 | `SubscribeDMs` | `(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error)` | RTDB SSE; skips initial snapshot |

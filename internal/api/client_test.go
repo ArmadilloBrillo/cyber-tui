@@ -822,11 +822,60 @@ func TestHTTPSendMessage_PostsContent(t *testing.T) {
 		writeOK(t, w, map[string]string{"conversationId": "c1", "messageId": "m1"})
 	})))
 	c.LoginWithRefreshToken("tok")
-	if err := c.SendMessage("c1", "hello there"); err != nil {
+	reply, err := c.SendMessage("c1", "hello there")
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "" {
+		t.Errorf("expected empty reply for a normal send, got %q", reply)
 	}
 	if !strings.Contains(string(gotBody), "hello there") {
 		t.Errorf("expected body to contain 'hello there', got: %s", gotBody)
+	}
+}
+
+func TestHTTPSendMessage_ReturnsReply(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]string{"reply": "Commands: /me, /dice, ..."})
+	})))
+	c.LoginWithRefreshToken("tok")
+	reply, err := c.SendMessage("c1", "/help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "Commands: /me, /dice, ..." {
+		t.Errorf("reply = %q, want the /help command list", reply)
+	}
+}
+
+func TestHTTPSendRoomMessage_ReturnsReply(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/circ/general" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, map[string]string{"reply": "Commands: /me, /dice, ..."})
+	})))
+	c.LoginWithRefreshToken("tok")
+	reply, err := c.SendRoomMessage("general", "/help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "Commands: /me, /dice, ..." {
+		t.Errorf("reply = %q, want the /help command list", reply)
+	}
+}
+
+func TestHTTPSendRoomMessage_EmptyReplyForNormalSend(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]string{"roomId": "general", "messageId": "m1"})
+	})))
+	c.LoginWithRefreshToken("tok")
+	reply, err := c.SendRoomMessage("general", "hello world")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "" {
+		t.Errorf("expected empty reply for a normal send, got %q", reply)
 	}
 }
 

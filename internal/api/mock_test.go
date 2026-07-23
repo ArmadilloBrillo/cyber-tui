@@ -227,8 +227,23 @@ func TestMockGetRoomMessages_BeforeReturnsEmpty(t *testing.T) {
 
 func TestMockSendRoomMessage_NoError(t *testing.T) {
 	m := newMock()
-	if err := m.SendRoomMessage("r1", "hello room"); err != nil {
+	reply, err := m.SendRoomMessage("r1", "hello room")
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "" {
+		t.Errorf("expected empty reply for a normal send, got %q", reply)
+	}
+}
+
+func TestMockSendRoomMessage_HelpReturnsReply(t *testing.T) {
+	m := newMock()
+	reply, err := m.SendRoomMessage("r1", "/help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply == "" {
+		t.Error("expected a non-empty reply for /help")
 	}
 }
 
@@ -322,8 +337,23 @@ func TestMockGetMessages_BeforeReturnsEmpty(t *testing.T) {
 
 func TestMockSendMessage_NoError(t *testing.T) {
 	m := newMock()
-	if err := m.SendMessage("c1", "hey"); err != nil {
+	reply, err := m.SendMessage("c1", "hey")
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "" {
+		t.Errorf("expected empty reply for a normal send, got %q", reply)
+	}
+}
+
+func TestMockSendMessage_HelpReturnsReply(t *testing.T) {
+	m := newMock()
+	reply, err := m.SendMessage("c1", "/help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply == "" {
+		t.Error("expected a non-empty reply for /help")
 	}
 }
 
