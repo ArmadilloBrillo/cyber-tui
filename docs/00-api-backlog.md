@@ -14,6 +14,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `/v1/follows` | GET | **Open** | Response does not include `followerUsername` or `followedUsername`. Confirmed still missing in v0.4 (re-tested 2026-05-29). The profile Following/Followers tabs fall back to showing a truncated user ID; profile navigation from those tabs is disabled until the API returns usernames. | 2026-04-17 |
 | `/v1/notifications` | GET | **Open (by design?)** | Notifications can point to posts that have since been deleted, and the notification object exposes no "target deleted/unavailable" flag — opening one is the only way to discover the target is gone (`GET /v1/posts/:id` → 404). The client now handles this gracefully (friendly "This post has been deleted" banner, non-blocking). A `targetDeleted` field (or server-side filtering of dead-target notifications) would let the client mark/skip them up front. | 2026-06-03 |
 | Rate limits (spec) | — | **Resolved** | The v0.4.1 inline-vs-table contradiction is gone in v0.5.0: the consolidated Rate Limits table now matches the inline per-endpoint limits (Entries 15/day, Replies 15/day, Notes 30/day, Bookmarks 75/day, Profile/Settings 15/day). Read limits were also raised (most list endpoints 30→45/min; profile/follows/topics/bookmarks/notes 20→30/min). Resolved 2026-06-04. | 2026-05-29 |
+| `/v1/search` | GET | **Open** | `createdAt` is inconsistent across hit types, and doesn't match the RFC3339 string every other user/post/reply-returning endpoint uses. Confirmed live: a numeric epoch (assumed ms) on user hits, and a raw Firestore Timestamp object (`{"_seconds":N,"_nanoseconds":N}`) on post hits — apparently un-normalized before being sent to the client. Not documented in the API spec. Client-side workaround: `apiTimestamp` (`internal/api/client.go`) accepts string, number, or object for `wireUser`/`wirePost`/`wireReply`'s date fields, and degrades to an empty timestamp rather than failing the whole response for any other shape. | 2026-07-23 |
 
 ---
 
@@ -111,14 +112,15 @@ Notes:
 
 ### Search (new in v0.7)
 
-| Endpoint | Method | Description | Priority |
+| Endpoint | Method | Description | Status |
 |---|---|---|---|
-| `GET /v1/search?q=<query>&type=all` | GET | Full-text search across users, posts, and replies | Medium |
+| `GET /v1/search?q=<query>&type=all` | GET | Full-text search across users, posts, and replies — grouped preview | **Done** — feature 34, `Search()` |
+| `GET /v1/search?q=<query>&type=posts\|replies\|users` | GET | Paginated single-category search | **Done** — feature 34, `SearchPosts`/`SearchReplies`/`SearchUsers()` |
 
 Notes:
-- `type=all` returns up to 8 hits per group (users/posts/replies), no pagination.
-- `type=posts|replies|users` returns paginated results; use `page` (0-based) for pagination; `cursor` in response is next page number or null.
-- User hits include guild fields, follower/post counts; reply hits include `parentPostAuthor`/`parentPostContent` context.
+- `type=all` returns up to 8 hits per group (users/posts/replies), no pagination, no total count. The client treats "exactly 8 hits" as the only available signal that a category may have more — see `docs/34-search.md`.
+- `type=posts|replies|users` returns paginated results; the client sends `page` (0-based) and treats the response `cursor` (next page number, or null) as an opaque cursor string, same as every other paginated endpoint — no special-casing needed.
+- Search hits reuse the existing `model.User`/`model.Post`/`model.Reply` types; no dedicated hit types were needed. The doc-mentioned extra reply-hit context (`parentPostAuthor`/`parentPostContent`) and user-hit guild fields were not captured — not needed for the current UI (reply hits navigate to the parent post directly; user hits already carry guild fields via the existing `User` type).
 - Rate limit: 30/min. Missing `q` → 400 VALIDATION_ERROR.
 
 ### Commands (new in v0.7)

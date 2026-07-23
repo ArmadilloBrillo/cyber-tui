@@ -139,6 +139,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `Follow` | Follow relationship (ID, followerID, followedID, followerUsername, followedUsername, createdAt) |
 | `Note` | Private journal note (ID, authorID, content, topics, revisionNumber, deleted, createdAt) |
 | `NoteRevision` | Single historical revision of a note (revisionNumber, content, topics, createdAt) |
+| `SearchPreview` | Grouped `type=all` search response (Users, Posts, Replies — up to 8 each, reusing the existing `User`/`Post`/`Reply` types) |
 
 ---
 
@@ -170,6 +171,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Notes | `GetNotes(cursor)`, `GetNote(noteID)`, `GetNoteRevision(noteID, revision)`, `GetNoteRevisions(noteID, cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
 | Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `StartConversation(recipientUsername)`, `MarkCMailRead(convID)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
 | Chatrooms | `GetRooms()`, `GetRoomMessages(roomID, limit, before)`, `SendRoomMessage(roomID, body)`, `MarkRoomRead(roomID)`, `SubscribeRoom(ctx, roomID) <-chan model.Message` |
+| Search | `Search(query)` (grouped `type=all` preview), `SearchPosts(query, cursor)`, `SearchReplies(query, cursor)`, `SearchUsers(query, cursor)` |
 
 #### `client.go`
 
@@ -194,7 +196,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 - `refresh()` — token refresh path; does not recurse
 - `wirePostToModel()`, `wireReplyToModel()`, `wireUserToModel()`, `wireSettingsToModel()`, `wireNotificationToModel()`, `wireNoteToModel()` — convert API JSON wire types to `model.*` types
 
-**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireRoom`, `wireCircMessage`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData` — match the JSON envelope shapes returned by the API.
+**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireRoom`, `wireCircMessage`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData`, `wireSearchPreview` — match the JSON envelope shapes returned by the API.
 
 **Note:** `HTTPClient.tokens` is guarded by a `sync.Mutex`. Bubble Tea runs commands in concurrent goroutines, so reads in `doRequest` and writes in `Login`/`refresh` go through the token accessor methods (`idToken`, `setTokens`, `snapshotTokens`, `applyRefresh`). See `docs/30-security-hardening.md`.
 
@@ -298,7 +300,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 | `WithAutoLogin(email, password)` | method | Pre-fills credentials for programmatic login |
 | `WithSavedEmail(email)` | method | Pre-fills email field on login screen |
 
-**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenGuilds`, `screenTopics`, `screenJournal`, `screenSettings`
+**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenGuilds`, `screenTopics`, `screenJournal`, `screenSearch`, `screenSettings`
 
 **Responsibilities:**
 
@@ -529,6 +531,18 @@ Note creation (`n`), editing (`enter`), deletion (`d`), and revision history (`h
 Key types: `JournalModel`, `SubmitSaveNoteMsg`, `SubmitPublishNoteMsg`, `SubmitDeleteNoteMsg`, `LoadMoreJournalMsg`, `LoadNoteRevisionsMsg`, `LoadNoteRevisionMsg`  
 Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNoteContent(noteID, content, topics)`, `DeleteNote(noteID)`, `SetRevisions(noteID, revisions, cursor)`, `SetRevisionPreview(note)`
 
+#### `search.go`
+
+Full-text search across users, posts, and replies — tab `search` (no number key; reached via the global `/` shortcut or `←`/`→` cycling). See `docs/34-search.md`.
+
+- Three modes: query (text input) → preview (grouped, up to 8 hits per category) → type-list (one category, fully paginated). Results stay cached across mode changes.
+- `esc` peels back one level at a time — type-list → preview → query (focused) — and, from the query box (the outermost level; no result list is showing there, so there's nothing left to peel back), leaves Search entirely and returns to the screen `/` was pressed from (`App.searchReturn`, the same return-to-origin pattern as `profileReturn`/`postDetailReturn`). Also the escape hatch if a search request fails: `SetError` never changes the view, so this is otherwise the only way back to normal tab/quit navigation. `esc` always blurs the query box on its way out so a later arrival via tab-cycling (which doesn't call `FocusQuery`) never inherits a stuck focused state.
+- `j`/`k` navigate a flattened row list (section headers are not selectable); `enter` opens a hit or drills into a "see all" row.
+- User hits emit the shared `ShowUserProfileMsg`; post hits emit `ShowSearchPostMsg`; reply hits emit `ShowSearchReplyMsg{PostID, ReplyID}` (fetches the parent post, then scrolls to the reply — same mechanism as the Notifications reply deep-link).
+
+Key types: `SearchModel`, `SubmitSearchMsg`, `DrillSearchTypeMsg`, `LoadMoreSearchMsg`, `ShowSearchPostMsg`, `ShowSearchReplyMsg`, `LeaveSearchMsg`  
+Key methods: `SetPreview(preview, query)`, `SetTypeResults(hitType, posts, replies, users, cursor)`, `AppendTypeResults(...)`, `FocusQuery()`, `InputFocused()`, `IsInTypeList()`, `LastQuery()`
+
 #### `compose.go`
 
 Reusable multi-line text editor embedded in Feed, PostDetail, Profile, and C-Mail.
@@ -674,7 +688,8 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `7` | Guilds |
 | `8` | Topics |
 | `9` | Profile |
-| `←` / `→` | Cycle tabs left / right (includes Settings) |
+| `←` / `→` | Cycle tabs left / right (includes Search and Settings, which have no number key) |
+| `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail) |
 | `v` | Toggle dense / relaxed display |
 | `?` | Help modal |
 | `t` | Theme picker |
@@ -802,6 +817,19 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `esc` | Return to list mode |
 | `ctrl+o` | Open URLs/images found across the loaded room history (plain `o` is captured by the compose input) |
 | all other | Forwarded to compose input |
+
+### Search
+
+`esc` peels back one level at a time, same as everywhere else in the app, and — once there's nothing left to peel back — leaves Search entirely and returns to whichever screen `/` was pressed from (the same return-to-origin pattern `p` → profile → `esc` uses):
+
+type-list → preview → query (focused) → **origin screen**
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | Next row (skips section headers) |
+| `k` / `↑` | Previous row |
+| `enter` | Submit the query (in query mode); open the selected hit or drill into a "see all" row (in preview/type-list) |
+| `esc` | Step back one level per the chain above |
 
 ### Settings
 

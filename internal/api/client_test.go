@@ -1975,3 +1975,237 @@ func TestHTTPUnwatchPost_CallsCorrectEndpoint(t *testing.T) {
 		t.Errorf("path = %q, want /v1/posts/p42/watch", gotPath)
 	}
 }
+
+// --- Search ---
+
+func TestHTTPSearch_ParsesGroupedPreview(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOK(t, w, map[string]any{
+			"users": []map[string]any{
+				{"userId": "u1", "username": "neuromancer"},
+			},
+			"posts": []map[string]any{
+				{"postId": "p1", "authorId": "u2", "authorUsername": "molly", "content": "street samurai"},
+			},
+			"replies": []map[string]any{
+				{"replyId": "r1", "postId": "p1", "authorId": "u3", "authorUsername": "wintermute", "content": "i arrange things"},
+			},
+		})
+	}))
+
+	preview, err := c.Search("matrix")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "type=all") || !strings.Contains(gotURL, "q=matrix") {
+		t.Errorf("unexpected request URL: %s", gotURL)
+	}
+	if len(preview.Users) != 1 || preview.Users[0].Username != "neuromancer" {
+		t.Errorf("unexpected users: %+v", preview.Users)
+	}
+	if len(preview.Posts) != 1 || preview.Posts[0].ID != "p1" || preview.Posts[0].AuthorUsername != "molly" {
+		t.Errorf("unexpected posts: %+v", preview.Posts)
+	}
+	if len(preview.Replies) != 1 || preview.Replies[0].ID != "r1" || preview.Replies[0].AuthorUsername != "wintermute" {
+		t.Errorf("unexpected replies: %+v", preview.Replies)
+	}
+}
+
+// TestHTTPSearch_ParsesNumericCreatedAt guards against a real bug: GET
+// /v1/search returns createdAt as a numeric epoch-ms value (at least for user
+// hits), diverging from every other user/post/reply-returning endpoint, which
+// use RFC3339 strings. Discovered via live testing against the real API.
+func TestHTTPSearch_ParsesNumericCreatedAt(t *testing.T) {
+	const epochMs = 1700000000000
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{
+			"users": []map[string]any{
+				{"userId": "u1", "username": "neuromancer", "createdAt": epochMs},
+			},
+			"posts": []map[string]any{
+				{"postId": "p1", "authorId": "u2", "authorUsername": "molly", "content": "street samurai", "createdAt": epochMs},
+			},
+			"replies": []map[string]any{
+				{"replyId": "r1", "postId": "p1", "authorId": "u3", "authorUsername": "wintermute", "content": "i arrange things", "createdAt": epochMs},
+			},
+		})
+	}))
+
+	preview, err := c.Search("matrix")
+	if err != nil {
+		t.Fatalf("unexpected error decoding numeric createdAt: %v", err)
+	}
+	want := time.UnixMilli(epochMs).UTC()
+	if len(preview.Users) != 1 || !preview.Users[0].CreatedAt.Equal(want) {
+		t.Errorf("user CreatedAt = %v, want %v", preview.Users[0].CreatedAt, want)
+	}
+	if len(preview.Posts) != 1 || !preview.Posts[0].CreatedAt.Equal(want) {
+		t.Errorf("post CreatedAt = %v, want %v", preview.Posts[0].CreatedAt, want)
+	}
+	if len(preview.Replies) != 1 || !preview.Replies[0].CreatedAt.Equal(want) {
+		t.Errorf("reply CreatedAt = %v, want %v", preview.Replies[0].CreatedAt, want)
+	}
+}
+
+// TestHTTPSearchPosts_ParsesNumericCreatedAt confirms the fix also covers the
+// paginated typed-search path (fetchPage + wirePostToModel), not just the
+// grouped type=all preview's bespoke unmarshaling.
+func TestHTTPSearchPosts_ParsesNumericCreatedAt(t *testing.T) {
+	const epochMs = 1700000000000
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOKWithCursor(t, w, []map[string]any{
+			{"postId": "p1", "authorId": "u1", "authorUsername": "case", "content": "flatline", "createdAt": epochMs},
+		}, "")
+	}))
+
+	posts, _, err := c.SearchPosts("flatline", "")
+	if err != nil {
+		t.Fatalf("unexpected error decoding numeric createdAt: %v", err)
+	}
+	want := time.UnixMilli(epochMs).UTC()
+	if len(posts) != 1 || !posts[0].CreatedAt.Equal(want) {
+		t.Errorf("post CreatedAt = %v, want %v", posts[0].CreatedAt, want)
+	}
+}
+
+// TestHTTPSearch_ParsesFirestoreTimestampObject guards against a second
+// createdAt shape observed live: a raw Firestore Timestamp object instead of
+// a string or a plain number.
+func TestHTTPSearch_ParsesFirestoreTimestampObject(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{
+			"users": []map[string]any{},
+			"posts": []map[string]any{
+				{"postId": "p1", "authorId": "u1", "authorUsername": "case", "content": "flatline",
+					"createdAt": map[string]any{"_seconds": 1700000000, "_nanoseconds": 0}},
+			},
+			"replies": []map[string]any{},
+		})
+	}))
+
+	preview, err := c.Search("flatline")
+	if err != nil {
+		t.Fatalf("unexpected error decoding a Firestore timestamp object: %v", err)
+	}
+	want := time.Unix(1700000000, 0).UTC()
+	if len(preview.Posts) != 1 || !preview.Posts[0].CreatedAt.Equal(want) {
+		t.Errorf("post CreatedAt = %v, want %v", preview.Posts[0].CreatedAt, want)
+	}
+}
+
+// TestHTTPSearch_UnrecognizedCreatedAtShape_DoesNotFail guards against a
+// third, still-unknown shape: decoding must degrade gracefully (empty
+// timestamp on that one hit) rather than failing the whole search response.
+func TestHTTPSearch_UnrecognizedCreatedAtShape_DoesNotFail(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{
+			"users": []map[string]any{},
+			"posts": []map[string]any{
+				{"postId": "p1", "authorId": "u1", "authorUsername": "case", "content": "flatline",
+					"createdAt": []int{1, 2, 3}},
+			},
+			"replies": []map[string]any{},
+		})
+	}))
+
+	preview, err := c.Search("flatline")
+	if err != nil {
+		t.Fatalf("expected search to succeed despite an unrecognized createdAt shape, got: %v", err)
+	}
+	if len(preview.Posts) != 1 || preview.Posts[0].ID != "p1" {
+		t.Fatalf("expected the post to still decode: %+v", preview.Posts)
+	}
+	if !preview.Posts[0].CreatedAt.IsZero() {
+		t.Errorf("expected zero-value CreatedAt for an unrecognized shape, got %v", preview.Posts[0].CreatedAt)
+	}
+}
+
+func TestHTTPSearchPosts_ParsesResultsAndCursor(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{
+			{"postId": "p1", "authorId": "u1", "authorUsername": "case", "content": "flatline"},
+		}, "1")
+	}))
+
+	posts, cursor, err := c.SearchPosts("flatline", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "type=posts") || !strings.Contains(gotURL, "q=flatline") {
+		t.Errorf("unexpected request URL: %s", gotURL)
+	}
+	if strings.Contains(gotURL, "page=") {
+		t.Errorf("first page should not include a page param: %s", gotURL)
+	}
+	if len(posts) != 1 || posts[0].ID != "p1" {
+		t.Errorf("unexpected posts: %+v", posts)
+	}
+	if cursor != "1" {
+		t.Errorf("cursor = %q, want %q", cursor, "1")
+	}
+}
+
+func TestHTTPSearchPosts_SendsPageParamForCursor(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	}))
+
+	c.SearchPosts("flatline", "1") //nolint:errcheck,dogsled
+	if !strings.Contains(gotURL, "page=1") {
+		t.Errorf("expected page=1 in URL, got: %s", gotURL)
+	}
+	if strings.Contains(gotURL, "cursor=") {
+		t.Errorf("search pagination should use 'page', not 'cursor': %s", gotURL)
+	}
+}
+
+func TestHTTPSearchReplies_ParsesResults(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{
+			{"replyId": "r1", "postId": "p1", "authorId": "u1", "authorUsername": "molly", "content": "don't stare"},
+		}, "")
+	}))
+
+	replies, cursor, err := c.SearchReplies("stare", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "type=replies") {
+		t.Errorf("unexpected request URL: %s", gotURL)
+	}
+	if len(replies) != 1 || replies[0].ID != "r1" || replies[0].PostID != "p1" {
+		t.Errorf("unexpected replies: %+v", replies)
+	}
+	if cursor != "" {
+		t.Errorf("expected empty (exhausted) cursor, got %q", cursor)
+	}
+}
+
+func TestHTTPSearchUsers_ParsesResults(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{
+			{"userId": "u1", "username": "wintermute", "followersCount": 42},
+		}, "")
+	}))
+
+	users, _, err := c.SearchUsers("wintermute", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "type=users") {
+		t.Errorf("unexpected request URL: %s", gotURL)
+	}
+	if len(users) != 1 || users[0].Username != "wintermute" || users[0].FollowersCount != 42 {
+		t.Errorf("unexpected users: %+v", users)
+	}
+}

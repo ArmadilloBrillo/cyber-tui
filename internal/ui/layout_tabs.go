@@ -220,6 +220,8 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 		return a.profile.ComposeActive()
 	case screenJournal:
 		return a.journal.ComposeActive()
+	case screenSearch:
+		return a.search.InputFocused()
 	}
 	return false
 }
@@ -282,6 +284,8 @@ func (l TabsLayout) renderActiveScreen(a App) string {
 		return a.topics.View()
 	case screenJournal:
 		return a.journal.View()
+	case screenSearch:
+		return a.search.View()
 	}
 	return ""
 }
@@ -435,6 +439,14 @@ func (l TabsLayout) screenHints(a App) []hint {
 			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, {"esc", "back"}, more}
+	case screenSearch:
+		if a.search.InputFocused() {
+			return []hint{{"enter", "search"}}
+		}
+		if a.search.IsInTypeList() {
+			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
+		}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open / see all"}, {"esc", "edit query"}, more}
 	case screenSettings:
 		base := []hint{{"↑↓", "navigate"}, {"space", "toggle"}, {"tab", "cycle"}, more}
 		if a.settingsScreen.IsDirty() {
@@ -490,6 +502,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		sectionStyle.Render("global"),
 		row("1-9", "feed · notifs · c-mail · circ · journal · bookmarks · guilds · topics · profile"),
 		row("← →", "cycle tabs"),
+		row("/", "search"),
 		row("t", "theme"),
 		row("v", "density"),
 		row("o", "open url"),
@@ -568,6 +581,12 @@ func (l TabsLayout) renderHelpModal(a App) string {
 			localSection = section("topics (browsing)")
 		} else {
 			localSection = section("topics")
+		}
+	case screenSearch:
+		if a.search.InputFocused() {
+			localSection = section("search")
+		} else {
+			localSection = section("search (results)")
 		}
 	case screenSettings:
 		t := "settings"

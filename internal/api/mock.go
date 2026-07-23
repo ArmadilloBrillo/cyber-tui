@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -661,4 +662,48 @@ func (m *MockClient) GetUserReplies(username, cursor string) ([]model.Reply, str
 		}
 	}
 	return userReplies, "", nil
+}
+
+// mockContains is a case-insensitive substring match used by the search mocks.
+func mockContains(haystack, needle string) bool {
+	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
+}
+
+func (m *MockClient) Search(query string) (model.SearchPreview, error) {
+	users, _, _ := m.SearchUsers(query, "")
+	posts, _, _ := m.SearchPosts(query, "")
+	replies, _, _ := m.SearchReplies(query, "")
+	return model.SearchPreview{Users: users, Posts: posts, Replies: replies}, nil
+}
+
+func (m *MockClient) SearchPosts(query, cursor string) ([]model.Post, string, error) {
+	feed, _, _ := m.GetFeed("")
+	var out []model.Post
+	for _, p := range feed {
+		if mockContains(p.Content, query) || mockContains(p.Title, query) {
+			out = append(out, p)
+		}
+	}
+	return out, "", nil
+}
+
+func (m *MockClient) SearchReplies(query, cursor string) ([]model.Reply, string, error) {
+	replies, _ := m.GetPostReplies("")
+	var out []model.Reply
+	for _, r := range replies {
+		if mockContains(r.Content, query) {
+			out = append(out, r)
+		}
+	}
+	return out, "", nil
+}
+
+func (m *MockClient) SearchUsers(query, cursor string) ([]model.User, string, error) {
+	var out []model.User
+	for _, u := range mockUsers {
+		if mockContains(u.Username, query) || mockContains(u.DisplayName, query) || mockContains(u.Bio, query) {
+			out = append(out, u)
+		}
+	}
+	return out, "", nil
 }

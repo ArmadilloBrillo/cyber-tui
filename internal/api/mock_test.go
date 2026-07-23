@@ -855,6 +855,86 @@ func TestMockGetNoteRevisions_NotFound(t *testing.T) {
 	}
 }
 
+// --- Search ---
+
+func TestMockSearchUsers_MatchesUsername(t *testing.T) {
+	m := newMock()
+	users, _, err := m.SearchUsers("neuro", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(users) != 1 || users[0].Username != "neuromancer" {
+		t.Errorf("unexpected users: %+v", users)
+	}
+}
+
+func TestMockSearchUsers_MatchesBio(t *testing.T) {
+	m := newMock()
+	users, _, err := m.SearchUsers("arranges", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(users) != 1 || users[0].Username != "wintermute" {
+		t.Errorf("expected wintermute (bio match), got: %+v", users)
+	}
+}
+
+func TestMockSearchPosts_MatchesContent(t *testing.T) {
+	m := newMock()
+	posts, _, err := m.SearchPosts("flatline", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(posts) != 1 || posts[0].ID != "p1" {
+		t.Errorf("unexpected posts: %+v", posts)
+	}
+}
+
+func TestMockSearchReplies_MatchesContent(t *testing.T) {
+	m := newMock()
+	replies, _, err := m.SearchReplies("arranged", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(replies) != 1 || replies[0].ID != "r2" {
+		t.Errorf("unexpected replies: %+v", replies)
+	}
+}
+
+func TestMockSearch_NoMatches_ReturnsEmpty(t *testing.T) {
+	m := newMock()
+	preview, err := m.Search("xyzzy-no-such-term")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(preview.Users) != 0 || len(preview.Posts) != 0 || len(preview.Replies) != 0 {
+		t.Errorf("expected no hits, got: %+v", preview)
+	}
+}
+
+func TestMockSearch_AggregatesAllThreeCategories(t *testing.T) {
+	m := newMock()
+	const q = "i"
+
+	preview, err := m.Search(q)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantUsers, _, _ := m.SearchUsers(q, "")
+	wantPosts, _, _ := m.SearchPosts(q, "")
+	wantReplies, _, _ := m.SearchReplies(q, "")
+
+	if len(preview.Users) != len(wantUsers) {
+		t.Errorf("Users: got %d, want %d", len(preview.Users), len(wantUsers))
+	}
+	if len(preview.Posts) != len(wantPosts) {
+		t.Errorf("Posts: got %d, want %d", len(preview.Posts), len(wantPosts))
+	}
+	if len(preview.Replies) != len(wantReplies) {
+		t.Errorf("Replies: got %d, want %d", len(preview.Replies), len(wantReplies))
+	}
+}
+
 // --- Interface compliance ---
 
 func TestMockClient_ImplementsClientInterface(t *testing.T) {

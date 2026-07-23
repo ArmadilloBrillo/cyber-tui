@@ -65,6 +65,7 @@ var menuTabs = []struct {
 	{"guilds", screenGuilds},
 	{"topics", screenTopics},
 	{"profile", screenProfile},
+	{"search", screenSearch},
 	{"settings", screenSettings},
 }
 
@@ -209,6 +210,10 @@ func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 	case screenJournal:
 		a.journal = a.journal.SetFetching()
 		return a, a.loadJournalCmd()
+	case screenSearch:
+		// No auto-fetch: Search only has meaning once a query is submitted.
+		// Cycling in just shows whatever state it was last left in.
+		return a, nil
 	}
 	return a, nil
 }
@@ -243,6 +248,8 @@ func delegateScreenUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
 		a.topics, cmd = a.topics.Update(msg)
 	case screenJournal:
 		a.journal, cmd = a.journal.Update(msg)
+	case screenSearch:
+		a.search, cmd = a.search.Update(msg)
 	}
 	return a, cmd
 }

@@ -336,6 +336,8 @@ func (l MillerLayout) HasFocusedInput(a App) bool {
 		return a.profile.ComposeActive()
 	case screenJournal:
 		return a.journal.ComposeActive()
+	case screenSearch:
+		return a.search.InputFocused()
 	}
 	return false
 }
@@ -402,6 +404,8 @@ func (l MillerLayout) screenTitle(a App) string {
 		return "guilds"
 	case screenTopics:
 		return "topics"
+	case screenSearch:
+		return "search"
 	case screenProfile:
 		return "profile"
 	case screenSettings:
@@ -440,6 +444,8 @@ func (l MillerLayout) renderContent(a App) string {
 		return a.topics.View()
 	case screenJournal:
 		return a.journal.View()
+	case screenSearch:
+		return a.search.View()
 	}
 	return ""
 }
@@ -576,6 +582,7 @@ func (l MillerLayout) renderHelpModal(a App) string {
 		row("l / enter", "enter content pane"),
 		row("h", "return to nav pane"),
 		row("1-9", "jump to section"),
+		row("/", "search"),
 		row("t", "theme"),
 		row("v", "density"),
 		row("o", "open url"),

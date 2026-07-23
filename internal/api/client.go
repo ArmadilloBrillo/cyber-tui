@@ -77,6 +77,63 @@ type wireAttachment struct {
 	Genre  string `json:"genre,omitempty"`
 }
 
+// apiTimestamp decodes a JSON value that may be an RFC3339 string (the
+// documented shape, used by every other endpoint), a numeric epoch-ms value,
+// or a raw Firestore Timestamp object (`{"_seconds":N,"_nanoseconds":N}`, or
+// the unprefixed `{"seconds":N,"nanoseconds":N}` variant) — all observed live
+// on different hit types from GET /v1/search, which appears to serialize
+// createdAt inconsistently. Undocumented drift from every other
+// user/post/reply-returning endpoint; see docs/00-api-backlog.md.
+//
+// An unrecognized shape is logged and left empty rather than failing the
+// whole decode — a malformed timestamp on one hit must never break the rest
+// of a search response.
+type apiTimestamp string
+
+func (t *apiTimestamp) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*t = ""
+		return nil
+	}
+	switch b[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(b, &s); err == nil {
+			*t = apiTimestamp(s)
+			return nil
+		}
+	case '{':
+		var fs struct {
+			Seconds        int64 `json:"_seconds"`
+			Nanoseconds    int64 `json:"_nanoseconds"`
+			SecondsAlt     int64 `json:"seconds"`
+			NanosecondsAlt int64 `json:"nanoseconds"`
+		}
+		if err := json.Unmarshal(b, &fs); err == nil {
+			sec, nsec := fs.Seconds, fs.Nanoseconds
+			if sec == 0 {
+				sec = fs.SecondsAlt
+			}
+			if nsec == 0 {
+				nsec = fs.NanosecondsAlt
+			}
+			if sec != 0 || nsec != 0 {
+				*t = apiTimestamp(time.Unix(sec, nsec).UTC().Format(time.RFC3339Nano))
+				return nil
+			}
+		}
+	default:
+		var ms int64
+		if err := json.Unmarshal(b, &ms); err == nil {
+			*t = apiTimestamp(time.UnixMilli(ms).UTC().Format(time.RFC3339Nano))
+			return nil
+		}
+	}
+	log.Printf("api: apiTimestamp: unrecognized value, leaving empty: %s", b)
+	*t = ""
+	return nil
+}
+
 type wirePost struct {
 	PostID         string           `json:"postId"`
 	AuthorID       string           `json:"authorId"`
@@ -93,39 +150,39 @@ type wirePost struct {
 	IsPublic       bool             `json:"isPublic"`
 	IsNSFW         bool             `json:"isNSFW"`
 	Deleted        bool             `json:"deleted"`
-	CreatedAt      string           `json:"createdAt"`
+	CreatedAt      apiTimestamp     `json:"createdAt"`
 	Attachments    []wireAttachment `json:"attachments"`
 }
 
 type wireUser struct {
-	UserID            string  `json:"userId"`
-	Username          string  `json:"username"`
-	DisplayName       string  `json:"displayName"`
-	Email             string  `json:"email"`
-	Bio               string  `json:"bio"`
-	WebsiteUrl        string  `json:"websiteUrl"`
-	WebsiteName       string  `json:"websiteName"`
-	WebsiteImageUrl   string  `json:"websiteImageUrl"`
-	PinnedPostID      string  `json:"pinnedPostId"`
-	LocationName      string  `json:"locationName"`
-	LocationLatitude  float64 `json:"locationLatitude"`
-	LocationLongitude float64 `json:"locationLongitude"`
-	FollowersCount    int     `json:"followersCount"`
-	FollowingCount    int     `json:"followingCount"`
-	PostsCount        int     `json:"postsCount"`
-	GuildSlug         string  `json:"guildSlug"`
-	GuildID           string  `json:"guildId"`
-	GuildName         string  `json:"guildName"`
-	GuildIcon         string  `json:"guildIcon"`
-	ProfilePictureUrl string  `json:"profilePictureUrl"`
-	IsSupporter       bool    `json:"isSupporter"`
-	SupporterIcon     string  `json:"supporterIcon"`
-	SerialNumber      int     `json:"serialNumber"`
-	PublicPostsCount  int     `json:"publicPostsCount"`
-	HasPublicPosts    bool    `json:"hasPublicPosts"`
-	CreatedAt         string  `json:"createdAt"`
-	LastActiveAt      string  `json:"lastActiveAt"`
-	UpdatedAt         string  `json:"updatedAt"`
+	UserID            string       `json:"userId"`
+	Username          string       `json:"username"`
+	DisplayName       string       `json:"displayName"`
+	Email             string       `json:"email"`
+	Bio               string       `json:"bio"`
+	WebsiteUrl        string       `json:"websiteUrl"`
+	WebsiteName       string       `json:"websiteName"`
+	WebsiteImageUrl   string       `json:"websiteImageUrl"`
+	PinnedPostID      string       `json:"pinnedPostId"`
+	LocationName      string       `json:"locationName"`
+	LocationLatitude  float64      `json:"locationLatitude"`
+	LocationLongitude float64      `json:"locationLongitude"`
+	FollowersCount    int          `json:"followersCount"`
+	FollowingCount    int          `json:"followingCount"`
+	PostsCount        int          `json:"postsCount"`
+	GuildSlug         string       `json:"guildSlug"`
+	GuildID           string       `json:"guildId"`
+	GuildName         string       `json:"guildName"`
+	GuildIcon         string       `json:"guildIcon"`
+	ProfilePictureUrl string       `json:"profilePictureUrl"`
+	IsSupporter       bool         `json:"isSupporter"`
+	SupporterIcon     string       `json:"supporterIcon"`
+	SerialNumber      int          `json:"serialNumber"`
+	PublicPostsCount  int          `json:"publicPostsCount"`
+	HasPublicPosts    bool         `json:"hasPublicPosts"`
+	CreatedAt         apiTimestamp `json:"createdAt"`
+	LastActiveAt      apiTimestamp `json:"lastActiveAt"`
+	UpdatedAt         apiTimestamp `json:"updatedAt"`
 }
 
 type wireFollow struct {
@@ -151,7 +208,7 @@ type wireReply struct {
 	AuthorUsername string           `json:"authorUsername"`
 	Content        string           `json:"content"`
 	ParentReplyID  string           `json:"parentReplyId"`
-	CreatedAt      string           `json:"createdAt"`
+	CreatedAt      apiTimestamp     `json:"createdAt"`
 	Attachments    []wireAttachment `json:"attachments"`
 }
 
@@ -683,7 +740,7 @@ func wireAttachmentsToModel(ws []wireAttachment) []model.Attachment {
 
 func wirePostToModel(w wirePost) model.Post {
 	sanitize.Strings(&w)
-	t := parseTime(w.CreatedAt)
+	t := parseTime(string(w.CreatedAt))
 	return model.Post{
 		ID:             w.PostID,
 		AuthorID:       w.AuthorID,
@@ -707,7 +764,7 @@ func wirePostToModel(w wirePost) model.Post {
 
 func wireReplyToModel(w wireReply) model.Reply {
 	sanitize.Strings(&w)
-	t := parseTime(w.CreatedAt)
+	t := parseTime(string(w.CreatedAt))
 	return model.Reply{
 		ID:             w.ReplyID,
 		PostID:         w.PostID,
@@ -748,9 +805,9 @@ func wireUserToModel(w wireUser) model.User {
 		SerialNumber:      w.SerialNumber,
 		PublicPostsCount:  w.PublicPostsCount,
 		HasPublicPosts:    w.HasPublicPosts,
-		CreatedAt:         parseTime(w.CreatedAt),
-		LastActiveAt:      parseTime(w.LastActiveAt),
-		UpdatedAt:         parseTime(w.UpdatedAt),
+		CreatedAt:         parseTime(string(w.CreatedAt)),
+		LastActiveAt:      parseTime(string(w.LastActiveAt)),
+		UpdatedAt:         parseTime(string(w.UpdatedAt)),
 	}
 }
 
@@ -1274,6 +1331,64 @@ func (c *HTTPClient) GetTopicPosts(slug string, cursor string) ([]model.Post, st
 		path += "&cursor=" + url.QueryEscape(cursor)
 	}
 	return fetchPage(c, path, wirePostToModel)
+}
+
+// --- Search ---
+
+type wireSearchPreview struct {
+	Users   []wireUser  `json:"users"`
+	Posts   []wirePost  `json:"posts"`
+	Replies []wireReply `json:"replies"`
+}
+
+// Search returns the grouped GET /v1/search?type=all preview.
+func (c *HTTPClient) Search(query string) (model.SearchPreview, error) {
+	path := "/v1/search?type=all&q=" + url.QueryEscape(query)
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return model.SearchPreview{}, err
+	}
+	var data wireSearchPreview
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return model.SearchPreview{}, err
+	}
+	out := model.SearchPreview{
+		Users:   make([]model.User, len(data.Users)),
+		Posts:   make([]model.Post, len(data.Posts)),
+		Replies: make([]model.Reply, len(data.Replies)),
+	}
+	for i, w := range data.Users {
+		out.Users[i] = wireUserToModel(w)
+	}
+	for i, w := range data.Posts {
+		out.Posts[i] = wirePostToModel(w)
+	}
+	for i, w := range data.Replies {
+		out.Replies[i] = wireReplyToModel(w)
+	}
+	return out, nil
+}
+
+// searchPath builds the /v1/search path for a typed (paginated) search.
+// cursor, when non-empty, is passed back as the API's page-number param.
+func searchPath(searchType, query, cursor string) string {
+	path := "/v1/search?type=" + searchType + "&q=" + url.QueryEscape(query)
+	if cursor != "" {
+		path += "&page=" + url.QueryEscape(cursor)
+	}
+	return path
+}
+
+func (c *HTTPClient) SearchPosts(query, cursor string) ([]model.Post, string, error) {
+	return fetchPage(c, searchPath("posts", query, cursor), wirePostToModel)
+}
+
+func (c *HTTPClient) SearchReplies(query, cursor string) ([]model.Reply, string, error) {
+	return fetchPage(c, searchPath("replies", query, cursor), wireReplyToModel)
+}
+
+func (c *HTTPClient) SearchUsers(query, cursor string) ([]model.User, string, error) {
+	return fetchPage(c, searchPath("users", query, cursor), wireUserToModel)
 }
 
 // --- Guilds ---

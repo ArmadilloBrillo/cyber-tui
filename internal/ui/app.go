@@ -37,6 +37,7 @@ const (
 	screenGuilds
 	screenTopics
 	screenJournal
+	screenSearch
 )
 
 type focusTarget int
@@ -132,12 +133,18 @@ type App struct {
 	guilds         screens.GuildsModel
 	topics         screens.TopicsModel
 	journal        screens.JournalModel
+	search         screens.SearchModel
 
 	// postDetailReturn is the screen to go back to when ESC is pressed in PostDetail.
 	postDetailReturn screen
 
 	// profileReturn is the screen to go back to when ESC is pressed in a read-only profile.
 	profileReturn screen
+
+	// searchReturn is the screen to go back to when ESC is pressed at Search's
+	// outermost level (blurred query, nothing left to peel back). Set whenever
+	// '/' switches into Search from somewhere else.
+	searchReturn screen
 
 	// pendingReplyID is set when navigating to PostDetail from a reply/thread_reply
 	// notification. After replies load, PostDetail scrolls to this reply, then it is cleared.
@@ -225,6 +232,7 @@ func NewApp(client api.Client) App {
 		guilds:             screens.NewGuildsModel(),
 		topics:             screens.NewTopicsModel(),
 		journal:            screens.NewJournalModel(0),
+		search:             screens.NewSearchModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -387,6 +395,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleJournal(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleSearch(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleUnauthorized(msg); ok {
 		return a2, cmd
 	}
@@ -419,6 +430,7 @@ func (a App) updateAll(msg tea.Msg) App {
 	a.guilds, _ = a.guilds.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
 	a.journal, _ = a.journal.Update(msg)
+	a.search, _ = a.search.Update(msg)
 	return a
 }
 
@@ -442,6 +454,7 @@ func (a *App) broadcastBookmarkedIDs() {
 	a.postDetail, _ = a.postDetail.Update(msg)
 	a.guilds, _ = a.guilds.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
+	a.search, _ = a.search.Update(msg)
 }
 
 // broadcastWatchedIDs pushes the current watched-post ID set to all screens
@@ -453,6 +466,7 @@ func (a *App) broadcastWatchedIDs() {
 	a.postDetail, _ = a.postDetail.Update(msg)
 	a.guilds, _ = a.guilds.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
+	a.search, _ = a.search.Update(msg)
 }
 
 // applyWindowSize stores the new terminal dimensions and broadcasts the size
@@ -531,6 +545,17 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			app, cmd := a.handleOpenURL(a.getFocusedURLs())
 			return app, cmd, true
+		}
+	case "/":
+		if a.active != screenLogin {
+			if a.active != screenSearch {
+				a.searchReturn = a.active
+			}
+			a.cmail = a.cmail.CancelSubscription()
+			a.chatrooms = a.chatrooms.CancelSubscription()
+			a.active = screenSearch
+			a.search = a.search.FocusQuery()
+			return a, nil, true
 		}
 	case "ctrl+c", "q":
 		if a.active != screenLogin {
@@ -1281,6 +1306,9 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadGuildPostsCmd(msg.slug), true
 
 	case screens.ShowUserProfileMsg:
+		if a.active != screenGuilds {
+			return a, nil, false
+		}
 		a.profileReturn = screenGuilds
 		return a, a.loadUserProfileCmd(msg.Username), true
 
@@ -1437,6 +1465,57 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 	return a, nil, false
 }
 
+// handleSearch processes search query, preview, drill-down, and pagination messages.
+func (a App) handleSearch(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case screens.SubmitSearchMsg:
+		return a, a.searchCmd(msg.Query), true
+
+	case searchPreviewLoadedMsg:
+		a.search = a.search.SetPreview(msg.preview, msg.query)
+		return a, nil, true
+
+	case screens.DrillSearchTypeMsg:
+		return a, a.searchTypeCmd(msg.Type, a.search.LastQuery()), true
+
+	case searchTypeLoadedMsg:
+		a.search = a.search.SetTypeResults(msg.hitType, msg.posts, msg.replies, msg.users, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadMoreSearchMsg:
+		return a, a.searchTypePageCmd(msg.Type, a.search.LastQuery(), msg.Cursor), true
+
+	case searchTypePageMsg:
+		a.search = a.search.AppendTypeResults(msg.hitType, msg.posts, msg.replies, msg.users, msg.cursor)
+		return a, nil, true
+
+	case screens.ShowSearchPostMsg:
+		a.postDetailReturn = screenSearch
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.Post)
+		return a, a.loadRepliesCmd(msg.Post.ID), true
+
+	case screens.ShowSearchReplyMsg:
+		a.postDetailReturn = screenSearch
+		a.active = screenPostDetail
+		a.pendingReplyID = msg.ReplyID
+		a.postDetail = a.postDetail.SetPost(model.Post{ID: msg.PostID})
+		return a, tea.Batch(a.loadProfilePostCmd(msg.PostID), a.loadRepliesCmd(msg.PostID)), true
+
+	case screens.ShowUserProfileMsg:
+		if a.active != screenSearch {
+			return a, nil, false
+		}
+		a.profileReturn = screenSearch
+		return a, a.loadUserProfileCmd(msg.Username), true
+
+	case screens.LeaveSearchMsg:
+		a.active = a.searchReturn
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
 // handleErr routes API error messages to the active screen's error display.
 // notifyTTL is how long a global notification banner stays before auto-dismissing.
 const notifyTTL = 4 * time.Second
@@ -1582,6 +1661,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.topics = a.topics.SetError(m.err)
 	case screenJournal:
 		a.journal = a.journal.SetError(m.err)
+	case screenSearch:
+		a.search = a.search.SetError(m.err)
 	}
 	// Errors never block a screen: the per-screen SetError above only feeds an
 	// inline "couldn't load" empty-state, while the failure is announced in the
@@ -2135,6 +2216,29 @@ type topicPostsLoadedMsg struct {
 type topicPostsPageMsg struct {
 	posts  []model.Post
 	cursor string
+}
+
+type searchPreviewLoadedMsg struct {
+	preview model.SearchPreview
+	query   string
+}
+
+// searchTypeLoadedMsg/searchTypePageMsg carry one paginated search category's
+// results. Exactly one of posts/replies/users is populated, matching hitType.
+type searchTypeLoadedMsg struct {
+	hitType string
+	posts   []model.Post
+	replies []model.Reply
+	users   []model.User
+	cursor  string
+}
+
+type searchTypePageMsg struct {
+	hitType string
+	posts   []model.Post
+	replies []model.Reply
+	users   []model.User
+	cursor  string
 }
 
 type guildsLoadedMsg struct {
@@ -2775,6 +2879,54 @@ func (a *App) loadTopicPostsPageCmd(slug, cursor string) tea.Cmd {
 		}
 		return topicPostsPageMsg{posts: posts, cursor: nextCursor}
 	}
+}
+
+// --- Search commands ---
+
+func (a *App) searchCmd(query string) tea.Cmd {
+	return func() tea.Msg {
+		preview, err := a.client.Search(query)
+		if err != nil {
+			return errMsg{err}
+		}
+		return searchPreviewLoadedMsg{preview: preview, query: query}
+	}
+}
+
+// searchTypeCmd fetches the first page of one search category (a "see all" drill-down).
+func (a *App) searchTypeCmd(hitType, query string) tea.Cmd {
+	return func() tea.Msg {
+		posts, replies, users, cursor, err := a.searchByType(hitType, query, "")
+		if err != nil {
+			return errMsg{err}
+		}
+		return searchTypeLoadedMsg{hitType: hitType, posts: posts, replies: replies, users: users, cursor: cursor}
+	}
+}
+
+// searchTypePageCmd fetches a subsequent page of one search category.
+func (a *App) searchTypePageCmd(hitType, query, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		posts, replies, users, nextCursor, err := a.searchByType(hitType, query, cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return searchTypePageMsg{hitType: hitType, posts: posts, replies: replies, users: users, cursor: nextCursor}
+	}
+}
+
+// searchByType dispatches to the matching typed search client method. Exactly
+// one of the three returned slices is populated, matching hitType.
+func (a *App) searchByType(hitType, query, cursor string) (posts []model.Post, replies []model.Reply, users []model.User, nextCursor string, err error) {
+	switch hitType {
+	case "posts":
+		posts, nextCursor, err = a.client.SearchPosts(query, cursor)
+	case "replies":
+		replies, nextCursor, err = a.client.SearchReplies(query, cursor)
+	case "users":
+		users, nextCursor, err = a.client.SearchUsers(query, cursor)
+	}
+	return
 }
 
 // --- Guilds commands ---

@@ -95,8 +95,8 @@ func TestNavigateTab_RightFromGuilds_GoesToTopics(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// menuTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings
-	expected := []screen{screenNotifications, screenCMail, screenChatrooms, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenFeed}
+	// menuTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, search, settings
+	expected := []screen{screenNotifications, screenCMail, screenChatrooms, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSearch, screenSettings, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(+1)
 		if a.active != want {
@@ -108,8 +108,8 @@ func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// menuTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings
-	expected := []screen{screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenChatrooms, screenCMail, screenNotifications, screenFeed}
+	// menuTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, search, settings
+	expected := []screen{screenSettings, screenSearch, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenChatrooms, screenCMail, screenNotifications, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(-1)
 		if a.active != want {
@@ -244,6 +244,232 @@ func TestHandleKeys_O_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
 	_, _, consumed := a.handleKeys(keyMsg("o"))
 	if consumed {
 		t.Error("expected plain 'o' to NOT be consumed while chatrooms input is focused — it must still type into the compose box")
+	}
+}
+
+// --- Search shortcut ('/') ---
+
+func TestHandleKeys_Slash_OpensSearch(t *testing.T) {
+	a := loggedInApp()
+	a2, _, consumed := a.handleKeys(keyMsg("/"))
+	if !consumed {
+		t.Fatal("expected '/' to be consumed on a screen with no focused input")
+	}
+	if a2.active != screenSearch {
+		t.Errorf("expected screenSearch, got %v", a2.active)
+	}
+	if !a2.search.InputFocused() {
+		t.Error("expected the search query box to be focused")
+	}
+}
+
+func TestHandleKeys_Slash_LoginScreen_NoOp(t *testing.T) {
+	a := newTestApp() // active == screenLogin
+	a2, _, consumed := a.handleKeys(keyMsg("/"))
+	if consumed {
+		t.Error("'/' on login screen should not be consumed")
+	}
+	if a2.active == screenSearch {
+		t.Error("should not navigate to search from the login screen")
+	}
+}
+
+func TestHandleKeys_Slash_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	_, _, consumed := a.handleKeys(keyMsg("/"))
+	if consumed {
+		t.Error("expected '/' to NOT be consumed while chatrooms input is focused — it must still type into the compose box (needed for /dice, /me, etc.)")
+	}
+}
+
+// --- Search reply deep-link ---
+
+// resolveMsgs runs cmd and flattens a tea.BatchMsg into its individual resolved messages.
+func resolveMsgs(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range batch {
+			if c != nil {
+				out = append(out, resolveMsgs(c)...)
+			}
+		}
+		return out
+	}
+	return []tea.Msg{msg}
+}
+
+func TestShowSearchReplyMsg_NavigatesToPostDetailAndScrollsToReply(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSearch
+
+	m, cmd := a.Update(screens.ShowSearchReplyMsg{PostID: "p1", ReplyID: "r1"})
+	a2 := m.(App)
+
+	if a2.active != screenPostDetail {
+		t.Fatalf("expected screenPostDetail, got %v", a2.active)
+	}
+	if a2.postDetailReturn != screenSearch {
+		t.Errorf("expected postDetailReturn = screenSearch, got %v", a2.postDetailReturn)
+	}
+	if a2.pendingReplyID != "r1" {
+		t.Errorf("expected pendingReplyID = r1, got %q", a2.pendingReplyID)
+	}
+
+	msgs := resolveMsgs(cmd)
+	if len(msgs) == 0 {
+		t.Fatal("expected resolved messages from the post+replies fetch batch")
+	}
+	for _, msg := range msgs {
+		var model tea.Model
+		model, _ = a2.Update(msg)
+		a2 = model.(App)
+	}
+	if a2.pendingReplyID != "" {
+		t.Errorf("expected pendingReplyID cleared after replies loaded, got %q", a2.pendingReplyID)
+	}
+}
+
+// TestHandleKeys_EscBlursSearchQuery_ThenQuitWorks reproduces the reported
+// bug: after opening Search, esc must be able to blur the query box so 'q'
+// (and tab navigation) work again — this held even when a search failed,
+// since SetError alone never changed SearchModel's view/focus state.
+func TestHandleKeys_EscBlursSearchQuery_ThenQuitWorks(t *testing.T) {
+	a := loggedInApp()
+	a2, _, consumed := a.handleKeys(keyMsg("/"))
+	if !consumed || !a2.search.InputFocused() {
+		t.Fatal("setup: expected '/' to open Search with the query box focused")
+	}
+
+	// esc isn't globally intercepted (activeScreenHasFocusedInput blocks
+	// everything except ctrl+c/ctrl+o while focused) — it reaches the screen
+	// via the normal delegateUpdate fallthrough, exactly like a real keypress would.
+	a2.search, _ = a2.search.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if a2.search.InputFocused() {
+		t.Fatal("expected esc to blur the query input")
+	}
+
+	_, cmd, consumed := a2.handleKeys(keyMsg("q"))
+	if !consumed {
+		t.Error("expected 'q' to quit once the query input is blurred")
+	}
+	if cmd == nil {
+		t.Error("expected a tea.Quit cmd")
+	}
+}
+
+// TestHandleKeys_Slash_SetsSearchReturn confirms '/' records the origin
+// screen (like profileReturn/postDetailReturn) rather than always assuming Feed.
+func TestHandleKeys_Slash_SetsSearchReturn(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
+	a2, _, consumed := a.handleKeys(keyMsg("/"))
+	if !consumed {
+		t.Fatal("expected '/' to be consumed")
+	}
+	if a2.searchReturn != screenGuilds {
+		t.Errorf("expected searchReturn = screenGuilds, got %v", a2.searchReturn)
+	}
+}
+
+// TestSearch_EscToLeave_ReturnsToOriginScreen confirms a single esc from
+// query mode returns to the screen '/' was pressed from, the same
+// return-to-origin pattern already used by 'p' -> profile -> esc.
+func TestSearch_EscToLeave_ReturnsToOriginScreen(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
+	a2, _, _ := a.handleKeys(keyMsg("/"))
+	if a2.searchReturn != screenGuilds {
+		t.Fatalf("setup: expected searchReturn = screenGuilds, got %v", a2.searchReturn)
+	}
+
+	// esc reaches the screen via the normal delegateUpdate fallthrough, same
+	// as a real keypress would — resolve the resulting cmd and feed it back
+	// through the full App dispatch chain, exactly as Bubble Tea would.
+	_, cmd := a2.search.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected esc to return a LeaveSearchMsg cmd")
+	}
+	msg := cmd()
+	if _, ok := msg.(screens.LeaveSearchMsg); !ok {
+		t.Fatalf("expected LeaveSearchMsg, got %T", msg)
+	}
+
+	m, _ := a2.Update(msg)
+	a3 := m.(App)
+	if a3.active != screenGuilds {
+		t.Errorf("expected esc to return to screenGuilds (origin), got %v", a3.active)
+	}
+}
+
+// TestSearch_UserHitToProfile_EscReturnsToSearchOrigin reproduces the
+// reported bug: searching from Feed, opening a user hit (-> Profile), then
+// pressing esc landed on Guilds instead of back on Search. Root cause:
+// handleGuilds's ShowUserProfileMsg case was missing the active-screen guard
+// every other handler has, so — since handleGuilds runs before handleSearch
+// in App.Update's dispatch chain — it unconditionally claimed the message
+// and overwrote profileReturn with screenGuilds regardless of what was
+// actually active.
+func TestSearch_UserHitToProfile_EscReturnsToSearchOrigin(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	a2, _, _ := a.handleKeys(keyMsg("/")) // searchReturn = screenFeed
+	a2.active = screenSearch
+
+	// Search's ShowUserProfileMsg case sets profileReturn and fires
+	// loadUserProfileCmd; resolve that and feed the real userProfileLoadedMsg
+	// back through Update, exactly as Bubble Tea would.
+	m, cmd := a2.Update(screens.ShowUserProfileMsg{Username: "neuromancer"})
+	a3 := m.(App)
+	if a3.profileReturn != screenSearch {
+		t.Fatalf("expected profileReturn = screenSearch, got %v", a3.profileReturn)
+	}
+	if cmd == nil {
+		t.Fatal("expected a profile-load cmd")
+	}
+	m2, _ := a3.Update(cmd())
+	a4 := m2.(App)
+	if a4.active != screenProfile {
+		t.Fatalf("expected navigation to screenProfile, got %v", a4.active)
+	}
+
+	// esc from the read-only profile must return to Search (its own origin),
+	// not to Guilds — the reported bug, caused by handleGuilds's
+	// ShowUserProfileMsg case missing the active-screen guard every other
+	// handler has, so it unconditionally intercepted the message first.
+	m3, _ := a4.Update(screens.BackFromProfileMsg{})
+	a5 := m3.(App)
+	if a5.active != screenSearch {
+		t.Errorf("expected esc from profile to return to screenSearch (Search's own origin), got %v", a5.active)
+	}
+
+	// esc from Search itself should then return to Feed, the original origin.
+	_, cmd2 := a5.search.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m4, _ := a5.Update(cmd2())
+	a6 := m4.(App)
+	if a6.active != screenFeed {
+		t.Errorf("expected esc from search to return to screenFeed (original origin), got %v", a6.active)
+	}
+}
+
+func TestShowSearchPostMsg_NavigatesToPostDetail(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSearch
+
+	m, _ := a.Update(screens.ShowSearchPostMsg{Post: model.Post{ID: "p1", AuthorUsername: "case"}})
+	a2 := m.(App)
+
+	if a2.active != screenPostDetail {
+		t.Fatalf("expected screenPostDetail, got %v", a2.active)
+	}
+	if a2.postDetailReturn != screenSearch {
+		t.Errorf("expected postDetailReturn = screenSearch, got %v", a2.postDetailReturn)
 	}
 }
 

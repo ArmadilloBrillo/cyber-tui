@@ -245,6 +245,15 @@ type NoteRevision struct {
 	CreatedAt      time.Time
 }
 
+// SearchPreview is the grouped GET /v1/search?type=all response: up to 8 hits
+// per category, no pagination, no total count. A category at exactly 8 hits
+// may have more — drill into it via SearchPosts/SearchReplies/SearchUsers.
+type SearchPreview struct {
+	Users   []User
+	Posts   []Post
+	Replies []Reply
+}
+
 // NotificationActor is the user who triggered the notification.
 type NotificationActor struct {
 	ID       string

@@ -177,4 +177,17 @@ type Client interface {
 	// Returns a channel of incoming messages and a cancel function.
 	// The channel is closed when cancel is called or the stream ends.
 	SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error)
+
+	// Search — full-text search across users, posts, and replies (v0.7).
+	// Search returns the grouped "type=all" preview: up to 8 hits per category,
+	// no pagination, no total count. A category at exactly 8 hits may have more —
+	// drill into it with SearchPosts/SearchReplies/SearchUsers.
+	Search(query string) (model.SearchPreview, error)
+	// SearchPosts/SearchReplies/SearchUsers return one paginated category.
+	// Pass empty cursor for first page; use the returned cursor for the next page
+	// (opaque to the caller — server-side it's a page number, but callers never
+	// need to know that, matching every other cursor-paginated method here).
+	SearchPosts(query, cursor string) ([]model.Post, string, error)
+	SearchReplies(query, cursor string) ([]model.Reply, string, error)
+	SearchUsers(query, cursor string) ([]model.User, string, error)
 }
