@@ -506,7 +506,7 @@ func (m ChatroomsModel) View() string {
 			name = m.activeRoom.Name
 			slug = m.activeRoom.Slug
 		}
-		header := theme.Title.Render(name + "  #" + slug)
+		header := theme.Title.Render(name) + "  " + theme.Subtle.Render("#"+slug)
 		if m.loadingHistory {
 			header += theme.Subtle.Render("  (loading history…)")
 		}
