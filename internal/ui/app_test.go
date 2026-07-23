@@ -247,6 +247,66 @@ func TestHandleKeys_O_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
 	}
 }
 
+// --- Status bar hints: '?' is unreachable in chat detail mode, ctrl+o isn't ---
+
+func hasHint(hints []hint, key string) bool {
+	for _, h := range hints {
+		if h.key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func TestScreenHints_ChatroomsDetail_NoHelpButHasCtrlO(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	hints := TabsLayout{}.screenHints(a)
+	if hasHint(hints, "?") {
+		t.Error("expected no '?' hint in chatrooms detail mode — it's unreachable while the compose input is focused")
+	}
+	if !hasHint(hints, "ctrl+o") {
+		t.Error("expected a ctrl+o hint in chatrooms detail mode")
+	}
+}
+
+func TestScreenHints_ChatroomsList_StillHasHelp(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	hints := TabsLayout{}.screenHints(a)
+	if !hasHint(hints, "?") {
+		t.Error("expected '?' hint in chatrooms list mode — no input is focused there")
+	}
+}
+
+func TestScreenHints_CMailDetail_NoHelpButHasCtrlO(t *testing.T) {
+	a := loggedInApp()
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	a.active = screenCMail
+
+	hints := TabsLayout{}.screenHints(a)
+	if hasHint(hints, "?") {
+		t.Error("expected no '?' hint in c-mail detail mode — it's unreachable while the compose input is focused")
+	}
+	if !hasHint(hints, "ctrl+o") {
+		t.Error("expected a ctrl+o hint in c-mail detail mode")
+	}
+}
+
+func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+	hints := TabsLayout{}.screenHints(a)
+	if !hasHint(hints, "?") {
+		t.Error("expected '?' hint in c-mail list mode — no input is focused there")
+	}
+}
+
 func TestURLPickerKey_Esc_Closes(t *testing.T) {
 	a := loggedInApp()
 	a.urlPickerOpen = true

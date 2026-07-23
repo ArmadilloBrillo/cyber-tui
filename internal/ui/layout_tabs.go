@@ -443,11 +443,16 @@ func (l TabsLayout) screenHints(a App) []hint {
 		return base
 	case screenChatrooms:
 		if a.chatrooms.IsShowingDetail() {
-			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"esc", "back"}, more}
+			// '?' (help) is unreachable while the compose input is focused
+			// here, same as plain 'o' — omit "more" and surface ctrl+o instead.
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"esc", "back"}}
 		}
 		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	case screenCMail:
-		return []hint{{"← →", "switch pane"}, {"j/k", "navigate"}, {"enter", "send"}, more}
+		if a.cmail.IsShowingDetail() {
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"esc", "back"}}
+		}
+		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	}
 	return []hint{more}
 }
