@@ -635,6 +635,13 @@ func (c *HTTPClient) refresh() error {
 	return nil
 }
 
+// RefreshSession proactively refreshes the ID token (and RTDB token) using the
+// stored refresh token, without waiting for a failed request to trigger it.
+// Safe to call concurrently with other requests.
+func (c *HTTPClient) RefreshSession() error {
+	return c.refresh()
+}
+
 // --- conversion helpers ---
 
 // parseTime parses an RFC3339 timestamp and logs a warning if the value is
@@ -1385,10 +1392,11 @@ func (c *HTTPClient) GetRoomMessages(roomID string, limit int, before int64) ([]
 	out := make([]model.Message, len(wire))
 	for i, w := range wire {
 		out[i] = model.Message{
-			ID:        w.ID,
-			From:      model.User{ID: w.UserID, Username: w.Username},
-			Body:      w.Content,
-			CreatedAt: time.UnixMilli(w.Timestamp),
+			ID:          w.ID,
+			From:        model.User{ID: w.UserID, Username: w.Username},
+			Body:        w.Content,
+			CreatedAt:   time.UnixMilli(w.Timestamp),
+			IsChatAdmin: w.IsChatAdmin,
 		}
 	}
 	return out, nil
@@ -1480,10 +1488,11 @@ func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
 // wireRTDBCircMessageToModel converts a Firebase CIRC chatroom message to the model type.
 func wireRTDBCircMessageToModel(id string, wm wireRTDBCircMessage) model.Message {
 	return model.Message{
-		ID:        id,
-		From:      model.User{ID: wm.UserID, Username: wm.Username},
-		Body:      wm.Content,
-		CreatedAt: time.UnixMilli(int64(wm.Timestamp)),
+		ID:          id,
+		From:        model.User{ID: wm.UserID, Username: wm.Username},
+		Body:        wm.Content,
+		CreatedAt:   time.UnixMilli(int64(wm.Timestamp)),
+		IsChatAdmin: wm.IsChatAdmin,
 	}
 }
 

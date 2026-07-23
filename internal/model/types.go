@@ -117,10 +117,11 @@ type ProfileUpdate struct {
 // They are not sourced from the REST API.
 
 type Message struct {
-	ID        string
-	From      User
-	Body      string
-	CreatedAt time.Time
+	ID          string
+	From        User
+	Body        string
+	CreatedAt   time.Time
+	IsChatAdmin bool // CIRC only: true when From was a chat admin at send time
 }
 
 type Conversation struct {

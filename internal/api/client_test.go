@@ -380,6 +380,33 @@ func TestHTTPTokenRefresh_Success(t *testing.T) {
 	}
 }
 
+func TestHTTPRefreshSession_Success(t *testing.T) {
+	refreshCalls := 0
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/auth/login":
+			writeOK(t, w, map[string]string{
+				"idToken": "old-token", "refreshToken": "ref", "rtdbToken": "rtdb",
+			})
+		case "/v1/auth/refresh":
+			refreshCalls++
+			writeOK(t, w, map[string]string{
+				"idToken": "new-token", "rtdbToken": "new-rtdb",
+			})
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+		}
+	}))
+
+	c.Login("u@example.com", "pw") //nolint:errcheck
+	if err := c.RefreshSession(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if refreshCalls != 1 {
+		t.Errorf("expected exactly one refresh call, got %d", refreshCalls)
+	}
+}
+
 func TestHTTPTokenRefresh_Failure(t *testing.T) {
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -717,6 +744,29 @@ func TestHTTPGetRoomMessages_PassesBeforeParam(t *testing.T) {
 	c.LoginWithRefreshToken("tok")
 	if _, err := c.GetRoomMessages("general", 50, 1700000000000); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPGetRoomMessages_ParsesIsChatAdmin(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "case", "isChatAdmin": true, "content": "hi", "timestamp": 1700000001000},
+			{"id": "m2", "userId": "u2", "username": "molly", "isChatAdmin": false, "content": "hey", "timestamp": 1700000002000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+	}
+	if !msgs[0].IsChatAdmin {
+		t.Error("expected msgs[0].IsChatAdmin = true")
+	}
+	if msgs[1].IsChatAdmin {
+		t.Error("expected msgs[1].IsChatAdmin = false")
 	}
 }
 

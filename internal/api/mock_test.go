@@ -78,6 +78,13 @@ func TestMockLogout(t *testing.T) {
 	}
 }
 
+func TestMockRefreshSession_NoError(t *testing.T) {
+	m := newMock()
+	if err := m.RefreshSession(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // --- Feed ---
 
 func TestMockGetFeed_ReturnsPosts(t *testing.T) {

@@ -103,7 +103,7 @@ cIRC REST API is now fully documented. A room is addressed by its `roomId` (slug
 | RTDB `chat_messages/<roomId>` | SSE | Subscribe to real-time new messages | **Done** — feature 33 |
 
 Notes:
-- Each room message includes `isChatAdmin` flag (parsed but not currently displayed in TUI).
+- Each room message includes `isChatAdmin` flag — parsed into `model.Message.IsChatAdmin` and shown as a `[admin]` badge in the TUI.
 - Rate limits: 15 sends/min, 300/day, 150/hour; 60 mark-read/min.
 - 403 if room isn't available to you.
 - Online-users list: API has no such endpoint — deferred.

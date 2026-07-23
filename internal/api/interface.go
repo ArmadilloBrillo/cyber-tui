@@ -15,6 +15,10 @@ type Client interface {
 	// tokens (IDToken + RTDBToken) without requiring the user's password.
 	LoginWithRefreshToken(refreshToken string) (model.Tokens, error)
 	Logout() error
+	// RefreshSession proactively refreshes the ID token (and RTDB token) using
+	// the stored refresh token, without waiting for a failed request to trigger
+	// it. Used to reconnect a live RTDB subscription after the token expires.
+	RefreshSession() error
 
 	// Feed — pass empty cursor for first page; use returned cursor for next page.
 	// Returns empty next-cursor when there are no more pages.
