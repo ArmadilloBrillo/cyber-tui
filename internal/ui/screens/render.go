@@ -273,7 +273,14 @@ func renderActionLine(username, body, ts string, viewportWidth int) string {
 			p = prefix
 		}
 		if i == last {
-			sb.WriteString(p + line + suffix + strings.Repeat(" ", tsGap) + theme.Subtle.Render(ts) + "\n")
+			// lipgloss pads every wrapped line to bodyWidth; trim that back off
+			// so the closing "*" sits right after the text instead of being
+			// pushed out to the right edge, then re-pad after it so the
+			// timestamp still lands flush right.
+			trimmed := strings.TrimRight(line, " ")
+			content := trimmed + suffix
+			pad := max(bodyWidth+len(suffix)-lipgloss.Width(content), 0)
+			sb.WriteString(p + content + strings.Repeat(" ", pad) + strings.Repeat(" ", tsGap) + theme.Subtle.Render(ts) + "\n")
 		} else {
 			sb.WriteString(p + line + "\n")
 		}

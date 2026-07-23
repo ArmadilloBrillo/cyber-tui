@@ -192,6 +192,9 @@ func TestRenderCircMessages_ActionLine(t *testing.T) {
 	if !strings.Contains(lines[0], "*") || strings.Count(lines[0], "*") < 2 {
 		t.Errorf("expected both a leading and trailing '*' on the action line, got: %q", lines[0])
 	}
+	if !strings.Contains(lines[0], "plumbing *") {
+		t.Errorf("expected the closing '*' to sit right after the action text with a single space, not right-aligned, got: %q", lines[0])
+	}
 	if strings.Contains(lines[0], "<ragnar>") {
 		t.Errorf("expected no username bracket on an action line, got: %q", lines[0])
 	}
@@ -241,6 +244,9 @@ func TestRenderCircMessages_ActionLineWrapsCorrectly(t *testing.T) {
 	if !strings.Contains(last, "*") {
 		t.Errorf("expected the trailing '*' on the last line, got: %q", last)
 	}
+	if strings.Contains(last, "  *") {
+		t.Errorf("expected the closing '*' to hug the last word with a single space, not be right-aligned/padded, got: %q", last)
+	}
 }
 
 // TestRenderChatMessages_ActionLine confirms an IsAction message in C-Mail
@@ -252,6 +258,9 @@ func TestRenderChatMessages_ActionLine(t *testing.T) {
 
 	if !strings.Contains(out, "* ragnar waves") {
 		t.Errorf("expected classic IRC action format in the output, got: %q", out)
+	}
+	if !strings.Contains(out, "waves *") {
+		t.Errorf("expected the closing '*' right after the action text with a single space, got: %q", out)
 	}
 	if strings.Contains(out, "╭") || strings.Contains(out, "╰") {
 		t.Errorf("expected no bubble border around an action message, got: %q", out)
