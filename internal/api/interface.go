@@ -156,7 +156,9 @@ type Client interface {
 
 	// Direct messages (C-Mail) — list/history/send via REST; real-time delivery via RTDB SSE.
 	GetConversations() ([]model.Conversation, error)
-	GetMessages(conversationID string, limit int) ([]model.Message, error)
+	// GetMessages returns up to limit messages for conversationID, oldest-first.
+	// Pass before=0 for the latest page; pass a previous message's timestamp for older pages.
+	GetMessages(conversationID string, limit int, before int64) ([]model.Message, error)
 	SendMessage(conversationID, body string) error
 	// StartConversation creates or retrieves a C-Mail conversation with recipientUsername.
 	// Returns 201 for a new conversation, 200 for an existing one (both return the conversation).

@@ -2513,7 +2513,7 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.profileReturn = screenNotifications
 		return a, a.loadUserProfileCmd(msg.Username), true
 	case pollUnreadTickMsg:
-		return a, tea.Batch(a.fetchUnreadCountCmd(), a.schedulePollCmd()), true
+		return a, tea.Batch(a.fetchUnreadCountCmd(), a.loadConvsCmd(), a.schedulePollCmd()), true
 	case unreadCountMsg:
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count

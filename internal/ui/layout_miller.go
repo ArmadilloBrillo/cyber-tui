@@ -358,6 +358,11 @@ func (l MillerLayout) renderNav(a App) string {
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			label = fmt.Sprintf("%s ●%d", label, a.polledUnreadCount)
 		}
+		if t.s == screenCMail {
+			if n := a.cmail.TotalUnread(); n > 0 {
+				label = fmt.Sprintf("%s ●%d", label, n)
+			}
+		}
 		isActive := a.active == t.s && !(t.s == screenCMail && a.cmail.IsShowingDetail())
 		var row string
 		if isActive {

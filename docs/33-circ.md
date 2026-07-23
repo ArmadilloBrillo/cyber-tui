@@ -16,19 +16,23 @@ CIRC provides access to the cyberspace.online public chatrooms via tab **4** in 
 
 - **Header** (1 row, always visible): `Room Name  ·  circ`
 - **Message viewport**: scrollable history in IRC-style format.
-  - Each message: `<username>  message body` with timestamp right-aligned.
+  - Each message: `<username>  message body` with timestamp right-aligned; long bodies word-wrap and the timestamp trails the last wrapped line.
   - Messages are rendered oldest-to-newest; the viewport starts at the bottom.
 - **Input box** (3 rows, at the bottom): type and press `Enter` to send.
 - Press `Esc` to return to the room list; the RTDB subscription is cancelled.
+- **Scroll-to-load history**: scrolling to the top of the loaded messages (`↑`) automatically fetches the next older page (`GetRoomMessages(roomID, 50, before)`, `before` = the oldest loaded message's timestamp) and prepends it, preserving scroll position so the previously-visible messages don't jump. The header shows `(loading history…)` while a page is in flight. Stops once a fetch returns no messages (start of history reached).
 
 ### Message format
 
 ```
 <alice>  hello everyone                                     14:32
-<bob>    this is the CIRC chatroom                         14:35
-<alice>  line 1 of a multi-line message                    14:36
-         line 2 indented to align with body
+<bob>    this is the CIRC chatroom                          14:35
+<alice>  a message long enough that it needs to wrap
+         onto a second line stays readable and the
+         timestamp trails the last line              14:36
 ```
+
+Long bodies word-wrap to fit the terminal width; continuation lines are indented to align under the body. The timestamp is right-aligned on the message's last (wrapped) line, with a minimum gap reserved so wrapped text never runs into or pushes it off-screen.
 
 ## Keyboard shortcuts
 
@@ -70,7 +74,7 @@ The real-time subscription mirrors the C-Mail pattern exactly:
 
 - **No online-users list**: The API does not expose an endpoint for listing users currently online in a room. The right panel from the original design was deferred.
 - **No slash command preview**: The API supports IRC-style commands (`/me`, `/poke`, `/dice`, etc.) expanded server-side, but the TUI has no client-side rendering for them yet.
-- **No pagination for history**: `GetRoomMessages` loads the latest 50 messages. The `before` cursor parameter is implemented but the UI does not yet trigger additional pages when scrolling to the top.
+- **Exhaustion heuristic is coarse**: an older-page fetch that returns zero messages marks history as exhausted for the session; a page that returns fewer than the requested limit but more than zero is not treated as exhausted, so the very last page may trigger one extra (empty) round-trip.
 
 ## Files
 

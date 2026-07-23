@@ -1513,8 +1513,11 @@ func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
 
 // GetMessages returns history for a conversation via GET /v1/cmail/:id.
 // Messages are returned oldest-first.
-func (c *HTTPClient) GetMessages(conversationID string, limit int) ([]model.Message, error) {
+func (c *HTTPClient) GetMessages(conversationID string, limit int, before int64) ([]model.Message, error) {
 	path := "/v1/cmail/" + url.PathEscape(conversationID) + fmt.Sprintf("?limit=%d", limit)
+	if before > 0 {
+		path += fmt.Sprintf("&before=%d", before)
+	}
 	env, err := c.doRequest("GET", path, nil)
 	if err != nil {
 		return nil, err

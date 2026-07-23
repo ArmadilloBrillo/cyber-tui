@@ -207,6 +207,17 @@ func TestMockGetRoomMessages_ReturnsMessages(t *testing.T) {
 	}
 }
 
+func TestMockGetRoomMessages_BeforeReturnsEmpty(t *testing.T) {
+	m := newMock()
+	msgs, err := m.GetRoomMessages("r1", 20, 1700000000000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected no messages for a before-cursor page, got %d", len(msgs))
+	}
+}
+
 func TestMockSendRoomMessage_NoError(t *testing.T) {
 	m := newMock()
 	if err := m.SendRoomMessage("r1", "hello room"); err != nil {
@@ -282,12 +293,23 @@ func TestMockGetConversations_ConvsHaveParticipants(t *testing.T) {
 
 func TestMockGetMessages_ReturnsMessages(t *testing.T) {
 	m := newMock()
-	msgs, err := m.GetMessages("c1", 20)
+	msgs, err := m.GetMessages("c1", 20, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(msgs) == 0 {
 		t.Fatal("expected at least one message")
+	}
+}
+
+func TestMockGetMessages_BeforeReturnsEmpty(t *testing.T) {
+	m := newMock()
+	msgs, err := m.GetMessages("c1", 20, 1700000000000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected no messages for a before-cursor page, got %d", len(msgs))
 	}
 }
 

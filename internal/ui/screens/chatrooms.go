@@ -51,6 +51,10 @@ type circMsgsLoadedMsg struct {
 	roomID string
 	msgs   []model.Message
 }
+type circOlderMsgsLoadedMsg struct {
+	roomID string
+	msgs   []model.Message
+}
 type circErrMsg struct{ err error }
 
 // waitForRoomMsg blocks on the subscription channel and returns the next message as a tea.Cmd.
@@ -86,6 +90,10 @@ type ChatroomsModel struct {
 	sub          *roomSubscription
 	currentUser  string
 	client       api.Client
+
+	// History pagination state for the active room, reset on open.
+	historyExhausted bool // true once an older-page fetch returns zero messages
+	loadingHistory   bool // guards re-firing while an older-page fetch is in flight
 }
 
 // SendRoomMessageMsg is emitted when the user sends a chatroom message.
@@ -154,6 +162,21 @@ func (m ChatroomsModel) loadRoomMessagesCmd(roomID string) tea.Cmd {
 	}
 }
 
+// loadOlderRoomMessagesCmd fetches the page of messages preceding before (ms epoch).
+func (m ChatroomsModel) loadOlderRoomMessagesCmd(roomID string, before int64) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		msgs, err := client.GetRoomMessages(roomID, 50, before)
+		if err != nil {
+			return circErrMsg{err}
+		}
+		return circOlderMsgsLoadedMsg{roomID: roomID, msgs: msgs}
+	}
+}
+
 // InputFocused returns true in detail mode to prevent tab-navigation key capture.
 func (m ChatroomsModel) InputFocused() bool { return m.mode == chatroomModeDetail }
 
@@ -191,6 +214,32 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 	if m.ready {
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
+	}
+	return m
+}
+
+// PrependMessages inserts an older page of history above the currently loaded
+// messages, preserving the user's scroll position rather than jumping.
+// No-op if roomID doesn't match the active room.
+func (m ChatroomsModel) PrependMessages(roomID string, msgs []model.Message) ChatroomsModel {
+	m.loadingHistory = false
+	if m.activeRoom == nil || m.activeRoom.Slug != roomID {
+		return m
+	}
+	if len(msgs) == 0 {
+		m.historyExhausted = true
+		return m
+	}
+	oldOffset := m.viewport.YOffset
+	var oldLines int
+	if m.ready {
+		oldLines = lipgloss.Height(m.renderMessages())
+	}
+	m.messages = append(msgs, m.messages...)
+	if m.ready {
+		newContent := m.renderMessages()
+		m.viewport.SetContent(newContent)
+		m.viewport.SetYOffset(oldOffset + lipgloss.Height(newContent) - oldLines)
 	}
 	return m
 }
@@ -260,6 +309,9 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	case circMsgsLoadedMsg:
 		return m.SetMessages(msg.roomID, msg.msgs), nil
 
+	case circOlderMsgsLoadedMsg:
+		return m.PrependMessages(msg.roomID, msg.msgs), nil
+
 	case roomReceivedMsg:
 		m = m.AppendMessage(msg.msg)
 		if m.sub != nil {
@@ -306,6 +358,8 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 					m.activeRoom = &room
 					m.messages = nil
 					m.mode = chatroomModeDetail
+					m.historyExhausted = false
+					m.loadingHistory = false
 					m.input.Focus()
 					if m.ready {
 						m.viewport.SetContent(m.renderMessages())
@@ -347,6 +401,12 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				return m, nil
 			case "up":
 				m.viewport.ScrollUp(1)
+				if m.viewport.AtTop() && !m.loadingHistory && !m.historyExhausted &&
+					m.activeRoom != nil && len(m.messages) > 0 {
+					m.loadingHistory = true
+					before := m.messages[0].CreatedAt.UnixMilli()
+					return m, m.loadOlderRoomMessagesCmd(m.activeRoom.Slug, before)
+				}
 				return m, nil
 			case "down":
 				m.viewport.ScrollDown(1)
@@ -445,6 +505,9 @@ func (m ChatroomsModel) View() string {
 			name = m.activeRoom.Name
 		}
 		header := theme.Title.Render(name + "  ·  circ")
+		if m.loadingHistory {
+			header += theme.Subtle.Render("  (loading history…)")
+		}
 		inputBox := theme.ActiveBorder.Render(m.input.View())
 		return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), inputBox)
 	default: // chatroomModeList

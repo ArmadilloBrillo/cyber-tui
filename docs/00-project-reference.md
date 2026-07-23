@@ -448,9 +448,10 @@ Direct messages (C-Mail) with live Firebase RTDB integration.
 - Other person's messages left-aligned; my messages right-aligned (driven by `currentUser` field)
 - `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history in detail mode
 - **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile emits `StartConversationMsg{Username}` (defined in `messages.go`); App calls `StartConversation(username)` via REST, then switches to C-Mail and opens the returned conversation in detail mode; self-DMs are dropped in the App handler
+- **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetMessages(convID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on conversation open
 
 Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`
-Key internal types: `dmSubscription` (RTDB channel + cancel func), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `cmailMsgsLoadedMsg`
+Key internal types: `dmSubscription` (RTDB channel + cancel func), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`
 
 #### `chatrooms.go`
 
@@ -458,14 +459,15 @@ Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integrati
 
 - Two-mode flow: `chatroomModeList` (full-width room cards) → `chatroomModeDetail` (header + message viewport + compose input); ESC returns to list
 - Room cards show name, `#slug` subtitle, and last-message timestamp (right-aligned)
-- IRC-style message rendering via `renderCircMessages` (see `render.go`): `<username>  body` with right-aligned timestamp
+- IRC-style message rendering via `renderCircMessages` (see `render.go`): `<username>  body` with right-aligned timestamp; long bodies word-wrap to the viewport width, with room reserved so the timestamp trails the last wrapped line instead of overflowing
 - Subscribes to RTDB SSE stream via `api.Client.SubscribeRoom()` on room selection; cancelled on ESC or screen switch
 - `waitForRoomMsg(sub)` is the Bubble Tea Cmd pump (mirrors `waitForDM` in `cmail.go`)
 - `RoomOpenedMsg` is emitted on Enter; App calls `MarkRoomRead` fire-and-forget
 - `CancelSubscription()` is called by the layout on every key that navigates away
+- **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetRoomMessages(roomID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on room open
 
 Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`
-Key internal types: `roomSubscription` (RTDB channel + cancel func), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `circMsgsLoadedMsg`
+Key internal types: `roomSubscription` (RTDB channel + cancel func), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`
 - Room selected with arrow keys or Enter; Enter in the input pane sends via `SendRoomMessageMsg`
 - App handles `SendRoomMessageMsg` → `api.Client.SendRoomMessage()`
 

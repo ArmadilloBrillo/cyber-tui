@@ -701,6 +701,25 @@ func TestHTTPGetConversations_ParsesList(t *testing.T) {
 	}
 }
 
+func TestHTTPGetRoomMessages_PassesBeforeParam(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/circ/general" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if !strings.Contains(r.URL.RawQuery, "limit=50") {
+			t.Errorf("expected limit param, got: %s", r.URL.RawQuery)
+		}
+		if !strings.Contains(r.URL.RawQuery, "before=1700000000000") {
+			t.Errorf("expected before param, got: %s", r.URL.RawQuery)
+		}
+		writeOK(t, w, []map[string]any{})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if _, err := c.GetRoomMessages("general", 50, 1700000000000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/cmail/c1" || r.Method != http.MethodGet {
@@ -715,7 +734,7 @@ func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
 		})
 	})))
 	c.LoginWithRefreshToken("tok")
-	msgs, err := c.GetMessages("c1", 50)
+	msgs, err := c.GetMessages("c1", 50, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -727,6 +746,19 @@ func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
 	}
 	if msgs[1].ID != "m2" || msgs[1].From.Username != "molly_millions" {
 		t.Errorf("msgs[1] mismatch: %+v", msgs[1])
+	}
+}
+
+func TestHTTPGetMessages_PassesBeforeParam(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.RawQuery, "before=1700000000000") {
+			t.Errorf("expected before param, got: %s", r.URL.RawQuery)
+		}
+		writeOK(t, w, []map[string]any{})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if _, err := c.GetMessages("c1", 50, 1700000000000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

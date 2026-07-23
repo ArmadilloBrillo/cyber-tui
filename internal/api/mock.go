@@ -406,6 +406,9 @@ func (m *MockClient) GetRooms() ([]model.Room, error) {
 }
 
 func (m *MockClient) GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error) {
+	if before > 0 {
+		return nil, nil
+	}
 	return []model.Message{
 		{ID: "m1", From: mockUsers[0], Body: "anybody else getting lag in the matrix tonight?", CreatedAt: time.Now().Add(-5 * time.Minute)},
 		{ID: "m2", From: mockUsers[1], Body: "always. use a slower deck.", CreatedAt: time.Now().Add(-3 * time.Minute)},
@@ -459,7 +462,10 @@ func (m *MockClient) GetConversations() ([]model.Conversation, error) {
 	}, nil
 }
 
-func (m *MockClient) GetMessages(conversationID string, limit int) ([]model.Message, error) {
+func (m *MockClient) GetMessages(conversationID string, limit int, before int64) ([]model.Message, error) {
+	if before > 0 {
+		return nil, nil
+	}
 	return []model.Message{
 		{ID: "dm1", From: mockUsers[1], Body: "we need to talk about the job", CreatedAt: time.Now().Add(-1 * time.Hour)},
 		{ID: "dm2", From: mockUsers[0], Body: "i'm listening", CreatedAt: time.Now().Add(-55 * time.Minute)},

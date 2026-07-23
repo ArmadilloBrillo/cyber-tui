@@ -26,6 +26,8 @@ Full-width conversation list. Each conversation is a bordered card:
 Card header: `@username` (left) + timestamp + `(N)` unread badge (right, when unread > 0).
 Preview: first line of `LastMessage`, truncated to fit card width.
 
+The C-Mail tab itself also shows an aggregate unread badge, mirroring the Notifications tab: `c-mail (N)` in the Tabs layout, `c-mail ●N` in the Miller layout, where `N` is the sum of `UnreadCount` across all conversations (`CMailModel.TotalUnread()`). The badge clears immediately (optimistically) when a conversation is opened, and refreshes from the server every 60s alongside the notifications poll.
+
 ### Detail mode
 
 Full-width message history viewport + fixed compose input at bottom:
@@ -44,6 +46,8 @@ Full-width message history viewport + fixed compose input at bottom:
 
 - Other person's messages: left-aligned (`@username  timestamp` header, then body)
 - My messages: right-aligned (`timestamp  @me` header, then body)
+
+**Scroll-to-load history**: scrolling to the top of the loaded messages (`↑`) automatically fetches the next older page (`GetMessages(conversationID, 50, before)`, `before` = the oldest loaded message's timestamp) and prepends it, preserving scroll position. The header shows `(loading history…)` while a page is in flight. Stops once a fetch returns no messages.
 
 ---
 
@@ -87,6 +91,7 @@ Full-width message history viewport + fixed compose input at bottom:
 | `HasActiveConv() bool` | Alias for `IsShowingDetail()` |
 | `SelectedConv() int` | Cursor index in conversation list |
 | `InputFocused() bool` | True in detail mode (compose input focused) |
+| `TotalUnread() int` | Sum of `UnreadCount` across all conversations, for the tab-bar badge |
 
 ---
 
@@ -99,7 +104,7 @@ C-Mail uses a hybrid architecture: REST for listing, history, and sending; Fireb
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/v1/cmail` | List all conversations (unread first, then newest activity) |
-| `GET` | `/v1/cmail/:conversationId` | Load message history (query `?limit=N`) |
+| `GET` | `/v1/cmail/:conversationId` | Load message history (query `?limit=N&before=<timestamp>`; `before` pages further back) |
 | `POST` | `/v1/cmail` | Start or return an existing conversation (body: `{"recipientUsername": "..."}`) |
 | `POST` | `/v1/cmail/:conversationId` | Send a message (body: `{"content": "..."}`) |
 | `POST` | `/v1/cmail/:conversationId/read` | Mark conversation read (resets unread count) |
@@ -131,7 +136,7 @@ The subscription is opened when a conversation is selected (Enter in list mode) 
 | Method | Signature | Notes |
 |---|---|---|
 | `GetConversations` | `() ([]model.Conversation, error)` | Populates `UnreadCount`, `LastMessage`, and `LastMessageAt` from wire response |
-| `GetMessages` | `(convID string, limit int) ([]model.Message, error)` | Returns oldest-first |
+| `GetMessages` | `(convID string, limit int, before int64) ([]model.Message, error)` | Returns oldest-first; pass `before=0` for the latest page, or a previous message's timestamp for older pages |
 | `SendMessage` | `(convID, body string) error` | POST to REST endpoint |
 | `StartConversation` | `(recipientUsername string) (model.Conversation, error)` | POST to REST; idempotent |
 | `MarkCMailRead` | `(convID string) error` | POST to REST; called when a conversation is opened |
@@ -139,8 +144,8 @@ The subscription is opened when a conversation is selected (Enter in list mode) 
 
 ### App-Level Wiring
 
-- Conversations are pre-loaded on login via `afterLoginCmd`.
-- When the user selects a conversation (Enter in list mode), `CMailConvSelectedMsg` is emitted; App calls `markCMailReadCmd(convID)` to clear the unread badge.
+- Conversations are pre-loaded on login via `afterLoginCmd`, and re-fetched every 60s on the same `pollUnreadTickMsg` ticker that refreshes the notifications unread count (`app.go`), so the tab badge stays current even while the user is on another tab.
+- When the user selects a conversation (Enter in list mode), `CMailModel` zeroes that conversation's local `UnreadCount` immediately (optimistic, before the server round-trip) and `CMailConvSelectedMsg` is emitted; App calls `markCMailReadCmd(convID)` to persist the read state server-side.
 - Pressing `c` on a highlighted post, reply, notification, or profile (read-only) emits `StartConversationMsg{Username}`. App calls `StartConversation(username)`, then switches to C-Mail and opens the returned conversation in detail mode. Self-DMs are silently dropped in the App handler.
 
 ### Conversation List Display

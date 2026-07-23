@@ -48,6 +48,10 @@ type cmailMsgsLoadedMsg struct {
 	convID string
 	msgs   []model.Message
 }
+type cmailOlderMsgsLoadedMsg struct {
+	convID string
+	msgs   []model.Message
+}
 type cmailErrMsg struct{ err error }
 
 // waitForDM blocks on the subscription channel and returns the next message as a tea.Cmd.
@@ -85,6 +89,10 @@ type CMailModel struct {
 	client       api.Client
 	dmSub        *dmSubscription
 	activeConvID string
+
+	// History pagination state for the active conversation, reset on open.
+	historyExhausted bool // true once an older-page fetch returns zero messages
+	loadingHistory   bool // guards re-firing while an older-page fetch is in flight
 }
 
 // SendCMailMsg is emitted when the user sends a C-Mail message.
@@ -146,11 +154,26 @@ func (m CMailModel) loadConvMessagesCmd(convID string) tea.Cmd {
 		if client == nil {
 			return nil
 		}
-		msgs, err := client.GetMessages(convID, 50)
+		msgs, err := client.GetMessages(convID, 50, 0)
 		if err != nil {
 			return cmailErrMsg{err}
 		}
 		return cmailMsgsLoadedMsg{convID: convID, msgs: msgs}
+	}
+}
+
+// loadOlderConvMessagesCmd fetches the page of messages preceding before (ms epoch).
+func (m CMailModel) loadOlderConvMessagesCmd(convID string, before int64) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		msgs, err := client.GetMessages(convID, 50, before)
+		if err != nil {
+			return cmailErrMsg{err}
+		}
+		return cmailOlderMsgsLoadedMsg{convID: convID, msgs: msgs}
 	}
 }
 
@@ -178,15 +201,33 @@ func (m CMailModel) SetConversations(convs []model.Conversation) CMailModel {
 // dmSubscribedMsg / cmailMsgsLoadedMsg handlers accept the new conversation's results.
 func (m CMailModel) SetActiveConversation(conv model.Conversation) CMailModel {
 	m = m.cancelDMSub()
+	for i := range m.conversations {
+		if m.conversations[i].ID == conv.ID {
+			m.conversations[i].UnreadCount = 0
+			conv = m.conversations[i]
+			break
+		}
+	}
 	m.activeConvID = conv.ID
 	m.activeConv = &conv
 	m.mode = cmailModeDetail
+	m.historyExhausted = false
+	m.loadingHistory = false
 	m.input.Focus()
 	if m.ready {
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
 	}
 	return m
+}
+
+// TotalUnread sums UnreadCount across all conversations for the tab-bar badge.
+func (m CMailModel) TotalUnread() int {
+	total := 0
+	for _, c := range m.conversations {
+		total += c.UnreadCount
+	}
+	return total
 }
 
 // ConvOpenCmds returns the batch command to load message history and open the
@@ -254,6 +295,9 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case cmailOlderMsgsLoadedMsg:
+		return m.PrependMessages(msg.convID, msg.msgs), nil
+
 	case dmReceivedMsg:
 		m = m.AppendMessage(msg.msg)
 		if m.dmSub != nil {
@@ -295,15 +339,19 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 				return m, nil
 			case "enter":
 				if len(m.conversations) > 0 {
+					m.conversations[m.selectedConv].UnreadCount = 0
 					conv := m.conversations[m.selectedConv]
 					m = m.cancelDMSub()
 					m.activeConvID = conv.ID
 					m.activeConv = &conv
 					m.mode = cmailModeDetail
+					m.historyExhausted = false
+					m.loadingHistory = false
 					m.input.Focus()
 					if m.ready {
 						m.viewport.SetContent(m.renderMessages())
 						m.viewport.GotoBottom()
+						m.listVP.SetContent(m.renderConvCards())
 					}
 					convID := conv.ID
 					return m, tea.Batch(
@@ -340,6 +388,12 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 				return m, nil
 			case "up":
 				m.viewport.ScrollUp(1)
+				if m.viewport.AtTop() && !m.loadingHistory && !m.historyExhausted &&
+					m.activeConv != nil && len(m.activeConv.Messages) > 0 {
+					m.loadingHistory = true
+					before := m.activeConv.Messages[0].CreatedAt.UnixMilli()
+					return m, m.loadOlderConvMessagesCmd(m.activeConv.ID, before)
+				}
 				return m, nil
 			case "down":
 				m.viewport.ScrollDown(1)
@@ -512,6 +566,34 @@ func (m CMailModel) AppendMessage(msg model.Message) CMailModel {
 	return m
 }
 
+// PrependMessages inserts an older page of history above the currently loaded
+// messages, preserving the user's scroll position rather than jumping.
+// No-op if convID doesn't match the active conversation.
+func (m CMailModel) PrependMessages(convID string, msgs []model.Message) CMailModel {
+	m.loadingHistory = false
+	if m.activeConv == nil || m.activeConv.ID != convID {
+		return m
+	}
+	if len(msgs) == 0 {
+		m.historyExhausted = true
+		return m
+	}
+	oldOffset := m.viewport.YOffset
+	var oldLines int
+	if m.ready {
+		oldLines = lipgloss.Height(m.renderMessages())
+	}
+	conv := *m.activeConv
+	conv.Messages = append(msgs, conv.Messages...)
+	m.activeConv = &conv
+	if m.ready {
+		newContent := m.renderMessages()
+		m.viewport.SetContent(newContent)
+		m.viewport.SetYOffset(oldOffset + lipgloss.Height(newContent) - oldLines)
+	}
+	return m
+}
+
 func (m CMailModel) View() string {
 	switch m.mode {
 	case cmailModeDetail:
@@ -523,6 +605,9 @@ func (m CMailModel) View() string {
 			other = m.otherParticipant(*m.activeConv)
 		}
 		header := theme.Title.Render("@" + other + "  ·  c-mail")
+		if m.loadingHistory {
+			header += theme.Subtle.Render("  (loading history…)")
+		}
 		inputBox := theme.ActiveBorder.Render(m.input.View())
 		return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), inputBox)
 	default: // cmailModeList

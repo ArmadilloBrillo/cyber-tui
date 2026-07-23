@@ -1,6 +1,7 @@
 package screens_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -282,5 +283,140 @@ func TestChatrooms_AppendMessage(t *testing.T) {
 	msg := model.Message{ID: "x1", From: model.User{Username: "molly"}, Body: "test", CreatedAt: time.Now()}
 	_ = m.AppendMessage(msg)
 	// No panic = pass; state is internal but AppendMessage should not crash
+}
+
+// --- History pagination (load-more on scroll-to-top) ---
+
+func TestChatrooms_UpAtTop_TriggersHistoryLoadThenGuards(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
+	})
+
+	m, cmd := sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Fatal("expected a history-load command when scrolling up at the top")
+	}
+
+	// A second "up" press while the load is in flight must not refire.
+	_, cmd = sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd != nil {
+		t.Error("expected no command while a history load is already in flight")
+	}
+}
+
+func TestChatrooms_UpAtTop_NoMessagesNoCmd(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // no messages loaded yet
+
+	_, cmd := sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd != nil {
+		t.Error("expected no history-load command with no messages loaded")
+	}
+}
+
+func TestChatrooms_PrependMessages_InsertsOlderMessagesAbove(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
+	})
+
+	m = m.PrependMessages("zion", []model.Message{
+		{ID: "m0", From: model.User{Username: "molly"}, Body: "older message", CreatedAt: time.Now().Add(-time.Hour)},
+	})
+
+	view := m.View()
+	oldIdx := strings.Index(view, "older message")
+	newIdx := strings.Index(view, "first message")
+	if oldIdx == -1 || newIdx == -1 {
+		t.Fatalf("expected both messages in the rendered view, got: %q", view)
+	}
+	if oldIdx > newIdx {
+		t.Error("expected the prepended (older) message to render above the existing message")
+	}
+}
+
+func TestChatrooms_PrependMessages_EmptyMarksExhausted(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
+	})
+
+	m = m.PrependMessages("zion", nil)
+
+	_, cmd := sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd != nil {
+		t.Error("expected no further history-load command once history is exhausted")
+	}
+}
+
+func sampleConvWithMessage() []model.Conversation {
+	return []model.Conversation{
+		{
+			ID:           "c1",
+			Participants: []model.User{{Username: "neuromancer"}, {Username: "molly"}},
+			Messages: []model.Message{
+				{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
+			},
+		},
+	}
+}
+
+func TestCMail_UpAtTop_TriggersHistoryLoadThenGuards(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m, cmd := sendSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Fatal("expected a history-load command when scrolling up at the top")
+	}
+
+	_, cmd = sendSpecialKey(m, tea.KeyUp)
+	if cmd != nil {
+		t.Error("expected no command while a history load is already in flight")
+	}
+}
+
+func TestCMail_PrependMessages_InsertsOlderMessagesAbove(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m = m.PrependMessages("c1", []model.Message{
+		{ID: "m0", From: model.User{Username: "molly"}, Body: "older message", CreatedAt: time.Now().Add(-time.Hour)},
+	})
+
+	view := m.View()
+	oldIdx := strings.Index(view, "older message")
+	newIdx := strings.Index(view, "first message")
+	if oldIdx == -1 || newIdx == -1 {
+		t.Fatalf("expected both messages in the rendered view, got: %q", view)
+	}
+	if oldIdx > newIdx {
+		t.Error("expected the prepended (older) message to render above the existing message")
+	}
+}
+
+func TestCMail_PrependMessages_EmptyMarksExhausted(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m = m.PrependMessages("c1", nil)
+
+	_, cmd := sendSpecialKey(m, tea.KeyUp)
+	if cmd != nil {
+		t.Error("expected no further history-load command once history is exhausted")
+	}
 }
 

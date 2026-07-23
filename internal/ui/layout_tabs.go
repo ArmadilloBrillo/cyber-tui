@@ -234,6 +234,11 @@ func (l TabsLayout) renderTabBar(a App) string {
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			label = fmt.Sprintf("%s (%d)", label, a.polledUnreadCount)
 		}
+		if t.s == screenCMail {
+			if n := a.cmail.TotalUnread(); n > 0 {
+				label = fmt.Sprintf("%s (%d)", label, n)
+			}
+		}
 		isActive := a.active == t.s && !(t.s == screenCMail && a.cmail.IsShowingDetail())
 		if isActive {
 			tabs += theme.ActiveTab.Render(label)
