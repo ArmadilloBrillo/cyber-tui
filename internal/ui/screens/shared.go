@@ -59,3 +59,24 @@ func attachmentURLs(attachments []model.Attachment) []string {
 	}
 	return out
 }
+
+// dedupeURLs removes repeated URLs while preserving first-seen order. Used by
+// URLProvider implementations that aggregate across many items (e.g. an
+// entire loaded chat history) rather than a single focused one, where the
+// same link posted more than once would otherwise show up repeatedly in the
+// open-link picker.
+func dedupeURLs(urls []string) []string {
+	if len(urls) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(urls))
+	out := make([]string, 0, len(urls))
+	for _, u := range urls {
+		if seen[u] {
+			continue
+		}
+		seen[u] = true
+		out = append(out, u)
+	}
+	return out
+}

@@ -1,10 +1,13 @@
 package screens_test
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 )
@@ -12,7 +15,7 @@ import (
 // --- ChatroomsModel.InputFocused ---
 
 func TestChatroomsInputFocused_DefaultFalse(t *testing.T) {
-	m := screens.NewChatroomsModel()
+	m := screens.NewChatroomsModel("", nil)
 	if m.InputFocused() {
 		t.Error("input should not be focused on a freshly created ChatroomsModel")
 	}
@@ -173,5 +176,512 @@ func TestCMailSend_EmptyBodyNoCmd(t *testing.T) {
 			t.Error("expected no SendCMailMsg for empty body, got one")
 		}
 	}
+}
+
+// --- ChatroomsModel mode transition tests ---
+
+func sampleRooms() []model.Room {
+	return []model.Room{
+		{ID: "r1", Slug: "zion", Name: "Zion", LastMessageAt: time.Now().Add(-2 * time.Minute), SortOrder: 1},
+		{ID: "r2", Slug: "sprawl", Name: "Sprawl", LastMessageAt: time.Now().Add(-10 * time.Minute), SortOrder: 2},
+	}
+}
+
+func sendChatroomKey(m screens.ChatroomsModel, key string) (screens.ChatroomsModel, tea.Cmd) {
+	return m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+}
+
+func sendChatroomSpecialKey(m screens.ChatroomsModel, keyType tea.KeyType) (screens.ChatroomsModel, tea.Cmd) {
+	return m.Update(tea.KeyMsg{Type: keyType})
+}
+
+func TestChatrooms_DefaultIsListMode(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	if m.IsShowingDetail() {
+		t.Error("fresh ChatroomsModel should be in list mode")
+	}
+}
+
+func TestChatrooms_InputNotFocusedByDefault(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	if m.InputFocused() {
+		t.Error("input should not be focused before a room is selected")
+	}
+}
+
+func TestChatrooms_EnterOpensDetailMode(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	if !m.IsShowingDetail() {
+		t.Error("expected detail mode after Enter on a room")
+	}
+	if !m.InputFocused() {
+		t.Error("expected input to be focused after entering a room")
+	}
+}
+
+func TestChatrooms_EscReturnsToListMode(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	if !m.IsShowingDetail() {
+		t.Fatal("setup: expected detail mode after Enter")
+	}
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEsc)
+	if m.IsShowingDetail() {
+		t.Error("expected list mode after Esc in detail mode")
+	}
+	if m.InputFocused() {
+		t.Error("expected input to be blurred after returning to list mode")
+	}
+}
+
+func TestChatrooms_JKNavigateList(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomKey(m, "j")
+	// After j, should be at index 1 (can't inspect directly, but Enter should open r2)
+	m2, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+	if !m2.IsShowingDetail() {
+		t.Fatal("expected detail mode after Enter")
+	}
+	// The batch cmd fires loadRoomMessages, openRoomSubscription, and RoomOpenedMsg
+	if cmd == nil {
+		t.Error("expected a command batch after Enter on a room")
+	}
+}
+
+func TestChatrooms_Send_EmitsMessage(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // open room
+
+	for _, r := range "hello circ" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	_, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("expected a command after Enter with text")
+	}
+	msg := cmd()
+	sendMsg, ok := msg.(screens.SendRoomMessageMsg)
+	if !ok {
+		t.Fatalf("expected SendRoomMessageMsg, got %T", msg)
+	}
+	if sendMsg.Body != "hello circ" {
+		t.Errorf("expected body='hello circ', got %q", sendMsg.Body)
+	}
+	if sendMsg.RoomID != "zion" {
+		t.Errorf("expected roomID='zion', got %q", sendMsg.RoomID)
+	}
+}
+
+func TestChatrooms_AppendMessage(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+
+	msg := model.Message{ID: "x1", From: model.User{Username: "molly"}, Body: "test", CreatedAt: time.Now()}
+	_ = m.AppendMessage(msg)
+	// No panic = pass; state is internal but AppendMessage should not crash
+}
+
+// --- Open-link shortcut (o / ctrl+o) ---
+
+func TestChatrooms_GetFocusedURLs_NilInListMode(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	// still in list mode: no room open, nothing to expose
+	if urls := m.GetFocusedURLs(); urls != nil {
+		t.Errorf("expected nil URLs in list mode, got %v", urls)
+	}
+}
+
+func TestChatrooms_GetFocusedURLs_AggregatesLoadedMessagesAndDedupes(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // opens "zion"
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "check https://example.com/one", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "bob"}, Body: "no links here", CreatedAt: time.Now()},
+		{ID: "m3", From: model.User{Username: "molly"}, Body: "also https://example.com/one and https://example.com/two", CreatedAt: time.Now()},
+	})
+
+	urls := m.GetFocusedURLs()
+	if len(urls) != 2 {
+		t.Fatalf("expected 2 deduped URLs, got %d: %v", len(urls), urls)
+	}
+}
+
+// --- /help reply as a local system message ---
+
+func TestChatrooms_AppendSystemMessage_RendersLocally(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi", CreatedAt: time.Now()},
+	})
+
+	m = m.AppendSystemMessage("zion", "Commands: /me, /dice, /help")
+
+	view := m.View()
+	if !strings.Contains(view, "Commands: /me, /dice, /help") {
+		t.Errorf("expected the system reply in the view, got: %q", view)
+	}
+	if strings.Contains(view, "<system>") {
+		t.Errorf("expected no username bracket for a system message, got: %q", view)
+	}
+}
+
+func TestChatrooms_AppendSystemMessage_WrongRoomIsNoOp(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // opens "zion"
+
+	m = m.AppendSystemMessage("sprawl", "should not appear")
+
+	view := m.View()
+	if strings.Contains(view, "should not appear") {
+		t.Error("expected AppendSystemMessage to no-op for a non-active room")
+	}
+}
+
+func TestCMail_AppendSystemMessage_RendersLocally(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m = m.AppendSystemMessage("c1", "Commands: /me, /dice, /help")
+
+	view := m.View()
+	if !strings.Contains(view, "Commands: /me, /dice, /help") {
+		t.Errorf("expected the system reply in the view, got: %q", view)
+	}
+}
+
+func TestCMail_AppendSystemMessage_WrongConvIsNoOp(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter) // opens "c1"
+
+	m = m.AppendSystemMessage("c2", "should not appear")
+
+	view := m.View()
+	if strings.Contains(view, "should not appear") {
+		t.Error("expected AppendSystemMessage to no-op for a non-active conversation")
+	}
+}
+
+// --- History pagination (load-more on scroll-to-top) ---
+
+func TestChatrooms_UpAtTop_TriggersHistoryLoadThenGuards(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
+	})
+
+	m, cmd := sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Fatal("expected a history-load command when scrolling up at the top")
+	}
+
+	// A second "up" press while the load is in flight must not refire.
+	_, cmd = sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd != nil {
+		t.Error("expected no command while a history load is already in flight")
+	}
+}
+
+func TestChatrooms_UpAtTop_NoMessagesNoCmd(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // no messages loaded yet
+
+	_, cmd := sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd != nil {
+		t.Error("expected no history-load command with no messages loaded")
+	}
+}
+
+func TestChatrooms_PrependMessages_InsertsOlderMessagesAbove(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
+	})
+
+	m = m.PrependMessages("zion", []model.Message{
+		{ID: "m0", From: model.User{Username: "molly"}, Body: "older message", CreatedAt: time.Now().Add(-time.Hour)},
+	})
+
+	view := m.View()
+	oldIdx := strings.Index(view, "older message")
+	newIdx := strings.Index(view, "first message")
+	if oldIdx == -1 || newIdx == -1 {
+		t.Fatalf("expected both messages in the rendered view, got: %q", view)
+	}
+	if oldIdx > newIdx {
+		t.Error("expected the prepended (older) message to render above the existing message")
+	}
+}
+
+func TestChatrooms_PrependMessages_EmptyMarksExhausted(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
+	})
+
+	m = m.PrependMessages("zion", nil)
+
+	_, cmd := sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd != nil {
+		t.Error("expected no further history-load command once history is exhausted")
+	}
+}
+
+func sampleConvWithMessage() []model.Conversation {
+	return []model.Conversation{
+		{
+			ID:           "c1",
+			Participants: []model.User{{Username: "neuromancer"}, {Username: "molly"}},
+			Messages: []model.Message{
+				{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
+			},
+		},
+	}
+}
+
+func TestCMail_GetFocusedURLs_NilInListMode(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m = m.SetConversations(sampleConvWithMessage())
+	if urls := m.GetFocusedURLs(); urls != nil {
+		t.Errorf("expected nil URLs in list mode, got %v", urls)
+	}
+}
+
+func TestCMail_GetFocusedURLs_AggregatesLoadedMessages(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m = m.SetConversations([]model.Conversation{
+		{
+			ID:           "c1",
+			Participants: []model.User{{Username: "neuromancer"}, {Username: "molly"}},
+			Messages: []model.Message{
+				{ID: "m1", From: model.User{Username: "molly"}, Body: "check https://example.com/one", CreatedAt: time.Now()},
+				{ID: "m2", From: model.User{Username: "neuromancer"}, Body: "no links here", CreatedAt: time.Now()},
+			},
+		},
+	})
+	m, _ = sendSpecialKey(m, tea.KeyEnter) // opens "c1"
+
+	urls := m.GetFocusedURLs()
+	if len(urls) != 1 || urls[0] != "https://example.com/one" {
+		t.Errorf("expected [https://example.com/one], got %v", urls)
+	}
+}
+
+func TestCMail_UpAtTop_TriggersHistoryLoadThenGuards(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m, cmd := sendSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Fatal("expected a history-load command when scrolling up at the top")
+	}
+
+	_, cmd = sendSpecialKey(m, tea.KeyUp)
+	if cmd != nil {
+		t.Error("expected no command while a history load is already in flight")
+	}
+}
+
+func TestCMail_PrependMessages_InsertsOlderMessagesAbove(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m = m.PrependMessages("c1", []model.Message{
+		{ID: "m0", From: model.User{Username: "molly"}, Body: "older message", CreatedAt: time.Now().Add(-time.Hour)},
+	})
+
+	view := m.View()
+	oldIdx := strings.Index(view, "older message")
+	newIdx := strings.Index(view, "first message")
+	if oldIdx == -1 || newIdx == -1 {
+		t.Fatalf("expected both messages in the rendered view, got: %q", view)
+	}
+	if oldIdx > newIdx {
+		t.Error("expected the prepended (older) message to render above the existing message")
+	}
+}
+
+func TestCMail_PrependMessages_EmptyMarksExhausted(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", nil)
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m = m.PrependMessages("c1", nil)
+
+	_, cmd := sendSpecialKey(m, tea.KeyUp)
+	if cmd != nil {
+		t.Error("expected no further history-load command once history is exhausted")
+	}
+}
+
+// --- Load-failure handling ---
+
+// alwaysFailClient wraps a working MockClient but fails every message-history
+// fetch, for exercising the "couldn't load messages" error state.
+type alwaysFailClient struct {
+	*api.MockClient
+}
+
+func (c *alwaysFailClient) GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error) {
+	return nil, errors.New("boom")
+}
+
+func (c *alwaysFailClient) GetMessages(convID string, limit int, before int64) ([]model.Message, error) {
+	return nil, errors.New("boom")
+}
+
+// flakyOlderPageClient succeeds on the initial page (before == 0) but fails
+// every older-page fetch, for exercising the loadingHistory stuck-true bug fix.
+type flakyOlderPageClient struct {
+	*api.MockClient
+}
+
+func (c *flakyOlderPageClient) GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error) {
+	if before > 0 {
+		return nil, errors.New("boom")
+	}
+	return c.MockClient.GetRoomMessages(roomID, limit, before)
+}
+
+func (c *flakyOlderPageClient) GetMessages(convID string, limit int, before int64) ([]model.Message, error) {
+	if before > 0 {
+		return nil, errors.New("boom")
+	}
+	return c.MockClient.GetMessages(convID, limit, before)
+}
+
+func TestChatrooms_LoadOlderFailure_ResetsLoadingHistory(t *testing.T) {
+	client := &flakyOlderPageClient{MockClient: api.NewMockClient()}
+	m := screens.NewChatroomsModel("neuromancer", client)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first message", CreatedAt: time.Now()},
+	})
+
+	m, cmd := sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Fatal("expected a history-load command when scrolling up at the top")
+	}
+	m, _ = m.Update(cmd()) // circErrMsg — must reset loadingHistory, not leave it stuck
+
+	_, cmd = sendChatroomSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Error("expected loadingHistory to reset after a failed load, allowing a retry")
+	}
+}
+
+func TestChatrooms_View_ShowsErrorWhenInitialLoadFails(t *testing.T) {
+	client := &alwaysFailClient{MockClient: api.NewMockClient()}
+	m := screens.NewChatroomsModel("neuromancer", client)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("expected a command batch after Enter")
+	}
+	for _, resolved := range resolveMsgs(cmd) {
+		m, _ = m.Update(resolved)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "couldn't load messages") {
+		t.Errorf("expected error state in view, got: %q", view)
+	}
+}
+
+func TestCMail_LoadOlderFailure_ResetsLoadingHistory(t *testing.T) {
+	client := &flakyOlderPageClient{MockClient: api.NewMockClient()}
+	m := screens.NewCMailModel("neuromancer", client)
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m, cmd := sendSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Fatal("expected a history-load command when scrolling up at the top")
+	}
+	m, _ = m.Update(cmd()) // cmailErrMsg — must reset loadingHistory, not leave it stuck
+
+	_, cmd = sendSpecialKey(m, tea.KeyUp)
+	if cmd == nil {
+		t.Error("expected loadingHistory to reset after a failed load, allowing a retry")
+	}
+}
+
+func TestCMail_View_ShowsErrorWhenInitialLoadFails(t *testing.T) {
+	client := &alwaysFailClient{MockClient: api.NewMockClient()}
+	m := screens.NewCMailModel("neuromancer", client)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	// A conversation with no pre-loaded messages, so the failing initial fetch
+	// is what determines the detail view's content.
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neuromancer"}, {Username: "molly"}}},
+	})
+	m, cmd := sendSpecialKey(m, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("expected a command batch after Enter")
+	}
+	for _, resolved := range resolveMsgs(cmd) {
+		m, _ = m.Update(resolved)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "couldn't load messages") {
+		t.Errorf("expected error state in view, got: %q", view)
+	}
+}
+
+// resolveMsgs executes cmd and flattens one level of tea.BatchMsg into the
+// individual resulting messages, without recursively executing whatever
+// commands those messages' own Update() calls return (some of those, like
+// waitForRoomMsg, block on a live channel and must not run in a unit test).
+func resolveMsgs(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if msg == nil {
+		return nil
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			if m := c(); m != nil {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	return []tea.Msg{msg}
 }
 

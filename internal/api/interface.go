@@ -15,6 +15,10 @@ type Client interface {
 	// tokens (IDToken + RTDBToken) without requiring the user's password.
 	LoginWithRefreshToken(refreshToken string) (model.Tokens, error)
 	Logout() error
+	// RefreshSession proactively refreshes the ID token (and RTDB token) using
+	// the stored refresh token, without waiting for a failed request to trigger
+	// it. Used to reconnect a live RTDB subscription after the token expires.
+	RefreshSession() error
 
 	// Feed — pass empty cursor for first page; use returned cursor for next page.
 	// Returns empty next-cursor when there are no more pages.
@@ -53,10 +57,19 @@ type Client interface {
 	GetSettings() (model.Settings, error)
 	UpdateSettings(update model.Settings) error
 
-	// Chatrooms — NOTE: real impl uses Firebase RTDB with RTDBToken — pending feature/rtdb-chat
+	// Chatrooms — list/history/send via REST; real-time delivery via RTDB SSE.
 	GetRooms() ([]model.Room, error)
-	GetRoomMessages(roomID string, limit int) ([]model.Message, error)
-	SendRoomMessage(roomID, body string) error
+	// GetRoomMessages returns up to limit messages for roomID, oldest-first.
+	// Pass before=0 for the latest page; pass a previous timestamp cursor for older pages.
+	GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error)
+	// SendRoomMessage returns the server's reply text for reply-only commands
+	// (e.g. /help, which posts no message); empty for normal sends.
+	SendRoomMessage(roomID, body string) (string, error)
+	// MarkRoomRead resets the "new messages" indicator for the caller.
+	MarkRoomRead(roomID string) error
+	// SubscribeRoom opens a live RTDB SSE stream for the given chatroom.
+	// Returns a channel of incoming messages and a cancel function.
+	SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error)
 
 	// Notifications — cursor-paginated; mark-read methods are fire-and-forget.
 	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.
@@ -149,8 +162,12 @@ type Client interface {
 
 	// Direct messages (C-Mail) — list/history/send via REST; real-time delivery via RTDB SSE.
 	GetConversations() ([]model.Conversation, error)
-	GetMessages(conversationID string, limit int) ([]model.Message, error)
-	SendMessage(conversationID, body string) error
+	// GetMessages returns up to limit messages for conversationID, oldest-first.
+	// Pass before=0 for the latest page; pass a previous message's timestamp for older pages.
+	GetMessages(conversationID string, limit int, before int64) ([]model.Message, error)
+	// SendMessage returns the server's reply text for reply-only commands
+	// (e.g. /help, which posts no message); empty for normal sends.
+	SendMessage(conversationID, body string) (string, error)
 	// StartConversation creates or retrieves a C-Mail conversation with recipientUsername.
 	// Returns 201 for a new conversation, 200 for an existing one (both return the conversation).
 	StartConversation(recipientUsername string) (model.Conversation, error)

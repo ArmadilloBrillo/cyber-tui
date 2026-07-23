@@ -380,6 +380,33 @@ func TestHTTPTokenRefresh_Success(t *testing.T) {
 	}
 }
 
+func TestHTTPRefreshSession_Success(t *testing.T) {
+	refreshCalls := 0
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/auth/login":
+			writeOK(t, w, map[string]string{
+				"idToken": "old-token", "refreshToken": "ref", "rtdbToken": "rtdb",
+			})
+		case "/v1/auth/refresh":
+			refreshCalls++
+			writeOK(t, w, map[string]string{
+				"idToken": "new-token", "rtdbToken": "new-rtdb",
+			})
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+		}
+	}))
+
+	c.Login("u@example.com", "pw") //nolint:errcheck
+	if err := c.RefreshSession(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if refreshCalls != 1 {
+		t.Errorf("expected exactly one refresh call, got %d", refreshCalls)
+	}
+}
+
 func TestHTTPTokenRefresh_Failure(t *testing.T) {
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -701,6 +728,71 @@ func TestHTTPGetConversations_ParsesList(t *testing.T) {
 	}
 }
 
+func TestHTTPGetRoomMessages_PassesBeforeParam(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/circ/general" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if !strings.Contains(r.URL.RawQuery, "limit=50") {
+			t.Errorf("expected limit param, got: %s", r.URL.RawQuery)
+		}
+		if !strings.Contains(r.URL.RawQuery, "before=1700000000000") {
+			t.Errorf("expected before param, got: %s", r.URL.RawQuery)
+		}
+		writeOK(t, w, []map[string]any{})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if _, err := c.GetRoomMessages("general", 50, 1700000000000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPGetRoomMessages_ParsesIsChatAdmin(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "case", "isChatAdmin": true, "content": "hi", "timestamp": 1700000001000},
+			{"id": "m2", "userId": "u2", "username": "molly", "isChatAdmin": false, "content": "hey", "timestamp": 1700000002000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+	}
+	if !msgs[0].IsChatAdmin {
+		t.Error("expected msgs[0].IsChatAdmin = true")
+	}
+	if msgs[1].IsChatAdmin {
+		t.Error("expected msgs[1].IsChatAdmin = false")
+	}
+}
+
+// TestHTTPGetRoomMessages_ParsesIsAction locks in the undocumented isAction
+// field discovered via live testing: /me (and other emote commands) sets it,
+// and Body is just the bare action text with no username baked in.
+func TestHTTPGetRoomMessages_ParsesIsAction(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "ragnar", "isAction": true, "content": "waves", "timestamp": 1700000001000},
+			{"id": "m2", "userId": "u2", "username": "molly", "isAction": false, "content": "hey", "timestamp": 1700000002000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !msgs[0].IsAction || msgs[0].Body != "waves" {
+		t.Errorf("msgs[0] = %+v, want IsAction=true Body=waves", msgs[0])
+	}
+	if msgs[1].IsAction {
+		t.Error("expected msgs[1].IsAction = false")
+	}
+}
+
 func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/cmail/c1" || r.Method != http.MethodGet {
@@ -715,7 +807,7 @@ func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
 		})
 	})))
 	c.LoginWithRefreshToken("tok")
-	msgs, err := c.GetMessages("c1", 50)
+	msgs, err := c.GetMessages("c1", 50, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -730,6 +822,39 @@ func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
 	}
 }
 
+// TestHTTPGetMessages_ParsesIsAction locks in the undocumented isAction field
+// for C-Mail, added defensively alongside CIRC's (unconfirmed live for
+// C-Mail specifically, but the API describes commands as shared between the
+// two — harmless no-op if the field is actually absent there).
+func TestHTTPGetMessages_ParsesIsAction(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "senderId": "u1", "senderUsername": "case", "isAction": true, "content": "waves", "timestamp": 1700000001000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetMessages("c1", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !msgs[0].IsAction || msgs[0].Body != "waves" {
+		t.Errorf("msgs[0] = %+v, want IsAction=true Body=waves", msgs[0])
+	}
+}
+
+func TestHTTPGetMessages_PassesBeforeParam(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.RawQuery, "before=1700000000000") {
+			t.Errorf("expected before param, got: %s", r.URL.RawQuery)
+		}
+		writeOK(t, w, []map[string]any{})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if _, err := c.GetMessages("c1", 50, 1700000000000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestHTTPSendMessage_PostsContent(t *testing.T) {
 	var gotBody []byte
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -740,11 +865,60 @@ func TestHTTPSendMessage_PostsContent(t *testing.T) {
 		writeOK(t, w, map[string]string{"conversationId": "c1", "messageId": "m1"})
 	})))
 	c.LoginWithRefreshToken("tok")
-	if err := c.SendMessage("c1", "hello there"); err != nil {
+	reply, err := c.SendMessage("c1", "hello there")
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "" {
+		t.Errorf("expected empty reply for a normal send, got %q", reply)
 	}
 	if !strings.Contains(string(gotBody), "hello there") {
 		t.Errorf("expected body to contain 'hello there', got: %s", gotBody)
+	}
+}
+
+func TestHTTPSendMessage_ReturnsReply(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]string{"reply": "Commands: /me, /dice, ..."})
+	})))
+	c.LoginWithRefreshToken("tok")
+	reply, err := c.SendMessage("c1", "/help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "Commands: /me, /dice, ..." {
+		t.Errorf("reply = %q, want the /help command list", reply)
+	}
+}
+
+func TestHTTPSendRoomMessage_ReturnsReply(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/circ/general" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, map[string]string{"reply": "Commands: /me, /dice, ..."})
+	})))
+	c.LoginWithRefreshToken("tok")
+	reply, err := c.SendRoomMessage("general", "/help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "Commands: /me, /dice, ..." {
+		t.Errorf("reply = %q, want the /help command list", reply)
+	}
+}
+
+func TestHTTPSendRoomMessage_EmptyReplyForNormalSend(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]string{"roomId": "general", "messageId": "m1"})
+	})))
+	c.LoginWithRefreshToken("tok")
+	reply, err := c.SendRoomMessage("general", "hello world")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "" {
+		t.Errorf("expected empty reply for a normal send, got %q", reply)
 	}
 }
 

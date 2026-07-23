@@ -215,7 +215,7 @@ func NewApp(client api.Client) App {
 		wanderLust:         false,
 		login:              screens.NewLoginModel(""),
 		feed:               screens.NewFeedModel(),
-		chatrooms:          screens.NewChatroomsModel(),
+		chatrooms:          screens.NewChatroomsModel("", client),
 		cmail:              screens.NewCMailModel("", client),
 		profile:            screens.NewProfileModel(),
 		postDetail:         screens.NewPostDetailModel(),
@@ -486,12 +486,17 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		return model.(App), cmd, true
 	}
 	// When a screen has a focused text input, let it consume all keys.
-	// ctrl+c is kept as a hard escape hatch.
+	// ctrl+c is kept as a hard escape hatch; ctrl+o reaches the open-link
+	// shortcut too, since plain 'o' is unreachable while chatting (CIRC/
+	// C-Mail's compose input is focused for the entire detail view, not just
+	// a transient sub-mode like Feed's reply box).
 	if a.activeScreenHasFocusedInput() {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
 		}
-		return a, nil, false // fall through to delegateUpdate
+		if m.String() != "ctrl+o" {
+			return a, nil, false // fall through to delegateUpdate
+		}
 	}
 	switch m.String() {
 	case "t":
@@ -522,7 +527,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.helpModalOpen = true
 			return a, nil, true
 		}
-	case "o":
+	case "o", "ctrl+o":
 		if a.active != screenLogin {
 			app, cmd := a.handleOpenURL(a.getFocusedURLs())
 			return app, cmd, true
@@ -544,10 +549,12 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.tokens = msg.tokens
 		a.currentUser = msg.user
 		a.cmail = screens.NewCMailModel(msg.user.Username, a.client)
-		// Initialize the fresh model's viewports with the current terminal size.
+		a.chatrooms = screens.NewChatroomsModel(msg.user.Username, a.client)
+		// Initialize the fresh models' viewports with the current terminal size.
 		if a.width > 0 {
 			contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(a.width), Height: a.layout.ContentHeight(a.height)}
 			a.cmail, _ = a.cmail.Update(contentMsg)
+			a.chatrooms, _ = a.chatrooms.Update(contentMsg)
 		}
 		return a, a.afterLoginCmd(), true
 	case screens.LoginErrMsg:
@@ -688,6 +695,14 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
+	case screens.RoomOpenedMsg:
+		return a, a.markRoomReadCmd(msg.RoomID), true
+	case screens.RoomReconnectedMsg:
+		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
+		return a, cmd, true
+	case roomCommandReplyMsg:
+		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, msg.reply)
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -702,14 +717,6 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
-	case cmailMessageSentMsg:
-		sent := model.Message{
-			From:      model.User{Username: a.currentUser.Username},
-			Body:      msg.body,
-			CreatedAt: time.Now(),
-		}
-		a.cmail = a.cmail.AppendMessage(sent)
-		return a, nil, true
 	case screens.CMailConvSelectedMsg:
 		return a, a.markCMailReadCmd(msg.ConversationID), true
 	case screens.StartConversationMsg:
@@ -726,6 +733,12 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.cmail.ConvOpenCmds(convID),
 			func() tea.Msg { return screens.CMailConvSelectedMsg{ConversationID: convID} },
 		), true
+	case screens.CMailReconnectedMsg:
+		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
+		return a, cmd, true
+	case cmailCommandReplyMsg:
+		a.cmail = a.cmail.AppendSystemMessage(msg.convID, msg.reply)
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -1689,6 +1702,10 @@ func (a App) getFocusedURLs() []string {
 		p = a.topics
 	case screenJournal:
 		p = a.journal
+	case screenChatrooms:
+		p = a.chatrooms
+	case screenCMail:
+		p = a.cmail
 	}
 	if p == nil {
 		return nil
@@ -1829,7 +1846,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		}
 		// Initialise the RTDB client using the URL returned by the API (best effort).
 		if hc, ok := a.client.(*api.HTTPClient); ok {
-			_ = hc.InitRTDB(tokens.RTDBToken, tokens.RTDBUrl)
+			_ = hc.InitRTDB(tokens.IDToken, tokens.RTDBUrl)
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
@@ -1866,7 +1883,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 			return screens.LoginErrMsg{Err: err}
 		}
 		if hc, ok := a.client.(*api.HTTPClient); ok {
-			_ = hc.InitRTDB(tokens.RTDBToken, tokens.RTDBUrl)
+			_ = hc.InitRTDB(tokens.IDToken, tokens.RTDBUrl)
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
@@ -1926,9 +1943,17 @@ type feedPageMsg struct {
 }
 type roomsLoadedMsg struct{ rooms []model.Room }
 type convsLoadedMsg struct{ convs []model.Conversation }
-type cmailMessageSentMsg struct {
+
+// roomCommandReplyMsg/cmailCommandReplyMsg carry a reply-only slash command's
+// text (e.g. /help) back from the send response, for local display only —
+// nothing was posted, so nothing arrives via the RTDB subscription.
+type roomCommandReplyMsg struct {
+	roomID string
+	reply  string
+}
+type cmailCommandReplyMsg struct {
 	convID string
-	body   string
+	reply  string
 }
 type conversationStartedMsg struct{ conv model.Conversation }
 type profileLoadedMsg struct{ user model.User }
@@ -2319,19 +2344,34 @@ func (a *App) loadUserFollowersCmd(userID, cursor string) tea.Cmd {
 
 func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	return func() tea.Msg {
-		if err := a.client.SendRoomMessage(roomID, body); err != nil {
+		reply, err := a.client.SendRoomMessage(roomID, body)
+		if err != nil {
 			return actionErrMsg{err}
 		}
+		if reply != "" {
+			return roomCommandReplyMsg{roomID: roomID, reply: reply}
+		}
+		return nil
+	}
+}
+
+func (a *App) markRoomReadCmd(roomID string) tea.Cmd {
+	return func() tea.Msg {
+		_ = a.client.MarkRoomRead(roomID) // fire-and-forget
 		return nil
 	}
 }
 
 func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 	return func() tea.Msg {
-		if err := a.client.SendMessage(convID, body); err != nil {
+		reply, err := a.client.SendMessage(convID, body)
+		if err != nil {
 			return actionErrMsg{err}
 		}
-		return cmailMessageSentMsg{convID: convID, body: body}
+		if reply != "" {
+			return cmailCommandReplyMsg{convID: convID, reply: reply}
+		}
+		return nil
 	}
 }
 
@@ -2514,7 +2554,7 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.profileReturn = screenNotifications
 		return a, a.loadUserProfileCmd(msg.Username), true
 	case pollUnreadTickMsg:
-		return a, tea.Batch(a.fetchUnreadCountCmd(), a.schedulePollCmd()), true
+		return a, tea.Batch(a.fetchUnreadCountCmd(), a.loadConvsCmd(), a.schedulePollCmd()), true
 	case unreadCountMsg:
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count

@@ -189,6 +189,129 @@ func listFooter(loading, exhausted bool) string {
 	return ""
 }
 
+// renderCircMessages renders a list of chatroom messages in IRC style:
+// <username>  message body                                     14:32
+// The timestamp is right-aligned on the message's last line; the username is
+// highlighted. Bodies word-wrap to fit viewportWidth, with room reserved on
+// every wrapped line for the timestamp column so long messages never push it
+// off-screen; continuation lines are indented to align under the body.
+func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int) string {
+	if viewportWidth < 20 {
+		viewportWidth = 80
+	}
+	const tsGap = 2 // minimum space between the wrapped text and the timestamp
+	var sb strings.Builder
+	for _, msg := range msgs {
+		if msg.IsSystem {
+			sb.WriteString(renderSystemNotice(msg.Body, viewportWidth))
+			continue
+		}
+		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
+		tsWidth := lipgloss.Width(ts)
+
+		if msg.IsAction {
+			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth))
+			continue
+		}
+
+		adminTag := ""
+		adminTagWidth := 0
+		if msg.IsChatAdmin {
+			adminTag = " " + theme.Highlight.Render("[admin]")
+			adminTagWidth = len(" [admin]")
+		}
+
+		// Styled prefix: <username>[ [admin]]  (plain width = len(username) + tag + 4)
+		styledPrefix := "<" + theme.Highlight.Render(msg.From.Username) + adminTag + ">  "
+		rawPrefixWidth := len(msg.From.Username) + adminTagWidth + 4
+		indent := strings.Repeat(" ", rawPrefixWidth)
+
+		bodyWidth := max(viewportWidth-rawPrefixWidth-tsWidth-tsGap, 10)
+
+		body := strings.TrimRight(msg.Body, "\n")
+		lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(body), "\n")
+		last := len(lines) - 1
+
+		for i, line := range lines {
+			prefix := indent
+			if i == 0 {
+				prefix = styledPrefix
+			}
+			if i == last {
+				sb.WriteString(prefix + line + strings.Repeat(" ", tsGap) + theme.Subtle.Render(ts) + "\n")
+			} else {
+				sb.WriteString(prefix + line + "\n")
+			}
+		}
+	}
+	return sb.String()
+}
+
+// renderActionLine renders a /me-style action message in classic IRC form:
+// "* username body *", right-aligned timestamp trailing the last wrapped
+// line — no username bracket, matching how real IRC clients narrate actions
+// in the third person. The API returns IsAction messages with Body already
+// stripped of the username (just the action text), so it's assembled here.
+func renderActionLine(username, body, ts string, viewportWidth int) string {
+	const suffix = " *"
+	tsWidth := lipgloss.Width(ts)
+	const tsGap = 2
+
+	prefix := "* " + theme.Highlight.Render(username) + " "
+	rawPrefixWidth := len(username) + 3 // "* " + " "
+	indent := strings.Repeat(" ", rawPrefixWidth)
+
+	bodyWidth := max(viewportWidth-rawPrefixWidth-len(suffix)-tsWidth-tsGap, 10)
+
+	lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(strings.TrimRight(body, "\n")), "\n")
+	last := len(lines) - 1
+
+	var sb strings.Builder
+	for i, line := range lines {
+		p := indent
+		if i == 0 {
+			p = prefix
+		}
+		if i == last {
+			// lipgloss pads every wrapped line to bodyWidth; trim that back off
+			// so the closing "*" sits right after the text instead of being
+			// pushed out to the right edge, then re-pad after it so the
+			// timestamp still lands flush right.
+			trimmed := strings.TrimRight(line, " ")
+			content := trimmed + suffix
+			pad := max(bodyWidth+len(suffix)-lipgloss.Width(content), 0)
+			sb.WriteString(p + content + strings.Repeat(" ", pad) + strings.Repeat(" ", tsGap) + theme.Subtle.Render(ts) + "\n")
+		} else {
+			sb.WriteString(p + line + "\n")
+		}
+	}
+	return sb.String()
+}
+
+// renderSystemNotice renders a local-only notice (e.g. a /help reply) as a
+// muted, word-wrapped block prefixed with "*** " — distinct from real chat
+// messages: no username bracket/bubble, no timestamp column, since it was
+// never sent to or stored by the server.
+func renderSystemNotice(body string, viewportWidth int) string {
+	if viewportWidth < 10 {
+		viewportWidth = 80
+	}
+	const prefix = "*** "
+	bodyWidth := max(viewportWidth-len(prefix), 10)
+	indent := strings.Repeat(" ", len(prefix))
+
+	lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(strings.TrimRight(body, "\n")), "\n")
+	var sb strings.Builder
+	for i, line := range lines {
+		p := indent
+		if i == 0 {
+			p = prefix
+		}
+		sb.WriteString(theme.Subtle.Render(p+line) + "\n")
+	}
+	return sb.String()
+}
+
 // renderChatMessages renders a list of chat messages as bordered bubbles sized
 // to their content (up to 75% of viewportWidth).
 // Messages from currentUser use ActiveBorder (cyan) and are right-aligned.
@@ -203,7 +326,17 @@ func renderChatMessages(msgs []model.Message, currentUser string, loc *time.Loca
 
 	var sb strings.Builder
 	for _, msg := range msgs {
+		if msg.IsSystem {
+			sb.WriteString(renderSystemNotice(msg.Body, viewportWidth))
+			sb.WriteString("\n")
+			continue
+		}
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
+		if msg.IsAction {
+			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth))
+			sb.WriteString("\n")
+			continue
+		}
 		isMe := currentUser != "" && msg.From.Username == currentUser
 
 		var header string

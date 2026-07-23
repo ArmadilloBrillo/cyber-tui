@@ -2,11 +2,14 @@ package ui
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/screens"
 )
 
 func keyMsg(key string) tea.KeyMsg {
@@ -46,8 +49,8 @@ func TestTabIndex_Notifs(t *testing.T) {
 func TestTabIndex_Profile(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenProfile
-	if got := a.tabIndex(); got != 7 {
-		t.Errorf("expected 7, got %d", got)
+	if got := a.tabIndex(); got != 8 {
+		t.Errorf("expected 8, got %d", got)
 	}
 }
 
@@ -92,8 +95,8 @@ func TestNavigateTab_RightFromGuilds_GoesToTopics(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// menuTabs order: feed, notifications, c-mail, journal, bookmarks, guilds, topics, profile, settings
-	expected := []screen{screenNotifications, screenCMail, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenFeed}
+	// menuTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings
+	expected := []screen{screenNotifications, screenCMail, screenChatrooms, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(+1)
 		if a.active != want {
@@ -105,8 +108,8 @@ func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// menuTabs order: feed, notifications, c-mail, journal, bookmarks, guilds, topics, profile, settings
-	expected := []screen{screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenCMail, screenNotifications, screenFeed}
+	// menuTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings
+	expected := []screen{screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenChatrooms, screenCMail, screenNotifications, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(-1)
 		if a.active != want {
@@ -204,6 +207,103 @@ func TestHandleKeys_O_MultipleURLs_OpensPicker(t *testing.T) {
 	}
 	if a2.urlPickerCursor != 0 {
 		t.Errorf("picker cursor should start at 0, got %d", a2.urlPickerCursor)
+	}
+}
+
+// setupChatroomsDetailWithURL opens a room in detail mode with one message
+// containing a URL, so InputFocused() is true — the state that makes plain
+// 'o' unreachable and ctrl+o necessary.
+func setupChatroomsDetailWithURL(a App) App {
+	a.active = screenChatrooms
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	cm = cm.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "check https://example.com", CreatedAt: time.Now()},
+	})
+	a.chatrooms = cm
+	return a
+}
+
+func TestHandleKeys_CtrlO_ReachesOpenLink_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if !consumed {
+		t.Error("expected ctrl+o to be consumed even while chatrooms input is focused")
+	}
+}
+
+func TestHandleKeys_O_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	_, _, consumed := a.handleKeys(keyMsg("o"))
+	if consumed {
+		t.Error("expected plain 'o' to NOT be consumed while chatrooms input is focused — it must still type into the compose box")
+	}
+}
+
+// --- Status bar hints: '?' is unreachable in chat detail mode, ctrl+o isn't ---
+
+func hasHint(hints []hint, key string) bool {
+	for _, h := range hints {
+		if h.key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func TestScreenHints_ChatroomsDetail_NoHelpButHasCtrlO(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	hints := TabsLayout{}.screenHints(a)
+	if hasHint(hints, "?") {
+		t.Error("expected no '?' hint in chatrooms detail mode — it's unreachable while the compose input is focused")
+	}
+	if !hasHint(hints, "ctrl+o") {
+		t.Error("expected a ctrl+o hint in chatrooms detail mode")
+	}
+}
+
+func TestScreenHints_ChatroomsList_StillHasHelp(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	hints := TabsLayout{}.screenHints(a)
+	if !hasHint(hints, "?") {
+		t.Error("expected '?' hint in chatrooms list mode — no input is focused there")
+	}
+}
+
+func TestScreenHints_CMailDetail_NoHelpButHasCtrlO(t *testing.T) {
+	a := loggedInApp()
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	a.active = screenCMail
+
+	hints := TabsLayout{}.screenHints(a)
+	if hasHint(hints, "?") {
+		t.Error("expected no '?' hint in c-mail detail mode — it's unreachable while the compose input is focused")
+	}
+	if !hasHint(hints, "ctrl+o") {
+		t.Error("expected a ctrl+o hint in c-mail detail mode")
+	}
+}
+
+func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+	hints := TabsLayout{}.screenHints(a)
+	if !hasHint(hints, "?") {
+		t.Error("expected '?' hint in c-mail list mode — no input is focused there")
 	}
 }
 
@@ -438,5 +538,63 @@ func TestRouteURL_EphemeralAllowsInternalProfileNav(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Error("cmd = nil, want profile load command")
+	}
+}
+
+// --- Live-stream reconnect toasts ---
+
+func TestHandleChatrooms_RoomReconnected_ShowsToast(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.Update(screens.RoomReconnectedMsg{})
+	got := m.(App)
+	if got.notifyText != "reconnected to live chat" {
+		t.Errorf("notifyText = %q, want reconnect banner", got.notifyText)
+	}
+	if got.notifyLevel != notifyInfo {
+		t.Errorf("notifyLevel = %v, want notifyInfo", got.notifyLevel)
+	}
+}
+
+func TestHandleCMail_ConvReconnected_ShowsToast(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.Update(screens.CMailReconnectedMsg{})
+	got := m.(App)
+	if got.notifyText != "reconnected to live chat" {
+		t.Errorf("notifyText = %q, want reconnect banner", got.notifyText)
+	}
+	if got.notifyLevel != notifyInfo {
+		t.Errorf("notifyLevel = %v, want notifyInfo", got.notifyLevel)
+	}
+}
+
+// --- /help reply routed to a local system message ---
+
+func TestHandleChatrooms_CommandReply_AppendsSystemMessage(t *testing.T) {
+	a := loggedInApp()
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+
+	m, _ := a.Update(roomCommandReplyMsg{roomID: "zion", reply: "Commands: /me, /dice, /help"})
+	got := m.(App)
+	if view := got.chatrooms.View(); !strings.Contains(view, "Commands: /me, /dice, /help") {
+		t.Errorf("expected the /help reply in the chatrooms view, got: %q", view)
+	}
+}
+
+func TestHandleCMail_CommandReply_AppendsSystemMessage(t *testing.T) {
+	a := loggedInApp()
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+
+	m, _ := a.Update(cmailCommandReplyMsg{convID: "c1", reply: "Commands: /me, /dice, /help"})
+	got := m.(App)
+	if view := got.cmail.View(); !strings.Contains(view, "Commands: /me, /dice, /help") {
+		t.Errorf("expected the /help reply in the c-mail view, got: %q", view)
 	}
 }

@@ -8,7 +8,7 @@ Comprehensive map of every module, file, and artifact in this repository. Use th
 
 **cyber-tui** is a terminal user interface (TUI) client for [cyberspace.online](https://cyberspace.online) — a retro text-only social network. It is written in Go, using [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI event loop, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling, and [Wish](https://github.com/charmbracelet/wish) to optionally host the client over SSH.
 
-The client talks to the cyberspace.online REST API (current target v0.7; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages (SSE). See `docs/00-latest-api-reference.md` for the current API spec snapshot.
+The client talks to the cyberspace.online REST API (current target v0.7; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages and public chatrooms (SSE). See `docs/00-latest-api-reference.md` for the current API spec snapshot.
 
 ---
 
@@ -128,7 +128,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `ProfileUpdate` | Optional fields for PATCH /v1/users/me (all pointer types, includes new website/location fields) |
 | `Message` | DM/chat message (ID, from, body, createdAt) |
 | `Conversation` | 1-on-1 DM thread (ID, participants, messages, UnreadCount, LastMessage) |
-| `Room` | Public chatroom (ID, name, description, member count) |
+| `Room` | Public chatroom (ID, slug, name, lastMessageAt, sortOrder) |
 | `NotificationPrefs` | Notification subscription toggles (bookmark, reply, poke) |
 | `Settings` | All user preferences (notifications, content filters, display options) |
 | `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName, postSlug, postAuthorUsername, postContent, replyContent) |
@@ -169,6 +169,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Guilds | `GetGuilds(cursor)`, `GetGuild(slug)`, `GetGuildPosts(slug, cursor)`, `CreateGuildPost(slug, content, title, postSlug, topics)`, `GetGuildMembers(slug, cursor)`, `JoinGuild(slug)`, `LeaveGuild(slug)` |
 | Notes | `GetNotes(cursor)`, `GetNote(noteID)`, `GetNoteRevision(noteID, revision)`, `GetNoteRevisions(noteID, cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
 | Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `StartConversation(recipientUsername)`, `MarkCMailRead(convID)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
+| Chatrooms | `GetRooms()`, `GetRoomMessages(roomID, limit, before)`, `SendRoomMessage(roomID, body)`, `MarkRoomRead(roomID)`, `SubscribeRoom(ctx, roomID) <-chan model.Message` |
 
 #### `client.go`
 
@@ -193,7 +194,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 - `refresh()` — token refresh path; does not recurse
 - `wirePostToModel()`, `wireReplyToModel()`, `wireUserToModel()`, `wireSettingsToModel()`, `wireNotificationToModel()`, `wireNoteToModel()` — convert API JSON wire types to `model.*` types
 
-**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData` — match the JSON envelope shapes returned by the API.
+**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireRoom`, `wireCircMessage`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData` — match the JSON envelope shapes returned by the API.
 
 **Note:** `HTTPClient.tokens` is guarded by a `sync.Mutex`. Bubble Tea runs commands in concurrent goroutines, so reads in `doRequest` and writes in `Login`/`refresh` go through the token accessor methods (`idToken`, `setTokens`, `snapshotTokens`, `applyRefresh`). See `docs/30-security-hardening.md`.
 
@@ -447,15 +448,31 @@ Direct messages (C-Mail) with live Firebase RTDB integration.
 - Other person's messages left-aligned; my messages right-aligned (driven by `currentUser` field)
 - `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history in detail mode
 - **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile emits `StartConversationMsg{Username}` (defined in `messages.go`); App calls `StartConversation(username)` via REST, then switches to C-Mail and opens the returned conversation in detail mode; self-DMs are dropped in the App handler
+- **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetMessages(convID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on conversation open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
+- **Live-stream reconnect:** when `dmStreamClosedMsg` fires for the still-active conversation (idToken expiry, ~1hr), `reconnectConvCmd` calls `api.Client.RefreshSession()` then re-subscribes; success emits `CMailReconnectedMsg`, which App turns into a "reconnected to live chat" toast. A stale close event (from an abandoned conversation) is a no-op.
+- **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendMessage`'s reply text is routed through app.go's `cmailCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice`. `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live for CIRC, parsed defensively here) rendered via `renderActionLine` as classic IRC `* username body *`
 
-Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`
-Key internal types: `dmSubscription` (RTDB channel + cancel func), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `cmailMsgsLoadedMsg`
+Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`, `CMailReconnectedMsg`
+Key internal types: `dmSubscription` (RTDB channel + cancel func + `ConvID`), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `dmReconnectedMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`
 
 #### `chatrooms.go`
 
-Public chatroom browser and chat (UI complete; API integration deferred).
+Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integration including live RTDB SSE.
 
-- Two-pane layout matching C-Mail
+- Two-mode flow: `chatroomModeList` (full-width room cards) → `chatroomModeDetail` (header + message viewport + compose input); ESC returns to list
+- Room cards show name, `#slug` subtitle, and last-message timestamp (right-aligned)
+- IRC-style message rendering via `renderCircMessages` (see `render.go`): `<username>  body` with right-aligned timestamp; long bodies word-wrap to the viewport width, with room reserved so the timestamp trails the last wrapped line instead of overflowing
+- Subscribes to RTDB SSE stream via `api.Client.SubscribeRoom()` on room selection; cancelled on ESC or screen switch
+- `waitForRoomMsg(sub)` is the Bubble Tea Cmd pump (mirrors `waitForDM` in `cmail.go`)
+- `RoomOpenedMsg` is emitted on Enter; App calls `MarkRoomRead` fire-and-forget
+- `CancelSubscription()` is called by the layout on every key that navigates away
+- **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetRoomMessages(roomID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on room open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
+- **Live-stream reconnect:** when `roomStreamClosedMsg` fires for the still-active room (idToken expiry, ~1hr), `reconnectRoomCmd` calls `api.Client.RefreshSession()` then re-subscribes; success emits `RoomReconnectedMsg`, which App turns into a "reconnected to live chat" toast. A stale close event (from an abandoned room) is a no-op.
+- **Admin badge:** `renderCircMessages` shows a `[admin]` tag next to the username when `model.Message.IsChatAdmin` is set (parsed from both the REST and RTDB wire formats)
+- **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendRoomMessage`'s reply text is routed through app.go's `roomCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice` (shared with `cmail.go`). `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live) rendered via `renderActionLine` as classic IRC `* username body *` — see `docs/33-circ.md` for the live-testing findings
+
+Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`
+Key internal types: `roomSubscription` (RTDB channel + cancel func + `RoomID`), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `roomReconnectedMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`
 - Room selected with arrow keys or Enter; Enter in the input pane sends via `SendRoomMessageMsg`
 - App handles `SendRoomMessageMsg` → `api.Client.SendRoomMessage()`
 
@@ -651,17 +668,19 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `1` | Feed |
 | `2` | Notifications |
 | `3` | C-Mail (direct messages) |
-| `4` | Journal (private notes) |
-| `5` | Bookmarks |
-| `6` | Guilds |
-| `7` | Topics |
-| `8` | Profile |
-| `9` | Settings |
-| `←` / `→` | Cycle tabs left / right |
+| `4` | CIRC (public chatrooms) |
+| `5` | Journal (private notes) |
+| `6` | Bookmarks |
+| `7` | Guilds |
+| `8` | Topics |
+| `9` | Profile |
+| `←` / `→` | Cycle tabs left / right (includes Settings) |
 | `v` | Toggle dense / relaxed display |
 | `?` | Help modal |
 | `t` | Theme picker |
 | `z` | Timezone picker |
+| `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused |
+| `ctrl+o` | Same as `o`, but reaches the handler even while a compose input is focused — the only way to open links in CIRC/C-Mail, since their input is focused for the entire detail view, not just a transient compose sub-mode |
 | `q` / `ctrl+c` | Quit |
 
 ### Login
@@ -754,6 +773,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `↓` | Scroll message history down |
 | `enter` | Send message (when input non-empty) |
 | `esc` | Return to list mode |
+| `ctrl+o` | Open URLs/images found across the loaded conversation (plain `o` is captured by the compose input) |
 | all other | Forwarded to compose input (`j`/`k` type normally) |
 
 **From other screens**
@@ -761,6 +781,27 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | Key | Action |
 |---|---|
 | `c` | Start or open C-Mail conversation with highlighted user (feed, post detail, notifications, read-only profile) — self-DM is a no-op |
+
+### CIRC
+
+**List mode**
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | Next room |
+| `k` / `↑` | Previous room |
+| `enter` | Open room (detail mode) |
+
+**Detail mode**
+
+| Key | Action |
+|---|---|
+| `↑` | Scroll message history up (reaching the top loads older history) |
+| `↓` | Scroll message history down |
+| `enter` | Send message (when input non-empty) |
+| `esc` | Return to list mode |
+| `ctrl+o` | Open URLs/images found across the loaded room history (plain `o` is captured by the compose input) |
+| all other | Forwarded to compose input |
 
 ### Settings
 

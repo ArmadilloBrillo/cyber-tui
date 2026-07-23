@@ -103,6 +103,7 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 	case "1":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
+			a.chatrooms = a.chatrooms.CancelSubscription()
 			a.active = screenFeed
 			if !a.feed.IsLoaded() {
 				a.feed = a.feed.SetFetching()
@@ -113,6 +114,7 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 	case "2":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
+			a.chatrooms = a.chatrooms.CancelSubscription()
 			a.active = screenNotifications
 			if !a.notifications.HasPaginated() {
 				a.notifications = a.notifications.SetFetching()
@@ -122,19 +124,28 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 		}
 	case "3":
 		if a.active != screenLogin {
+			a.chatrooms = a.chatrooms.CancelSubscription()
 			a.active = screenCMail
 			return a, a.loadConvsCmd(), true
 		}
 	case "4":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenJournal
-			a.journal = a.journal.SetFetching()
-			return a, a.loadJournalCmd(), true
+			a.active = screenChatrooms
+			return a, a.loadRoomsCmd(), true
 		}
 	case "5":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
+			a.chatrooms = a.chatrooms.CancelSubscription()
+			a.active = screenJournal
+			a.journal = a.journal.SetFetching()
+			return a, a.loadJournalCmd(), true
+		}
+	case "6":
+		if a.active != screenLogin {
+			a.cmail = a.cmail.CancelSubscription()
+			a.chatrooms = a.chatrooms.CancelSubscription()
 			a.active = screenBookmarks
 			if !a.bookmarks.IsLoaded() {
 				a.bookmarks = a.bookmarks.SetFetching()
@@ -142,9 +153,10 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 			}
 			return a, nil, true
 		}
-	case "6":
+	case "7":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
+			a.chatrooms = a.chatrooms.CancelSubscription()
 			a.active = screenGuilds
 			if !a.guilds.IsLoaded() {
 				a.guilds = a.guilds.SetFetching()
@@ -152,9 +164,10 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 			}
 			return a, nil, true
 		}
-	case "7":
+	case "8":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
+			a.chatrooms = a.chatrooms.CancelSubscription()
 			a.active = screenTopics
 			if !a.topics.IsLoaded() {
 				a.topics = a.topics.SetFetching()
@@ -162,17 +175,12 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 			}
 			return a, nil, true
 		}
-	case "8":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenProfile
-			return a, a.loadProfileCmd(), true
-		}
 	case "9":
 		if a.active != screenLogin {
 			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenSettings
-			return a, nil, true
+			a.chatrooms = a.chatrooms.CancelSubscription()
+			a.active = screenProfile
+			return a, a.loadProfileCmd(), true
 		}
 	case "left":
 		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
@@ -226,7 +234,14 @@ func (l TabsLayout) renderTabBar(a App) string {
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			label = fmt.Sprintf("%s (%d)", label, a.polledUnreadCount)
 		}
-		isActive := a.active == t.s && !(t.s == screenCMail && a.cmail.IsShowingDetail())
+		if t.s == screenCMail {
+			if n := a.cmail.TotalUnread(); n > 0 {
+				label = fmt.Sprintf("%s (%d)", label, n)
+			}
+		}
+		isActive := a.active == t.s &&
+			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
+			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())
 		if isActive {
 			tabs += theme.ActiveTab.Render(label)
 		} else {
@@ -426,8 +441,18 @@ func (l TabsLayout) screenHints(a App) []hint {
 			return append([]hint{{"Ctrl+s", "save"}, {"Esc", "revert"}}, base...)
 		}
 		return base
+	case screenChatrooms:
+		if a.chatrooms.IsShowingDetail() {
+			// '?' (help) is unreachable while the compose input is focused
+			// here, same as plain 'o' — omit "more" and surface ctrl+o instead.
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"esc", "back"}}
+		}
+		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	case screenCMail:
-		return []hint{{"← →", "switch pane"}, {"j/k", "navigate"}, {"enter", "send"}, more}
+		if a.cmail.IsShowingDetail() {
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"esc", "back"}}
+		}
+		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	}
 	return []hint{more}
 }
@@ -463,7 +488,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 
 	globalSection := lipgloss.JoinVertical(lipgloss.Left,
 		sectionStyle.Render("global"),
-		row("1-9", "feed · notifs · c-mail · journal · bookmarks · guilds · topics · profile · settings"),
+		row("1-9", "feed · notifs · c-mail · circ · journal · bookmarks · guilds · topics · profile"),
 		row("← →", "cycle tabs"),
 		row("t", "theme"),
 		row("v", "density"),
@@ -550,6 +575,12 @@ func (l TabsLayout) renderHelpModal(a App) string {
 			t = "settings (unsaved changes)"
 		}
 		localSection = section(t)
+	case screenChatrooms:
+		if a.chatrooms.IsShowingDetail() {
+			localSection = section("circ (room)")
+		} else {
+			localSection = section("circ")
+		}
 	case screenCMail:
 		localSection = section("c-mail")
 	}

@@ -1,8 +1,10 @@
 package api_test
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -73,6 +75,13 @@ func TestMockLogout(t *testing.T) {
 	_, _ = m.Login("neo@matrix.net", "secret")
 	if err := m.Logout(); err != nil {
 		t.Fatalf("unexpected error on logout: %v", err)
+	}
+}
+
+func TestMockRefreshSession_NoError(t *testing.T) {
+	m := newMock()
+	if err := m.RefreshSession(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -196,7 +205,7 @@ func TestMockGetRooms_RoomsHaveNames(t *testing.T) {
 
 func TestMockGetRoomMessages_ReturnsMessages(t *testing.T) {
 	m := newMock()
-	msgs, err := m.GetRoomMessages("r1", 20)
+	msgs, err := m.GetRoomMessages("r1", 20, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -205,10 +214,77 @@ func TestMockGetRoomMessages_ReturnsMessages(t *testing.T) {
 	}
 }
 
+func TestMockGetRoomMessages_BeforeReturnsEmpty(t *testing.T) {
+	m := newMock()
+	msgs, err := m.GetRoomMessages("r1", 20, 1700000000000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected no messages for a before-cursor page, got %d", len(msgs))
+	}
+}
+
 func TestMockSendRoomMessage_NoError(t *testing.T) {
 	m := newMock()
-	if err := m.SendRoomMessage("r1", "hello room"); err != nil {
+	reply, err := m.SendRoomMessage("r1", "hello room")
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "" {
+		t.Errorf("expected empty reply for a normal send, got %q", reply)
+	}
+}
+
+func TestMockSendRoomMessage_HelpReturnsReply(t *testing.T) {
+	m := newMock()
+	reply, err := m.SendRoomMessage("r1", "/help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply == "" {
+		t.Error("expected a non-empty reply for /help")
+	}
+}
+
+func TestMockMarkRoomRead_NoError(t *testing.T) {
+	m := newMock()
+	if err := m.MarkRoomRead("r1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMockSubscribeRoom_DeliversMessageAndCloses(t *testing.T) {
+	m := newMock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch, subCancel, err := m.SubscribeRoom(ctx, "r1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer subCancel()
+	msg, ok := <-ch
+	if !ok {
+		t.Fatal("expected a message before channel close")
+	}
+	if msg.Body == "" {
+		t.Error("expected non-empty message body")
+	}
+}
+
+func TestMockGetRooms_ReturnsUpdatedFields(t *testing.T) {
+	m := newMock()
+	rooms, err := m.GetRooms()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, r := range rooms {
+		if r.Slug == "" {
+			t.Errorf("room %q has empty slug", r.Name)
+		}
+		if r.LastMessageAt.IsZero() {
+			t.Errorf("room %q has zero LastMessageAt", r.Name)
+		}
 	}
 }
 
@@ -239,7 +315,7 @@ func TestMockGetConversations_ConvsHaveParticipants(t *testing.T) {
 
 func TestMockGetMessages_ReturnsMessages(t *testing.T) {
 	m := newMock()
-	msgs, err := m.GetMessages("c1", 20)
+	msgs, err := m.GetMessages("c1", 20, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -248,10 +324,36 @@ func TestMockGetMessages_ReturnsMessages(t *testing.T) {
 	}
 }
 
+func TestMockGetMessages_BeforeReturnsEmpty(t *testing.T) {
+	m := newMock()
+	msgs, err := m.GetMessages("c1", 20, 1700000000000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected no messages for a before-cursor page, got %d", len(msgs))
+	}
+}
+
 func TestMockSendMessage_NoError(t *testing.T) {
 	m := newMock()
-	if err := m.SendMessage("c1", "hey"); err != nil {
+	reply, err := m.SendMessage("c1", "hey")
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "" {
+		t.Errorf("expected empty reply for a normal send, got %q", reply)
+	}
+}
+
+func TestMockSendMessage_HelpReturnsReply(t *testing.T) {
+	m := newMock()
+	reply, err := m.SendMessage("c1", "/help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply == "" {
+		t.Error("expected a non-empty reply for /help")
 	}
 }
 

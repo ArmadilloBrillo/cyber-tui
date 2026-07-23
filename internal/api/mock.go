@@ -8,6 +8,10 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 )
 
+// mockHelpReply mirrors the /help reply documented in the API's command table.
+const mockHelpReply = "Commands: /me <action> · /poke /hug /hi5 /slap [@user] · " +
+	"/dice <notation> · /8ball <question> · /fortune · /help"
+
 // MockClient implements Client with static fake data.
 // Used during development before the real API is available.
 type MockClient struct {
@@ -102,6 +106,10 @@ func (m *MockClient) LoginWithRefreshToken(refreshToken string) (model.Tokens, e
 
 func (m *MockClient) Logout() error {
 	m.tokens = model.Tokens{}
+	return nil
+}
+
+func (m *MockClient) RefreshSession() error {
 	return nil
 }
 
@@ -399,22 +407,56 @@ func (m *MockClient) UpdateSettings(update model.Settings) error {
 
 func (m *MockClient) GetRooms() ([]model.Room, error) {
 	return []model.Room{
-		{ID: "r1", Name: "#zion", Description: "the last human city", Members: 42},
-		{ID: "r2", Name: "#sprawl", Description: "boston-atlanta metropolitan axis", Members: 17},
-		{ID: "r3", Name: "#freeside", Description: "orbital pleasure dome", Members: 8},
+		{ID: "r1", Slug: "zion", Name: "Zion", LastMessageAt: time.Now().Add(-2 * time.Minute), SortOrder: 1},
+		{ID: "r2", Slug: "sprawl", Name: "Sprawl", LastMessageAt: time.Now().Add(-15 * time.Minute), SortOrder: 2},
+		{ID: "r3", Slug: "freeside", Name: "Freeside", LastMessageAt: time.Now().Add(-1 * time.Hour), SortOrder: 3},
 	}, nil
 }
 
-func (m *MockClient) GetRoomMessages(roomID string, limit int) ([]model.Message, error) {
+func (m *MockClient) GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error) {
+	if before > 0 {
+		return nil, nil
+	}
 	return []model.Message{
 		{ID: "m1", From: mockUsers[0], Body: "anybody else getting lag in the matrix tonight?", CreatedAt: time.Now().Add(-5 * time.Minute)},
-		{ID: "m2", From: mockUsers[1], Body: "always. use a slower deck.", CreatedAt: time.Now().Add(-3 * time.Minute)},
-		{ID: "m3", From: mockUsers[2], Body: "...", CreatedAt: time.Now().Add(-1 * time.Minute)},
+		{ID: "m2", From: mockUsers[1], Body: "always. use a slower deck.", CreatedAt: time.Now().Add(-3 * time.Minute), IsChatAdmin: true},
+		{ID: "m3", From: mockUsers[2], Body: "shrugs", CreatedAt: time.Now().Add(-1 * time.Minute), IsAction: true},
 	}, nil
 }
 
-func (m *MockClient) SendRoomMessage(roomID, body string) error {
+func (m *MockClient) SendRoomMessage(roomID, body string) (string, error) {
+	if body == "/help" {
+		return mockHelpReply, nil
+	}
+	return "", nil
+}
+
+func (m *MockClient) MarkRoomRead(roomID string) error {
 	return nil
+}
+
+// SubscribeRoom returns a channel that delivers one fake incoming message after
+// 2 seconds (to exercise the live-stream UI path), then closes.
+func (m *MockClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan model.Message, 1)
+	go func() {
+		defer close(ch)
+		select {
+		case <-time.After(2 * time.Second):
+			select {
+			case ch <- model.Message{
+				ID:        "mock-room-live-1",
+				From:      mockUsers[1],
+				Body:      "incoming mock room message",
+				CreatedAt: time.Now(),
+			}:
+			case <-ctx.Done():
+			}
+		case <-ctx.Done():
+		}
+	}()
+	return ch, cancel, nil
 }
 
 func (m *MockClient) GetConversations() ([]model.Conversation, error) {
@@ -431,15 +473,21 @@ func (m *MockClient) GetConversations() ([]model.Conversation, error) {
 	}, nil
 }
 
-func (m *MockClient) GetMessages(conversationID string, limit int) ([]model.Message, error) {
+func (m *MockClient) GetMessages(conversationID string, limit int, before int64) ([]model.Message, error) {
+	if before > 0 {
+		return nil, nil
+	}
 	return []model.Message{
 		{ID: "dm1", From: mockUsers[1], Body: "we need to talk about the job", CreatedAt: time.Now().Add(-1 * time.Hour)},
 		{ID: "dm2", From: mockUsers[0], Body: "i'm listening", CreatedAt: time.Now().Add(-55 * time.Minute)},
 	}, nil
 }
 
-func (m *MockClient) SendMessage(conversationID, body string) error {
-	return nil
+func (m *MockClient) SendMessage(conversationID, body string) (string, error) {
+	if body == "/help" {
+		return mockHelpReply, nil
+	}
+	return "", nil
 }
 
 // SubscribeDMs returns a channel that delivers one fake incoming message after

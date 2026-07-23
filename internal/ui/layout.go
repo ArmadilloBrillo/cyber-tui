@@ -59,6 +59,7 @@ var menuTabs = []struct {
 	{"feed", screenFeed},
 	{"notifications", screenNotifications},
 	{"c-mail", screenCMail},
+	{"circ", screenChatrooms},
 	{"journal", screenJournal},
 	{"bookmarks", screenBookmarks},
 	{"guilds", screenGuilds},
@@ -160,6 +161,9 @@ func tabIndexOf(a App) int {
 func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 	if a.active == screenCMail {
 		a.cmail = a.cmail.CancelSubscription()
+	}
+	if a.active == screenChatrooms {
+		a.chatrooms = a.chatrooms.CancelSubscription()
 	}
 	idx := (tabIndexOf(a) + delta + len(menuTabs)) % len(menuTabs)
 	a.active = menuTabs[idx].s

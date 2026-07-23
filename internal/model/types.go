@@ -117,10 +117,14 @@ type ProfileUpdate struct {
 // They are not sourced from the REST API.
 
 type Message struct {
-	ID        string
-	From      User
-	Body      string
-	CreatedAt time.Time
+	ID          string
+	From        User
+	Body        string
+	CreatedAt   time.Time
+	IsChatAdmin bool // CIRC only: true when From was a chat admin at send time
+	IsSystem    bool // local-only notice (e.g. a /help reply); never sent to or stored by the server
+	IsAction    bool // true for /me and other emote-style commands (undocumented API field);
+	// Body is just the action text with no username baked in — render as "* username body *"
 }
 
 type Conversation struct {
@@ -133,10 +137,11 @@ type Conversation struct {
 }
 
 type Room struct {
-	ID          string
-	Name        string
-	Description string
-	Members     int
+	ID            string
+	Slug          string
+	Name          string
+	LastMessageAt time.Time
+	SortOrder     int
 }
 
 // NotificationPrefs maps to the notifications sub-object in GET/PATCH /v1/settings.
