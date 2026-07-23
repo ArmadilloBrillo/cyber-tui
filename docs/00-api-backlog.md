@@ -123,7 +123,9 @@ Notes:
 
 ### Commands (new in v0.7)
 
-Both cIRC and C-Mail support IRC-style slash commands expanded server-side: `/me`, `/poke`, `/hug`, `/hi5`, `/slap` (with optional `[@user]`), `/dice <notation>`, `/8ball <question>`, `/fortune`, `/help`. Malformed commands return 400. All except `/help` need no client-side handling — the server stores the expanded result and it flows through the normal message pipeline. `/help` posts nothing; its `{ data: { reply } }` is captured by `SendRoomMessage`/`SendMessage` (**Done**) and shown as a local system notice — see `docs/33-circ.md` / `docs/08-cmail.md`.
+Both cIRC and C-Mail support IRC-style slash commands expanded server-side: `/me`, `/poke`, `/hug`, `/hi5`, `/slap` (with optional `[@user]`), `/dice <notation>`, `/8ball <question>`, `/fortune`, `/help`. Malformed commands return 400. `/help` posts nothing; its `{ data: { reply } }` is captured by `SendRoomMessage`/`SendMessage` (**Done**) and shown as a local system notice — see `docs/33-circ.md` / `docs/08-cmail.md`.
+
+`/me` and the other emotes set an undocumented `isAction` field (with `content` stripped of the username), discovered by live-testing against CIRC — not in the official docs. `model.Message.IsAction` (**Done**) renders these as classic IRC `* username body *` lines. See the callout in `docs/00-latest-api-reference.md`'s Commands section.
 
 ### Thread Watching (new in v0.5.1)
 

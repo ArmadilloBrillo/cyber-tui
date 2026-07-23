@@ -173,3 +173,92 @@ func TestRenderChatMessages_SystemNotice(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderCircMessages_ActionLine confirms an IsAction message (e.g. from
+// /me) renders in classic IRC form "* username body *" with no username
+// bracket, and that a regular message immediately after is unaffected.
+func TestRenderCircMessages_ActionLine(t *testing.T) {
+	const width = 60
+	action := circMsg("ragnar", "tests the plumbing")
+	action.IsAction = true
+	regular := circMsg("bob", "hi there")
+
+	out := renderCircMessages([]model.Message{action, regular}, time.UTC, "datetime", width)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+
+	if !strings.HasPrefix(lines[0], "* ragnar tests the plumbing") {
+		t.Errorf("expected classic IRC action format on the first line, got: %q", lines[0])
+	}
+	if !strings.Contains(lines[0], "*") || strings.Count(lines[0], "*") < 2 {
+		t.Errorf("expected both a leading and trailing '*' on the action line, got: %q", lines[0])
+	}
+	if strings.Contains(lines[0], "<ragnar>") {
+		t.Errorf("expected no username bracket on an action line, got: %q", lines[0])
+	}
+	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
+	if !strings.Contains(lines[0], ts) {
+		t.Errorf("expected the timestamp to still trail the action line, got: %q", lines[0])
+	}
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w > width {
+			t.Errorf("line %d width %d exceeds viewport width %d: %q", i, w, width, l)
+		}
+	}
+	found := false
+	for _, l := range lines[1:] {
+		if strings.Contains(l, "<bob>") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected the regular message after the action line to still render normally")
+	}
+}
+
+// TestRenderCircMessages_ActionLineWrapsCorrectly guards against the action
+// prefix/suffix width not being folded into the wrap budget, which would
+// misalign continuation lines and the trailing timestamp for a long action.
+func TestRenderCircMessages_ActionLineWrapsCorrectly(t *testing.T) {
+	const width = 60
+	action := circMsg("ragnar", strings.Repeat("does a very long dramatic action sequence ", 5))
+	action.IsAction = true
+
+	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected the long action to wrap onto multiple lines, got %d line(s)", len(lines))
+	}
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w > width {
+			t.Errorf("line %d width %d exceeds viewport width %d: %q", i, w, width, l)
+		}
+	}
+	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
+	last := lines[len(lines)-1]
+	if !strings.Contains(last, ts) {
+		t.Errorf("expected timestamp %q on last line, got %q", ts, last)
+	}
+	if !strings.Contains(last, "*") {
+		t.Errorf("expected the trailing '*' on the last line, got: %q", last)
+	}
+}
+
+// TestRenderChatMessages_ActionLine confirms an IsAction message in C-Mail
+// renders as a plain "* username body *" line, not a bidirectional bubble.
+func TestRenderChatMessages_ActionLine(t *testing.T) {
+	const width = 60
+	action := model.Message{From: model.User{Username: "ragnar"}, Body: "waves", IsAction: true, CreatedAt: circMsgTime}
+	out := renderChatMessages([]model.Message{action}, "ragnar", time.UTC, "datetime", width)
+
+	if !strings.Contains(out, "* ragnar waves") {
+		t.Errorf("expected classic IRC action format in the output, got: %q", out)
+	}
+	if strings.Contains(out, "╭") || strings.Contains(out, "╰") {
+		t.Errorf("expected no bubble border around an action message, got: %q", out)
+	}
+	for i, l := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if w := lipgloss.Width(l); w > width {
+			t.Errorf("line %d width %d exceeds viewport width %d: %q", i, w, width, l)
+		}
+	}
+}

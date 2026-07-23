@@ -51,7 +51,9 @@ Full-width message history viewport + fixed compose input at bottom:
 
 **Live-stream reconnect**: the Firebase `idToken` backing the RTDB subscription expires hourly. When the stream closes while a conversation is still open, the app calls `api.Client.RefreshSession()` and reopens the subscription automatically, showing a brief "reconnected to live chat" notification. A single reconnect attempt is made; if it fails, the conversation is left without live updates until the user leaves and re-enters.
 
-**Slash commands**: like CIRC, the server expands `/me`, `/poke`/`/hug`/`/hi5`/`/slap`, `/dice`, `/8ball`, and `/fortune` server-side — these already work with no client changes. `/help` posts no message; its reply is captured from the send response and appended as a local-only system notice (`model.Message.IsSystem`, rendered via `renderSystemNotice` — no bubble, no border, just a muted `*** `-prefixed block). It's never sent to or stored by the server.
+**Slash commands**: like CIRC, the server expands `/me`, `/poke`/`/hug`/`/hi5`/`/slap`, `/dice`, `/8ball`, and `/fortune` server-side. `/help` posts no message; its reply is captured from the send response and appended as a local-only system notice (`model.Message.IsSystem`, rendered via `renderSystemNotice` — no bubble, no border, just a muted `*** `-prefixed block). It's never sent to or stored by the server.
+
+`/me` and other emotes set an undocumented `isAction` field on the message, discovered via live testing against CIRC (parsed defensively for C-Mail too, but not yet confirmed live there — see `docs/33-circ.md`). `model.Message.IsAction` messages render as `* username body *` (`renderActionLine` in `render.go`) instead of the usual bordered bubble — same classic-IRC treatment as CIRC.
 
 ---
 

@@ -420,7 +420,7 @@ func (m *MockClient) GetRoomMessages(roomID string, limit int, before int64) ([]
 	return []model.Message{
 		{ID: "m1", From: mockUsers[0], Body: "anybody else getting lag in the matrix tonight?", CreatedAt: time.Now().Add(-5 * time.Minute)},
 		{ID: "m2", From: mockUsers[1], Body: "always. use a slower deck.", CreatedAt: time.Now().Add(-3 * time.Minute), IsChatAdmin: true},
-		{ID: "m3", From: mockUsers[2], Body: "...", CreatedAt: time.Now().Add(-1 * time.Minute)},
+		{ID: "m3", From: mockUsers[2], Body: "shrugs", CreatedAt: time.Now().Add(-1 * time.Minute), IsAction: true},
 	}, nil
 }
 

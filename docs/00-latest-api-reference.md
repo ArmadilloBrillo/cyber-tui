@@ -1058,6 +1058,8 @@ Both cIRC and C-Mail sends understand IRC-style slash commands. When a message's
 
 Plain text is posted as-is. A malformed command (e.g. bad `/dice` notation) returns `400 VALIDATION_ERROR`.
 
+> **Undocumented, observed via live testing (2026, cyber-tui client work) — not confirmed against the official docs, re-verify on next drift check:** command messages carry additional fields not listed above. `/me` (and likely the other emote commands) sets `"isAction": true` on the stored/broadcast message, and `content` is just the bare action text with the username stripped out (e.g. `/me tests the plumbing` → `content: "tests the plumbing"`, `isAction: true`) — the client is expected to prepend the username for display. `/8ball` was observed to set `isAction: true` alongside `"isEightball": true` and an `"eightballAnswer"` field. Confirmed live for CIRC (`GET /v1/circ/:roomId`); not yet independently confirmed for C-Mail.
+
 ---
 
 ## Response Format

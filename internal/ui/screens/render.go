@@ -209,6 +209,11 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
 		tsWidth := lipgloss.Width(ts)
 
+		if msg.IsAction {
+			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth))
+			continue
+		}
+
 		adminTag := ""
 		adminTagWidth := 0
 		if msg.IsChatAdmin {
@@ -237,6 +242,40 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 			} else {
 				sb.WriteString(prefix + line + "\n")
 			}
+		}
+	}
+	return sb.String()
+}
+
+// renderActionLine renders a /me-style action message in classic IRC form:
+// "* username body *", right-aligned timestamp trailing the last wrapped
+// line — no username bracket, matching how real IRC clients narrate actions
+// in the third person. The API returns IsAction messages with Body already
+// stripped of the username (just the action text), so it's assembled here.
+func renderActionLine(username, body, ts string, viewportWidth int) string {
+	const suffix = " *"
+	tsWidth := lipgloss.Width(ts)
+	const tsGap = 2
+
+	prefix := "* " + theme.Highlight.Render(username) + " "
+	rawPrefixWidth := len(username) + 3 // "* " + " "
+	indent := strings.Repeat(" ", rawPrefixWidth)
+
+	bodyWidth := max(viewportWidth-rawPrefixWidth-len(suffix)-tsWidth-tsGap, 10)
+
+	lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(strings.TrimRight(body, "\n")), "\n")
+	last := len(lines) - 1
+
+	var sb strings.Builder
+	for i, line := range lines {
+		p := indent
+		if i == 0 {
+			p = prefix
+		}
+		if i == last {
+			sb.WriteString(p + line + suffix + strings.Repeat(" ", tsGap) + theme.Subtle.Render(ts) + "\n")
+		} else {
+			sb.WriteString(p + line + "\n")
 		}
 	}
 	return sb.String()
@@ -286,6 +325,11 @@ func renderChatMessages(msgs []model.Message, currentUser string, loc *time.Loca
 			continue
 		}
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
+		if msg.IsAction {
+			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth))
+			sb.WriteString("\n")
+			continue
+		}
 		isMe := currentUser != "" && msg.From.Username == currentUser
 
 		var header string

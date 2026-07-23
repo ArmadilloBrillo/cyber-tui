@@ -770,6 +770,29 @@ func TestHTTPGetRoomMessages_ParsesIsChatAdmin(t *testing.T) {
 	}
 }
 
+// TestHTTPGetRoomMessages_ParsesIsAction locks in the undocumented isAction
+// field discovered via live testing: /me (and other emote commands) sets it,
+// and Body is just the bare action text with no username baked in.
+func TestHTTPGetRoomMessages_ParsesIsAction(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "ragnar", "isAction": true, "content": "waves", "timestamp": 1700000001000},
+			{"id": "m2", "userId": "u2", "username": "molly", "isAction": false, "content": "hey", "timestamp": 1700000002000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !msgs[0].IsAction || msgs[0].Body != "waves" {
+		t.Errorf("msgs[0] = %+v, want IsAction=true Body=waves", msgs[0])
+	}
+	if msgs[1].IsAction {
+		t.Error("expected msgs[1].IsAction = false")
+	}
+}
+
 func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/cmail/c1" || r.Method != http.MethodGet {
@@ -796,6 +819,26 @@ func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
 	}
 	if msgs[1].ID != "m2" || msgs[1].From.Username != "molly_millions" {
 		t.Errorf("msgs[1] mismatch: %+v", msgs[1])
+	}
+}
+
+// TestHTTPGetMessages_ParsesIsAction locks in the undocumented isAction field
+// for C-Mail, added defensively alongside CIRC's (unconfirmed live for
+// C-Mail specifically, but the API describes commands as shared between the
+// two — harmless no-op if the field is actually absent there).
+func TestHTTPGetMessages_ParsesIsAction(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "senderId": "u1", "senderUsername": "case", "isAction": true, "content": "waves", "timestamp": 1700000001000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetMessages("c1", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !msgs[0].IsAction || msgs[0].Body != "waves" {
+		t.Errorf("msgs[0] = %+v, want IsAction=true Body=waves", msgs[0])
 	}
 }
 

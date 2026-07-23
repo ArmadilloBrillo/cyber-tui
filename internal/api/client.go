@@ -354,6 +354,7 @@ type wireCircMessage struct {
 	UserID      string `json:"userId"`
 	Username    string `json:"username"`
 	IsChatAdmin bool   `json:"isChatAdmin"`
+	IsAction    bool   `json:"isAction"` // undocumented; true for /me and other emote commands
 	Content     string `json:"content"`
 	Timestamp   int64  `json:"timestamp"` // epoch ms
 }
@@ -379,6 +380,7 @@ type wireCMailMessage struct {
 	ID             string `json:"id"`
 	SenderID       string `json:"senderId"`
 	SenderUsername string `json:"senderUsername"`
+	IsAction       bool   `json:"isAction"` // undocumented; true for /me and other emote commands
 	Content        string `json:"content"`
 	Timestamp      int64  `json:"timestamp"` // epoch ms
 }
@@ -393,6 +395,7 @@ type wireCMailStartResponse struct {
 type wireRTDBMessage struct {
 	SenderID       string  `json:"senderId"`
 	SenderUsername string  `json:"senderUsername"`
+	IsAction       bool    `json:"isAction"` // undocumented; true for /me and other emote commands
 	Content        string  `json:"content"`
 	Timestamp      float64 `json:"timestamp"` // epoch ms as a Firebase number
 	Read           bool    `json:"read"`
@@ -404,6 +407,7 @@ type wireRTDBCircMessage struct {
 	UserID      string  `json:"userId"`
 	Username    string  `json:"username"`
 	IsChatAdmin bool    `json:"isChatAdmin"`
+	IsAction    bool    `json:"isAction"` // undocumented; true for /me and other emote commands
 	Content     string  `json:"content"`
 	Timestamp   float64 `json:"timestamp"` // epoch ms as a Firebase number
 }
@@ -1397,6 +1401,7 @@ func (c *HTTPClient) GetRoomMessages(roomID string, limit int, before int64) ([]
 			Body:        w.Content,
 			CreatedAt:   time.UnixMilli(w.Timestamp),
 			IsChatAdmin: w.IsChatAdmin,
+			IsAction:    w.IsAction,
 		}
 	}
 	return out, nil
@@ -1491,6 +1496,7 @@ func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
 		From:      model.User{ID: wm.SenderID, Username: wm.SenderUsername},
 		Body:      wm.Content,
 		CreatedAt: time.UnixMilli(int64(wm.Timestamp)),
+		IsAction:  wm.IsAction,
 	}
 }
 
@@ -1502,6 +1508,7 @@ func wireRTDBCircMessageToModel(id string, wm wireRTDBCircMessage) model.Message
 		Body:        wm.Content,
 		CreatedAt:   time.UnixMilli(int64(wm.Timestamp)),
 		IsChatAdmin: wm.IsChatAdmin,
+		IsAction:    wm.IsAction,
 	}
 }
 
@@ -1551,6 +1558,7 @@ func (c *HTTPClient) GetMessages(conversationID string, limit int, before int64)
 			From:      model.User{ID: w.SenderID, Username: w.SenderUsername},
 			Body:      w.Content,
 			CreatedAt: time.UnixMilli(w.Timestamp),
+			IsAction:  w.IsAction,
 		}
 	}
 	return out, nil
