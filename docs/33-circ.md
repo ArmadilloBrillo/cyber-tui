@@ -14,7 +14,7 @@ CIRC provides access to the cyberspace.online public chatrooms via tab **4** in 
 
 ### Detail mode (after selecting a room)
 
-- **Header** (1 row, always visible): `Room Name  ·  circ`
+- **Header** (1 row, always visible): `Room Name  #slug`
 - **Message viewport**: scrollable history in IRC-style format.
   - Each message: `<username>  message body` with timestamp right-aligned; long bodies word-wrap and the timestamp trails the last wrapped line.
   - Messages are rendered oldest-to-newest; the viewport starts at the bottom.

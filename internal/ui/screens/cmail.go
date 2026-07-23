@@ -26,7 +26,7 @@ const (
 
 // Rows consumed by the detail view's header and input box (outside the history viewport).
 const (
-	cmailDetailHeaderRows = 1 // "@otheruser · c-mail" header
+	cmailDetailHeaderRows = 1 // "@otheruser" header
 	cmailInputRows        = 3 // bordered textinput: 1 content + 2 border rows
 	cmailDetailChrome     = cmailDetailHeaderRows + cmailInputRows
 )
@@ -604,7 +604,7 @@ func (m CMailModel) View() string {
 		if m.activeConv != nil {
 			other = m.otherParticipant(*m.activeConv)
 		}
-		header := theme.Title.Render("@" + other + "  ·  c-mail")
+		header := theme.Title.Render("@" + other)
 		if m.loadingHistory {
 			header += theme.Subtle.Render("  (loading history…)")
 		}

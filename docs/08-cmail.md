@@ -33,7 +33,7 @@ The C-Mail tab itself also shows an aggregate unread badge, mirroring the Notifi
 Full-width message history viewport + fixed compose input at bottom:
 
 ```
-@molly  ·  c-mail                                       ← title header row
+@molly                                                   ← title header row
 ────────────────────────────────────────────────────────
 14:10  @molly   hey, did you see the news?              ← left-aligned (other)
                                      yeah, not good  ← right-aligned (me)

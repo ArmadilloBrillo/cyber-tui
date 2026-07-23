@@ -25,7 +25,7 @@ const (
 
 // Rows consumed by the detail view's header and input box (outside the message viewport).
 const (
-	chatroomDetailHeaderRows = 1 // "Room Name  ·  circ" header
+	chatroomDetailHeaderRows = 1 // "Room Name  #slug" header
 	chatroomInputRows        = 3 // bordered textinput: 1 content + 2 border rows
 	chatroomDetailChrome     = chatroomDetailHeaderRows + chatroomInputRows
 )
@@ -501,10 +501,12 @@ func (m ChatroomsModel) View() string {
 			return ""
 		}
 		name := ""
+		slug := ""
 		if m.activeRoom != nil {
 			name = m.activeRoom.Name
+			slug = m.activeRoom.Slug
 		}
-		header := theme.Title.Render(name + "  ·  circ")
+		header := theme.Title.Render(name + "  #" + slug)
 		if m.loadingHistory {
 			header += theme.Subtle.Render("  (loading history…)")
 		}
