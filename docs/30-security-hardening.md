@@ -72,11 +72,67 @@ authentication remains out of scope.
 x/crypto, including the SSH server path, plus standard-library issues fixed in
 recent Go patch releases).
 
+## Follow-up — 2026-07-24 review remediation
+
+The 2026-07-24 code and security review (`docs/reviews/2026-07-24-code-security-review.md`)
+found five issues; this section records the fixes.
+
+### 7. Chat message sanitize-bypass (High)
+
+Section 1 above states `sanitize.Strings` is called at every wire-to-model
+converter — but five chat-related conversion paths in `internal/api/client.go`
+were missed: `GetRoomMessages`, `GetMessages`, `GetConversations`,
+`wireRTDBMessageToModel`, and `wireRTDBCircMessageToModel`. A sixth,
+`GetRooms`, was found missing the same call while fixing the others. All six
+now call `sanitize.Strings` before building the model value, matching every
+other converter in the file. As defense in depth, `internal/ui/screens/render.go`
+now also strips control characters from the sender username and action-line
+username directly at render time (`sanitize.Strip`), and `internal/ui/app.go`
+sanitizes server-generated slash-command reply text before displaying it as a
+system message — so a future field added to either path doesn't silently
+regress the same way.
+
+### 8. Unsanitized raw bytes in log output (Medium)
+
+`apiTimestamp.UnmarshalJSON`'s fallback log line used to write an
+unrecognized server value straight to stderr with `%s`. Changed to `%q`,
+which renders control/escape characters as safe Go-quoted text instead of
+passing them through raw.
+
+### 9. Redirect scheme downgrade (Low)
+
+`NewHTTPClient`'s `http.Client` now sets `CheckRedirect` to refuse any
+redirect whose target scheme is not `https` (replicating the standard
+10-redirect cap that Go's default `nil` `CheckRedirect` provides). Closes a
+gap where `validateBaseURL` only checked the configured `apiBaseURL` once at
+startup — a same-host HTTPS→HTTP redirect issued by a compromised or
+misconfigured host would otherwise still carry the bearer token, since Go
+only strips `Authorization` on a cross-host redirect, not a same-host scheme
+downgrade.
+
+### 10. `crypto/tls` toolchain CVE (Low)
+
+`govulncheck` flagged GO-2026-5856 (Encrypted Client Hello privacy leak) in
+the Go standard library at the toolchain version then in use. Toolchain
+bumped to `go1.26.5`, which CI picks up automatically via `setup-go`'s
+`go-version-file: go.mod`. Re-running `govulncheck` after the bump confirms
+the finding is gone.
+
+### 11. SSH server mode — opt-in gate for non-loopback binds
+
+SSH server mode remains unauthenticated by design (see §4) — that isn't
+changing. What changed: binding `sshListenAddr` to anything but a loopback
+address now requires the new `allowRemoteSsh` config flag, mirroring the
+`allowInsecureApi` pattern in §5, so a single misconfigured `sshListenAddr`
+(e.g. `":2222"`, which binds all interfaces) can't expose an unauthenticated
+session to the network by itself.
+
 ## New configuration field
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
 | `allowInsecureApi` | bool | `false` | Permit a plain `http://` `apiBaseURL` to a non-loopback host. Off by default. |
+| `allowRemoteSsh` | bool | `false` | Permit `sshListenAddr` to bind a non-loopback address. SSH server mode is unauthenticated. Off by default. |
 
 ## Verification
 
@@ -95,3 +151,10 @@ Targeted tests added by this work:
 - `internal/rtdb`: rejection of host-injecting `aud` claims.
 - `internal/ssh`: surfaced listen error.
 - `cmd/cyber-tui`: `validateBaseURL` scheme rules.
+
+Targeted tests added by the 2026-07-24 follow-up (§7-11):
+
+- `internal/api`: control-character stripping for `GetRoomMessages`, `GetMessages`,
+  `GetConversations`, `GetRooms`, and the RTDB SSE `SubscribeDMs`/`SubscribeRoom`
+  paths; `NewHTTPClient` refusing a redirect to a non-https URL.
+- `cmd/cyber-tui`: `validateSSHAddr` loopback/non-loopback/opt-in rules.

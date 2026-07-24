@@ -151,6 +151,29 @@ func TestHTTPLogin_BadCredentials(t *testing.T) {
 	}
 }
 
+// TestHTTPClient_RefusesInsecureRedirect guards against a regression of the
+// 2026-07-24 review's redirect-scheme-downgrade finding: NewHTTPClient must
+// refuse to follow a redirect to a non-https URL, so a compromised or
+// misconfigured API host can't strip the bearer token down to cleartext via
+// a same-host scheme downgrade. Uses api.NewHTTPClient directly (not the
+// newClient test helper, which injects a raw *http.Client via
+// NewHTTPClientForTesting and bypasses the CheckRedirect wiring under test).
+func TestHTTPClient_RefusesInsecureRedirect(t *testing.T) {
+	redirectSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://example-should-not-be-followed.invalid/v1/feed", http.StatusFound)
+	}))
+	defer redirectSrv.Close()
+
+	c := api.NewHTTPClient(redirectSrv.URL)
+	_, _, err := c.GetFeed("")
+	if err == nil {
+		t.Fatal("expected error refusing insecure redirect, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing redirect") {
+		t.Errorf("error = %v, want it to mention refusing redirect", err)
+	}
+}
+
 func TestHTTPGetFeed_ParsesPosts(t *testing.T) {
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeOK(t, w, []map[string]any{
@@ -659,6 +682,39 @@ func TestHTTPSubscribeDMs_SkipsSnapshotDeliversMessages(t *testing.T) {
 	}
 }
 
+// TestHTTPSubscribeDMs_SanitizesControlChars guards against a regression of
+// the sanitize-bypass finding in the 2026-07-24 security review: live DM
+// messages arriving over RTDB SSE must have control characters stripped from
+// sender username and body, just like every REST-sourced field.
+func TestHTTPSubscribeDMs_SanitizesControlChars(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/msg1","data":{"senderId":"u2","senderUsername":"evil\u001b[31m","content":"hi\u001b[0m","timestamp":1700000001000}}`)
+	}))
+
+	ch, cancel, err := c.SubscribeDMs(context.Background(), "conv1")
+	if err != nil {
+		t.Fatalf("SubscribeDMs error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if strings.ContainsRune(msg.From.Username, 0x1b) {
+			t.Errorf("msg.From.Username contains unstripped ESC: %q", msg.From.Username)
+		}
+		if strings.ContainsRune(msg.Body, 0x1b) {
+			t.Errorf("msg.Body contains unstripped ESC: %q", msg.Body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+}
+
 // TestHTTPSubscribeDMs_CancelClosesChannel verifies that calling cancel stops the stream.
 func TestHTTPSubscribeDMs_CancelClosesChannel(t *testing.T) {
 	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -743,6 +799,37 @@ func TestHTTPSubscribeRoom_AuthRevokedClosesChannel(t *testing.T) {
 	}
 }
 
+// TestHTTPSubscribeRoom_SanitizesControlChars mirrors
+// TestHTTPSubscribeDMs_SanitizesControlChars for cIRC rooms.
+func TestHTTPSubscribeRoom_SanitizesControlChars(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/msg1","data":{"userId":"u2","username":"evil\u001b[31m","content":"hi\u001b[0m","timestamp":1700000001000}}`)
+	}))
+
+	ch, cancel, err := c.SubscribeRoom(context.Background(), "zion")
+	if err != nil {
+		t.Fatalf("SubscribeRoom error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if strings.ContainsRune(msg.From.Username, 0x1b) {
+			t.Errorf("msg.From.Username contains unstripped ESC: %q", msg.From.Username)
+		}
+		if strings.ContainsRune(msg.Body, 0x1b) {
+			t.Errorf("msg.Body contains unstripped ESC: %q", msg.Body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+}
+
 // --- C-Mail REST tests ---
 
 func TestHTTPGetConversations_ParsesList(t *testing.T) {
@@ -779,6 +866,53 @@ func TestHTTPGetConversations_ParsesList(t *testing.T) {
 	}
 	if convs[0].LastMessage != "we need to talk" {
 		t.Errorf("LastMessage = %q, want 'we need to talk'", convs[0].LastMessage)
+	}
+}
+
+// TestHTTPGetConversations_SanitizesControlChars guards against a regression
+// of the 2026-07-24 review's sanitize-bypass finding for the C-Mail
+// conversation list (other-user username and last-message preview).
+func TestHTTPGetConversations_SanitizesControlChars(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{
+				"conversationId": "c1",
+				"otherUser":      map[string]any{"userId": "u2", "username": "evil\u001b[31m"},
+				"lastMessage":    "hi\u001b[0m",
+				"lastMessageAt":  1700000000000,
+				"unreadCount":    0,
+			},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	convs, err := c.GetConversations()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.ContainsRune(convs[0].Participants[0].Username, 0x1b) {
+		t.Errorf("Participants[0].Username contains unstripped ESC: %q", convs[0].Participants[0].Username)
+	}
+	if strings.ContainsRune(convs[0].LastMessage, 0x1b) {
+		t.Errorf("LastMessage contains unstripped ESC: %q", convs[0].LastMessage)
+	}
+}
+
+// TestHTTPGetRooms_SanitizesControlChars guards against the same sanitize-bypass
+// class the 2026-07-24 review found in chat messages, applied here to room
+// name/slug — GetRooms was found missing sanitize.Strings during the fix.
+func TestHTTPGetRooms_SanitizesControlChars(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "r1", "slug": "general", "name": "evil\u001b[31m", "lastMessageAt": 1700000000000, "sortOrder": 0},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	rooms, err := c.GetRooms()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.ContainsRune(rooms[0].Name, 0x1b) {
+		t.Errorf("Name contains unstripped ESC: %q", rooms[0].Name)
 	}
 }
 
@@ -847,6 +981,27 @@ func TestHTTPGetRoomMessages_ParsesIsAction(t *testing.T) {
 	}
 }
 
+// TestHTTPGetRoomMessages_SanitizesControlChars guards against a regression
+// of the 2026-07-24 review's sanitize-bypass finding for cIRC room history.
+func TestHTTPGetRoomMessages_SanitizesControlChars(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "evil\u001b[31m", "content": "hi\u001b[0m", "timestamp": 1700000001000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.ContainsRune(msgs[0].From.Username, 0x1b) {
+		t.Errorf("From.Username contains unstripped ESC: %q", msgs[0].From.Username)
+	}
+	if strings.ContainsRune(msgs[0].Body, 0x1b) {
+		t.Errorf("Body contains unstripped ESC: %q", msgs[0].Body)
+	}
+}
+
 func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/cmail/c1" || r.Method != http.MethodGet {
@@ -873,6 +1028,27 @@ func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
 	}
 	if msgs[1].ID != "m2" || msgs[1].From.Username != "molly_millions" {
 		t.Errorf("msgs[1] mismatch: %+v", msgs[1])
+	}
+}
+
+// TestHTTPGetMessages_SanitizesControlChars guards against a regression of
+// the 2026-07-24 review's sanitize-bypass finding for C-Mail history.
+func TestHTTPGetMessages_SanitizesControlChars(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "senderId": "u1", "senderUsername": "evil\u001b[31m", "content": "hi\u001b[0m", "timestamp": 1700000001000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetMessages("c1", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.ContainsRune(msgs[0].From.Username, 0x1b) {
+		t.Errorf("From.Username contains unstripped ESC: %q", msgs[0].From.Username)
+	}
+	if strings.ContainsRune(msgs[0].Body, 0x1b) {
+		t.Errorf("Body contains unstripped ESC: %q", msgs[0].Body)
 	}
 }
 

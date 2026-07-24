@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 
@@ -59,6 +60,10 @@ func main() {
 
 	// SSH server mode (experimental)
 	if cfg.SSHListenAddr != "" {
+		if err := validateSSHAddr(cfg.SSHListenAddr, cfg.AllowRemoteSSH); err != nil {
+			fmt.Fprintf(os.Stderr, "config: %v\n", err)
+			os.Exit(1)
+		}
 		keyPath := cfg.SSHHostKeyPath
 		if keyPath == "" {
 			keyPath = "./ssh_host_key"
@@ -116,5 +121,27 @@ func validateBaseURL(raw string, allowInsecure bool) error {
 			"Use https, or set allowInsecureApi: true for a non-loopback dev server", raw)
 	default:
 		return fmt.Errorf("apiBaseURL %q must use http or https", raw)
+	}
+}
+
+// validateSSHAddr rejects a non-loopback SSH listen address unless
+// allowRemote is set. SSH server mode performs no authentication, so an
+// address like ":2222" (all interfaces) would otherwise expose a full,
+// unauthenticated session to anyone who can reach it from a single
+// misconfigured field.
+func validateSSHAddr(addr string, allowRemote bool) error {
+	if addr == "" || allowRemote {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid sshListenAddr %q: %w", addr, err)
+	}
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return nil
+	default:
+		return fmt.Errorf("sshListenAddr %q binds a non-loopback address; SSH server mode is unauthenticated. "+
+			"Use a loopback address, or set allowRemoteSsh: true to expose it intentionally", addr)
 	}
 }

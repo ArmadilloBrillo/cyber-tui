@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -129,7 +130,7 @@ func (t *apiTimestamp) UnmarshalJSON(b []byte) error {
 			return nil
 		}
 	}
-	log.Printf("api: apiTimestamp: unrecognized value, leaving empty: %s", b)
+	log.Printf("api: apiTimestamp: unrecognized value, leaving empty: %q", b)
 	*t = ""
 	return nil
 }
@@ -546,9 +547,28 @@ func (c *HTTPClient) applyRefresh(idToken, rtdbToken, rtdbUrl string) {
 // NewHTTPClient creates a production HTTPClient with a 15-second timeout.
 func NewHTTPClient(baseURL string) *HTTPClient {
 	return &HTTPClient{
-		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		baseURL: baseURL,
+		httpClient: &http.Client{
+			Timeout:       15 * time.Second,
+			CheckRedirect: refuseInsecureRedirect,
+		},
 	}
+}
+
+// refuseInsecureRedirect stops the bearer-token-bearing Authorization header
+// from following a redirect to a non-https URL. validateBaseURL only checks
+// the configured apiBaseURL once at startup; without this, a same-host
+// scheme downgrade (https -> http) issued by the server itself would still
+// carry the token, since Go's default client only strips Authorization on a
+// cross-host redirect, not a same-host scheme change.
+func refuseInsecureRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("api: stopped after 10 redirects")
+	}
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("api: refusing redirect to non-https URL: %s", req.URL)
+	}
+	return nil
 }
 
 // NewHTTPClientForTesting creates an HTTPClient with a custom http.Client.
@@ -1482,6 +1502,7 @@ func (c *HTTPClient) GetRooms() ([]model.Room, error) {
 	}
 	out := make([]model.Room, len(wire))
 	for i, w := range wire {
+		sanitize.Strings(&w)
 		out[i] = model.Room{
 			ID:            w.ID,
 			Slug:          w.Slug,
@@ -1510,16 +1531,22 @@ func (c *HTTPClient) GetRoomMessages(roomID string, limit int, before int64) ([]
 	}
 	out := make([]model.Message, len(wire))
 	for i, w := range wire {
-		out[i] = model.Message{
-			ID:          w.ID,
-			From:        model.User{ID: w.UserID, Username: w.Username},
-			Body:        w.Content,
-			CreatedAt:   time.UnixMilli(w.Timestamp),
-			IsChatAdmin: w.IsChatAdmin,
-			IsAction:    w.IsAction,
-		}
+		out[i] = wireCircMessageToModel(w)
 	}
 	return out, nil
+}
+
+// wireCircMessageToModel converts a REST cIRC chatroom message to the model type.
+func wireCircMessageToModel(w wireCircMessage) model.Message {
+	sanitize.Strings(&w)
+	return model.Message{
+		ID:          w.ID,
+		From:        model.User{ID: w.UserID, Username: w.Username},
+		Body:        w.Content,
+		CreatedAt:   time.UnixMilli(w.Timestamp),
+		IsChatAdmin: w.IsChatAdmin,
+		IsAction:    w.IsAction,
+	}
 }
 
 // SendRoomMessage sends a message to a chatroom via POST /v1/circ/:roomId.
@@ -1610,6 +1637,7 @@ func (c *HTTPClient) rtdbOrErr() (*rtdb.Client, error) {
 
 // wireRTDBMessageToModel converts a Firebase DM message to the model type.
 func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
+	sanitize.Strings(&wm)
 	return model.Message{
 		ID:        id,
 		From:      model.User{ID: wm.SenderID, Username: wm.SenderUsername},
@@ -1621,6 +1649,7 @@ func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
 
 // wireRTDBCircMessageToModel converts a Firebase CIRC chatroom message to the model type.
 func wireRTDBCircMessageToModel(id string, wm wireRTDBCircMessage) model.Message {
+	sanitize.Strings(&wm)
 	return model.Message{
 		ID:          id,
 		From:        model.User{ID: wm.UserID, Username: wm.Username},
@@ -1644,6 +1673,7 @@ func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
 	}
 	out := make([]model.Conversation, len(wire))
 	for i, w := range wire {
+		sanitize.Strings(&w)
 		out[i] = model.Conversation{
 			ID:            w.ConversationID,
 			Participants:  []model.User{{ID: w.OtherUser.UserID, Username: w.OtherUser.Username}},
@@ -1672,15 +1702,21 @@ func (c *HTTPClient) GetMessages(conversationID string, limit int, before int64)
 	}
 	out := make([]model.Message, len(wire))
 	for i, w := range wire {
-		out[i] = model.Message{
-			ID:        w.ID,
-			From:      model.User{ID: w.SenderID, Username: w.SenderUsername},
-			Body:      w.Content,
-			CreatedAt: time.UnixMilli(w.Timestamp),
-			IsAction:  w.IsAction,
-		}
+		out[i] = wireCMailMessageToModel(w)
 	}
 	return out, nil
+}
+
+// wireCMailMessageToModel converts a REST C-Mail message to the model type.
+func wireCMailMessageToModel(w wireCMailMessage) model.Message {
+	sanitize.Strings(&w)
+	return model.Message{
+		ID:        w.ID,
+		From:      model.User{ID: w.SenderID, Username: w.SenderUsername},
+		Body:      w.Content,
+		CreatedAt: time.UnixMilli(w.Timestamp),
+		IsAction:  w.IsAction,
+	}
 }
 
 // SendMessage sends a C-Mail message via POST /v1/cmail/:id. Returns the

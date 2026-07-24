@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
@@ -253,6 +254,7 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 // in the third person. The API returns IsAction messages with Body already
 // stripped of the username (just the action text), so it's assembled here.
 func renderActionLine(username, body, ts string, viewportWidth int) string {
+	username = sanitize.Strip(username)
 	const suffix = " *"
 	tsWidth := lipgloss.Width(ts)
 	const tsGap = 2
@@ -338,12 +340,13 @@ func renderChatMessages(msgs []model.Message, currentUser string, loc *time.Loca
 			continue
 		}
 		isMe := currentUser != "" && msg.From.Username == currentUser
+		username := sanitize.Strip(msg.From.Username)
 
 		var header string
 		if isMe {
-			header = theme.Subtle.Render(ts) + "  " + theme.Highlight.Render("@"+msg.From.Username)
+			header = theme.Subtle.Render(ts) + "  " + theme.Highlight.Render("@"+username)
 		} else {
-			header = theme.Highlight.Render("@"+msg.From.Username) + "  " + theme.Subtle.Render(ts)
+			header = theme.Highlight.Render("@"+username) + "  " + theme.Subtle.Render(ts)
 		}
 
 		// Natural inner width: widest of the header and each raw body line, capped at max.
