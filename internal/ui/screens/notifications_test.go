@@ -544,6 +544,20 @@ func TestNotifSummary_ChatMention(t *testing.T) {
 	}
 }
 
+func TestNotifSummary_ChatMention_WithRoomName(t *testing.T) {
+	n := model.Notification{Type: "chat_mention", RoomName: "The Sprawl", RoomSlug: "cyberspace"}
+	if got, want := notifSummary(n), "mentioned you in #The Sprawl."; got != want {
+		t.Errorf("summary mismatch: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifSummary_ChatMention_RoomSlugFallback(t *testing.T) {
+	n := model.Notification{Type: "chat_mention", RoomSlug: "cyberspace"}
+	if got, want := notifSummary(n), "mentioned you in #cyberspace."; got != want {
+		t.Errorf("summary mismatch: got %q, want %q", got, want)
+	}
+}
+
 func TestNotifIcon_ChatMention(t *testing.T) {
 	n := model.Notification{Type: "chat_mention", Read: false}
 	if !strings.Contains(notifIcon(n), "»") {
@@ -671,33 +685,55 @@ func TestNotifs_Enter_Unfollowed_EmitsShowUserProfileMsg(t *testing.T) {
 	}
 }
 
-func TestNotifs_Enter_DmMessage_EmitsShowUserProfileMsg(t *testing.T) {
+func TestNotifs_Enter_DmMessage_EmitsStartConversationMsg(t *testing.T) {
 	notifs := []model.Notification{makeNotif("n1", "dm_message", "", false)}
 	m := initNotifs(notifs)
-	_, msgs := runKeyAll(m, "enter")
-	var gotProfile bool
+	m2, msgs := runKeyAll(m, "enter")
+	var gotConv bool
+	var gotMarkRead bool
 	for _, msg := range msgs {
-		if _, ok := msg.(ShowUserProfileMsg); ok {
-			gotProfile = true
+		switch sc := msg.(type) {
+		case StartConversationMsg:
+			gotConv = true
+			if sc.Username != "testuser" {
+				t.Errorf("expected StartConversationMsg for actor testuser, got %q", sc.Username)
+			}
+		case MarkNotifReadMsg:
+			gotMarkRead = true
 		}
 	}
-	if !gotProfile {
-		t.Error("expected ShowUserProfileMsg for dm_message enter")
+	if !gotConv {
+		t.Error("expected StartConversationMsg for dm_message enter")
+	}
+	if !gotMarkRead {
+		t.Error("expected MarkNotifReadMsg for dm_message enter")
+	}
+	if m2.notifs[0].Read != true {
+		t.Error("dm_message notification should be marked read optimistically")
 	}
 }
 
-func TestNotifs_Enter_ChatMention_EmitsShowUserProfileMsg(t *testing.T) {
-	notifs := []model.Notification{makeNotif("n1", "chat_mention", "", false)}
+func TestNotifs_Enter_ChatMention_EmitsOpenRoomMsg(t *testing.T) {
+	notifs := []model.Notification{{
+		ID:       "n1",
+		Type:     "chat_mention",
+		Actor:    model.NotificationActor{ID: "u1", Username: "testuser"},
+		RoomSlug: "cyberspace",
+	}}
 	m := initNotifs(notifs)
-	_, msgs := runKeyAll(m, "enter")
-	var gotProfile bool
-	for _, msg := range msgs {
-		if _, ok := msg.(ShowUserProfileMsg); ok {
-			gotProfile = true
-		}
+	m2, msg := runKey(m, "enter")
+	or, ok := msg.(OpenRoomMsg)
+	if !ok {
+		t.Fatalf("expected OpenRoomMsg, got %T", msg)
 	}
-	if !gotProfile {
-		t.Error("expected ShowUserProfileMsg for chat_mention enter")
+	if or.RoomSlug != "cyberspace" {
+		t.Errorf("expected RoomSlug 'cyberspace', got %q", or.RoomSlug)
+	}
+	if or.NotifID != "n1" {
+		t.Errorf("expected NotifID 'n1', got %q", or.NotifID)
+	}
+	if m2.notifs[0].Read != true {
+		t.Error("chat_mention notification should be marked read optimistically")
 	}
 }
 
@@ -1017,3 +1053,20 @@ func TestNotifs_IsReady(t *testing.T) {
 type errForTest string
 
 func (e errForTest) Error() string { return string(e) }
+
+func TestNotifs_RenderNotif_ChatMention_ShowsMessagePreview(t *testing.T) {
+	n := model.Notification{
+		ID:             "n1",
+		Type:           "chat_mention",
+		Actor:          model.NotificationActor{ID: "u1", Username: "tangelic"},
+		CreatedAt:      time.Now(),
+		RoomSlug:       "cyberspace",
+		RoomName:       "The Sprawl",
+		MessageContent: "@ragnar you here?",
+	}
+	m := initNotifs([]model.Notification{n})
+	rendered := m.renderNotif(n, false)
+	if !strings.Contains(rendered, "@ragnar you here?") {
+		t.Errorf("expected message content preview in rendered notification, got: %q", rendered)
+	}
+}

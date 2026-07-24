@@ -1254,6 +1254,45 @@ func TestHTTPGetNotifications_ParsesNotifs(t *testing.T) {
 	}
 }
 
+func TestHTTPGetNotifications_ParsesChatMentionMetadata(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOKWithCursor(t, w, []map[string]any{
+			{
+				"id":            "n1",
+				"type":          "chat_mention",
+				"read":          false,
+				"createdAt":     "2026-07-24T09:40:05.206Z",
+				"actorId":       "u1",
+				"actorUsername": "tangelic",
+				"targetId":      "cyberspace",
+				"metadata": map[string]any{
+					"roomSlug":       "cyberspace",
+					"roomName":       "The Sprawl",
+					"messageContent": "@ragnar you here?",
+				},
+			},
+		}, "")
+	})))
+	c.LoginWithRefreshToken("tok")
+	notifs, _, err := c.GetNotifications("", false, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notifs) != 1 {
+		t.Fatalf("expected 1 notif, got %d", len(notifs))
+	}
+	n := notifs[0]
+	if n.RoomSlug != "cyberspace" {
+		t.Errorf("RoomSlug mismatch: got %q, want %q", n.RoomSlug, "cyberspace")
+	}
+	if n.RoomName != "The Sprawl" {
+		t.Errorf("RoomName mismatch: got %q, want %q", n.RoomName, "The Sprawl")
+	}
+	if n.MessageContent != "@ragnar you here?" {
+		t.Errorf("MessageContent mismatch: got %q, want %q", n.MessageContent, "@ragnar you here?")
+	}
+}
+
 func TestHTTPGetNotifications_CursorInURL(t *testing.T) {
 	var capturedURL string
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -132,7 +132,7 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `Room` | Public chatroom (ID, slug, name, lastMessageAt, sortOrder) |
 | `NotificationPrefs` | Notification subscription toggles (bookmark, reply, poke) |
 | `Settings` | All user preferences (notifications, content filters, display options) |
-| `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName, postSlug, postAuthorUsername, postContent, replyContent) |
+| `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName, guildSlug, postSlug, postAuthorUsername, postContent, replyContent, roomSlug, roomName, messageContent) |
 | `Bookmark` | Saved post or reply (ID, type, postID/replyID, content snapshot, author, createdAt) |
 | `Topic` | Tag with post count (slug, postCount) |
 | `Guild` | Guild community (ID, name, slug, icon, bio, memberCount, founderUsername, createdAt, isMember, role, link, linkText, profilePictureUrl) |
@@ -412,11 +412,12 @@ Notification feed (replies, new followers, pokes, bookmarks, thread replies).
 
 - Cursor-based pagination matching the feed pattern
 - `j`/`k` navigate; Up at top emits `RefreshNotifsMsg`
-- `enter` emits `ShowNotificationPostMsg` → App navigates to PostDetail (includes ReplyID for scroll-to)
+- `enter` emits `ShowNotificationPostMsg` → App navigates to PostDetail (includes ReplyID for scroll-to) for post/reply notifications; `OpenRoomMsg` (jump to the cIRC room) for `chat_mention`; `StartConversationMsg` (open/create the C-Mail conversation with the sender) for `dm_message`
 - `m` emits `MarkNotifReadMsg`; `M` emits `MarkAllNotifsReadMsg`
-- `1` toggles unread-only filter
+- `u` toggles unread-only filter
+- `chat_mention` and `post_mention`/`reply_mention` notifications show an inline `"> …"` preview of the mentioning content (`MessageContent`/`PostContent`/`ReplyContent`)
 
-Key types: `NotificationsModel`, `LoadMoreNotifsMsg`, `RefreshNotifsMsg`, `MarkNotifReadMsg`, `MarkAllNotifsReadMsg`, `ShowNotificationPostMsg`  
+Key types: `NotificationsModel`, `LoadMoreNotifsMsg`, `RefreshNotifsMsg`, `MarkNotifReadMsg`, `MarkAllNotifsReadMsg`, `ShowNotificationPostMsg`, `OpenRoomMsg`  
 Key methods: `SetNotifs(notifs, cursor)`, `AppendNotifs(notifs, cursor)`
 
 #### `settings.go`
@@ -473,6 +474,7 @@ Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integrati
 - **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetRoomMessages(roomID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on room open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
 - **Live-stream reconnect:** when `roomStreamClosedMsg` fires for the still-active room (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectRoomCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (shared `reconnectDelay`/`reconnectBackoffSchedule` from `reconnect.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleRoomReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `RoomReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path. `cancelRoomSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned room) is a no-op.
 - **Admin badge:** `renderCircMessages` shows a `[admin]` tag next to the username when `model.Message.IsChatAdmin` is set (parsed from both the REST and RTDB wire formats)
+- **Jump-to-room from a notification:** Notifications' `enter` on a `chat_mention` emits `OpenRoomMsg{RoomSlug, NotifID}`; App activates this screen (reloading the room list) and calls `SetPendingRoomSlug`, then `OpenPendingRoom()` (called from the `roomsLoadedMsg` handler) auto-enters detail mode for the matching room via the shared `enterRoomDetail` helper — the same code path the list `enter` keybinding uses
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendRoomMessage`'s reply text is routed through app.go's `roomCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice` (shared with `cmail.go`). `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live) rendered via `renderActionLine` as classic IRC `* username body *` — see `docs/33-circ.md` for the live-testing findings
 
 Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`

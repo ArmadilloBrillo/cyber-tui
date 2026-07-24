@@ -99,9 +99,10 @@ type ChatroomsModel struct {
 	loc         *time.Location
 	timeDisplayFormat string
 
-	mode         chatroomMode
-	selectedRoom int // index into rooms
-	activeRoomID string
+	mode            chatroomMode
+	selectedRoom    int // index into rooms
+	activeRoomID    string
+	pendingRoomSlug string // set by SetPendingRoomSlug; consumed by OpenPendingRoom once rooms (re)load
 	sub          *roomSubscription
 	currentUser  string
 	client       api.Client
@@ -269,6 +270,59 @@ func (m ChatroomsModel) SetRooms(rooms []model.Room) ChatroomsModel {
 		m.listVP.SetContent(m.renderRoomCards())
 	}
 	return m
+}
+
+// SetPendingRoomSlug records a room to auto-open once the room list next
+// loads (used for chat_mention notification navigation via OpenRoomMsg).
+func (m ChatroomsModel) SetPendingRoomSlug(slug string) ChatroomsModel {
+	m.pendingRoomSlug = slug
+	return m
+}
+
+// OpenPendingRoom auto-enters detail mode for the slug previously set via
+// SetPendingRoomSlug, once the containing room list has (re)loaded. No-op if
+// no slug is pending or none of the loaded rooms match. The pending slug is
+// always cleared so a stale/unmatched slug can't reactivate on a later,
+// unrelated room-list reload (e.g. the user manually revisits cIRC afterward).
+func (m ChatroomsModel) OpenPendingRoom() (ChatroomsModel, tea.Cmd) {
+	slug := m.pendingRoomSlug
+	m.pendingRoomSlug = ""
+	if slug == "" {
+		return m, nil
+	}
+	for i, room := range m.rooms {
+		if room.Slug == slug {
+			return m.enterRoomDetail(i, room)
+		}
+	}
+	return m, nil
+}
+
+// enterRoomDetail switches into detail mode for room (at list index idx),
+// cancelling any existing subscription and kicking off history load + live
+// subscribe. Shared by the list "enter" keybinding and OpenPendingRoom
+// (chat_mention notification navigation).
+func (m ChatroomsModel) enterRoomDetail(idx int, room model.Room) (ChatroomsModel, tea.Cmd) {
+	m.selectedRoom = idx
+	m = m.cancelRoomSub()
+	m.activeRoomID = room.Slug
+	m.activeRoom = &room
+	m.messages = nil
+	m.mode = chatroomModeDetail
+	m.historyExhausted = false
+	m.loadingHistory = false
+	m.err = nil
+	m.input.Focus()
+	if m.ready {
+		m.viewport.SetContent(m.renderMessages())
+		m.viewport.GotoBottom()
+	}
+	roomID := room.Slug
+	return m, tea.Batch(
+		m.loadRoomMessagesCmd(room.Slug),
+		m.openRoomSubscriptionCmd(room.Slug),
+		func() tea.Msg { return RoomOpenedMsg{RoomID: roomID} },
+	)
 }
 
 // AppendMessage adds a live incoming message to the currently open room.
@@ -494,26 +548,7 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				return m, nil
 			case "enter":
 				if len(m.rooms) > 0 {
-					room := m.rooms[m.selectedRoom]
-					m = m.cancelRoomSub()
-					m.activeRoomID = room.Slug
-					m.activeRoom = &room
-					m.messages = nil
-					m.mode = chatroomModeDetail
-					m.historyExhausted = false
-					m.loadingHistory = false
-					m.err = nil
-					m.input.Focus()
-					if m.ready {
-						m.viewport.SetContent(m.renderMessages())
-						m.viewport.GotoBottom()
-					}
-					roomID := room.Slug
-					return m, tea.Batch(
-						m.loadRoomMessagesCmd(room.Slug),
-						m.openRoomSubscriptionCmd(room.Slug),
-						func() tea.Msg { return RoomOpenedMsg{RoomID: roomID} },
-					)
+					return m.enterRoomDetail(m.selectedRoom, m.rooms[m.selectedRoom])
 				}
 				return m, nil
 			}

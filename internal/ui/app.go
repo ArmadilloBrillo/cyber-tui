@@ -751,7 +751,17 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case roomsLoadedMsg:
 		a.chatrooms = a.chatrooms.SetRooms(msg.rooms)
-		return a, nil, true
+		var cmd tea.Cmd
+		a.chatrooms, cmd = a.chatrooms.OpenPendingRoom()
+		return a, cmd, true
+	case screens.OpenRoomMsg:
+		// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
+		if a.polledUnreadCount > 0 {
+			a.polledUnreadCount--
+		}
+		a.chatrooms = a.chatrooms.SetPendingRoomSlug(msg.RoomSlug)
+		a, activateCmd := activateScreen(a, screenChatrooms)
+		return a, tea.Batch(a.markNotifReadCmd(msg.NotifID), activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
 	case screens.RoomOpenedMsg:

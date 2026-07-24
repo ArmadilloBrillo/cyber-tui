@@ -306,8 +306,22 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 				return m, nil
 			}
 			n := visible[m.selectedIndex]
-			if n.Type == "poke" || n.Type == "new_follower" || n.Type == "unfollowed" ||
-				n.Type == "chat_mention" || n.Type == "dm_message" {
+			switch n.Type {
+			case "chat_mention":
+				// Jump straight to the cIRC room the mention happened in.
+				m = m.MarkRead(n.ID)
+				notifID, slug := n.ID, n.RoomSlug
+				return m, func() tea.Msg { return OpenRoomMsg{RoomSlug: slug, NotifID: notifID} }
+			case "dm_message":
+				// Open (or start) the C-Mail conversation with the sender — same
+				// flow as the 'c' key elsewhere.
+				m = m.MarkRead(n.ID)
+				notifID, username := n.ID, n.Actor.Username
+				return m, tea.Batch(
+					func() tea.Msg { return MarkNotifReadMsg{ID: notifID} },
+					func() tea.Msg { return StartConversationMsg{Username: username} },
+				)
+			case "poke", "new_follower", "unfollowed":
 				// No post to open — navigate to actor's profile and mark read.
 				m = m.MarkRead(n.ID)
 				notifID, username := n.ID, n.Actor.Username
@@ -476,6 +490,12 @@ func baseNotifSummary(n model.Notification) string {
 	case "post_mention":
 		return "mentioned you in a post."
 	case "chat_mention":
+		if n.RoomName != "" {
+			return "mentioned you in #" + n.RoomName + "."
+		}
+		if n.RoomSlug != "" {
+			return "mentioned you in #" + n.RoomSlug + "."
+		}
 		return "mentioned you in chat."
 	case "dm_message":
 		return "sent you a message."
@@ -580,10 +600,14 @@ func (m NotificationsModel) renderNotif(n model.Notification, selected bool) str
 
 	// For mention types, show an inline content preview so the user can read
 	// what mentioned them without navigating away. PostContent is set for
-	// post_mention; ReplyContent for reply_mention (v0.7+ metadata).
+	// post_mention; ReplyContent for reply_mention; MessageContent for
+	// chat_mention (v0.7+ metadata).
 	mentionContent := n.PostContent
 	if mentionContent == "" {
 		mentionContent = n.ReplyContent
+	}
+	if mentionContent == "" {
+		mentionContent = n.MessageContent
 	}
 	if mentionContent != "" && innerWidth > 4 {
 		flat := strings.ReplaceAll(mentionContent, "\n", " ")

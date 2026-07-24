@@ -62,6 +62,16 @@ type ShowUserProfileMsg struct{ Username string }
 // conversation with that user. App guards against self-DMs.
 type StartConversationMsg struct{ Username string }
 
+// OpenRoomMsg is emitted by Notifications when the user presses Enter on a
+// chat_mention notification. RoomSlug identifies the target cIRC room; App
+// activates the Chatrooms screen and stashes the slug on ChatroomsModel so it
+// can auto-enter detail mode once the room list has (re)loaded. NotifID lets
+// App mark the notification read in the same batch.
+type OpenRoomMsg struct {
+	RoomSlug string
+	NotifID  string
+}
+
 // BackFromProfileMsg is emitted by ProfileModel in read-only mode when ESC is pressed.
 type BackFromProfileMsg struct{}
 

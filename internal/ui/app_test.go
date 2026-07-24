@@ -981,6 +981,34 @@ func TestHandleChatrooms_RoomReconnected_ShowsToast(t *testing.T) {
 	}
 }
 
+func TestHandleChatrooms_OpenRoomMsg_ActivatesScreenAndSetsPendingSlug(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenNotifications
+	a.polledUnreadCount = 3
+	m, cmd := a.Update(screens.OpenRoomMsg{RoomSlug: "cyberspace", NotifID: "n1"})
+	got := m.(App)
+	if got.active != screenChatrooms {
+		t.Errorf("active = %v, want screenChatrooms", got.active)
+	}
+	if got.polledUnreadCount != 2 {
+		t.Errorf("polledUnreadCount = %d, want 2 (decremented)", got.polledUnreadCount)
+	}
+	if cmd == nil {
+		t.Fatal("expected a non-nil command batch")
+	}
+}
+
+func TestHandleChatrooms_RoomsLoadedMsg_ConsumesPendingSlug(t *testing.T) {
+	a := loggedInApp()
+	a.chatrooms = a.chatrooms.SetPendingRoomSlug("sprawl")
+	rooms := []model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}, {ID: "r2", Slug: "sprawl", Name: "Sprawl"}}
+	m, _ := a.Update(roomsLoadedMsg{rooms: rooms})
+	got := m.(App)
+	if !got.chatrooms.IsShowingDetail() {
+		t.Error("expected chatrooms to auto-enter detail mode for the pending slug")
+	}
+}
+
 func TestHandleCMail_ConvReconnected_ShowsToast(t *testing.T) {
 	a := loggedInApp()
 	m, _ := a.Update(screens.CMailReconnectedMsg{})
