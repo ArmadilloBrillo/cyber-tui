@@ -108,6 +108,14 @@ type ChatroomsModel struct {
 	client       api.Client
 	err          error // last message-load/subscribe failure for the active room; cleared on success
 
+	// canGoBack is true when the active room was opened via a deep link
+	// (e.g. a chat_mention notification) rather than by switching to this
+	// tab normally. When true, ESC in detail mode leaves Chatrooms
+	// entirely instead of dropping to the room list. Reset to false by
+	// activateScreen whenever Chatrooms is entered through ordinary tab
+	// navigation.
+	canGoBack bool
+
 	// Reconnect-retry state, active only between a stream closing and either
 	// a successful reconnect or exhausting maxReconnectAttempts.
 	reconnectAttempt int
@@ -276,6 +284,14 @@ func (m ChatroomsModel) SetRooms(rooms []model.Room) ChatroomsModel {
 // loads (used for chat_mention notification navigation via OpenRoomMsg).
 func (m ChatroomsModel) SetPendingRoomSlug(slug string) ChatroomsModel {
 	m.pendingRoomSlug = slug
+	return m
+}
+
+// SetCanGoBack marks whether the active room was reached via a deep link,
+// which determines whether ESC in detail mode leaves Chatrooms entirely
+// (see canGoBack field doc).
+func (m ChatroomsModel) SetCanGoBack(v bool) ChatroomsModel {
+	m.canGoBack = v
 	return m
 }
 
@@ -556,6 +572,11 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		case chatroomModeDetail:
 			switch msg.String() {
 			case "esc":
+				if m.canGoBack {
+					m = m.cancelRoomSub()
+					m.canGoBack = false
+					return m, func() tea.Msg { return LeaveChatroomsMsg{} }
+				}
 				m = m.cancelRoomSub()
 				m.mode = chatroomModeList
 				m.activeRoom = nil

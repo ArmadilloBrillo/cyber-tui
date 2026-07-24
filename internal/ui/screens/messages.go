@@ -75,6 +75,18 @@ type OpenRoomMsg struct {
 // BackFromProfileMsg is emitted by ProfileModel in read-only mode when ESC is pressed.
 type BackFromProfileMsg struct{}
 
+// LeaveCMailMsg is emitted by CMailModel when ESC is pressed in detail mode
+// on a conversation that was reached via a deep link (canGoBack). App
+// returns to the screen the user deep-linked from instead of dropping to
+// C-Mail's own conversation list.
+type LeaveCMailMsg struct{}
+
+// LeaveChatroomsMsg is emitted by ChatroomsModel when ESC is pressed in
+// detail mode on a room that was reached via a deep link (canGoBack). App
+// returns to the screen the user deep-linked from instead of dropping to
+// Chatrooms' own room list.
+type LeaveChatroomsMsg struct{}
+
 // SaveSettingsMsg is emitted by SettingsModel when the user presses ctrl+s
 // with unsaved changes. App.handleSettings calls UpdateSettings and returns
 // settingsSavedMsg or errMsg.

@@ -100,6 +100,8 @@ Pressing `enter` on `poke`, `new_follower`, or `unfollowed` notifications (or an
 - `chat_mention` → emits `OpenRoomMsg{RoomSlug, NotifID}`. App switches to the Chatrooms screen, reloads the room list, and auto-enters detail mode for the matching room (`ChatroomsModel.SetPendingRoomSlug` / `OpenPendingRoom`), the same as if the user had cursored to that room and pressed `enter` themselves.
 - `dm_message` → emits the existing `StartConversationMsg{Username}` (the same message the `c` key already sends from any screen), opening or creating the C-Mail conversation with the sender.
 
+Both deep-links record Notifications as the return screen (`App.chatroomsReturn` / `App.cmailReturn`) and mark the destination model's `canGoBack = true`, so pressing `Esc` from the room/conversation returns straight back to Notifications instead of dropping to Chatrooms'/C-Mail's own list — see `docs/33-circ.md` and `docs/08-cmail.md`.
+
 ---
 
 ## Notification Types

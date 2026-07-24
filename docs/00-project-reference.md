@@ -447,24 +447,25 @@ Key types: `SettingsModel`, `SaveSettingsMsg`
 
 Direct messages (C-Mail) with live Firebase RTDB integration.
 
-- Two-mode flow: `cmailModeList` (full-width conversation cards) → `cmailModeDetail` (history viewport + compose input); ESC returns to list
+- Two-mode flow: `cmailModeList` (full-width conversation cards) → `cmailModeDetail` (history viewport + compose input); ESC returns to list — unless the conversation was reached via a deep link (see "Starting a conversation" below), in which case ESC leaves C-Mail entirely and returns to the origin screen
 - Subscribes to RTDB SSE stream via `api.Client.SubscribeDMs()` on conversation selection; cancelled on ESC or screen switch
 - `waitForDM(sub)` is a Bubble Tea `Cmd` that blocks on the subscription channel and returns each incoming message as a `tea.Msg`
 - Other person's messages left-aligned; my messages right-aligned (driven by `currentUser` field)
 - `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history in detail mode
-- **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile emits `StartConversationMsg{Username}` (defined in `messages.go`); App calls `StartConversation(username)` via REST, then switches to C-Mail and opens the returned conversation in detail mode; self-DMs are dropped in the App handler. Distinct from `g m` (see "Keyboard Shortcuts" → Global): `c` targets the specific highlighted user, `g m` just opens the C-Mail tab's conversation list — the in-app hint for `c` reads "message" rather than "c-mail" to keep the two from being conflated
+- **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile (or opening a `dm_message` notification) emits `StartConversationMsg{Username}` (defined in `messages.go`); App records the originating screen in `App.cmailReturn` and sets `CMailModel.canGoBack = true`, then calls `StartConversation(username)` via REST, switches to C-Mail, and opens the returned conversation in detail mode; self-DMs are dropped in the App handler. Distinct from `g m` (see "Keyboard Shortcuts" → Global): `c` targets the specific highlighted user, `g m` just opens the C-Mail tab's conversation list — the in-app hint for `c` reads "message" rather than "c-mail" to keep the two from being conflated
+- **Deep-link ESC:** when `canGoBack` is true, ESC in detail mode emits `LeaveCMailMsg` instead of dropping to the conversation list; App sets `active = cmailReturn`, returning straight to whatever screen the conversation was opened from. Entering C-Mail through ordinary tab/leader-key navigation resets `canGoBack` to `false` in `activateScreen` (`layout.go`), so ESC there still just drops to the list, same as before this existed — this mirrors the `canGoBack`/`profileReturn` pattern in `profile.go`
 - **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetMessages(convID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on conversation open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
 - **Live-stream reconnect:** when `dmStreamClosedMsg` fires for the still-active conversation (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectConvCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (`reconnectDelay`/`reconnectBackoffSchedule` in `reconnect.go`, shared with `chatrooms.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `CMailReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path, so it's visible even with history already loaded. `cancelDMSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned conversation) is a no-op.
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendMessage`'s reply text is routed through app.go's `cmailCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice`. `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live for CIRC, parsed defensively here) rendered via `renderActionLine` as classic IRC `* username body *`
 
-Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`, `CMailReconnectedMsg`
+Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`, `CMailReconnectedMsg`, `LeaveCMailMsg`
 Key internal types: `dmSubscription` (RTDB channel + cancel func + `ConvID`), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `dmReconnectedMsg`, `dmReconnectFailedMsg`, `dmReconnectRetryDueMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`
 
 #### `chatrooms.go`
 
 Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integration including live RTDB SSE.
 
-- Two-mode flow: `chatroomModeList` (full-width room cards) → `chatroomModeDetail` (header + message viewport + compose input); ESC returns to list
+- Two-mode flow: `chatroomModeList` (full-width room cards) → `chatroomModeDetail` (header + message viewport + compose input); ESC returns to list — unless the room was reached via a deep link (see "Jump-to-room from a notification" below), in which case ESC leaves Chatrooms entirely and returns to the origin screen
 - Room cards show name, `#slug` subtitle, and last-message timestamp (right-aligned)
 - IRC-style message rendering via `renderCircMessages` (see `render.go`): `<username>  body` with right-aligned timestamp; long bodies word-wrap to the viewport width, with room reserved so the timestamp trails the last wrapped line instead of overflowing
 - Subscribes to RTDB SSE stream via `api.Client.SubscribeRoom()` on room selection; cancelled on ESC or screen switch
@@ -474,10 +475,11 @@ Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integrati
 - **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetRoomMessages(roomID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on room open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
 - **Live-stream reconnect:** when `roomStreamClosedMsg` fires for the still-active room (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectRoomCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (shared `reconnectDelay`/`reconnectBackoffSchedule` from `reconnect.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleRoomReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `RoomReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path. `cancelRoomSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned room) is a no-op.
 - **Admin badge:** `renderCircMessages` shows a `[admin]` tag next to the username when `model.Message.IsChatAdmin` is set (parsed from both the REST and RTDB wire formats)
-- **Jump-to-room from a notification:** Notifications' `enter` on a `chat_mention` emits `OpenRoomMsg{RoomSlug, NotifID}`; App activates this screen (reloading the room list) and calls `SetPendingRoomSlug`, then `OpenPendingRoom()` (called from the `roomsLoadedMsg` handler) auto-enters detail mode for the matching room via the shared `enterRoomDetail` helper — the same code path the list `enter` keybinding uses
+- **Jump-to-room from a notification:** Notifications' `enter` on a `chat_mention` emits `OpenRoomMsg{RoomSlug, NotifID}`; App records the originating screen in `App.chatroomsReturn`, activates this screen (reloading the room list; `activateScreen` resets `canGoBack` to `false` as part of that, so it's set back to `true` right after), and calls `SetPendingRoomSlug`, then `OpenPendingRoom()` (called from the `roomsLoadedMsg` handler) auto-enters detail mode for the matching room via the shared `enterRoomDetail` helper — the same code path the list `enter` keybinding uses
+- **Deep-link ESC:** when `canGoBack` is true, ESC in detail mode emits `LeaveChatroomsMsg` instead of dropping to the room list; App sets `active = chatroomsReturn`, returning straight to Notifications (or wherever else a future deep link originates). Entering Chatrooms through ordinary tab/leader-key navigation resets `canGoBack` to `false`, so ESC there still just drops to the list, same as before this existed — this mirrors the `canGoBack`/`profileReturn` pattern in `profile.go`, also just adopted by `cmail.go`
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendRoomMessage`'s reply text is routed through app.go's `roomCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice` (shared with `cmail.go`). `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live) rendered via `renderActionLine` as classic IRC `* username body *` — see `docs/33-circ.md` for the live-testing findings
 
-Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`
+Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`, `OpenRoomMsg`, `LeaveChatroomsMsg`
 Key internal types: `roomSubscription` (RTDB channel + cancel func + `RoomID`), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `roomReconnectedMsg`, `roomReconnectFailedMsg`, `roomReconnectRetryDueMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`
 - Room selected with arrow keys or Enter; Enter in the input pane sends via `SendRoomMessageMsg`
 - App handles `SendRoomMessageMsg` → `api.Client.SendRoomMessage()`
@@ -856,7 +858,7 @@ fields.
 | `↑` | Scroll message history up |
 | `↓` | Scroll message history down |
 | `enter` | Send message (when input non-empty) |
-| `esc` | Return to list mode |
+| `esc` | Return to list mode — or, if this conversation was opened via `c` / a `dm_message` notification, leave C-Mail entirely and return to that origin screen |
 | `ctrl+o` | Open URLs/images found across the loaded conversation (plain `o` is captured by the compose input) |
 | all other | Forwarded to compose input (`j`/`k` type normally) |
 
@@ -865,6 +867,7 @@ fields.
 | Key | Action |
 |---|---|
 | `c` | Start or open C-Mail conversation with highlighted user (feed, post detail, notifications, read-only profile) — self-DM is a no-op |
+| `enter` on a `dm_message` notification | Same as `c` |
 
 ### CIRC
 
@@ -883,7 +886,7 @@ fields.
 | `↑` | Scroll message history up (reaching the top loads older history) |
 | `↓` | Scroll message history down |
 | `enter` | Send message (when input non-empty) |
-| `esc` | Return to list mode |
+| `esc` | Return to list mode — or, if this room was opened via a `chat_mention` notification, leave Chatrooms entirely and return to that origin screen |
 | `ctrl+o` | Open URLs/images found across the loaded room history (plain `o` is captured by the compose input) |
 | all other | Forwarded to compose input |
 
