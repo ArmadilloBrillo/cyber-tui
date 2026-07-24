@@ -337,6 +337,9 @@ type wireNotificationMetadata struct {
 	PostSlug       string `json:"postSlug"`
 	PostContent    string `json:"postContent"`
 	ReplyContent   string `json:"replyContent"`
+	RoomSlug       string `json:"roomSlug"`
+	RoomName       string `json:"roomName"`
+	MessageContent string `json:"messageContent"`
 }
 
 type wireNotification struct {
@@ -919,6 +922,9 @@ func wireNotificationToModel(w wireNotification) model.Notification {
 		PostAuthorUsername:   w.Metadata.AuthorUsername,
 		PostContent:          w.Metadata.PostContent,
 		ReplyContent:         w.Metadata.ReplyContent,
+		RoomSlug:             w.Metadata.RoomSlug,
+		RoomName:             w.Metadata.RoomName,
+		MessageContent:       w.Metadata.MessageContent,
 	}
 }
 

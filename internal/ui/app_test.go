@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -981,6 +982,34 @@ func TestHandleChatrooms_RoomReconnected_ShowsToast(t *testing.T) {
 	}
 }
 
+func TestHandleChatrooms_OpenRoomMsg_ActivatesScreenAndSetsPendingSlug(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenNotifications
+	a.polledUnreadCount = 3
+	m, cmd := a.Update(screens.OpenRoomMsg{RoomSlug: "cyberspace", NotifID: "n1"})
+	got := m.(App)
+	if got.active != screenChatrooms {
+		t.Errorf("active = %v, want screenChatrooms", got.active)
+	}
+	if got.polledUnreadCount != 2 {
+		t.Errorf("polledUnreadCount = %d, want 2 (decremented)", got.polledUnreadCount)
+	}
+	if cmd == nil {
+		t.Fatal("expected a non-nil command batch")
+	}
+}
+
+func TestHandleChatrooms_RoomsLoadedMsg_ConsumesPendingSlug(t *testing.T) {
+	a := loggedInApp()
+	a.chatrooms = a.chatrooms.SetPendingRoomSlug("sprawl")
+	rooms := []model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}, {ID: "r2", Slug: "sprawl", Name: "Sprawl"}}
+	m, _ := a.Update(roomsLoadedMsg{rooms: rooms})
+	got := m.(App)
+	if !got.chatrooms.IsShowingDetail() {
+		t.Error("expected chatrooms to auto-enter detail mode for the pending slug")
+	}
+}
+
 func TestHandleCMail_ConvReconnected_ShowsToast(t *testing.T) {
 	a := loggedInApp()
 	m, _ := a.Update(screens.CMailReconnectedMsg{})
@@ -1022,5 +1051,127 @@ func TestHandleCMail_CommandReply_AppendsSystemMessage(t *testing.T) {
 	got := m.(App)
 	if view := got.cmail.View(); !strings.Contains(view, "Commands: /me, /dice, /help") {
 		t.Errorf("expected the /help reply in the c-mail view, got: %q", view)
+	}
+}
+
+// --- ESC from a deep-linked C-Mail/Chatrooms conversation returns to origin ---
+//
+// Reported behavior: pressing 'c' on a post opens a C-Mail conversation with
+// its author; ESC used to always drop to C-Mail's own conversation list
+// instead of back to the post. C-Mail and Chatrooms are reached via 'c' /
+// chat_mention / dm_message deep links from several origin screens, so the
+// origin is captured on CMailModel/ChatroomsModel via canGoBack and consumed
+// by a dedicated Leave*Msg on ESC, mirroring the existing profileReturn/
+// postDetailReturn/searchReturn pattern.
+
+func TestHandleCMail_StartConversation_EscReturnsToOrigin(t *testing.T) {
+	for _, origin := range []screen{screenFeed, screenPostDetail, screenNotifications, screenProfile} {
+		t.Run(fmt.Sprintf("origin_%d", origin), func(t *testing.T) {
+			a := loggedInApp()
+			a.active = origin
+
+			m, cmd, _ := a.handleCMail(screens.StartConversationMsg{Username: "molly"})
+			if m.cmailReturn != origin {
+				t.Fatalf("expected cmailReturn = %v, got %v", origin, m.cmailReturn)
+			}
+			if cmd == nil {
+				t.Fatal("expected a start-conversation cmd")
+			}
+
+			// Resolve the (mocked) API call exactly as Bubble Tea would.
+			m2, _ := m.Update(cmd())
+			a2 := m2.(App)
+			if a2.active != screenCMail {
+				t.Fatalf("expected navigation to screenCMail, got %v", a2.active)
+			}
+			if !a2.cmail.IsShowingDetail() {
+				t.Fatal("expected cmail to land directly in detail mode")
+			}
+
+			cm, escCmd := a2.cmail.Update(tea.KeyMsg{Type: tea.KeyEsc})
+			a2.cmail = cm
+			if escCmd == nil {
+				t.Fatal("expected esc on a deep-linked conversation to emit LeaveCMailMsg")
+			}
+			m3, _ := a2.Update(escCmd())
+			a3 := m3.(App)
+			if a3.active != origin {
+				t.Errorf("expected esc to return to %v (the deep-link origin), got %v", origin, a3.active)
+			}
+		})
+	}
+}
+
+func TestHandleCMail_NormalTabEntry_EscStillDropsToList(t *testing.T) {
+	a := loggedInApp()
+	a, _ = activateScreen(a, screenCMail) // ordinary tab/leader-key entry
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	if !a.cmail.IsShowingDetail() {
+		t.Fatal("expected entering a conversation via enter to reach detail mode")
+	}
+
+	cm2, escCmd := a.cmail.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	a.cmail = cm2
+	if a.cmail.IsShowingDetail() {
+		t.Error("expected esc to drop back to C-Mail's own list when not deep-linked")
+	}
+	if escCmd != nil {
+		t.Error("expected no LeaveCMailMsg when the conversation wasn't reached via a deep link")
+	}
+}
+
+func TestHandleChatrooms_OpenRoomMsg_EscReturnsToOrigin(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenNotifications
+
+	m, _, _ := a.handleChatrooms(screens.OpenRoomMsg{RoomSlug: "sprawl", NotifID: "n1"})
+	if m.chatroomsReturn != screenNotifications {
+		t.Fatalf("expected chatroomsReturn = screenNotifications, got %v", m.chatroomsReturn)
+	}
+
+	// Simulate the room list (re)loading, which lets OpenPendingRoom
+	// auto-enter detail mode for the deep-linked room.
+	rooms := []model.Room{{ID: "r1", Slug: "sprawl", Name: "Sprawl"}}
+	m2, _ := m.Update(roomsLoadedMsg{rooms: rooms})
+	a2 := m2.(App)
+	if !a2.chatrooms.IsShowingDetail() {
+		t.Fatal("expected chatrooms to auto-enter detail mode for the pending slug")
+	}
+
+	cm, escCmd := a2.chatrooms.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	a2.chatrooms = cm
+	if escCmd == nil {
+		t.Fatal("expected esc on a deep-linked room to emit LeaveChatroomsMsg")
+	}
+	m3, _ := a2.Update(escCmd())
+	a3 := m3.(App)
+	if a3.active != screenNotifications {
+		t.Errorf("expected esc to return to screenNotifications (the deep-link origin), got %v", a3.active)
+	}
+}
+
+func TestHandleChatrooms_NormalTabEntry_EscStillDropsToList(t *testing.T) {
+	a := loggedInApp()
+	a, _ = activateScreen(a, screenChatrooms) // ordinary tab/leader-key entry
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+	if !a.chatrooms.IsShowingDetail() {
+		t.Fatal("expected entering a room via enter to reach detail mode")
+	}
+
+	cm2, escCmd := a.chatrooms.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	a.chatrooms = cm2
+	if a.chatrooms.IsShowingDetail() {
+		t.Error("expected esc to drop back to Chatrooms' own list when not deep-linked")
+	}
+	if escCmd != nil {
+		t.Error("expected no LeaveChatroomsMsg when the room wasn't reached via a deep link")
 	}
 }

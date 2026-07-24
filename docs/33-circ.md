@@ -19,11 +19,13 @@ CIRC provides access to the cyberspace.online public chatrooms via tab **4** in 
   - Each message: `<username>  message body` with timestamp right-aligned; long bodies word-wrap and the timestamp trails the last wrapped line.
   - Messages are rendered oldest-to-newest; the viewport starts at the bottom.
 - **Input box** (3 rows, at the bottom): type and press `Enter` to send.
-- Press `Esc` to return to the room list; the RTDB subscription is cancelled.
+- Press `Esc` to return to the room list; the RTDB subscription is cancelled — or, if this room was opened via a `chat_mention` notification, leave Chatrooms entirely and return to Notifications instead (see "Deep-link back-navigation" below).
 - **Scroll-to-load history**: scrolling to the top of the loaded messages (`↑`) automatically fetches the next older page (`GetRoomMessages(roomID, 50, before)`, `before` = the oldest loaded message's timestamp) and prepends it, preserving scroll position so the previously-visible messages don't jump. The header shows `(loading history…)` while a page is in flight. Stops once a fetch returns no messages (start of history reached). If a fetch fails, the room isn't left stuck — a retry is possible on the next scroll-to-top.
 - **Failed loads are distinguishable from empty**: if the initial (or a later) message fetch fails, the viewport shows "couldn't load messages" instead of the misleading "no messages yet".
 - **Live-stream reconnect**: the Firebase `idToken` backing the RTDB subscription expires hourly. The stream is treated as dead — triggering reconnect — on any of: the server sending a terminal `auth_revoked`/`cancel` SSE event, a 10-minute idle-read timeout (no line received, including keepalive comments), a 30-second connect-phase timeout, or an outright network error/close (see `internal/rtdb/client.go`). When the stream closes while a room is still open, the app refreshes the session and reopens the subscription, retrying with exponential backoff (`1s, 2s, 4s, 8s, 15s` — 6 attempts total) if an attempt fails. Success shows a brief "reconnected to live chat" notification. While retrying, the room header shows `(live updates lost, reconnecting… N/6)`; if all attempts fail, it shows a persistent `(live updates lost)` until the user leaves and re-enters the room — this indicator is independent of the message list, so it's visible even with history already loaded.
 - **Admin badge**: messages sent by a chat admin (`isChatAdmin` from the API) show a `[admin]` tag next to the username.
+- **Jump-to-room from a notification**: pressing `Enter` on a `chat_mention` notification emits `OpenRoomMsg{RoomSlug, NotifID}`. App records the originating screen in `App.chatroomsReturn`, activates Chatrooms (reloading the room list), and stashes the slug via `SetPendingRoomSlug`; once the room list (re)loads, `OpenPendingRoom()` auto-enters detail mode for the matching room and `ChatroomsModel.canGoBack` is set to `true`.
+- **Deep-link back-navigation**: when `canGoBack` is true, `Esc` in detail mode emits `LeaveChatroomsMsg` instead of dropping to the room list; App sets `active = chatroomsReturn`, returning to Notifications (the only deep-link origin today). Reaching Chatrooms through the ordinary tab/leader-key navigation resets `canGoBack` to `false`, so `Esc` there still returns to the room list as before. Mirrors the `canGoBack`/`profileReturn` pattern already used by read-only profiles (`docs/16-view-profile.md`) and now also by C-Mail (`docs/08-cmail.md`).
 
 ### Slash commands
 
@@ -55,7 +57,7 @@ Long bodies word-wrap to fit the terminal width; continuation lines are indented
 | `Enter` | Open selected room |
 | `↑` / `↓` | Scroll messages (detail mode) |
 | `Enter` | Send message (detail mode) |
-| `Esc` | Return to room list |
+| `Esc` | Return to room list — or, if deep-linked from a `chat_mention` notification, leave Chatrooms and return to Notifications |
 | `ctrl+o` | Open URLs/images from the loaded room history (detail mode). Plain `o` — the shortcut used everywhere else in the TUI — can't reach this here: the compose input is focused for the entire detail view (not a transient sub-mode like Feed's reply box), so `o` always gets typed into the message instead. `ctrl+o` is exempted from the focused-input gate specifically for this. |
 
 ## API integration

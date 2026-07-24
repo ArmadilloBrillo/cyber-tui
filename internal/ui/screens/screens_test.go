@@ -252,6 +252,66 @@ func TestChatrooms_JKNavigateList(t *testing.T) {
 	}
 }
 
+func TestChatrooms_OpenPendingRoom_EntersDetailMode(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetPendingRoomSlug("sprawl")
+	m = m.SetRooms(sampleRooms())
+	m, cmd := m.OpenPendingRoom()
+	if !m.IsShowingDetail() {
+		t.Error("expected detail mode after OpenPendingRoom matches a loaded room")
+	}
+	if !m.InputFocused() {
+		t.Error("expected input to be focused after OpenPendingRoom")
+	}
+	if cmd == nil {
+		t.Error("expected a command batch after OpenPendingRoom")
+	}
+}
+
+func TestChatrooms_OpenPendingRoom_NoMatchIsNoop(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetPendingRoomSlug("nonexistent-room")
+	m = m.SetRooms(sampleRooms())
+	m, cmd := m.OpenPendingRoom()
+	if m.IsShowingDetail() {
+		t.Error("expected list mode when pending slug matches no loaded room")
+	}
+	if cmd != nil {
+		t.Error("expected nil command when pending slug matches no loaded room")
+	}
+	// The stale slug must be cleared so a later, unrelated reload can't
+	// suddenly jump into a room the user never asked to open.
+	m = m.SetRooms(sampleRooms())
+	m, cmd = m.OpenPendingRoom()
+	if m.IsShowingDetail() || cmd != nil {
+		t.Error("expected pending slug to have been cleared after first OpenPendingRoom call")
+	}
+}
+
+func TestChatrooms_OpenPendingRoom_EmptySlugIsNoop(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, cmd := m.OpenPendingRoom()
+	if m.IsShowingDetail() {
+		t.Error("expected list mode when no pending slug was set")
+	}
+	if cmd != nil {
+		t.Error("expected nil command when no pending slug was set")
+	}
+}
+
+func TestChatrooms_EnterKey_StillWorksAfterRefactor(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	if !m.IsShowingDetail() {
+		t.Error("expected detail mode after Enter on the first room (regression check)")
+	}
+	if !m.InputFocused() {
+		t.Error("expected input focused after Enter (regression check)")
+	}
+}
+
 func TestChatrooms_Send_EmitsMessage(t *testing.T) {
 	m := screens.NewChatroomsModel("neuromancer", nil)
 	m = m.SetRooms(sampleRooms())

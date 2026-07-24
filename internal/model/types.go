@@ -283,4 +283,7 @@ type Notification struct {
 	PostAuthorUsername   string // author of the target post; used with PostSlug for navigation (v0.7+)
 	PostContent          string // non-empty for post_mention; the text that mentioned you (v0.7+)
 	ReplyContent         string // non-empty for reply_mention; the reply text that mentioned you (v0.7+)
+	RoomSlug             string // chat_mention: metadata.roomSlug; the cIRC room to jump to
+	RoomName             string // chat_mention: metadata.roomName; display name of the room
+	MessageContent       string // non-empty for chat_mention; the chat message that mentioned you
 }

@@ -100,6 +100,14 @@ type CMailModel struct {
 	loc          *time.Location // timezone for timestamp display; nil = UTC
 	timeDisplayFormat string    // "datetime", "relative", "unix", or "swatch"
 
+	// canGoBack is true when the active conversation was opened via a
+	// deep link (e.g. 'c' on a post, or a chat_mention/dm_message
+	// notification) rather than by switching to this tab normally. When
+	// true, ESC in detail mode leaves C-Mail entirely instead of dropping
+	// to the conversation list. Reset to false by activateScreen whenever
+	// C-Mail is entered through ordinary tab navigation.
+	canGoBack bool
+
 	// DM subscription state — managed entirely within CMailModel.
 	client       api.Client
 	dmSub        *dmSubscription
@@ -253,6 +261,14 @@ func (m CMailModel) SetConversations(convs []model.Conversation) CMailModel {
 	if m.ready {
 		m.listVP.SetContent(m.renderConvCards())
 	}
+	return m
+}
+
+// SetCanGoBack marks whether the active conversation was reached via a deep
+// link, which determines whether ESC in detail mode leaves C-Mail entirely
+// (see canGoBack field doc).
+func (m CMailModel) SetCanGoBack(v bool) CMailModel {
+	m.canGoBack = v
 	return m
 }
 
@@ -490,6 +506,11 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		case cmailModeDetail:
 			switch msg.String() {
 			case "esc":
+				if m.canGoBack {
+					m = m.cancelDMSub()
+					m.canGoBack = false
+					return m, func() tea.Msg { return LeaveCMailMsg{} }
+				}
 				m = m.cancelDMSub()
 				m.mode = cmailModeList
 				m.activeConv = nil

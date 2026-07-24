@@ -74,7 +74,7 @@ Full-width message history viewport + fixed compose input at bottom:
 | `Enter` | Send message (when input non-empty) |
 | `↑` | Scroll message history up |
 | `↓` | Scroll message history down |
-| `Esc` | Return to list mode; cancel RTDB subscription |
+| `Esc` | Return to list mode; cancel RTDB subscription — or, if this conversation was opened via a deep link (`c` from another screen, or a `dm_message` notification), leave C-Mail entirely and return to that origin screen instead |
 | `ctrl+o` | Open URLs/images from the loaded conversation. Plain `o` can't reach this here — the compose input is focused for the entire detail view, so `o` always types into the message instead; `ctrl+o` is exempted from the focused-input gate specifically for this. |
 | all other | Forwarded to compose input (`j`/`k` type normally) |
 
@@ -86,7 +86,7 @@ Full-width message history viewport + fixed compose input at bottom:
 
 **Type:** `CMailModel`
 **Constructor:** `NewCMailModel(currentUser string, client api.Client) CMailModel`
-**Messages emitted:** `SendCMailMsg{ConversationID, Body}`, `CMailConvSelectedMsg{ConversationID}`, `StartConversationMsg{Username}` (from other screens)
+**Messages emitted:** `SendCMailMsg{ConversationID, Body}`, `CMailConvSelectedMsg{ConversationID}`, `StartConversationMsg{Username}` (from other screens), `LeaveCMailMsg{}` (Esc on a deep-linked conversation)
 **App field:** `a.cmail`
 **Screen constant:** `screenCMail`
 
@@ -155,7 +155,8 @@ The subscription is opened when a conversation is selected (Enter in list mode) 
 
 - Conversations are pre-loaded on login via `afterLoginCmd`, and re-fetched every 60s on the same `pollUnreadTickMsg` ticker that refreshes the notifications unread count (`app.go`), so the tab badge stays current even while the user is on another tab.
 - When the user selects a conversation (Enter in list mode), `CMailModel` zeroes that conversation's local `UnreadCount` immediately (optimistic, before the server round-trip) and `CMailConvSelectedMsg` is emitted; App calls `markCMailReadCmd(convID)` to persist the read state server-side.
-- Pressing `c` on a highlighted post, reply, notification, or profile (read-only) emits `StartConversationMsg{Username}`. App calls `StartConversation(username)`, then switches to C-Mail and opens the returned conversation in detail mode. Self-DMs are silently dropped in the App handler.
+- Pressing `c` on a highlighted post, reply, notification, or profile (read-only) — or opening a `dm_message` notification — emits `StartConversationMsg{Username}`. App records the screen this was sent from in `App.cmailReturn` and marks `CMailModel.canGoBack = true`, then calls `StartConversation(username)` and switches to C-Mail, opening the returned conversation in detail mode. Self-DMs are silently dropped in the App handler.
+- **Deep-link back-navigation**: when `canGoBack` is true, `Esc` in detail mode emits `LeaveCMailMsg` instead of dropping to the conversation list; App sets `active = cmailReturn`, returning to the screen the conversation was opened from (e.g. back to the post you pressed `c` on, or back to Notifications). Reaching C-Mail through the ordinary tab/leader-key navigation resets `canGoBack` to `false`, so `Esc` there still returns to the list as before. Mirrors the `canGoBack`/`profileReturn` pattern already used by read-only profiles (`docs/16-view-profile.md`).
 
 ### Conversation List Display
 

@@ -152,6 +152,14 @@ type App struct {
 	// '/' switches into Search from somewhere else.
 	searchReturn screen
 
+	// cmailReturn is the screen to go back to when ESC is pressed in a
+	// deep-linked C-Mail conversation (see CMailModel.canGoBack).
+	cmailReturn screen
+
+	// chatroomsReturn is the screen to go back to when ESC is pressed in a
+	// deep-linked Chatrooms room (see ChatroomsModel.canGoBack).
+	chatroomsReturn screen
+
 	// pendingReplyID is set when navigating to PostDetail from a reply/thread_reply
 	// notification. After replies load, PostDetail scrolls to this reply, then it is cleared.
 	pendingReplyID string
@@ -751,7 +759,21 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case roomsLoadedMsg:
 		a.chatrooms = a.chatrooms.SetRooms(msg.rooms)
-		return a, nil, true
+		var cmd tea.Cmd
+		a.chatrooms, cmd = a.chatrooms.OpenPendingRoom()
+		return a, cmd, true
+	case screens.OpenRoomMsg:
+		// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
+		if a.polledUnreadCount > 0 {
+			a.polledUnreadCount--
+		}
+		a.chatroomsReturn = a.active
+		a.chatrooms = a.chatrooms.SetPendingRoomSlug(msg.RoomSlug)
+		// activateScreen resets canGoBack for ordinary tab/leader entry into
+		// Chatrooms, so it must be set true *after* that call, not before.
+		a, activateCmd := activateScreen(a, screenChatrooms)
+		a.chatrooms = a.chatrooms.SetCanGoBack(true)
+		return a, tea.Batch(a.markNotifReadCmd(msg.NotifID), activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
 	case screens.RoomOpenedMsg:
@@ -761,6 +783,9 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, cmd, true
 	case roomCommandReplyMsg:
 		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, sanitize.Strip(msg.reply))
+		return a, nil, true
+	case screens.LeaveChatroomsMsg:
+		a.active = a.chatroomsReturn
 		return a, nil, true
 	}
 	return a, nil, false
@@ -782,6 +807,8 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		if msg.Username == "" || msg.Username == a.currentUser.Username {
 			return a, nil, true
 		}
+		a.cmailReturn = a.active
+		a.cmail = a.cmail.SetCanGoBack(true)
 		return a, a.startConversationCmd(msg.Username), true
 	case conversationStartedMsg:
 		a.active = screenCMail
@@ -797,6 +824,9 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, cmd, true
 	case cmailCommandReplyMsg:
 		a.cmail = a.cmail.AppendSystemMessage(msg.convID, sanitize.Strip(msg.reply))
+		return a, nil, true
+	case screens.LeaveCMailMsg:
+		a.active = a.cmailReturn
 		return a, nil, true
 	}
 	return a, nil, false
