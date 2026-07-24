@@ -54,6 +54,7 @@ cyber-tui/
 │       │   ├── settings.go      # Settings screen
 │       │   ├── cmail.go         # Direct messages (C-Mail) screen
 │       │   ├── chatrooms.go     # Public chatrooms screen
+│       │   ├── reconnect.go     # Shared RTDB reconnect backoff/retry helpers (cmail.go + chatrooms.go)
 │       │   ├── compose.go       # Reusable multi-line text editor
 │       │   ├── timeutil.go      # Time formatting helpers
 │       │   ├── timeutil_test.go # Time formatting tests
@@ -252,19 +253,20 @@ Firebase Realtime Database client. Communicates with RTDB using its REST API and
 
 | Identifier | Kind | Purpose |
 |---|---|---|
-| `Client` | struct | RTDB HTTP client (baseURL, token, httpClient, streamClient) |
-| `SSEEvent` | struct | Single SSE event (Event string, Data []byte, Err error) |
-| `New(baseURL, token)` | func | Production constructor (15s timeout for REST, 0s for SSE) |
+| `Client` | struct | RTDB HTTP client (baseURL, token, idle timeout, httpClient, streamClient) |
+| `SSEEvent` | struct | Single SSE event (Event string, Data []byte, Err error). `Event` is `"auth_revoked"`/`"cancel"` on a terminal server event, always paired with `Err` set. |
+| `New(baseURL, token)` | func | Production constructor (15s timeout for REST; SSE stream has no overall timeout but a 30s `ResponseHeaderTimeout` on connect) |
 | `NewForTesting(baseURL, token, hc)` | func | Test constructor with injected `http.Client` |
 | `Get(ctx, path, params)` | method | One-shot GET, returns raw JSON bytes |
 | `Put(ctx, path, val)` | method | Marshals val to JSON and PUTs it |
-| `Subscribe(ctx, path, params)` | method | Opens SSE stream; returns `<-chan SSEEvent` |
+| `Subscribe(ctx, path, params)` | method | Opens SSE stream; returns `<-chan SSEEvent`, closed (with a terminal `Err`) on cancel, server close, `auth_revoked`/`cancel`, or a 10-minute idle-read timeout |
+| `SetIdleTimeoutForTesting(d)` | method | Test-only override of the idle-read watchdog duration (default 10 min) |
 
-Internal: `readSSE(ctx, reader, ch)` parses the SSE wire format and forwards events; `buildURL(path, params)` constructs authenticated URLs under `mu.RLock()`; `SetToken(token)` replaces the auth token under `mu.Lock()` (called by `HTTPClient.applyRefresh` on token refresh).
+Internal: `readSSE(ctx, cancel, reader, ch)` parses the SSE wire format, forwards events, and races a per-line idle timer against `ctx.Done()` — any line (including a discarded `:`-comment) resets the timer; `buildURL(path, params)` constructs authenticated URLs under `mu.RLock()`; `SetToken(token)` replaces the auth token under `mu.Lock()` (called by `HTTPClient.applyRefresh` on token refresh) — this only affects *future* connections, since an open SSE stream's token is fixed in its URL at connect time and can't be revived without reconnecting.
 
 #### `client_test.go`
 
-Tests for RTDB REST operations, SSE parsing, and `SetToken` token-update behaviour.
+Tests for RTDB REST operations, SSE parsing (including `auth_revoked`/`cancel` terminal events and the idle-read watchdog), and `SetToken` token-update behaviour.
 
 ---
 
@@ -451,11 +453,11 @@ Direct messages (C-Mail) with live Firebase RTDB integration.
 - `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history in detail mode
 - **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile emits `StartConversationMsg{Username}` (defined in `messages.go`); App calls `StartConversation(username)` via REST, then switches to C-Mail and opens the returned conversation in detail mode; self-DMs are dropped in the App handler
 - **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetMessages(convID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on conversation open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
-- **Live-stream reconnect:** when `dmStreamClosedMsg` fires for the still-active conversation (idToken expiry, ~1hr), `reconnectConvCmd` calls `api.Client.RefreshSession()` then re-subscribes; success emits `CMailReconnectedMsg`, which App turns into a "reconnected to live chat" toast. A stale close event (from an abandoned conversation) is a no-op.
+- **Live-stream reconnect:** when `dmStreamClosedMsg` fires for the still-active conversation (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectConvCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (`reconnectDelay`/`reconnectBackoffSchedule` in `reconnect.go`, shared with `chatrooms.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `CMailReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path, so it's visible even with history already loaded. `cancelDMSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned conversation) is a no-op.
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendMessage`'s reply text is routed through app.go's `cmailCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice`. `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live for CIRC, parsed defensively here) rendered via `renderActionLine` as classic IRC `* username body *`
 
 Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`, `CMailReconnectedMsg`
-Key internal types: `dmSubscription` (RTDB channel + cancel func + `ConvID`), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `dmReconnectedMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`
+Key internal types: `dmSubscription` (RTDB channel + cancel func + `ConvID`), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `dmReconnectedMsg`, `dmReconnectFailedMsg`, `dmReconnectRetryDueMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`
 
 #### `chatrooms.go`
 
@@ -469,12 +471,12 @@ Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integrati
 - `RoomOpenedMsg` is emitted on Enter; App calls `MarkRoomRead` fire-and-forget
 - `CancelSubscription()` is called by the layout on every key that navigates away
 - **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetRoomMessages(roomID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on room open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
-- **Live-stream reconnect:** when `roomStreamClosedMsg` fires for the still-active room (idToken expiry, ~1hr), `reconnectRoomCmd` calls `api.Client.RefreshSession()` then re-subscribes; success emits `RoomReconnectedMsg`, which App turns into a "reconnected to live chat" toast. A stale close event (from an abandoned room) is a no-op.
+- **Live-stream reconnect:** when `roomStreamClosedMsg` fires for the still-active room (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectRoomCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (shared `reconnectDelay`/`reconnectBackoffSchedule` from `reconnect.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleRoomReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `RoomReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path. `cancelRoomSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned room) is a no-op.
 - **Admin badge:** `renderCircMessages` shows a `[admin]` tag next to the username when `model.Message.IsChatAdmin` is set (parsed from both the REST and RTDB wire formats)
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendRoomMessage`'s reply text is routed through app.go's `roomCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice` (shared with `cmail.go`). `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live) rendered via `renderActionLine` as classic IRC `* username body *` — see `docs/33-circ.md` for the live-testing findings
 
 Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`
-Key internal types: `roomSubscription` (RTDB channel + cancel func + `RoomID`), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `roomReconnectedMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`
+Key internal types: `roomSubscription` (RTDB channel + cancel func + `RoomID`), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `roomReconnectedMsg`, `roomReconnectFailedMsg`, `roomReconnectRetryDueMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`
 - Room selected with arrow keys or Enter; Enter in the input pane sends via `SendRoomMessageMsg`
 - App handles `SendRoomMessageMsg` → `api.Client.SendRoomMessage()`
 

@@ -689,6 +689,60 @@ func TestHTTPSubscribeDMs_CancelClosesChannel(t *testing.T) {
 	}
 }
 
+// TestHTTPSubscribeDMs_AuthRevokedClosesChannel verifies that a terminal
+// auth_revoked event from the server closes the message channel with no
+// message delivered, confirming rtdb.Client's terminal-event handling is
+// correctly wired through the SubscribeDMs translator.
+func TestHTTPSubscribeDMs_AuthRevokedClosesChannel(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "auth_revoked", `null`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeDMs(context.Background(), "conv1")
+	if err != nil {
+		t.Fatalf("SubscribeDMs error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if ok {
+			t.Fatalf("expected channel to close with no message, got %+v", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for channel to close")
+	}
+}
+
+// TestHTTPSubscribeRoom_AuthRevokedClosesChannel mirrors
+// TestHTTPSubscribeDMs_AuthRevokedClosesChannel for cIRC rooms.
+func TestHTTPSubscribeRoom_AuthRevokedClosesChannel(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "auth_revoked", `null`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeRoom(context.Background(), "zion")
+	if err != nil {
+		t.Fatalf("SubscribeRoom error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if ok {
+			t.Fatalf("expected channel to close with no message, got %+v", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for channel to close")
+	}
+}
+
 // --- C-Mail REST tests ---
 
 func TestHTTPGetConversations_ParsesList(t *testing.T) {

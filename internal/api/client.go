@@ -1546,6 +1546,10 @@ func (c *HTTPClient) MarkRoomRead(roomID string) error {
 // SubscribeRoom opens a live RTDB SSE stream for the given chatroom.
 // New messages arrive on the returned channel; call cancel to close the stream.
 // The initial full-snapshot event is skipped — load history via GetRoomMessages instead.
+// The channel closes when the stream ends for any reason — a network error,
+// an idle-read timeout, or the server sending a terminal auth_revoked/cancel
+// event (see rtdb.Client.Subscribe) — not only on an outright disconnect.
+// Callers should treat any close as "needs reconnect."
 func (c *HTTPClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error) {
 	r, err := c.rtdbOrErr()
 	if err != nil {
@@ -1720,6 +1724,10 @@ func (c *HTTPClient) MarkCMailRead(conversationID string) error {
 // SubscribeDMs opens a live RTDB SSE stream for the given conversation.
 // New messages arrive on the returned channel; call cancel to close the stream.
 // The initial full-snapshot event is skipped — load history via GetMessages instead.
+// The channel closes when the stream ends for any reason — a network error,
+// an idle-read timeout, or the server sending a terminal auth_revoked/cancel
+// event (see rtdb.Client.Subscribe) — not only on an outright disconnect.
+// Callers should treat any close as "needs reconnect."
 func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error) {
 	r, err := c.rtdbOrErr()
 	if err != nil {
