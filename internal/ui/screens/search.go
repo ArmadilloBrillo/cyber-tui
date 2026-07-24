@@ -324,6 +324,7 @@ func (m SearchModel) Update(msg tea.Msg) (SearchModel, tea.Cmd) {
 				// peel back first. Blur so a later arrival via tab-cycling
 				// (which doesn't call FocusQuery) doesn't inherit a stuck
 				// focused state.
+				m.query.SetValue("")
 				m.query.Blur()
 				return m, func() tea.Msg { return LeaveSearchMsg{} }
 			}

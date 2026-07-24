@@ -166,8 +166,12 @@ func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 	if a.active == screenChatrooms {
 		a.chatrooms = a.chatrooms.CancelSubscription()
 	}
+	prev := a.active
 	idx := (tabIndexOf(a) + delta + len(menuTabs)) % len(menuTabs)
 	a.active = menuTabs[idx].s
+	if a.active == screenSearch && prev != screenSearch {
+		a.searchReturn = prev
+	}
 	switch a.active {
 	case screenFeed:
 		if !a.feed.IsLoaded() {

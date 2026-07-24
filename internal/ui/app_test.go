@@ -408,6 +408,30 @@ func TestSearch_EscToLeave_ReturnsToOriginScreen(t *testing.T) {
 	}
 }
 
+// TestNavigateTab_IntoSearch_SetsSearchReturn reproduces a reported bug:
+// tab-cycling into Search (rather than pressing '/') left searchReturn at
+// its zero value (screenLogin), so Esc from Search would drop an
+// authenticated user on the login screen. navigateTabBy must record the
+// origin screen itself, since it's a second entry point into Search that
+// bypasses the '/' handler's searchReturn assignment.
+func TestNavigateTab_IntoSearch_SetsSearchReturn(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenProfile
+	a.navigateTab(+1)
+	if a.active != screenSearch {
+		t.Fatalf("setup: expected screenSearch, got %v", a.active)
+	}
+	if a.searchReturn != screenProfile {
+		t.Fatalf("expected searchReturn = screenProfile, got %v", a.searchReturn)
+	}
+
+	m, _ := a.Update(screens.LeaveSearchMsg{})
+	a2 := m.(App)
+	if a2.active != screenProfile {
+		t.Errorf("expected esc to return to screenProfile (origin), got %v", a2.active)
+	}
+}
+
 // TestSearch_UserHitToProfile_EscReturnsToSearchOrigin reproduces the
 // reported bug: searching from Feed, opening a user hit (-> Profile), then
 // pressing esc landed on Guilds instead of back on Search. Root cause:
