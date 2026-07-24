@@ -164,98 +164,26 @@ func (l MillerLayout) View(a App) string {
 
 func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 	if a.focus == focusMenu {
+		if a.active == screenLogin {
+			return a, nil, false
+		}
+		if s, ok := screenForNumber(msg.String()); ok {
+			var cmd tea.Cmd
+			a, cmd = activateScreen(a, s)
+			return a, cmd, true
+		}
 		switch msg.String() {
 		case "j", "down":
-			if a.active != screenLogin {
-				var cmd tea.Cmd
-				a, cmd = navigateTabBy(a, +1)
-				return a, cmd, true
-			}
+			var cmd tea.Cmd
+			a, cmd = navigateTabBy(a, +1)
+			return a, cmd, true
 		case "k", "up":
-			if a.active != screenLogin {
-				var cmd tea.Cmd
-				a, cmd = navigateTabBy(a, -1)
-				return a, cmd, true
-			}
+			var cmd tea.Cmd
+			a, cmd = navigateTabBy(a, -1)
+			return a, cmd, true
 		case "l", "right", "enter":
-			if a.active != screenLogin {
-				a.focus = focusList
-				return a, nil, true
-			}
-		case "1":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenFeed
-				if !a.feed.IsLoaded() {
-					a.feed = a.feed.SetFetching()
-					return a, a.loadFeedCmd(), true
-				}
-				return a, nil, true
-			}
-		case "2":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenNotifications
-				if !a.notifications.HasPaginated() {
-					a.notifications = a.notifications.SetFetching()
-					return a, a.loadNotifsCmd(), true
-				}
-				return a, nil, true
-			}
-		case "3":
-			if a.active != screenLogin {
-				a.active = screenCMail
-				return a, a.loadConvsCmd(), true
-			}
-		case "4":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenJournal
-				a.journal = a.journal.SetFetching()
-				return a, a.loadJournalCmd(), true
-			}
-		case "5":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenBookmarks
-				if !a.bookmarks.IsLoaded() {
-					a.bookmarks = a.bookmarks.SetFetching()
-					return a, a.loadBookmarksCmd(""), true
-				}
-				return a, nil, true
-			}
-		case "6":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenGuilds
-				if !a.guilds.IsLoaded() {
-					a.guilds = a.guilds.SetFetching()
-					return a, a.loadGuildsCmd(""), true
-				}
-				return a, nil, true
-			}
-		case "7":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenTopics
-				if !a.topics.IsLoaded() {
-					a.topics = a.topics.SetFetching()
-					return a, a.loadTopicsCmd(), true
-				}
-				return a, nil, true
-			}
-		case "8":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenProfile
-				return a, a.loadProfileCmd(), true
-			}
-		case "9":
-			if a.active != screenLogin {
-				a.cmail = a.cmail.CancelSubscription()
-				a.active = screenSettings
-				return a, nil, true
-			}
+			a.focus = focusList
+			return a, nil, true
 		}
 		return a, nil, false
 	}
@@ -355,30 +283,34 @@ func (l MillerLayout) renderNav(a App) string {
 	navW := millerSidebarWidth - 1 // leave 1 col for the "│" separator
 
 	var rows []string
-	for _, t := range menuTabs {
-		label := t.label
+	for _, t := range visibleTabs() {
+		badge := ""
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
-			label = fmt.Sprintf("%s ●%d", label, a.polledUnreadCount)
+			badge = fmt.Sprintf(" ●%d", a.polledUnreadCount)
 		}
 		if t.s == screenCMail {
 			if n := a.cmail.TotalUnread(); n > 0 {
-				label = fmt.Sprintf("%s ●%d", label, n)
+				badge = fmt.Sprintf(" ●%d", n)
 			}
 		}
 		isActive := a.active == t.s &&
 			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
 			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())
-		var row string
+		marker := "  "
+		base := theme.Subtle
 		if isActive {
+			marker = "▶ "
 			if a.focus == focusMenu {
-				row = theme.Highlight.Width(navW).Render("▶ " + label)
-			} else {
-				row = theme.Subtle.Width(navW).Render("▶ " + label)
+				base = theme.Highlight
 			}
-		} else {
-			row = theme.Subtle.Width(navW).Render("  " + label)
 		}
-		rows = append(rows, row)
+		before, ch, after := splitMnemonic(t.label, t.mnemonic)
+		// No background is set on base/mnemonic here, so — unlike renderTabBar —
+		// wrapping the whole nested-ANSI string in one Width call is safe: the
+		// worst a lost style could do is leave trailing padding spaces
+		// uncolored, which is invisible.
+		text := base.Render(marker+before) + theme.NavMnemonic.Render(ch) + base.Render(after+badge)
+		rows = append(rows, lipgloss.NewStyle().Width(navW).Render(text))
 	}
 	return strings.Join(rows, "\n")
 }
@@ -483,7 +415,7 @@ func (l MillerLayout) renderNotification(a App) string {
 func (l MillerLayout) screenHints(a App) []hint {
 	switch a.focus {
 	case focusMenu:
-		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-9", "jump"}, {"?", "more"}}
+		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-9 / g+", "jump"}, {"?", "more"}}
 	case focusDetail:
 		return []hint{{"h/←", "list"}, {"j/k", "replies"}, {"↵", "thread"}, {"r", "reply"}}
 	default: // focusList
@@ -576,18 +508,21 @@ func (l MillerLayout) renderHelpModal(a App) string {
 		return lipgloss.JoinHorizontal(lipgloss.Top, k, theme.Subtle.Render(desc))
 	}
 
-	globalSection := lipgloss.JoinVertical(lipgloss.Left,
+	globalRows := append([]string{
 		sectionStyle.Render("global"),
 		row("j/k", "move nav · select section"),
 		row("l / enter", "enter content pane"),
 		row("h", "return to nav pane"),
 		row("1-9", "jump to section"),
+	}, leaderRows(row)...)
+	globalRows = append(globalRows,
 		row("/", "search"),
 		row("t", "theme"),
 		row("v", "density"),
 		row("o", "open url"),
 		row("q", "quit"),
 	)
+	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		title,

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -51,22 +52,51 @@ type CompactComposer interface {
 	ComposeView(width int) string // panel rendered at the given spanning width
 }
 
-// menuTabs is the ordered list of navigable screens.
-var menuTabs = []struct {
-	label string
-	s     screen
-}{
-	{"feed", screenFeed},
-	{"notifications", screenNotifications},
-	{"c-mail", screenCMail},
-	{"circ", screenChatrooms},
-	{"journal", screenJournal},
-	{"bookmarks", screenBookmarks},
-	{"guilds", screenGuilds},
-	{"topics", screenTopics},
-	{"profile", screenProfile},
-	{"search", screenSearch},
-	{"settings", screenSettings},
+// navTab is one entry in menuTabs.
+type navTab struct {
+	label    string
+	mnemonic rune
+	s        screen
+	// hidden excludes this entry from the rendered tab bar/nav sidebar and
+	// from arrow-key cycling (see visibleTabs, navigateTabBy) while keeping
+	// it reachable via its mnemonic leader chord and listed in the help
+	// modal's leader legend (leaderRows). Used for Search: it's an
+	// explicit-entry-only destination ("g s" or "/"), not a tab you park on
+	// or arrow past while browsing — see docs/02-menu-bar-navigation.md.
+	hidden bool
+}
+
+// menuTabs is the ordered list of navigable screens — the single source of
+// truth for tab-bar rendering, the "1"-"9" numeric aliases (the first 9
+// entries, by index), and the "g"+mnemonic leader-key chords (all entries,
+// via their mnemonic rune). Keeping all three derived from this one slice is
+// what keeps TabsLayout and MillerLayout from drifting apart. mnemonic must
+// be a rune that appears in label, since the tab bar renders it highlighted
+// inline within the label text.
+var menuTabs = []navTab{
+	{label: "feed", mnemonic: 'f', s: screenFeed},
+	{label: "notifications", mnemonic: 'n', s: screenNotifications},
+	{label: "c-mail", mnemonic: 'm', s: screenCMail},
+	{label: "circ", mnemonic: 'i', s: screenChatrooms},
+	{label: "journal", mnemonic: 'j', s: screenJournal},
+	{label: "bookmarks", mnemonic: 'b', s: screenBookmarks},
+	{label: "guilds", mnemonic: 'g', s: screenGuilds},
+	{label: "topics", mnemonic: 't', s: screenTopics},
+	{label: "profile", mnemonic: 'p', s: screenProfile},
+	{label: "search", mnemonic: 's', s: screenSearch, hidden: true},
+	{label: "settings", mnemonic: 'e', s: screenSettings},
+}
+
+// visibleTabs returns the menuTabs entries shown on the tab bar/nav sidebar
+// and reachable by arrow-key cycling — i.e. everything except hidden entries.
+func visibleTabs() []navTab {
+	out := make([]navTab, 0, len(menuTabs))
+	for _, t := range menuTabs {
+		if !t.hidden {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 var renderedVersionLine = theme.Subtle.Render("version " + version.Version + " (" + version.Commit + ")")
@@ -147,9 +177,12 @@ func themeIndex(name string) int {
 	return 0
 }
 
-// tabIndexOf returns the index of a.active within menuTabs, defaulting to 0.
+// tabIndexOf returns the index of a.active within visibleTabs, defaulting to
+// 0. a.active won't normally be a hidden screen (Search) here, since
+// navigateTabBy — the only caller — is a no-op while Search is active; if it
+// ever is, this defaults to 0 (Feed) same as any other not-found screen.
 func tabIndexOf(a App) int {
-	for i, t := range menuTabs {
+	for i, t := range visibleTabs() {
 		if t.s == a.active {
 			return i
 		}
@@ -157,9 +190,66 @@ func tabIndexOf(a App) int {
 	return 0
 }
 
-// navigateTabBy computes the App state and load command for moving delta steps
-// through menuTabs from the current active screen.
-func navigateTabBy(a App, delta int) (App, tea.Cmd) {
+// screenForNumber resolves a "1"-"9" key to its menuTabs entry, by index.
+// Only the first 9 of menuTabs' 11 entries have a numeric alias; Search and
+// Settings are reachable only via the "g"+mnemonic leader chord (see
+// screenForMnemonic) or, for Search, "/".
+func screenForNumber(key string) (screen, bool) {
+	if len(key) != 1 || key[0] < '1' || key[0] > '9' {
+		return 0, false
+	}
+	idx := int(key[0] - '1')
+	if idx >= len(menuTabs) {
+		return 0, false
+	}
+	return menuTabs[idx].s, true
+}
+
+// screenForMnemonic resolves the second keystroke of a "g"-prefixed leader
+// chord (e.g. "g f" for Feed) to its menuTabs entry. Derived from menuTabs
+// so it can never drift from what's shown highlighted on the tab bar.
+func screenForMnemonic(key string) (screen, bool) {
+	if len(key) != 1 {
+		return 0, false
+	}
+	for _, t := range menuTabs {
+		if rune(key[0]) == t.mnemonic {
+			return t.s, true
+		}
+	}
+	return 0, false
+}
+
+// splitMnemonic locates mnemonic within label and returns it split into three
+// parts (before, the mnemonic character itself, after) so a renderer can
+// style the mnemonic distinctly as an inline "go to" hint. If mnemonic isn't
+// found, ch is empty and before holds the full label.
+func splitMnemonic(label string, mnemonic rune) (before, ch, after string) {
+	idx := strings.IndexRune(label, mnemonic)
+	if idx < 0 {
+		return label, "", ""
+	}
+	n := utf8.RuneLen(mnemonic)
+	return label[:idx], label[idx : idx+n], label[idx+n:]
+}
+
+// leaderRows formats every "g"+mnemonic chord as a help-modal row via row
+// (see TabsLayout/MillerLayout's renderHelpModal), derived from menuTabs so
+// the help text can never drift from what the leader key actually does.
+func leaderRows(row func(key, desc string) string) []string {
+	rows := make([]string, 0, len(menuTabs))
+	for _, t := range menuTabs {
+		rows = append(rows, row("g "+string(t.mnemonic), t.label))
+	}
+	return rows
+}
+
+// activateScreen switches directly to screen s (as opposed to navigateTabBy's
+// relative cycling), cancelling any live subscription being left behind and
+// running the same lazy-load-on-entry side effects as cycling would. Used by
+// the "1"-"9" numeric aliases and the "g"+mnemonic leader chords in both
+// layouts, so a direct jump behaves identically to arriving via cycling.
+func activateScreen(a App, s screen) (App, tea.Cmd) {
 	if a.active == screenCMail {
 		a.cmail = a.cmail.CancelSubscription()
 	}
@@ -167,8 +257,7 @@ func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 		a.chatrooms = a.chatrooms.CancelSubscription()
 	}
 	prev := a.active
-	idx := (tabIndexOf(a) + delta + len(menuTabs)) % len(menuTabs)
-	a.active = menuTabs[idx].s
+	a.active = s
 	if a.active == screenSearch && prev != screenSearch {
 		a.searchReturn = prev
 	}
@@ -216,10 +305,24 @@ func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 		return a, a.loadJournalCmd()
 	case screenSearch:
 		// No auto-fetch: Search only has meaning once a query is submitted.
-		// Cycling in just shows whatever state it was last left in.
+		// Jumping in just shows whatever state it was last left in.
 		return a, nil
 	}
 	return a, nil
+}
+
+// navigateTabBy computes the App state and load command for moving delta
+// steps through visibleTabs from the current active screen. A no-op while
+// Search is active: it's a hidden, explicit-entry-only destination (reached
+// via "g s" or "/", see handleKeys in app.go), not part of the cyclable tab
+// rotation — the same reason screenPostDetail was never part of it either.
+func navigateTabBy(a App, delta int) (App, tea.Cmd) {
+	if a.active == screenSearch {
+		return a, nil
+	}
+	tabs := visibleTabs()
+	idx := (tabIndexOf(a) + delta + len(tabs)) % len(tabs)
+	return activateScreen(a, tabs[idx].s)
 }
 
 // delegateScreenUpdate routes a message to the currently active screen model.
