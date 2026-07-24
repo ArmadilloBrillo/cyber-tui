@@ -1,7 +1,7 @@
 {
   "data": [
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "> Get on the train, get on the train.\n>\n> Fuck you!\n>\n> I'm getting IN the train!\n>\n> Let Evil Knievel get on the train.\n>\n> &nbsp;\n>\n> --George Carlin (sortof)\n\n&nbsp;\n\n&nbsp;",
       "deleted": false,
@@ -16,7 +16,7 @@
     },
     {
       "postId": "TSim6vHqmLVwFSHIdnzx",
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "Hello Cyberlings,\n\nlike dear @7spires, I too have been playing around with the Cyberspace API.\n\nI've hacked together a reasonably functional alpha-release TUI that covers the basics like posting, replying, profile viewing (and editing but it's a bit iffy) and notifications. You can configure your timezone and theme (there are 3).\n\nIf you feel like it, have a look. The repo can be found here: https://github.com/ArmadilloBrillo/cyber-tui\n\nHappy to receive feedback. No warranty given ;)",
       "topics": [
@@ -34,7 +34,7 @@
     },
     {
       "postId": "bljSY7N8jjOc407AfzQo",
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "I am going on a trip to Italy (Rome -> Torrento -> Naples) next week.\n\nI am considering canceling so I can spend more time working on this here TUI for Cyberspace ;)",
       "topics": [
@@ -52,7 +52,7 @@
     },
     {
       "postId": "6oLNd2zg81AKYRBa0IRA",
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "For those using Claude Code with any regularity, this is a need repo: https://github.com/jarrodwatts/claude-hud",
       "topics": [
@@ -70,7 +70,7 @@
     },
     {
       "postId": "5yW9HATElMRVoRP9AaZq",
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "Damn, I hit the reply limit on the API again.\n\nThere goes my plan for a sentimemt analysis AI bot that replies with targeted ads to all of you!",
       "topics": [
@@ -88,7 +88,7 @@
     },
     {
       "postId": "Mq8nK45siq7Pe9aBtR4E",
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "I saw a doctor once.\n\n\nHe didn't see me. I was hiding.",
       "topics": [
@@ -106,7 +106,7 @@
       "bookmarksCount": 1
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "",
       "deleted": false,
@@ -129,7 +129,7 @@
       "postId": "Dgfi8bWZN7OpzDMcsD82"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "For those with API access and the interest to take a look, this is the link to my  Cyberspace TUI prototype: \n\n[https://github.com/ArmadilloBrillo/cyber-tui](https://github.com/ArmadilloBrillo/cyber-tui)\n\nAlso linked in my profile :)",
       "deleted": false,
@@ -145,7 +145,7 @@
     },
     {
       "postId": "aOEJtdjpTRRX2VZMeQwj",
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "Seems I accidentally left my car unlocked last night. In the night (presumably) someone rifled through the interior and took my Android Auto wireless dongle. That's it. No damage, left my insurance papers and little electric tyre pump. Very polite theft, although they could have closed the trunk all the way.",
       "topics": [],
@@ -160,7 +160,7 @@
       "repliesCount": 18
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "`Geen geld, geen vuur, geen speed.`  \n`Geen krant, geen wonder, geen weed.`\n\n`Geen brood, geen tijd, geen weet.`  \n`Geen klote, geen donder, geen reet.`\n\n`-- Jules Deelder, Night Mayor Of Rotterdam`",
       "deleted": false,
@@ -178,7 +178,7 @@
       "postId": "ncYD4EkTKTqRhudIMPxA"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "Me:   \n`❯ The lesson I learned today is that you're really not very good at analyzing and extracting data from images.`\n\nClaude:  \n`● Noted and saved. Going forward, when a task requires data from a screenshot I'll ask you to provide it as text or export it from the source system directly.`\n\nIs it me or is uncle Claude being a little sassy with me?",
       "deleted": false,
@@ -192,7 +192,7 @@
       "postId": "vsxqhYcjhbesfdgQrUl4"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "`I AM PLEASE TO REPORT THAT THE UNITED STATES OF AMERICA, AND THE COUNTRY OF IRAN, HAVE HAD VERY GOOD AND PRODUCTIVE CONVERSATIONS.`   \n`THIS TOTALLY HAPPENED!!!`  \n`I CLEARLY HAVE NO REASON TO LIE ABOUT THIS!!`  \n`I HAVE INSTRUCTED THE DEPARTMENT OF WAR TO POSTPONE ANY AND ALL MILITARY STRIKES AGAINST IRANIAN POWER PLANTS AND ENERGY INFRASTRUCTURE.`  \n`I MEAN...THAT WOULD BE A WAR CRIME, RIGHT!?` \n\n`THANK YOU FOR YOUR ATTENTION TO THIS MATTER!`\n\n`COMMANDER TACO.`",
       "deleted": false,
@@ -212,7 +212,7 @@
       "postId": "KBTUGUbx8uAD8pZKi9PC"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "Update on the goings-on in my life lately.\n\nI have not smoked in 5 weeks, which is nice.\n\nI have settled enough into my job to feel comfortable coming in and writing this post while I have coffee. Not sure that's a good thing.\n\nToday's the 14th anniversary of my first date with my partner Trish. We celebrate it each year, so tonight we're going out for a nice dinner. It's also St. Patrick's day AND my only brother's birthday, so it's easy to remember the day.\n\nIt's exactly a week ago since we moved my dad out of my parent's apartment, and moved him to a care facility. His dementia/Alzheimer has progressed so much that the situation at home was untenable, both for my dad and my mum really. It's been an emotional journey, certainly for her. It's a cocktail of loss, sadness, relief, guilt, anger and a bunch of other stuff. I am not quite sure how I feel about it. Certainly relief is high on my part since I now have to worry less about both my parents. One can finally sleep at night, the other gets the care he needs.  \nNow we need to find a permanent care home for dad, close enough to mum, so she can walk there to visit him.\n\nSo yeah. Some things going on.\n\nHope you're all well <3",
       "deleted": false,
@@ -227,7 +227,7 @@
       "postId": "aeBpQgAYATmIsuLlCEik"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "Good morning Cyberlings!\n\nQuick sign of life.\n\nI have started a new job this week and I find myself suddenly without much time to catch up on Cyberspace or post much.\n\nThis does not mean I have forgotten all you lovely people.\n\nThis job is eating all my mental bandwidth. It's a role I am somewhat unfamiliar with, so I have an unhealthy dose of imposter syndrome, and to be honest, I am not used to the stress of feeling like I have to perform or am being watched. Not that I am being micro managed, mind. Quite the opposite, but still.\n\nI hope to reach a more comfortable state of mind in a week or 2 weeks, and settle into a rhythm here.\n\nI hope you're all doing well.\n\n&nbsp;",
       "deleted": false,
@@ -242,7 +242,7 @@
       "postId": "nk5j2RUY0hn5nHv9sE1h"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "So I was looking around the internet for the Melania 'feel-lem'.  \nMe and some friends decided it would be a laugh to make it night, but that it was not worth the money to go see it in the theater (not that they run it anywhere around here).\n\nFound nothing!  \nBut I *did* find someone called Melania Black, who also makes movies.\n\nNow, I don't avail myself of the carnal arts much, but her movies are probably a hell of lot more interesting :-)\n\nJust sayin....",
       "deleted": false,
@@ -256,7 +256,7 @@
       "postId": "mnuzWYZn1z4SSkU7pW9G"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "I've got an interview later this morning. \n\nIt's been over a year since I last worked, and I feel both apprehensive and somewhat excited.\n\nIt's a strategic IT position for a pretty large company without a mature data environment (their words). They're looking to define a long term data strategy with all the bells and whistles...from the data platform to governance, compliance, fin-ops, data- and technical architecture etc.  \nVery challenging. \n\nI tell myself it's the sort of position I want, yet the prospect of possibly re-joining the working masses is a daunting, especially since a role like this means I will be scrutinized.\n\nOnce I used to be a data engineer, doing development in my corner...a ticket hound, not very visible. But I moved on to leadership roles over the years. I do enjoy that a lot, but there's more pressure due to visibility and a LOT more office politics to contend with.\n\nBut I am a grown ass man with some social skills.  \nPeople generally tend to like me, so I am giving it a bash.  \nStill unsure this is a good idea.\n\nBut let's see where this lands.",
       "deleted": false,
@@ -274,7 +274,7 @@
       "postId": "dgaOAfUaBAZz1t0f7YFI"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "@evie [posted](https://cyberspace.online/evie/e4bBXN1Ynj7HOJqyzrWf) a link to Nena - 99 Luftballons.\n\nReposting it because it deserves a place in the Jukebox ;)",
       "deleted": false,
@@ -301,7 +301,7 @@
       "postId": "tl8fe4Lg7pJdiVCsKBaH"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "",
       "deleted": false,
@@ -323,7 +323,7 @@
       "postId": "XvNRmIFkNZCS83RSL1Y9"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "So I have installed Home Assistant OS on a VM under Proxmox.\n\nRuns great, has all the bells and whistles, although, other than the Add-On Store, I might as well just run Home Assistant Core in a docker container (as I also already do).\n\nThat aside, the HA Add-On Store is full of, you guessed it, add-ons to install into HA.\n\nFor instance you can install Bitwarden/Vaultwarden password manager, AdGuard Home, Grafana and a whole bunch of other add-ons.\n\nMy question is: why would you?\n\n*Some* of the add-ons in the store could be considered HA-adjacent, such as Mosquitto MQTT Broker, but the ones I listed above have ++nothing++ to do with Home Assistant, or home automation.\n\nYes, I am running Vaultwarden, but I am running it as a stand-alone docker container, not as some add-on in HA.\n\nMy mind boggles.  \nAnyone have an explanation why this would be a good idea?  \nI can't find one.",
       "deleted": false,
@@ -338,7 +338,7 @@
       "postId": "bc5vzpDZLROMo944GBfl"
     },
     {
-      "authorId": "5dfFKBZ1t1VZRH4PKgeL0Vw7sTi2",
+      "authorId": "REDACTED_FIREBASE_UID_28_CHARS",
       "authorUsername": "ragnar",
       "content": "Good morning, Cyberlings.\n\nA good friend gave me a nice bag of organic coffee she brought back from Kenya.  \nSo, this morning I decided, rather than using the industrial (yet convenient) Senseo pads, to whip out the old stove-top espresso maker, and make some proper coffee.\n\nWell shit, I had almost forgotten how good good coffee tastes.\n\nFor sale: used Senseo coffee machine.  \nPrice: free",
       "deleted": false,

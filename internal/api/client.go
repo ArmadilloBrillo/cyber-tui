@@ -53,6 +53,7 @@ type loginResponseData struct {
 	IDToken      string `json:"idToken"`
 	RefreshToken string `json:"refreshToken"`
 	RTDBToken    string `json:"rtdbToken"`
+	RTDBUrl      string `json:"rtdbUrl"`
 }
 
 type refreshRequest struct {
@@ -62,6 +63,7 @@ type refreshRequest struct {
 type refreshResponseData struct {
 	IDToken   string `json:"idToken"`
 	RTDBToken string `json:"rtdbToken"`
+	RTDBUrl   string `json:"rtdbUrl"`
 }
 
 type wireAttachment struct {
@@ -73,6 +75,63 @@ type wireAttachment struct {
 	Artist string `json:"artist,omitempty"`
 	Title  string `json:"title,omitempty"`
 	Genre  string `json:"genre,omitempty"`
+}
+
+// apiTimestamp decodes a JSON value that may be an RFC3339 string (the
+// documented shape, used by every other endpoint), a numeric epoch-ms value,
+// or a raw Firestore Timestamp object (`{"_seconds":N,"_nanoseconds":N}`, or
+// the unprefixed `{"seconds":N,"nanoseconds":N}` variant) — all observed live
+// on different hit types from GET /v1/search, which appears to serialize
+// createdAt inconsistently. Undocumented drift from every other
+// user/post/reply-returning endpoint; see docs/00-api-backlog.md.
+//
+// An unrecognized shape is logged and left empty rather than failing the
+// whole decode — a malformed timestamp on one hit must never break the rest
+// of a search response.
+type apiTimestamp string
+
+func (t *apiTimestamp) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*t = ""
+		return nil
+	}
+	switch b[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(b, &s); err == nil {
+			*t = apiTimestamp(s)
+			return nil
+		}
+	case '{':
+		var fs struct {
+			Seconds        int64 `json:"_seconds"`
+			Nanoseconds    int64 `json:"_nanoseconds"`
+			SecondsAlt     int64 `json:"seconds"`
+			NanosecondsAlt int64 `json:"nanoseconds"`
+		}
+		if err := json.Unmarshal(b, &fs); err == nil {
+			sec, nsec := fs.Seconds, fs.Nanoseconds
+			if sec == 0 {
+				sec = fs.SecondsAlt
+			}
+			if nsec == 0 {
+				nsec = fs.NanosecondsAlt
+			}
+			if sec != 0 || nsec != 0 {
+				*t = apiTimestamp(time.Unix(sec, nsec).UTC().Format(time.RFC3339Nano))
+				return nil
+			}
+		}
+	default:
+		var ms int64
+		if err := json.Unmarshal(b, &ms); err == nil {
+			*t = apiTimestamp(time.UnixMilli(ms).UTC().Format(time.RFC3339Nano))
+			return nil
+		}
+	}
+	log.Printf("api: apiTimestamp: unrecognized value, leaving empty: %s", b)
+	*t = ""
+	return nil
 }
 
 type wirePost struct {
@@ -91,39 +150,39 @@ type wirePost struct {
 	IsPublic       bool             `json:"isPublic"`
 	IsNSFW         bool             `json:"isNSFW"`
 	Deleted        bool             `json:"deleted"`
-	CreatedAt      string           `json:"createdAt"`
+	CreatedAt      apiTimestamp     `json:"createdAt"`
 	Attachments    []wireAttachment `json:"attachments"`
 }
 
 type wireUser struct {
-	UserID            string  `json:"userId"`
-	Username          string  `json:"username"`
-	DisplayName       string  `json:"displayName"`
-	Email             string  `json:"email"`
-	Bio               string  `json:"bio"`
-	WebsiteUrl        string  `json:"websiteUrl"`
-	WebsiteName       string  `json:"websiteName"`
-	WebsiteImageUrl   string  `json:"websiteImageUrl"`
-	PinnedPostID      string  `json:"pinnedPostId"`
-	LocationName      string  `json:"locationName"`
-	LocationLatitude  float64 `json:"locationLatitude"`
-	LocationLongitude float64 `json:"locationLongitude"`
-	FollowersCount    int     `json:"followersCount"`
-	FollowingCount    int     `json:"followingCount"`
-	PostsCount        int     `json:"postsCount"`
-	GuildSlug         string  `json:"guildSlug"`
-	GuildID           string  `json:"guildId"`
-	GuildName         string  `json:"guildName"`
-	GuildIcon         string  `json:"guildIcon"`
-	ProfilePictureUrl string  `json:"profilePictureUrl"`
-	IsSupporter       bool    `json:"isSupporter"`
-	SupporterIcon     string  `json:"supporterIcon"`
-	SerialNumber      int     `json:"serialNumber"`
-	PublicPostsCount  int     `json:"publicPostsCount"`
-	HasPublicPosts    bool    `json:"hasPublicPosts"`
-	CreatedAt         string  `json:"createdAt"`
-	LastActiveAt      string  `json:"lastActiveAt"`
-	UpdatedAt         string  `json:"updatedAt"`
+	UserID            string       `json:"userId"`
+	Username          string       `json:"username"`
+	DisplayName       string       `json:"displayName"`
+	Email             string       `json:"email"`
+	Bio               string       `json:"bio"`
+	WebsiteUrl        string       `json:"websiteUrl"`
+	WebsiteName       string       `json:"websiteName"`
+	WebsiteImageUrl   string       `json:"websiteImageUrl"`
+	PinnedPostID      string       `json:"pinnedPostId"`
+	LocationName      string       `json:"locationName"`
+	LocationLatitude  float64      `json:"locationLatitude"`
+	LocationLongitude float64      `json:"locationLongitude"`
+	FollowersCount    int          `json:"followersCount"`
+	FollowingCount    int          `json:"followingCount"`
+	PostsCount        int          `json:"postsCount"`
+	GuildSlug         string       `json:"guildSlug"`
+	GuildID           string       `json:"guildId"`
+	GuildName         string       `json:"guildName"`
+	GuildIcon         string       `json:"guildIcon"`
+	ProfilePictureUrl string       `json:"profilePictureUrl"`
+	IsSupporter       bool         `json:"isSupporter"`
+	SupporterIcon     string       `json:"supporterIcon"`
+	SerialNumber      int          `json:"serialNumber"`
+	PublicPostsCount  int          `json:"publicPostsCount"`
+	HasPublicPosts    bool         `json:"hasPublicPosts"`
+	CreatedAt         apiTimestamp `json:"createdAt"`
+	LastActiveAt      apiTimestamp `json:"lastActiveAt"`
+	UpdatedAt         apiTimestamp `json:"updatedAt"`
 }
 
 type wireFollow struct {
@@ -149,7 +208,7 @@ type wireReply struct {
 	AuthorUsername string           `json:"authorUsername"`
 	Content        string           `json:"content"`
 	ParentReplyID  string           `json:"parentReplyId"`
-	CreatedAt      string           `json:"createdAt"`
+	CreatedAt      apiTimestamp     `json:"createdAt"`
 	Attachments    []wireAttachment `json:"attachments"`
 }
 
@@ -176,18 +235,19 @@ type wireTopic struct {
 }
 
 type wireGuild struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Slug            string `json:"slug"`
-	Icon            string `json:"icon"`
-	Bio             string `json:"bio"`
-	MemberCount     int    `json:"memberCount"`
-	FounderUsername string `json:"founderUsername"`
-	CreatedAt       string `json:"createdAt"`
-	IsMember        bool   `json:"isMember"`
-	Role            string `json:"role"`
-	Link            string `json:"link"`
-	LinkText        string `json:"linkText"`
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Slug              string `json:"slug"`
+	Icon              string `json:"icon"`
+	Bio               string `json:"bio"`
+	MemberCount       int    `json:"memberCount"`
+	FounderUsername   string `json:"founderUsername"`
+	CreatedAt         string `json:"createdAt"`
+	IsMember          bool   `json:"isMember"`
+	Role              string `json:"role"`
+	Link              string `json:"link"`
+	LinkText          string `json:"linkText"`
+	ProfilePictureUrl string `json:"profilePictureUrl"`
 }
 
 type wireGuildMember struct {
@@ -206,6 +266,7 @@ type createGuildPostRequest struct {
 	Content string   `json:"content"`
 	Title   string   `json:"title,omitempty"`
 	Topics  []string `json:"topics"`
+	Slug    string   `json:"slug,omitempty"`
 }
 
 type createBookmarkRequest struct {
@@ -248,6 +309,7 @@ type createPostRequest struct {
 	Topics   []string `json:"topics"`
 	IsPublic bool     `json:"isPublic"`
 	IsNSFW   bool     `json:"isNSFW"`
+	Slug     string   `json:"slug,omitempty"`
 }
 
 type createPostResponseData struct {
@@ -271,6 +333,9 @@ type wireNotificationMetadata struct {
 	AuthorUsername string `json:"authorUsername"`
 	GuildName      string `json:"guildName"`
 	GuildSlug      string `json:"guildSlug"`
+	PostSlug       string `json:"postSlug"`
+	PostContent    string `json:"postContent"`
+	ReplyContent   string `json:"replyContent"`
 }
 
 type wireNotification struct {
@@ -329,6 +394,87 @@ type wirePatchSettings struct {
 	DefaultPublicPost bool                  `json:"defaultPublicPost"`
 }
 
+// --- CIRC wire types ---
+
+// wireRoom is a single entry from GET /v1/circ.
+type wireRoom struct {
+	ID            string `json:"id"`
+	Slug          string `json:"slug"`
+	Name          string `json:"name"`
+	LastMessageAt int64  `json:"lastMessageAt"` // epoch ms
+	SortOrder     int    `json:"sortOrder"`
+}
+
+// wireCircMessage is a single message from GET /v1/circ/:roomId.
+type wireCircMessage struct {
+	ID          string `json:"id"`
+	UserID      string `json:"userId"`
+	Username    string `json:"username"`
+	IsChatAdmin bool   `json:"isChatAdmin"`
+	IsAction    bool   `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content     string `json:"content"`
+	Timestamp   int64  `json:"timestamp"` // epoch ms
+}
+
+// --- C-Mail wire types ---
+
+type wireCMailOtherUser struct {
+	UserID   string `json:"userId"`
+	Username string `json:"username"`
+}
+
+// wireCMailConversation is a single entry from GET /v1/cmail.
+type wireCMailConversation struct {
+	ConversationID string             `json:"conversationId"`
+	OtherUser      wireCMailOtherUser `json:"otherUser"`
+	LastMessage    string             `json:"lastMessage"`
+	LastMessageAt  int64              `json:"lastMessageAt"` // epoch ms
+	UnreadCount    int                `json:"unreadCount"`
+}
+
+// wireCMailMessage is a single message from GET /v1/cmail/:id.
+type wireCMailMessage struct {
+	ID             string `json:"id"`
+	SenderID       string `json:"senderId"`
+	SenderUsername string `json:"senderUsername"`
+	IsAction       bool   `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content        string `json:"content"`
+	Timestamp      int64  `json:"timestamp"` // epoch ms
+}
+
+// wireCMailStartResponse is returned by POST /v1/cmail.
+type wireCMailStartResponse struct {
+	ConversationID string             `json:"conversationId"`
+	OtherUser      wireCMailOtherUser `json:"otherUser"`
+}
+
+// wireRTDBMessage is the Firebase shape for a DM message in /dm_messages/<convId>/<msgId>.
+type wireRTDBMessage struct {
+	SenderID       string  `json:"senderId"`
+	SenderUsername string  `json:"senderUsername"`
+	IsAction       bool    `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content        string  `json:"content"`
+	Timestamp      float64 `json:"timestamp"` // epoch ms as a Firebase number
+	Read           bool    `json:"read"`
+}
+
+// wireRTDBCircMessage is the Firebase shape for a CIRC chatroom message in /chat_messages/<roomId>/<msgId>.
+// Field names differ from DM messages (userId/username vs senderId/senderUsername).
+type wireRTDBCircMessage struct {
+	UserID      string  `json:"userId"`
+	Username    string  `json:"username"`
+	IsChatAdmin bool    `json:"isChatAdmin"`
+	IsAction    bool    `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content     string  `json:"content"`
+	Timestamp   float64 `json:"timestamp"` // epoch ms as a Firebase number
+}
+
+// wireRTDBSSEData is the outer wrapper of a Firebase "put" SSE event's data field.
+type wireRTDBSSEData struct {
+	Path string          `json:"path"`
+	Data json.RawMessage `json:"data"`
+}
+
 type envelope struct {
 	Data   json.RawMessage `json:"data"`
 	Cursor string          `json:"cursor"`
@@ -384,11 +530,17 @@ func (c *HTTPClient) snapshotTokens() model.Tokens {
 	return c.tokens
 }
 
-func (c *HTTPClient) applyRefresh(idToken, rtdbToken string) {
+func (c *HTTPClient) applyRefresh(idToken, rtdbToken, rtdbUrl string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.tokens.IDToken = idToken
 	c.tokens.RTDBToken = rtdbToken
+	if rtdbUrl != "" {
+		c.tokens.RTDBUrl = rtdbUrl
+	}
+	if c.rtdbClient != nil {
+		c.rtdbClient.SetToken(idToken)
+	}
 }
 
 // NewHTTPClient creates a production HTTPClient with a 15-second timeout.
@@ -405,22 +557,20 @@ func NewHTTPClientForTesting(baseURL string, hc *http.Client) *HTTPClient {
 	return &HTTPClient{baseURL: baseURL, httpClient: hc}
 }
 
-// InitRTDB parses the rtdbToken to derive the Firebase project ID, constructs
-// an rtdb.Client, and stores it for use by DM/chat methods. Called after login.
-func (c *HTTPClient) InitRTDB(rtdbToken string) error {
-	projectID, err := rtdb.ParseRTDBToken(rtdbToken)
-	if err != nil {
-		if c.isDebug() {
-			// Never log token material; the parse error alone is enough to diagnose.
-			fmt.Printf("[rtdb debug] InitRTDB: parse rtdb token failed: %v\n", err)
-		}
-		return fmt.Errorf("api: parse rtdb token: %w", err)
+// InitRTDB initialises the Firebase RTDB client using the URL from the login/refresh
+// response and the user's ID token. rtdbUrl must be the value from the API response —
+// it must not be derived from the token, as the regional URL format differs from
+// what JWT-based derivation would produce. idToken (not the API's rtdbToken field,
+// which is a custom token for signInWithCustomToken) is what Firebase RTDB's REST/SSE
+// auth query parameter actually accepts.
+func (c *HTTPClient) InitRTDB(idToken, rtdbUrl string) error {
+	if rtdbUrl == "" {
+		return fmt.Errorf("api: InitRTDB: rtdbUrl is empty")
 	}
-	baseURL := rtdb.BaseURL(projectID)
 	if c.isDebug() {
-		fmt.Printf("[rtdb debug] InitRTDB: projectID=%q baseURL=%q\n", projectID, baseURL)
+		fmt.Printf("[rtdb debug] InitRTDB: url=%q\n", rtdbUrl)
 	}
-	c.rtdbClient = rtdb.New(baseURL, rtdbToken)
+	c.rtdbClient = rtdb.New(rtdbUrl, idToken)
 	return nil
 }
 
@@ -542,8 +692,15 @@ func (c *HTTPClient) refresh() error {
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return err
 	}
-	c.applyRefresh(data.IDToken, data.RTDBToken)
+	c.applyRefresh(data.IDToken, data.RTDBToken, data.RTDBUrl)
 	return nil
+}
+
+// RefreshSession proactively refreshes the ID token (and RTDB token) using the
+// stored refresh token, without waiting for a failed request to trigger it.
+// Safe to call concurrently with other requests.
+func (c *HTTPClient) RefreshSession() error {
+	return c.refresh()
 }
 
 // --- conversion helpers ---
@@ -583,7 +740,7 @@ func wireAttachmentsToModel(ws []wireAttachment) []model.Attachment {
 
 func wirePostToModel(w wirePost) model.Post {
 	sanitize.Strings(&w)
-	t := parseTime(w.CreatedAt)
+	t := parseTime(string(w.CreatedAt))
 	return model.Post{
 		ID:             w.PostID,
 		AuthorID:       w.AuthorID,
@@ -607,7 +764,7 @@ func wirePostToModel(w wirePost) model.Post {
 
 func wireReplyToModel(w wireReply) model.Reply {
 	sanitize.Strings(&w)
-	t := parseTime(w.CreatedAt)
+	t := parseTime(string(w.CreatedAt))
 	return model.Reply{
 		ID:             w.ReplyID,
 		PostID:         w.PostID,
@@ -648,9 +805,9 @@ func wireUserToModel(w wireUser) model.User {
 		SerialNumber:      w.SerialNumber,
 		PublicPostsCount:  w.PublicPostsCount,
 		HasPublicPosts:    w.HasPublicPosts,
-		CreatedAt:         parseTime(w.CreatedAt),
-		LastActiveAt:      parseTime(w.LastActiveAt),
-		UpdatedAt:         parseTime(w.UpdatedAt),
+		CreatedAt:         parseTime(string(w.CreatedAt)),
+		LastActiveAt:      parseTime(string(w.LastActiveAt)),
+		UpdatedAt:         parseTime(string(w.UpdatedAt)),
 	}
 }
 
@@ -738,6 +895,10 @@ func wireNotificationToModel(w wireNotification) model.Notification {
 		ThreadAuthorUsername: w.Metadata.AuthorUsername,
 		GuildName:            w.Metadata.GuildName,
 		GuildSlug:            w.Metadata.GuildSlug,
+		PostSlug:             w.Metadata.PostSlug,
+		PostAuthorUsername:   w.Metadata.AuthorUsername,
+		PostContent:          w.Metadata.PostContent,
+		ReplyContent:         w.Metadata.ReplyContent,
 	}
 }
 
@@ -752,32 +913,34 @@ func wireTopicToModel(w wireTopic) model.Topic {
 func wireGuildToModel(w wireGuild) model.Guild {
 	sanitize.Strings(&w)
 	return model.Guild{
-		ID:              w.ID,
-		Name:            w.Name,
-		Slug:            w.Slug,
-		Icon:            w.Icon,
-		Bio:             w.Bio,
-		MemberCount:     w.MemberCount,
-		FounderUsername: w.FounderUsername,
-		CreatedAt:       parseTime(w.CreatedAt),
-		IsMember:        w.IsMember,
-		Role:            w.Role,
-		Link:            w.Link,
-		LinkText:        w.LinkText,
+		ID:                w.ID,
+		Name:              w.Name,
+		Slug:              w.Slug,
+		Icon:              w.Icon,
+		Bio:               w.Bio,
+		MemberCount:       w.MemberCount,
+		FounderUsername:   w.FounderUsername,
+		CreatedAt:         parseTime(w.CreatedAt),
+		IsMember:          w.IsMember,
+		Role:              w.Role,
+		Link:              w.Link,
+		LinkText:          w.LinkText,
+		ProfilePictureUrl: w.ProfilePictureUrl,
 	}
 }
 
 func wireGuildMemberToModel(w wireGuildMember) model.GuildMember {
 	sanitize.Strings(&w)
 	return model.GuildMember{
-		MembershipID: w.MembershipID,
-		GuildID:      w.GuildID,
-		GuildSlug:    w.GuildSlug,
-		UserID:       w.UserID,
-		Username:     w.Username,
-		Role:         w.Role,
-		JoinedAt:     parseTime(w.JoinedAt),
-		DisplayName:  w.DisplayName,
+		MembershipID:      w.MembershipID,
+		GuildID:           w.GuildID,
+		GuildSlug:         w.GuildSlug,
+		UserID:            w.UserID,
+		Username:          w.Username,
+		Role:              w.Role,
+		JoinedAt:          parseTime(w.JoinedAt),
+		DisplayName:       w.DisplayName,
+		ProfilePictureUrl: w.ProfilePictureURL,
 	}
 }
 
@@ -814,6 +977,7 @@ func (c *HTTPClient) Login(email, password string) (model.Tokens, error) {
 		IDToken:      data.IDToken,
 		RefreshToken: data.RefreshToken,
 		RTDBToken:    data.RTDBToken,
+		RTDBUrl:      data.RTDBUrl,
 	}
 	c.setTokens(t)
 	return t, nil
@@ -901,13 +1065,14 @@ func (c *HTTPClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	return all, nil
 }
 
-func (c *HTTPClient) CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
+func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
 	env, err := c.doJSON("POST", "/v1/posts", createPostRequest{
 		Content:  content,
 		Title:    title,
 		Topics:   topics,
 		IsPublic: isPublic,
 		IsNSFW:   isNSFW,
+		Slug:     slug,
 	})
 	if err != nil {
 		return model.Post{}, err
@@ -1049,10 +1214,13 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 
 // --- Notifications ---
 
-func (c *HTTPClient) GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error) {
+func (c *HTTPClient) GetNotifications(cursor string, unreadOnly bool, types []string) ([]model.Notification, string, error) {
 	path := "/v1/notifications?limit=20"
 	if unreadOnly {
 		path += "&read=false"
+	}
+	if len(types) > 0 {
+		path += "&type=" + url.QueryEscape(strings.Join(types, ","))
 	}
 	if cursor != "" {
 		path += "&cursor=" + url.QueryEscape(cursor)
@@ -1165,6 +1333,64 @@ func (c *HTTPClient) GetTopicPosts(slug string, cursor string) ([]model.Post, st
 	return fetchPage(c, path, wirePostToModel)
 }
 
+// --- Search ---
+
+type wireSearchPreview struct {
+	Users   []wireUser  `json:"users"`
+	Posts   []wirePost  `json:"posts"`
+	Replies []wireReply `json:"replies"`
+}
+
+// Search returns the grouped GET /v1/search?type=all preview.
+func (c *HTTPClient) Search(query string) (model.SearchPreview, error) {
+	path := "/v1/search?type=all&q=" + url.QueryEscape(query)
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return model.SearchPreview{}, err
+	}
+	var data wireSearchPreview
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return model.SearchPreview{}, err
+	}
+	out := model.SearchPreview{
+		Users:   make([]model.User, len(data.Users)),
+		Posts:   make([]model.Post, len(data.Posts)),
+		Replies: make([]model.Reply, len(data.Replies)),
+	}
+	for i, w := range data.Users {
+		out.Users[i] = wireUserToModel(w)
+	}
+	for i, w := range data.Posts {
+		out.Posts[i] = wirePostToModel(w)
+	}
+	for i, w := range data.Replies {
+		out.Replies[i] = wireReplyToModel(w)
+	}
+	return out, nil
+}
+
+// searchPath builds the /v1/search path for a typed (paginated) search.
+// cursor, when non-empty, is passed back as the API's page-number param.
+func searchPath(searchType, query, cursor string) string {
+	path := "/v1/search?type=" + searchType + "&q=" + url.QueryEscape(query)
+	if cursor != "" {
+		path += "&page=" + url.QueryEscape(cursor)
+	}
+	return path
+}
+
+func (c *HTTPClient) SearchPosts(query, cursor string) ([]model.Post, string, error) {
+	return fetchPage(c, searchPath("posts", query, cursor), wirePostToModel)
+}
+
+func (c *HTTPClient) SearchReplies(query, cursor string) ([]model.Reply, string, error) {
+	return fetchPage(c, searchPath("replies", query, cursor), wireReplyToModel)
+}
+
+func (c *HTTPClient) SearchUsers(query, cursor string) ([]model.User, string, error) {
+	return fetchPage(c, searchPath("users", query, cursor), wireUserToModel)
+}
+
 // --- Guilds ---
 
 func (c *HTTPClient) GetGuilds(cursor string) ([]model.Guild, string, error) {
@@ -1213,7 +1439,7 @@ func (c *HTTPClient) LeaveGuild(slug string) error {
 	return err
 }
 
-func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []string) (model.Post, error) {
+func (c *HTTPClient) CreateGuildPost(slug, content, title, postSlug string, topics []string) (model.Post, error) {
 	if topics == nil {
 		topics = []string{}
 	}
@@ -1221,6 +1447,7 @@ func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []strin
 		Content: content,
 		Title:   title,
 		Topics:  topics,
+		Slug:    postSlug,
 	})
 	if err != nil {
 		return model.Post{}, err
@@ -1241,45 +1468,312 @@ func (c *HTTPClient) CreateGuildPost(slug, content, title string, topics []strin
 	}, nil
 }
 
-// --- Chatrooms (RTDB stubs — pending feature/rtdb-chatrooms) ---
+// --- Chatrooms (CIRC) ---
 
+// GetRooms lists the chatrooms available to the caller via GET /v1/circ.
 func (c *HTTPClient) GetRooms() ([]model.Room, error) {
-	return nil, fmt.Errorf("not implemented: chatrooms use Firebase RTDB — see feature/rtdb-chatrooms")
+	env, err := c.doRequest("GET", "/v1/circ", nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireRoom
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]model.Room, len(wire))
+	for i, w := range wire {
+		out[i] = model.Room{
+			ID:            w.ID,
+			Slug:          w.Slug,
+			Name:          w.Name,
+			LastMessageAt: time.UnixMilli(w.LastMessageAt),
+			SortOrder:     w.SortOrder,
+		}
+	}
+	return out, nil
 }
 
-func (c *HTTPClient) GetRoomMessages(roomID string, limit int) ([]model.Message, error) {
-	return nil, fmt.Errorf("not implemented: chatrooms use Firebase RTDB — see feature/rtdb-chatrooms")
+// GetRoomMessages returns up to limit messages for roomID via GET /v1/circ/:roomId.
+// Pass before=0 for the latest page; pass a previous message timestamp for older pages.
+func (c *HTTPClient) GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error) {
+	path := "/v1/circ/" + url.PathEscape(roomID) + fmt.Sprintf("?limit=%d", limit)
+	if before > 0 {
+		path += fmt.Sprintf("&before=%d", before)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireCircMessage
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]model.Message, len(wire))
+	for i, w := range wire {
+		out[i] = model.Message{
+			ID:          w.ID,
+			From:        model.User{ID: w.UserID, Username: w.Username},
+			Body:        w.Content,
+			CreatedAt:   time.UnixMilli(w.Timestamp),
+			IsChatAdmin: w.IsChatAdmin,
+			IsAction:    w.IsAction,
+		}
+	}
+	return out, nil
 }
 
-func (c *HTTPClient) SendRoomMessage(roomID, body string) error {
-	return fmt.Errorf("not implemented: chatrooms use Firebase RTDB — see feature/rtdb-chatrooms")
+// SendRoomMessage sends a message to a chatroom via POST /v1/circ/:roomId.
+// Returns the server's reply text for reply-only commands (e.g. /help, which
+// posts no message); empty for normal sends.
+func (c *HTTPClient) SendRoomMessage(roomID, body string) (string, error) {
+	env, err := c.doJSON("POST", "/v1/circ/"+url.PathEscape(roomID), map[string]string{"content": body})
+	if err != nil {
+		return "", err
+	}
+	var data struct {
+		Reply string `json:"reply"`
+	}
+	_ = json.Unmarshal(env.Data, &data)
+	return data.Reply, nil
 }
 
-// --- Direct messages (C-Mail) via Firebase RTDB ---
-// NOTE: server-side RTDB paths are not yet finalised.
-// Full implementation is in git history (commit e41884a).
-// Wire types, rtdbOrErr, and wireRTDBMessageToModel are in that commit.
+// MarkRoomRead resets the unread indicator for roomID via POST /v1/circ/:roomId/read.
+func (c *HTTPClient) MarkRoomRead(roomID string) error {
+	_, err := c.doRequest("POST", "/v1/circ/"+url.PathEscape(roomID)+"/read", nil)
+	return err
+}
 
-// GetConversations returns empty — server-side RTDB paths not yet finalised.
+// SubscribeRoom opens a live RTDB SSE stream for the given chatroom.
+// New messages arrive on the returned channel; call cancel to close the stream.
+// The initial full-snapshot event is skipped — load history via GetRoomMessages instead.
+// The channel closes when the stream ends for any reason — a network error,
+// an idle-read timeout, or the server sending a terminal auth_revoked/cancel
+// event (see rtdb.Client.Subscribe) — not only on an outright disconnect.
+// Callers should treat any close as "needs reconnect."
+func (c *HTTPClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error) {
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	params := url.Values{
+		"orderBy":     {`"timestamp"`},
+		"limitToLast": {"50"},
+	}
+	sseEvents := r.Subscribe(ctx, "/chat_messages/"+roomID, params)
+	out := make(chan model.Message, 8)
+	go func() {
+		defer close(out)
+		for ev := range sseEvents {
+			if ev.Err != nil {
+				return
+			}
+			if ev.Event != "put" {
+				continue
+			}
+			var d wireRTDBSSEData
+			if err := json.Unmarshal(ev.Data, &d); err != nil {
+				continue
+			}
+			if d.Path == "/" {
+				// Initial full-snapshot; history is loaded via REST (GetRoomMessages).
+				continue
+			}
+			if len(d.Data) == 0 || string(d.Data) == "null" {
+				// Deletion event — skip.
+				continue
+			}
+			var wm wireRTDBCircMessage
+			if err := json.Unmarshal(d.Data, &wm); err != nil {
+				continue
+			}
+			msgID := strings.TrimPrefix(d.Path, "/")
+			select {
+			case out <- wireRTDBCircMessageToModel(msgID, wm):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
+}
+
+// --- Direct messages (C-Mail) ---
+
+// rtdbOrErr returns the RTDB client or an error if InitRTDB has not been called.
+func (c *HTTPClient) rtdbOrErr() (*rtdb.Client, error) {
+	if c.rtdbClient == nil {
+		return nil, fmt.Errorf("api: RTDB client not initialised (call InitRTDB after login)")
+	}
+	return c.rtdbClient, nil
+}
+
+// wireRTDBMessageToModel converts a Firebase DM message to the model type.
+func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
+	return model.Message{
+		ID:        id,
+		From:      model.User{ID: wm.SenderID, Username: wm.SenderUsername},
+		Body:      wm.Content,
+		CreatedAt: time.UnixMilli(int64(wm.Timestamp)),
+		IsAction:  wm.IsAction,
+	}
+}
+
+// wireRTDBCircMessageToModel converts a Firebase CIRC chatroom message to the model type.
+func wireRTDBCircMessageToModel(id string, wm wireRTDBCircMessage) model.Message {
+	return model.Message{
+		ID:          id,
+		From:        model.User{ID: wm.UserID, Username: wm.Username},
+		Body:        wm.Content,
+		CreatedAt:   time.UnixMilli(int64(wm.Timestamp)),
+		IsChatAdmin: wm.IsChatAdmin,
+		IsAction:    wm.IsAction,
+	}
+}
+
+// GetConversations lists the caller's C-Mail conversations via GET /v1/cmail.
+// Sorted: unread first, then most recently active.
 func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
-	return []model.Conversation{}, nil
+	env, err := c.doRequest("GET", "/v1/cmail", nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireCMailConversation
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]model.Conversation, len(wire))
+	for i, w := range wire {
+		out[i] = model.Conversation{
+			ID:            w.ConversationID,
+			Participants:  []model.User{{ID: w.OtherUser.UserID, Username: w.OtherUser.Username}},
+			UnreadCount:   w.UnreadCount,
+			LastMessage:   w.LastMessage,
+			LastMessageAt: time.UnixMilli(w.LastMessageAt),
+		}
+	}
+	return out, nil
 }
 
-// GetMessages returns empty — server-side RTDB paths not yet finalised.
-func (c *HTTPClient) GetMessages(conversationID string, limit int) ([]model.Message, error) {
-	return []model.Message{}, nil
+// GetMessages returns history for a conversation via GET /v1/cmail/:id.
+// Messages are returned oldest-first.
+func (c *HTTPClient) GetMessages(conversationID string, limit int, before int64) ([]model.Message, error) {
+	path := "/v1/cmail/" + url.PathEscape(conversationID) + fmt.Sprintf("?limit=%d", limit)
+	if before > 0 {
+		path += fmt.Sprintf("&before=%d", before)
+	}
+	env, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireCMailMessage
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]model.Message, len(wire))
+	for i, w := range wire {
+		out[i] = model.Message{
+			ID:        w.ID,
+			From:      model.User{ID: w.SenderID, Username: w.SenderUsername},
+			Body:      w.Content,
+			CreatedAt: time.UnixMilli(w.Timestamp),
+			IsAction:  w.IsAction,
+		}
+	}
+	return out, nil
 }
 
-// SendMessage is a no-op — server-side RTDB paths not yet finalised.
-func (c *HTTPClient) SendMessage(conversationID, body string) error {
-	return nil
+// SendMessage sends a C-Mail message via POST /v1/cmail/:id. Returns the
+// server's reply text for reply-only commands (e.g. /help, which posts no
+// message); empty for normal sends.
+func (c *HTTPClient) SendMessage(conversationID, body string) (string, error) {
+	env, err := c.doJSON("POST", "/v1/cmail/"+url.PathEscape(conversationID), map[string]string{"content": body})
+	if err != nil {
+		return "", err
+	}
+	var data struct {
+		Reply string `json:"reply"`
+	}
+	_ = json.Unmarshal(env.Data, &data)
+	return data.Reply, nil
 }
 
-// SubscribeDMs returns an immediately-closed channel — server-side RTDB paths not yet finalised.
+// StartConversation creates or retrieves a C-Mail conversation with recipientUsername
+// via POST /v1/cmail. Returns 200 for an existing conversation, 201 for a new one.
+func (c *HTTPClient) StartConversation(recipientUsername string) (model.Conversation, error) {
+	env, err := c.doJSON("POST", "/v1/cmail", map[string]string{"recipientUsername": recipientUsername})
+	if err != nil {
+		return model.Conversation{}, err
+	}
+	var data wireCMailStartResponse
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return model.Conversation{}, err
+	}
+	return model.Conversation{
+		ID:           data.ConversationID,
+		Participants: []model.User{{ID: data.OtherUser.UserID, Username: data.OtherUser.Username}},
+	}, nil
+}
+
+// MarkCMailRead resets the unread count for conversationID via POST /v1/cmail/:id/read.
+func (c *HTTPClient) MarkCMailRead(conversationID string) error {
+	_, err := c.doRequest("POST", "/v1/cmail/"+url.PathEscape(conversationID)+"/read", nil)
+	return err
+}
+
+// SubscribeDMs opens a live RTDB SSE stream for the given conversation.
+// New messages arrive on the returned channel; call cancel to close the stream.
+// The initial full-snapshot event is skipped — load history via GetMessages instead.
+// The channel closes when the stream ends for any reason — a network error,
+// an idle-read timeout, or the server sending a terminal auth_revoked/cancel
+// event (see rtdb.Client.Subscribe) — not only on an outright disconnect.
+// Callers should treat any close as "needs reconnect."
 func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error) {
-	ch := make(chan model.Message)
-	close(ch)
-	return ch, func() {}, nil
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	params := url.Values{
+		"orderBy":     {`"timestamp"`},
+		"limitToLast": {"50"},
+	}
+	sseEvents := r.Subscribe(ctx, "/dm_messages/"+convID, params)
+	out := make(chan model.Message, 8)
+	go func() {
+		defer close(out)
+		for ev := range sseEvents {
+			if ev.Err != nil {
+				return
+			}
+			if ev.Event != "put" {
+				continue
+			}
+			var d wireRTDBSSEData
+			if err := json.Unmarshal(ev.Data, &d); err != nil {
+				continue
+			}
+			if d.Path == "/" {
+				// Initial full-snapshot; history is loaded via REST (GetMessages).
+				continue
+			}
+			if len(d.Data) == 0 || string(d.Data) == "null" {
+				// Deletion event — skip.
+				continue
+			}
+			var wm wireRTDBMessage
+			if err := json.Unmarshal(d.Data, &wm); err != nil {
+				continue
+			}
+			msgID := strings.TrimPrefix(d.Path, "/")
+			select {
+			case out <- wireRTDBMessageToModel(msgID, wm):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
 }
 
 // --- Follows ---

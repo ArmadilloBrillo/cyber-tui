@@ -1,12 +1,15 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -224,7 +227,7 @@ func TestHTTPCreatePost_SendsAllFields(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass") //nolint:errcheck
 
-	post, err := c.CreatePost("body text", "My Title", []string{"cyber"}, true, true)
+	post, err := c.CreatePost("body text", "My Title", "", []string{"cyber"}, true, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -374,6 +377,33 @@ func TestHTTPTokenRefresh_Success(t *testing.T) {
 	_, _, err := c.GetFeed("")
 	if err != nil {
 		t.Fatalf("expected success after token refresh, got: %v", err)
+	}
+}
+
+func TestHTTPRefreshSession_Success(t *testing.T) {
+	refreshCalls := 0
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/auth/login":
+			writeOK(t, w, map[string]string{
+				"idToken": "old-token", "refreshToken": "ref", "rtdbToken": "rtdb",
+			})
+		case "/v1/auth/refresh":
+			refreshCalls++
+			writeOK(t, w, map[string]string{
+				"idToken": "new-token", "rtdbToken": "new-rtdb",
+			})
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+		}
+	}))
+
+	c.Login("u@example.com", "pw") //nolint:errcheck
+	if err := c.RefreshSession(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if refreshCalls != 1 {
+		t.Errorf("expected exactly one refresh call, got %d", refreshCalls)
 	}
 }
 
@@ -583,42 +613,407 @@ func newClientWithRTDB(t *testing.T, rtdbHandler http.Handler) (*api.HTTPClient,
 	return c, rtdbSrv
 }
 
-// TestHTTPGetMessages_ReturnsEmpty confirms the stub returns empty (server-side not ready).
-func TestHTTPGetMessages_ReturnsEmpty(t *testing.T) {
+// writeSSEEvent sends a single SSE event and flushes.
+func writeSSEEvent(w http.ResponseWriter, event, data string) {
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// TestHTTPSubscribeDMs_SkipsSnapshotDeliversMessages verifies that:
+// (a) the initial full-snapshot event (path="/") is skipped, and
+// (b) subsequent put events arrive on the channel.
+func TestHTTPSubscribeDMs_SkipsSnapshotDeliversMessages(t *testing.T) {
 	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`))
+		// Initial snapshot — must be skipped by SubscribeDMs.
+		writeSSEEvent(w, "put", `{"path":"/","data":{"msg0":{"senderId":"u1","senderUsername":"case","content":"old","timestamp":1700000000000,"read":false}}}`)
+		// New message — must arrive on channel.
+		writeSSEEvent(w, "put", `{"path":"/msg1","data":{"senderId":"u2","senderUsername":"molly_millions","content":"hello","timestamp":1700000001000,"read":false}}`)
 	}))
-	msgs, err := c.GetMessages("conv1", 50)
+
+	ch, cancel, err := c.SubscribeDMs(context.Background(), "conv1")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("SubscribeDMs error: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Errorf("len(msgs) = %d, want 0 (stub)", len(msgs))
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if msg.ID != "msg1" {
+			t.Errorf("msg.ID = %q, want msg1", msg.ID)
+		}
+		if msg.From.Username != "molly_millions" {
+			t.Errorf("msg.From.Username = %q, want molly_millions", msg.From.Username)
+		}
+		if msg.Body != "hello" {
+			t.Errorf("msg.Body = %q, want hello", msg.Body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
 	}
 }
 
-// TestHTTPSendMessage_NoOp confirms the stub does nothing (server-side not ready).
-func TestHTTPSendMessage_NoOp(t *testing.T) {
+// TestHTTPSubscribeDMs_CancelClosesChannel verifies that calling cancel stops the stream.
+func TestHTTPSubscribeDMs_CancelClosesChannel(t *testing.T) {
 	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("SendMessage stub should not make any HTTP request")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done() // hold open until client disconnects
 	}))
-	if err := c.SendMessage("conv1", "hi"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+
+	ch, cancel, err := c.SubscribeDMs(context.Background(), "conv1")
+	if err != nil {
+		t.Fatalf("SubscribeDMs error: %v", err)
+	}
+
+	cancel()
+
+	select {
+	case _, open := <-ch:
+		if open {
+			// Drain remaining events — channel should close shortly.
+			for range ch {
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("channel did not close after cancel")
 	}
 }
 
-// TestHTTPGetConversations_ReturnsEmpty confirms the stub returns empty (server-side not ready).
-func TestHTTPGetConversations_ReturnsEmpty(t *testing.T) {
+// TestHTTPSubscribeDMs_AuthRevokedClosesChannel verifies that a terminal
+// auth_revoked event from the server closes the message channel with no
+// message delivered, confirming rtdb.Client's terminal-event handling is
+// correctly wired through the SubscribeDMs translator.
+func TestHTTPSubscribeDMs_AuthRevokedClosesChannel(t *testing.T) {
 	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("GetConversations stub should not make any HTTP request")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "auth_revoked", `null`)
+		<-r.Context().Done()
 	}))
+
+	ch, cancel, err := c.SubscribeDMs(context.Background(), "conv1")
+	if err != nil {
+		t.Fatalf("SubscribeDMs error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if ok {
+			t.Fatalf("expected channel to close with no message, got %+v", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for channel to close")
+	}
+}
+
+// TestHTTPSubscribeRoom_AuthRevokedClosesChannel mirrors
+// TestHTTPSubscribeDMs_AuthRevokedClosesChannel for cIRC rooms.
+func TestHTTPSubscribeRoom_AuthRevokedClosesChannel(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "auth_revoked", `null`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeRoom(context.Background(), "zion")
+	if err != nil {
+		t.Fatalf("SubscribeRoom error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if ok {
+			t.Fatalf("expected channel to close with no message, got %+v", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for channel to close")
+	}
+}
+
+// --- C-Mail REST tests ---
+
+func TestHTTPGetConversations_ParsesList(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, []map[string]any{
+			{
+				"conversationId": "c1",
+				"otherUser":      map[string]any{"userId": "u2", "username": "molly_millions"},
+				"lastMessage":    "we need to talk",
+				"lastMessageAt":  1700000000000,
+				"unreadCount":    2,
+			},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
 	convs, err := c.GetConversations()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(convs) != 0 {
-		t.Errorf("len(convs) = %d, want 0 (stub)", len(convs))
+	if len(convs) != 1 {
+		t.Fatalf("len(convs) = %d, want 1", len(convs))
+	}
+	if convs[0].ID != "c1" {
+		t.Errorf("ID = %q, want c1", convs[0].ID)
+	}
+	if len(convs[0].Participants) != 1 || convs[0].Participants[0].Username != "molly_millions" {
+		t.Errorf("participants mismatch: %+v", convs[0].Participants)
+	}
+	if convs[0].UnreadCount != 2 {
+		t.Errorf("UnreadCount = %d, want 2", convs[0].UnreadCount)
+	}
+	if convs[0].LastMessage != "we need to talk" {
+		t.Errorf("LastMessage = %q, want 'we need to talk'", convs[0].LastMessage)
+	}
+}
+
+func TestHTTPGetRoomMessages_PassesBeforeParam(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/circ/general" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if !strings.Contains(r.URL.RawQuery, "limit=50") {
+			t.Errorf("expected limit param, got: %s", r.URL.RawQuery)
+		}
+		if !strings.Contains(r.URL.RawQuery, "before=1700000000000") {
+			t.Errorf("expected before param, got: %s", r.URL.RawQuery)
+		}
+		writeOK(t, w, []map[string]any{})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if _, err := c.GetRoomMessages("general", 50, 1700000000000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPGetRoomMessages_ParsesIsChatAdmin(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "case", "isChatAdmin": true, "content": "hi", "timestamp": 1700000001000},
+			{"id": "m2", "userId": "u2", "username": "molly", "isChatAdmin": false, "content": "hey", "timestamp": 1700000002000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+	}
+	if !msgs[0].IsChatAdmin {
+		t.Error("expected msgs[0].IsChatAdmin = true")
+	}
+	if msgs[1].IsChatAdmin {
+		t.Error("expected msgs[1].IsChatAdmin = false")
+	}
+}
+
+// TestHTTPGetRoomMessages_ParsesIsAction locks in the undocumented isAction
+// field discovered via live testing: /me (and other emote commands) sets it,
+// and Body is just the bare action text with no username baked in.
+func TestHTTPGetRoomMessages_ParsesIsAction(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "ragnar", "isAction": true, "content": "waves", "timestamp": 1700000001000},
+			{"id": "m2", "userId": "u2", "username": "molly", "isAction": false, "content": "hey", "timestamp": 1700000002000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !msgs[0].IsAction || msgs[0].Body != "waves" {
+		t.Errorf("msgs[0] = %+v, want IsAction=true Body=waves", msgs[0])
+	}
+	if msgs[1].IsAction {
+		t.Error("expected msgs[1].IsAction = false")
+	}
+}
+
+func TestHTTPGetMessages_ParsesMessages(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail/c1" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if !strings.Contains(r.URL.RawQuery, "limit=50") {
+			t.Errorf("expected limit param, got: %s", r.URL.RawQuery)
+		}
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "senderId": "u1", "senderUsername": "case", "content": "hello", "timestamp": 1700000001000},
+			{"id": "m2", "senderId": "u2", "senderUsername": "molly_millions", "content": "hey", "timestamp": 1700000002000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetMessages("c1", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+	}
+	if msgs[0].ID != "m1" || msgs[0].Body != "hello" || msgs[0].From.Username != "case" {
+		t.Errorf("msgs[0] mismatch: %+v", msgs[0])
+	}
+	if msgs[1].ID != "m2" || msgs[1].From.Username != "molly_millions" {
+		t.Errorf("msgs[1] mismatch: %+v", msgs[1])
+	}
+}
+
+// TestHTTPGetMessages_ParsesIsAction locks in the undocumented isAction field
+// for C-Mail, added defensively alongside CIRC's (unconfirmed live for
+// C-Mail specifically, but the API describes commands as shared between the
+// two — harmless no-op if the field is actually absent there).
+func TestHTTPGetMessages_ParsesIsAction(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "senderId": "u1", "senderUsername": "case", "isAction": true, "content": "waves", "timestamp": 1700000001000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetMessages("c1", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !msgs[0].IsAction || msgs[0].Body != "waves" {
+		t.Errorf("msgs[0] = %+v, want IsAction=true Body=waves", msgs[0])
+	}
+}
+
+func TestHTTPGetMessages_PassesBeforeParam(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.RawQuery, "before=1700000000000") {
+			t.Errorf("expected before param, got: %s", r.URL.RawQuery)
+		}
+		writeOK(t, w, []map[string]any{})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if _, err := c.GetMessages("c1", 50, 1700000000000); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPSendMessage_PostsContent(t *testing.T) {
+	var gotBody []byte
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail/c1" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		writeOK(t, w, map[string]string{"conversationId": "c1", "messageId": "m1"})
+	})))
+	c.LoginWithRefreshToken("tok")
+	reply, err := c.SendMessage("c1", "hello there")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "" {
+		t.Errorf("expected empty reply for a normal send, got %q", reply)
+	}
+	if !strings.Contains(string(gotBody), "hello there") {
+		t.Errorf("expected body to contain 'hello there', got: %s", gotBody)
+	}
+}
+
+func TestHTTPSendMessage_ReturnsReply(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]string{"reply": "Commands: /me, /dice, ..."})
+	})))
+	c.LoginWithRefreshToken("tok")
+	reply, err := c.SendMessage("c1", "/help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "Commands: /me, /dice, ..." {
+		t.Errorf("reply = %q, want the /help command list", reply)
+	}
+}
+
+func TestHTTPSendRoomMessage_ReturnsReply(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/circ/general" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, map[string]string{"reply": "Commands: /me, /dice, ..."})
+	})))
+	c.LoginWithRefreshToken("tok")
+	reply, err := c.SendRoomMessage("general", "/help")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "Commands: /me, /dice, ..." {
+		t.Errorf("reply = %q, want the /help command list", reply)
+	}
+}
+
+func TestHTTPSendRoomMessage_EmptyReplyForNormalSend(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]string{"roomId": "general", "messageId": "m1"})
+	})))
+	c.LoginWithRefreshToken("tok")
+	reply, err := c.SendRoomMessage("general", "hello world")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reply != "" {
+		t.Errorf("expected empty reply for a normal send, got %q", reply)
+	}
+}
+
+func TestHTTPStartConversation_ReturnsConversation(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{
+			"conversationId": "c-new",
+			"otherUser":      map[string]any{"userId": "u2", "username": "wintermute"},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	conv, err := c.StartConversation("wintermute")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if conv.ID != "c-new" {
+		t.Errorf("ID = %q, want c-new", conv.ID)
+	}
+	if len(conv.Participants) != 1 || conv.Participants[0].Username != "wintermute" {
+		t.Errorf("participants mismatch: %+v", conv.Participants)
+	}
+}
+
+func TestHTTPMarkCMailRead_FiresRequest(t *testing.T) {
+	called := false
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail/c1/read" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		called = true
+		writeOK(t, w, nil)
+	})))
+	c.LoginWithRefreshToken("tok")
+	if err := c.MarkCMailRead("c1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("expected POST /v1/cmail/c1/read to be called")
 	}
 }
 
@@ -653,7 +1048,7 @@ func TestHTTPGetNotifications_ParsesNotifs(t *testing.T) {
 		}, "next-cursor")
 	})))
 	c.LoginWithRefreshToken("tok")
-	notifs, cursor, err := c.GetNotifications("", false)
+	notifs, cursor, err := c.GetNotifications("", false, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -690,7 +1085,7 @@ func TestHTTPGetNotifications_CursorInURL(t *testing.T) {
 		writeOKWithCursor(t, w, []map[string]any{}, "")
 	})))
 	c.LoginWithRefreshToken("tok")
-	c.GetNotifications("cursor-abc", false)
+	c.GetNotifications("cursor-abc", false, nil)
 	if !strings.Contains(capturedURL, "cursor=cursor-abc") {
 		t.Errorf("expected cursor in URL, got: %s", capturedURL)
 	}
@@ -703,7 +1098,7 @@ func TestHTTPGetNotifications_UnreadOnlyParam(t *testing.T) {
 		writeOKWithCursor(t, w, []map[string]any{}, "")
 	})))
 	c.LoginWithRefreshToken("tok")
-	c.GetNotifications("", true)
+	c.GetNotifications("", true, nil)
 	if !strings.Contains(capturedURL, "read=false") {
 		t.Errorf("expected read=false in URL, got: %s", capturedURL)
 	}
@@ -716,9 +1111,22 @@ func TestHTTPGetNotifications_AllDoesNotAddReadParam(t *testing.T) {
 		writeOKWithCursor(t, w, []map[string]any{}, "")
 	})))
 	c.LoginWithRefreshToken("tok")
-	c.GetNotifications("", false)
+	c.GetNotifications("", false, nil)
 	if strings.Contains(capturedURL, "read=") {
 		t.Errorf("expected no read param in URL, got: %s", capturedURL)
+	}
+}
+
+func TestHTTPGetNotifications_TypeFilterInURL(t *testing.T) {
+	var capturedURL string
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	})))
+	c.LoginWithRefreshToken("tok")
+	c.GetNotifications("", false, []string{"reply", "bookmark"})
+	if !strings.Contains(capturedURL, "type=reply%2Cbookmark") {
+		t.Errorf("expected type filter in URL, got: %s", capturedURL)
 	}
 }
 
@@ -1619,5 +2027,239 @@ func TestHTTPUnwatchPost_CallsCorrectEndpoint(t *testing.T) {
 	}
 	if gotPath != "/v1/posts/p42/watch" {
 		t.Errorf("path = %q, want /v1/posts/p42/watch", gotPath)
+	}
+}
+
+// --- Search ---
+
+func TestHTTPSearch_ParsesGroupedPreview(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOK(t, w, map[string]any{
+			"users": []map[string]any{
+				{"userId": "u1", "username": "neuromancer"},
+			},
+			"posts": []map[string]any{
+				{"postId": "p1", "authorId": "u2", "authorUsername": "molly", "content": "street samurai"},
+			},
+			"replies": []map[string]any{
+				{"replyId": "r1", "postId": "p1", "authorId": "u3", "authorUsername": "wintermute", "content": "i arrange things"},
+			},
+		})
+	}))
+
+	preview, err := c.Search("matrix")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "type=all") || !strings.Contains(gotURL, "q=matrix") {
+		t.Errorf("unexpected request URL: %s", gotURL)
+	}
+	if len(preview.Users) != 1 || preview.Users[0].Username != "neuromancer" {
+		t.Errorf("unexpected users: %+v", preview.Users)
+	}
+	if len(preview.Posts) != 1 || preview.Posts[0].ID != "p1" || preview.Posts[0].AuthorUsername != "molly" {
+		t.Errorf("unexpected posts: %+v", preview.Posts)
+	}
+	if len(preview.Replies) != 1 || preview.Replies[0].ID != "r1" || preview.Replies[0].AuthorUsername != "wintermute" {
+		t.Errorf("unexpected replies: %+v", preview.Replies)
+	}
+}
+
+// TestHTTPSearch_ParsesNumericCreatedAt guards against a real bug: GET
+// /v1/search returns createdAt as a numeric epoch-ms value (at least for user
+// hits), diverging from every other user/post/reply-returning endpoint, which
+// use RFC3339 strings. Discovered via live testing against the real API.
+func TestHTTPSearch_ParsesNumericCreatedAt(t *testing.T) {
+	const epochMs = 1700000000000
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{
+			"users": []map[string]any{
+				{"userId": "u1", "username": "neuromancer", "createdAt": epochMs},
+			},
+			"posts": []map[string]any{
+				{"postId": "p1", "authorId": "u2", "authorUsername": "molly", "content": "street samurai", "createdAt": epochMs},
+			},
+			"replies": []map[string]any{
+				{"replyId": "r1", "postId": "p1", "authorId": "u3", "authorUsername": "wintermute", "content": "i arrange things", "createdAt": epochMs},
+			},
+		})
+	}))
+
+	preview, err := c.Search("matrix")
+	if err != nil {
+		t.Fatalf("unexpected error decoding numeric createdAt: %v", err)
+	}
+	want := time.UnixMilli(epochMs).UTC()
+	if len(preview.Users) != 1 || !preview.Users[0].CreatedAt.Equal(want) {
+		t.Errorf("user CreatedAt = %v, want %v", preview.Users[0].CreatedAt, want)
+	}
+	if len(preview.Posts) != 1 || !preview.Posts[0].CreatedAt.Equal(want) {
+		t.Errorf("post CreatedAt = %v, want %v", preview.Posts[0].CreatedAt, want)
+	}
+	if len(preview.Replies) != 1 || !preview.Replies[0].CreatedAt.Equal(want) {
+		t.Errorf("reply CreatedAt = %v, want %v", preview.Replies[0].CreatedAt, want)
+	}
+}
+
+// TestHTTPSearchPosts_ParsesNumericCreatedAt confirms the fix also covers the
+// paginated typed-search path (fetchPage + wirePostToModel), not just the
+// grouped type=all preview's bespoke unmarshaling.
+func TestHTTPSearchPosts_ParsesNumericCreatedAt(t *testing.T) {
+	const epochMs = 1700000000000
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOKWithCursor(t, w, []map[string]any{
+			{"postId": "p1", "authorId": "u1", "authorUsername": "case", "content": "flatline", "createdAt": epochMs},
+		}, "")
+	}))
+
+	posts, _, err := c.SearchPosts("flatline", "")
+	if err != nil {
+		t.Fatalf("unexpected error decoding numeric createdAt: %v", err)
+	}
+	want := time.UnixMilli(epochMs).UTC()
+	if len(posts) != 1 || !posts[0].CreatedAt.Equal(want) {
+		t.Errorf("post CreatedAt = %v, want %v", posts[0].CreatedAt, want)
+	}
+}
+
+// TestHTTPSearch_ParsesFirestoreTimestampObject guards against a second
+// createdAt shape observed live: a raw Firestore Timestamp object instead of
+// a string or a plain number.
+func TestHTTPSearch_ParsesFirestoreTimestampObject(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{
+			"users": []map[string]any{},
+			"posts": []map[string]any{
+				{"postId": "p1", "authorId": "u1", "authorUsername": "case", "content": "flatline",
+					"createdAt": map[string]any{"_seconds": 1700000000, "_nanoseconds": 0}},
+			},
+			"replies": []map[string]any{},
+		})
+	}))
+
+	preview, err := c.Search("flatline")
+	if err != nil {
+		t.Fatalf("unexpected error decoding a Firestore timestamp object: %v", err)
+	}
+	want := time.Unix(1700000000, 0).UTC()
+	if len(preview.Posts) != 1 || !preview.Posts[0].CreatedAt.Equal(want) {
+		t.Errorf("post CreatedAt = %v, want %v", preview.Posts[0].CreatedAt, want)
+	}
+}
+
+// TestHTTPSearch_UnrecognizedCreatedAtShape_DoesNotFail guards against a
+// third, still-unknown shape: decoding must degrade gracefully (empty
+// timestamp on that one hit) rather than failing the whole search response.
+func TestHTTPSearch_UnrecognizedCreatedAtShape_DoesNotFail(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{
+			"users": []map[string]any{},
+			"posts": []map[string]any{
+				{"postId": "p1", "authorId": "u1", "authorUsername": "case", "content": "flatline",
+					"createdAt": []int{1, 2, 3}},
+			},
+			"replies": []map[string]any{},
+		})
+	}))
+
+	preview, err := c.Search("flatline")
+	if err != nil {
+		t.Fatalf("expected search to succeed despite an unrecognized createdAt shape, got: %v", err)
+	}
+	if len(preview.Posts) != 1 || preview.Posts[0].ID != "p1" {
+		t.Fatalf("expected the post to still decode: %+v", preview.Posts)
+	}
+	if !preview.Posts[0].CreatedAt.IsZero() {
+		t.Errorf("expected zero-value CreatedAt for an unrecognized shape, got %v", preview.Posts[0].CreatedAt)
+	}
+}
+
+func TestHTTPSearchPosts_ParsesResultsAndCursor(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{
+			{"postId": "p1", "authorId": "u1", "authorUsername": "case", "content": "flatline"},
+		}, "1")
+	}))
+
+	posts, cursor, err := c.SearchPosts("flatline", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "type=posts") || !strings.Contains(gotURL, "q=flatline") {
+		t.Errorf("unexpected request URL: %s", gotURL)
+	}
+	if strings.Contains(gotURL, "page=") {
+		t.Errorf("first page should not include a page param: %s", gotURL)
+	}
+	if len(posts) != 1 || posts[0].ID != "p1" {
+		t.Errorf("unexpected posts: %+v", posts)
+	}
+	if cursor != "1" {
+		t.Errorf("cursor = %q, want %q", cursor, "1")
+	}
+}
+
+func TestHTTPSearchPosts_SendsPageParamForCursor(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{}, "")
+	}))
+
+	c.SearchPosts("flatline", "1") //nolint:errcheck,dogsled
+	if !strings.Contains(gotURL, "page=1") {
+		t.Errorf("expected page=1 in URL, got: %s", gotURL)
+	}
+	if strings.Contains(gotURL, "cursor=") {
+		t.Errorf("search pagination should use 'page', not 'cursor': %s", gotURL)
+	}
+}
+
+func TestHTTPSearchReplies_ParsesResults(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{
+			{"replyId": "r1", "postId": "p1", "authorId": "u1", "authorUsername": "molly", "content": "don't stare"},
+		}, "")
+	}))
+
+	replies, cursor, err := c.SearchReplies("stare", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "type=replies") {
+		t.Errorf("unexpected request URL: %s", gotURL)
+	}
+	if len(replies) != 1 || replies[0].ID != "r1" || replies[0].PostID != "p1" {
+		t.Errorf("unexpected replies: %+v", replies)
+	}
+	if cursor != "" {
+		t.Errorf("expected empty (exhausted) cursor, got %q", cursor)
+	}
+}
+
+func TestHTTPSearchUsers_ParsesResults(t *testing.T) {
+	var gotURL string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{
+			{"userId": "u1", "username": "wintermute", "followersCount": 42},
+		}, "")
+	}))
+
+	users, _, err := c.SearchUsers("wintermute", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotURL, "type=users") {
+		t.Errorf("unexpected request URL: %s", gotURL)
+	}
+	if len(users) != 1 || users[0].Username != "wintermute" || users[0].FollowersCount != 42 {
+		t.Errorf("unexpected users: %+v", users)
 	}
 }

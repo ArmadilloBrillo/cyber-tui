@@ -44,6 +44,7 @@ type SharedConfigMsg struct {
 	Timezone       string
 	ImageViewer    string
 	OwnGuildSlug   string
+	LayoutName     string // "tabs" or "miller"; used by settings screen to show current value
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -55,6 +56,11 @@ type URLProvider interface {
 // ShowUserProfileMsg is emitted by Feed, PostDetail, and Notifications when
 // the user presses 'p' on the highlighted item.
 type ShowUserProfileMsg struct{ Username string }
+
+// StartConversationMsg is emitted by any screen when the user presses 'c' on a
+// highlighted post, reply, notification, or profile to open (or create) a C-Mail
+// conversation with that user. App guards against self-DMs.
+type StartConversationMsg struct{ Username string }
 
 // BackFromProfileMsg is emitted by ProfileModel in read-only mode when ESC is pressed.
 type BackFromProfileMsg struct{}
@@ -68,6 +74,8 @@ type SaveSettingsMsg struct {
 	MaxThreadDepth int
 	Timezone       string
 	ImageViewer    string
+	LayoutName     string // "tabs" or "miller"
+	RemoteChanged  bool   // true when API-managed fields differ from the last saved baseline
 }
 
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark

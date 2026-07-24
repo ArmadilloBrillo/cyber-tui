@@ -500,6 +500,17 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				username = m.post.AuthorUsername
 			}
 			return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+		case "c":
+			if m.post.ID == "" {
+				return m, nil
+			}
+			var username string
+			if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
+				username = m.flatTree[m.selectedReply].Reply.AuthorUsername
+			} else {
+				username = m.post.AuthorUsername
+			}
+			return m, func() tea.Msg { return StartConversationMsg{Username: username} }
 		case "b":
 			if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
 				replyID := m.flatTree[m.selectedReply].Reply.ID
@@ -520,71 +531,22 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			}
 			return m, nil
 		case "up", "k":
-			if m.selectedReply >= 0 {
-				// Reply is selected — scroll through it first (pager behaviour).
-				replyTop := m.replyOffsets[m.selectedReply]
-				if replyTop < m.viewport.YOffset {
-					// Reply top is above the visible area — scroll up.
-					m.viewport.ScrollUp(1)
-				} else {
-					// Reply top is visible — move to previous item.
-					m.selectedReply--
-					m = m.refreshContent()
-					// Mirror the down-scroll behaviour: snap the previous item
-					// fully into view if it fits the viewport; otherwise leave
-					// the viewport in place and let the user scroll through it
-					// line-by-line.
-					var prevStart, prevHeight int
-					if m.selectedReply == -1 {
-						prevStart = 0
-						prevHeight = m.postHeight
-					} else {
-						prevStart = m.replyOffsets[m.selectedReply]
-						prevHeight = m.replyHeights[m.selectedReply]
-					}
-					if prevHeight <= m.viewport.Height {
-						// Item fits — snap it fully into view (mirrors down behaviour).
-						m = m.ensureSelectedVisible()
-					} else {
-						// Item is taller than the viewport — align its bottom to the
-						// viewport bottom so the selection highlight is visible and
-						// the user can scroll up through it line-by-line.
-						itemEnd := prevStart + prevHeight - 1
-						m.viewport.SetYOffset(itemEnd - m.viewport.Height + 1)
-					}
-				}
-			} else {
-				// Post is selected — scroll viewport up (pager behaviour).
-				m.viewport.ScrollUp(1)
+			newReply, newOffset := millerPageNav(-1, m.viewport.Height, m.postHeight,
+				m.replyOffsets, m.replyHeights, m.selectedReply, m.viewport.YOffset)
+			if newReply != m.selectedReply {
+				m.selectedReply = newReply
+				m = m.refreshContent()
 			}
+			m.viewport.SetYOffset(newOffset)
 			return m, nil
 		case "down", "j":
-			if m.selectedReply == -1 {
-				// Post is selected — scroll through it first, then advance to replies.
-				viewBottom := m.viewport.YOffset + m.viewport.Height - 1
-				if viewBottom >= m.postHeight-1 && len(m.replies) > 0 {
-					// Post bottom is visible — jump to first reply.
-					m.selectedReply = 0
-					m = m.refreshContent()
-					m = m.ensureSelectedVisible()
-				} else {
-					m.viewport.ScrollDown(1)
-				}
-			} else {
-				// Reply is selected — scroll through it first (pager behaviour).
-				replyH := m.replyHeights[m.selectedReply]
-				replyBottom := m.replyOffsets[m.selectedReply] + replyH - 1
-				viewBottom := m.viewport.YOffset + m.viewport.Height - 1
-				if replyBottom > viewBottom {
-					// Reply bottom is below the visible area — scroll down.
-					m.viewport.ScrollDown(1)
-				} else if m.selectedReply < len(m.flatTree)-1 {
-					// Reply bottom is visible — advance to next reply.
-					m.selectedReply++
-					m = m.refreshContent()
-					m = m.ensureSelectedVisible()
-				}
+			newReply, newOffset := millerPageNav(+1, m.viewport.Height, m.postHeight,
+				m.replyOffsets, m.replyHeights, m.selectedReply, m.viewport.YOffset)
+			if newReply != m.selectedReply {
+				m.selectedReply = newReply
+				m = m.refreshContent()
 			}
+			m.viewport.SetYOffset(newOffset)
 			return m, nil
 		}
 	}

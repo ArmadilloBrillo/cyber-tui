@@ -3,10 +3,15 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ragnar/cyber-tui/internal/model"
 )
+
+// mockHelpReply mirrors the /help reply documented in the API's command table.
+const mockHelpReply = "Commands: /me <action> · /poke /hug /hi5 /slap [@user] · " +
+	"/dice <notation> · /8ball <question> · /fortune · /help"
 
 // MockClient implements Client with static fake data.
 // Used during development before the real API is available.
@@ -102,6 +107,10 @@ func (m *MockClient) LoginWithRefreshToken(refreshToken string) (model.Tokens, e
 
 func (m *MockClient) Logout() error {
 	m.tokens = model.Tokens{}
+	return nil
+}
+
+func (m *MockClient) RefreshSession() error {
 	return nil
 }
 
@@ -217,7 +226,7 @@ func (m *MockClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	}, nil
 }
 
-func (m *MockClient) CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
+func (m *MockClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
 	return model.Post{
 		ID:             "new-1",
 		AuthorID:       mockUsers[0].ID,
@@ -314,7 +323,7 @@ func (m *MockClient) GetGuildPosts(slug string, cursor string) ([]model.Post, st
 	return nil, "", nil
 }
 
-func (m *MockClient) CreateGuildPost(slug, content, title string, topics []string) (model.Post, error) {
+func (m *MockClient) CreateGuildPost(slug, content, title, postSlug string, topics []string) (model.Post, error) {
 	return model.Post{}, nil
 }
 
@@ -331,7 +340,7 @@ func (m *MockClient) GetWatches(cursor string) ([]model.Watch, string, error) {
 func (m *MockClient) WatchPost(postID string) error   { return nil }
 func (m *MockClient) UnwatchPost(postID string) error { return nil }
 
-func (m *MockClient) GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error) {
+func (m *MockClient) GetNotifications(cursor string, unreadOnly bool, types []string) ([]model.Notification, string, error) {
 	if !unreadOnly {
 		return mockNotifications, "", nil
 	}
@@ -399,29 +408,65 @@ func (m *MockClient) UpdateSettings(update model.Settings) error {
 
 func (m *MockClient) GetRooms() ([]model.Room, error) {
 	return []model.Room{
-		{ID: "r1", Name: "#zion", Description: "the last human city", Members: 42},
-		{ID: "r2", Name: "#sprawl", Description: "boston-atlanta metropolitan axis", Members: 17},
-		{ID: "r3", Name: "#freeside", Description: "orbital pleasure dome", Members: 8},
+		{ID: "r1", Slug: "zion", Name: "Zion", LastMessageAt: time.Now().Add(-2 * time.Minute), SortOrder: 1},
+		{ID: "r2", Slug: "sprawl", Name: "Sprawl", LastMessageAt: time.Now().Add(-15 * time.Minute), SortOrder: 2},
+		{ID: "r3", Slug: "freeside", Name: "Freeside", LastMessageAt: time.Now().Add(-1 * time.Hour), SortOrder: 3},
 	}, nil
 }
 
-func (m *MockClient) GetRoomMessages(roomID string, limit int) ([]model.Message, error) {
+func (m *MockClient) GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error) {
+	if before > 0 {
+		return nil, nil
+	}
 	return []model.Message{
 		{ID: "m1", From: mockUsers[0], Body: "anybody else getting lag in the matrix tonight?", CreatedAt: time.Now().Add(-5 * time.Minute)},
-		{ID: "m2", From: mockUsers[1], Body: "always. use a slower deck.", CreatedAt: time.Now().Add(-3 * time.Minute)},
-		{ID: "m3", From: mockUsers[2], Body: "...", CreatedAt: time.Now().Add(-1 * time.Minute)},
+		{ID: "m2", From: mockUsers[1], Body: "always. use a slower deck.", CreatedAt: time.Now().Add(-3 * time.Minute), IsChatAdmin: true},
+		{ID: "m3", From: mockUsers[2], Body: "shrugs", CreatedAt: time.Now().Add(-1 * time.Minute), IsAction: true},
 	}, nil
 }
 
-func (m *MockClient) SendRoomMessage(roomID, body string) error {
+func (m *MockClient) SendRoomMessage(roomID, body string) (string, error) {
+	if body == "/help" {
+		return mockHelpReply, nil
+	}
+	return "", nil
+}
+
+func (m *MockClient) MarkRoomRead(roomID string) error {
 	return nil
+}
+
+// SubscribeRoom returns a channel that delivers one fake incoming message after
+// 2 seconds (to exercise the live-stream UI path), then closes.
+func (m *MockClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan model.Message, 1)
+	go func() {
+		defer close(ch)
+		select {
+		case <-time.After(2 * time.Second):
+			select {
+			case ch <- model.Message{
+				ID:        "mock-room-live-1",
+				From:      mockUsers[1],
+				Body:      "incoming mock room message",
+				CreatedAt: time.Now(),
+			}:
+			case <-ctx.Done():
+			}
+		case <-ctx.Done():
+		}
+	}()
+	return ch, cancel, nil
 }
 
 func (m *MockClient) GetConversations() ([]model.Conversation, error) {
 	return []model.Conversation{
 		{
-			ID:           "c1",
-			Participants: []model.User{mockUsers[0], mockUsers[1]},
+			ID:            "c1",
+			Participants:  []model.User{mockUsers[0], mockUsers[1]},
+			LastMessage:   "we need to talk about the job",
+			LastMessageAt: time.Now().Add(-1 * time.Hour),
 			Messages: []model.Message{
 				{ID: "dm1", From: mockUsers[1], Body: "we need to talk about the job", CreatedAt: time.Now().Add(-1 * time.Hour)},
 			},
@@ -429,15 +474,21 @@ func (m *MockClient) GetConversations() ([]model.Conversation, error) {
 	}, nil
 }
 
-func (m *MockClient) GetMessages(conversationID string, limit int) ([]model.Message, error) {
+func (m *MockClient) GetMessages(conversationID string, limit int, before int64) ([]model.Message, error) {
+	if before > 0 {
+		return nil, nil
+	}
 	return []model.Message{
 		{ID: "dm1", From: mockUsers[1], Body: "we need to talk about the job", CreatedAt: time.Now().Add(-1 * time.Hour)},
 		{ID: "dm2", From: mockUsers[0], Body: "i'm listening", CreatedAt: time.Now().Add(-55 * time.Minute)},
 	}, nil
 }
 
-func (m *MockClient) SendMessage(conversationID, body string) error {
-	return nil
+func (m *MockClient) SendMessage(conversationID, body string) (string, error) {
+	if body == "/help" {
+		return mockHelpReply, nil
+	}
+	return "", nil
 }
 
 // SubscribeDMs returns a channel that delivers one fake incoming message after
@@ -459,6 +510,17 @@ func (m *MockClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 		}
 	}()
 	return ch, cancel, nil
+}
+
+func (m *MockClient) StartConversation(recipientUsername string) (model.Conversation, error) {
+	return model.Conversation{
+		ID:           "c-new",
+		Participants: []model.User{{Username: recipientUsername}},
+	}, nil
+}
+
+func (m *MockClient) MarkCMailRead(conversationID string) error {
+	return nil
 }
 
 var mockFollowing = []model.Follow{
@@ -600,4 +662,48 @@ func (m *MockClient) GetUserReplies(username, cursor string) ([]model.Reply, str
 		}
 	}
 	return userReplies, "", nil
+}
+
+// mockContains is a case-insensitive substring match used by the search mocks.
+func mockContains(haystack, needle string) bool {
+	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
+}
+
+func (m *MockClient) Search(query string) (model.SearchPreview, error) {
+	users, _, _ := m.SearchUsers(query, "")
+	posts, _, _ := m.SearchPosts(query, "")
+	replies, _, _ := m.SearchReplies(query, "")
+	return model.SearchPreview{Users: users, Posts: posts, Replies: replies}, nil
+}
+
+func (m *MockClient) SearchPosts(query, cursor string) ([]model.Post, string, error) {
+	feed, _, _ := m.GetFeed("")
+	var out []model.Post
+	for _, p := range feed {
+		if mockContains(p.Content, query) || mockContains(p.Title, query) {
+			out = append(out, p)
+		}
+	}
+	return out, "", nil
+}
+
+func (m *MockClient) SearchReplies(query, cursor string) ([]model.Reply, string, error) {
+	replies, _ := m.GetPostReplies("")
+	var out []model.Reply
+	for _, r := range replies {
+		if mockContains(r.Content, query) {
+			out = append(out, r)
+		}
+	}
+	return out, "", nil
+}
+
+func (m *MockClient) SearchUsers(query, cursor string) ([]model.User, string, error) {
+	var out []model.User
+	for _, u := range mockUsers {
+		if mockContains(u.Username, query) || mockContains(u.DisplayName, query) || mockContains(u.Bio, query) {
+			out = append(out, u)
+		}
+	}
+	return out, "", nil
 }

@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.5.1) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.7) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -14,6 +14,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `/v1/follows` | GET | **Open** | Response does not include `followerUsername` or `followedUsername`. Confirmed still missing in v0.4 (re-tested 2026-05-29). The profile Following/Followers tabs fall back to showing a truncated user ID; profile navigation from those tabs is disabled until the API returns usernames. | 2026-04-17 |
 | `/v1/notifications` | GET | **Open (by design?)** | Notifications can point to posts that have since been deleted, and the notification object exposes no "target deleted/unavailable" flag — opening one is the only way to discover the target is gone (`GET /v1/posts/:id` → 404). The client now handles this gracefully (friendly "This post has been deleted" banner, non-blocking). A `targetDeleted` field (or server-side filtering of dead-target notifications) would let the client mark/skip them up front. | 2026-06-03 |
 | Rate limits (spec) | — | **Resolved** | The v0.4.1 inline-vs-table contradiction is gone in v0.5.0: the consolidated Rate Limits table now matches the inline per-endpoint limits (Entries 15/day, Replies 15/day, Notes 30/day, Bookmarks 75/day, Profile/Settings 15/day). Read limits were also raised (most list endpoints 30→45/min; profile/follows/topics/bookmarks/notes 20→30/min). Resolved 2026-06-04. | 2026-05-29 |
+| `/v1/search` | GET | **Open** | `createdAt` is inconsistent across hit types, and doesn't match the RFC3339 string every other user/post/reply-returning endpoint uses. Confirmed live: a numeric epoch (assumed ms) on user hits, and a raw Firestore Timestamp object (`{"_seconds":N,"_nanoseconds":N}`) on post hits — apparently un-normalized before being sent to the client. Not documented in the API spec. Client-side workaround: `apiTimestamp` (`internal/api/client.go`) accepts string, number, or object for `wireUser`/`wirePost`/`wireReply`'s date fields, and degrades to an empty timestamp rather than failing the whole response for any other shape. | 2026-07-23 |
 
 ---
 
@@ -44,6 +45,7 @@ Ordered roughly by implementation effort / priority.
 | `model.Post` fields | `Title`, `Slug`, `GuildID`, `GuildSlug`, `IsGuildThread` | **Done** — feature 28 |
 | `POST /v1/posts` signature | Extended: `CreatePost(content, title, topics, isPublic, isNSFW)` | **Done** — feature 28 |
 | `GET /v1/users/:username/posts/:slug` | Slug-based post lookup not in Client interface. Useful for deep-linking; not needed for core navigation. | Low |
+| `POST /v1/posts` — optional `slug` field (v0.7) | Custom slug (`a-z0-9-`, max 60 chars); server generates one if omitted. Compose panel (`PostComposePanel`) now includes a slug field with inline validation; empty slug is silently omitted from the wire. Same applies to `POST /v1/guilds/:slug/posts`. | **Done** — v0.7 alignment |
 
 ### Guilds (new in v0.4)
 
@@ -65,15 +67,67 @@ Notes:
 - Notification metadata for guild **replies/posts** uses `metadata.guildSlug` + `metadata.isGuildThread: true` (observed 2026-06-03), **not** `metadata.guildName`. The client decodes `guildSlug` and shows `in #<slug>` on `reply`/`thread_reply`/`new_post_*` (prefers slug over the rarer `guildName`). As of API **v0.5.0** the server documents the notification object and its `metadata` keys (incl. `guildSlug`, `guildName`, `isGuildThread`, `threadId`, `postSlug`, `authorUsername`), closing the earlier doc gap; the client's slug-preference behavior matches the documented schema.
 - The `isMember` / `role` fields on `GET /v1/guilds/:slug` were broken in v0.4 but are **fixed in v0.4.1** (verified 2026-06-01 — see Resolved Issues). The `GetGuild()` client method could now be called to read accurate membership state, though the current `User.GuildSlug` approach also works.
 - Join/leave are now official v0.4.1 API endpoints. Any authenticated user can also create a guild thread without being a member (explicitly stated in v0.4.1 spec).
-- v0.4.1 adds `profilePictureUrl` to both the guild list response and the guild members list response. The `Guild` and `GuildMember` model types and wire layer do not yet carry this field.
+- v0.4.1 adds `profilePictureUrl` to both the guild list response and the guild members list response. `Guild` and `GuildMember` model types and wire layer now carry this field (v0.7 alignment); rendering is deferred until imgview support lands in the guild list.
 
 ### Guilds (new in v0.4.1)
 
 | Area | Description | Priority |
 |---|---|---|
-| `profilePictureUrl` on Guild / GuildMember | v0.4.1 adds this field to the guild list response and the member list response. Not in model types or wire layer. Low value for a TUI but keeps model in sync. | Low |
+| `profilePictureUrl` on Guild / GuildMember | v0.4.1 adds this field to the guild list response and the member list response. Captured in model and wire layer; rendering deferred (no imgview in guild list yet). | **Done** — v0.7 alignment |
 | Guild join (`POST /v1/guilds/:slug/join`) | Now an official API endpoint. One guild per user; 409 if already in one. | **Done** |
 | Guild leave (`POST /v1/guilds/:slug/leave`) | Now an official API endpoint. Founders get 403 — must use web. | **Done** |
+
+### C-Mail (new in v0.7)
+
+All REST endpoints and the RTDB SSE subscription are fully implemented. See `docs/08-cmail.md` for details.
+
+| Endpoint | Method | Description | Status |
+|---|---|---|---|
+| `POST /v1/cmail` | POST | Start or get a conversation by `recipientUsername` (idempotent) | **Done** — `StartConversation` |
+| `GET /v1/cmail` | GET | List conversations (unread first, then newest activity) | **Done** — `GetConversations`; populates `UnreadCount`, `LastMessage` |
+| `GET /v1/cmail/:conversationId` | GET | Load message history | **Done** — `GetMessages` |
+| `POST /v1/cmail/:conversationId` | POST | Send a message | **Done** — `SendMessage` |
+| `POST /v1/cmail/:conversationId/read` | POST | Mark conversation as read | **Done** — `MarkCMailRead`; called on conversation open |
+| RTDB `dm_messages/<conversationId>` | SSE | Real-time new messages | **Done** — `SubscribeDMs`; skips initial snapshot |
+| RTDB `user_conversations/<uid>` | SSE | Live conversation list / unread updates | Not implemented — REST list covers the use case at navigation time |
+
+### cIRC (new in v0.7)
+
+cIRC REST API is now fully documented. A room is addressed by its `roomId` (slug, e.g. `general`). Real-time reading uses Firebase RTDB SSE.
+
+| Endpoint | Method | Description | Status |
+|---|---|---|---|
+| `GET /v1/circ` | GET | List rooms available to you (sorted by `sortOrder`, then newest activity) | **Done** — feature 33 |
+| `GET /v1/circ/:roomId` | GET | Load room message history (paginated, oldest-first, `before` cursor) | **Done** — feature 33 |
+| `POST /v1/circ/:roomId` | POST | Send a message to a room (supports slash commands) | **Done** — feature 33 |
+| `POST /v1/circ/:roomId/read` | POST | Mark room as read (drives "new messages" indicator) | **Done** — feature 33 |
+| RTDB `chat_messages/<roomId>` | SSE | Subscribe to real-time new messages | **Done** — feature 33 |
+
+Notes:
+- Each room message includes `isChatAdmin` flag — parsed into `model.Message.IsChatAdmin` and shown as a `[admin]` badge in the TUI.
+- Rate limits: 15 sends/min, 300/day, 150/hour; 60 mark-read/min.
+- 403 if room isn't available to you.
+- Online-users list: API has no such endpoint — deferred.
+- Slash command rendering: server expands `/me`, `/poke`, `/dice` etc. server-side; no client-side preview yet.
+
+### Search (new in v0.7)
+
+| Endpoint | Method | Description | Status |
+|---|---|---|---|
+| `GET /v1/search?q=<query>&type=all` | GET | Full-text search across users, posts, and replies — grouped preview | **Done** — feature 34, `Search()` |
+| `GET /v1/search?q=<query>&type=posts\|replies\|users` | GET | Paginated single-category search | **Done** — feature 34, `SearchPosts`/`SearchReplies`/`SearchUsers()` |
+
+Notes:
+- `type=all` returns up to 8 hits per group (users/posts/replies), no pagination, no total count. The client treats "exactly 8 hits" as the only available signal that a category may have more — see `docs/34-search.md`.
+- `type=posts|replies|users` returns paginated results; the client sends `page` (0-based) and treats the response `cursor` (next page number, or null) as an opaque cursor string, same as every other paginated endpoint — no special-casing needed.
+- Search hits reuse the existing `model.User`/`model.Post`/`model.Reply` types; no dedicated hit types were needed. The doc-mentioned extra reply-hit context (`parentPostAuthor`/`parentPostContent`) and user-hit guild fields were not captured — not needed for the current UI (reply hits navigate to the parent post directly; user hits already carry guild fields via the existing `User` type).
+- Rate limit: 30/min. Missing `q` → 400 VALIDATION_ERROR.
+
+### Commands (new in v0.7)
+
+Both cIRC and C-Mail support IRC-style slash commands expanded server-side: `/me`, `/poke`, `/hug`, `/hi5`, `/slap` (with optional `[@user]`), `/dice <notation>`, `/8ball <question>`, `/fortune`, `/help`. Malformed commands return 400. `/help` posts nothing; its `{ data: { reply } }` is captured by `SendRoomMessage`/`SendMessage` (**Done**) and shown as a local system notice — see `docs/33-circ.md` / `docs/08-cmail.md`.
+
+`/me` and the other emotes set an undocumented `isAction` field (with `content` stripped of the username), discovered by live-testing against CIRC — not in the official docs. `model.Message.IsAction` (**Done**) renders these as classic IRC `* username body *` lines. See the callout in `docs/00-latest-api-reference.md`'s Commands section.
 
 ### Thread Watching (new in v0.5.1)
 
@@ -96,7 +150,7 @@ Notes:
 
 | Area | Description | Priority |
 |---|---|---|
-| `type` filter on `GET /v1/notifications` | `?type=reply,reply_mention` — comma-separated list of notification types to fetch. Not currently used; could power a future "filter by type" UX. | Low |
+| `type` filter on `GET /v1/notifications` | `?type=reply,reply_mention` — comma-separated list of notification types to fetch. API param is wired (`GetNotifications(..., types []string)`); pass `nil` for all types. UI filter control (multi-select / cycling) is deferred. | Low — UI deferred |
 
 ### Replies
 
@@ -150,6 +204,8 @@ Notes:
 | `GET /v1/notes/:id/revisions` | Note revision history — journal `h` key; feature 25 | 2026-04-17 |
 | `PATCH /v1/notes/:id` | Server-side 500 bug resolved in API v0.4. Note editing and revision history fully operational. | 2026-05-29 |
 | `POST /v1/posts` (extended) | `CreatePost` now accepts `title`, `isPublic`, `isNSFW`. `Post` model gained `Title`, `Slug`, `GuildID`, `GuildSlug`, `IsGuildThread`. Title rendered in feed/detail/profile/bookmarks. Feature 28. | 2026-05-29 |
+| Login / refresh — `rtdbUrl` (v0.7) | Login and token-refresh responses now return `rtdbUrl` (e.g. `https://…europe-west1.firebasedatabase.app`). Previously the RTDB URL was derived from the JWT's project ID, producing the wrong `firebaseio.com` regional domain. `Tokens` model gains `RTDBUrl`; `InitRTDB()` now takes the URL from the API response; `applyRefresh()` also updates `rtdbClient.token` via `SetToken()`. | 2026-07-20 |
+| Notification metadata — `postContent` / `replyContent` (v0.7) | `post_mention` and `reply_mention` notifications now carry `postContent` and `replyContent` inline, eliminating the need for a follow-up `GET /v1/posts/:id` round trip. `Notification` model gains `PostSlug`, `PostAuthorUsername`, `PostContent`, `ReplyContent`; content preview is rendered inline in the notification list row. | 2026-07-20 |
 | `GET /v1/guilds/:slug/members` | Guild member list — paginated, oldest-joined first; `m` from guild posts view; `enter` navigates to profile. Feature 29. | 2026-05-30 |
 | `GET /v1/guilds/:slug` (join/leave flow) | Guild detail (`isMember`, `role`) fetched alongside thread list. `J` to join, `l` to leave with y/n confirmation and membership hint bar. Feature 29. | 2026-06-01 |
 | `POST /v1/guilds/:slug/join` | Join guild — `J` key in guild thread feed with confirmation prompt; success banner "✓ Joined #name". Feature 29. | 2026-06-01 |

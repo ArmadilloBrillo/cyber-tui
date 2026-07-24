@@ -66,6 +66,9 @@ type Config struct {
 	// protocol is detected. "terminal" (default) displays the image in a
 	// fullscreen modal; "browser" always opens in the OS default browser.
 	ImageViewer string `json:"imageViewer,omitempty"`
+
+	// Layout selects the UI layout. "" or "tabs" = tab bar (default); "miller" = sidebar columns.
+	Layout string `json:"layout,omitempty"`
 }
 
 // GetMaxThreadDepth returns MaxThreadDepth, substituting the default (3) when
@@ -137,12 +140,17 @@ func (c Config) GetLocation() *time.Location {
 }
 
 // ParseTimezoneLabel converts a label like "UTC+5:30" or "UTC-8" to a fixed
-// *time.Location. Returns time.UTC for "" or "UTC".
+// *time.Location. Returns time.UTC for "" or "UTC", and for any label that
+// does not parse — the config file is hand-editable, so malformed input must
+// degrade to UTC rather than panic or yield a partial offset.
 func ParseTimezoneLabel(label string) *time.Location {
 	if label == "" || label == "UTC" {
 		return time.UTC
 	}
-	rest := label[3:] // strip "UTC"
+	if !strings.HasPrefix(label, "UTC") {
+		return time.UTC
+	}
+	rest := label[3:]
 	sign := 1
 	if len(rest) > 0 && rest[0] == '-' {
 		sign = -1
@@ -152,10 +160,16 @@ func ParseTimezoneLabel(label string) *time.Location {
 	}
 	hours, mins := 0, 0
 	if idx := strings.Index(rest, ":"); idx >= 0 {
-		fmt.Sscanf(rest[:idx], "%d", &hours)
-		fmt.Sscanf(rest[idx+1:], "%d", &mins)
+		if _, err := fmt.Sscanf(rest[:idx], "%d", &hours); err != nil {
+			return time.UTC
+		}
+		if _, err := fmt.Sscanf(rest[idx+1:], "%d", &mins); err != nil {
+			return time.UTC
+		}
 	} else {
-		fmt.Sscanf(rest, "%d", &hours)
+		if _, err := fmt.Sscanf(rest, "%d", &hours); err != nil {
+			return time.UTC
+		}
 	}
 	offset := sign * (hours*3600 + mins*60)
 	return time.FixedZone(label, offset)

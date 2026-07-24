@@ -6,75 +6,77 @@ Private 1-on-1 conversations. Accessed via tab `3` or the `c-mail` tab in the na
 
 ## Layout
 
-Two-pane horizontal split:
+C-Mail uses a two-mode sequential flow:
+
+### List mode (default)
+
+Full-width conversation list. Each conversation is a bordered card:
 
 ```
-╔══════════════════╗ ╔════════════════════════════════════════╗
-║ c-mail           ║ ║ @otheruser                             ║  ← focused pane = ActiveBorder
-║                  ║ ╠════════════════════════════════════════╣
-║>@molly           ║ ║ 14:10  @molly   hey, you saw the news? ║
-║  hey, you saw…   ║ ║ 14:12  @you     yeah, not good         ║
-║                  ║ ╠════════════════════════════════════════╣
-║ @wintermute      ║ ║> _                                     ║
-║  i am the one…   ║ ╚════════════════════════════════════════╝
-╚══════════════════╝
+╔═══════════════════════════════════════════════════════════╗  ← ActiveBorder when selected
+║ @molly                                     2h ago   (3)  ║
+║ hey, did you see the news about the ice…               ║
+╚═══════════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════╗
+║ @wintermute                                    3d ago    ║
+║ i am the one who remembers                              ║
+╚═══════════════════════════════════════════════════════════╝
 ```
 
-- **Left pane** — conversation list with `ActiveBorder` (bright green) when focused
-- **Right pane** — message thread + compose input; input box uses `ActiveBorder` when focused
-- Sidebar width: `clamp(terminalWidth/4, 20, 32)` — scales with terminal, min 20, max 32
-- Compose input width: fills right pane (dynamic, recalculated on resize)
+Card header: `@username` (left) + timestamp + `(N)` unread badge (right, when unread > 0).
+Preview: first line of `LastMessage`, truncated to fit card width.
 
----
+The C-Mail tab itself also shows an aggregate unread badge, mirroring the Notifications tab: `c-mail (N)` in the Tabs layout, `c-mail ●N` in the Miller layout, where `N` is the sum of `UnreadCount` across all conversations (`CMailModel.TotalUnread()`). The badge clears immediately (optimistically) when a conversation is opened, and refreshes from the server every 60s alongside the notifications poll.
 
-## Focus Model
+### Detail mode
 
-| Pane | Constant | Visual indicator |
-|---|---|---|
-| Conversation list | `FocusCMailLeft` | Sidebar border = bright green |
-| Chat + input | `FocusCMailRight` | Input box border = bright green |
+Full-width message history viewport + fixed compose input at bottom:
 
-Initial focus on screen load: `FocusCMailLeft`.
+```
+@molly                                                   ← title header row
+────────────────────────────────────────────────────────
+14:10  @molly   hey, did you see the news?              ← left-aligned (other)
+                                     yeah, not good  ← right-aligned (me)
+                                     14:12  @you
+────────────────────────────────────────────────────────
+╔═══════════════════════════════════════════════════════╗  ← ActiveBorder
+║ compose c-mail...                                     ║
+╚═══════════════════════════════════════════════════════╝
+```
+
+- Other person's messages: left-aligned (`@username  timestamp` header, then body)
+- My messages: right-aligned (`timestamp  @me` header, then body)
+
+**Scroll-to-load history**: scrolling to the top of the loaded messages (`↑`) automatically fetches the next older page (`GetMessages(conversationID, 50, before)`, `before` = the oldest loaded message's timestamp) and prepends it, preserving scroll position. The header shows `(loading history…)` while a page is in flight. Stops once a fetch returns no messages. If a fetch fails, `loadingHistory` resets so a retry is possible on the next scroll-to-top, and the viewport shows "couldn't load messages" instead of a misleading "no messages" if nothing has loaded yet.
+
+**Live-stream reconnect**: the Firebase `idToken` backing the RTDB subscription expires hourly. The stream is treated as dead — triggering reconnect — on any of: the server sending a terminal `auth_revoked`/`cancel` SSE event, a 10-minute idle-read timeout (no line received, including keepalive comments), a 30-second connect-phase timeout, or an outright network error/close (see `internal/rtdb/client.go`). When the stream closes while a conversation is still open, the app calls `api.Client.RefreshSession()` and reopens the subscription, retrying with exponential backoff (`1s, 2s, 4s, 8s, 15s` — 6 attempts total) if an attempt fails. Success shows a brief "reconnected to live chat" notification. While retrying, the conversation header shows `(live updates lost, reconnecting… N/6)`; if all attempts fail, it shows a persistent `(live updates lost)` until the user leaves and re-enters the conversation — this indicator is independent of the message list, so it's visible even with history already loaded.
+
+**Slash commands**: like CIRC, the server expands `/me`, `/poke`/`/hug`/`/hi5`/`/slap`, `/dice`, `/8ball`, and `/fortune` server-side. `/help` posts no message; its reply is captured from the send response and appended as a local-only system notice (`model.Message.IsSystem`, rendered via `renderSystemNotice` — no bubble, no border, just a muted `*** `-prefixed block). It's never sent to or stored by the server.
+
+`/me` and other emotes set an undocumented `isAction` field on the message, discovered via live testing against CIRC (parsed defensively for C-Mail too, but not yet confirmed live there — see `docs/33-circ.md`). `model.Message.IsAction` messages render as `* username body *` (`renderActionLine` in `render.go`) instead of the usual bordered bubble — same classic-IRC treatment as CIRC.
 
 ---
 
 ## Key Bindings
 
-### Left pane (`FocusCMailLeft`)
+### List mode
 
 | Key | Action |
 |---|---|
 | `↑` / `k` | Move cursor up the conversation list |
 | `↓` / `j` | Move cursor down the conversation list |
-| `Enter` | Open selected conversation → shift focus to right pane, auto-focus input |
-| `Tab` | Shift focus to right pane, focus input |
-| `←` / `→` | Fall through to tab navigation (switch screens) |
+| `Enter` | Open selected conversation → switch to detail mode, focus input |
 
-### Right pane (`FocusCMailRight`)
+### Detail mode
 
 | Key | Action |
 |---|---|
-| `Enter` | Send message (when input focused and non-empty) |
-| `↑` / `↓` | Scroll message history (when input not focused) |
-| `Esc` | First press: blur input. Second press: return focus to left pane |
-| `Tab` | Blur input, shift focus to left pane |
-| `←` / `→` | Fall through to tab navigation |
-
----
-
-## Width Calculation
-
-```
-sidebarWidth  = clamp(terminalWidth / 4, 20, 32)   // inner content
-sidebarOuter  = sidebarWidth + 4                    // + border(2) + padding(2)
-gap           = 2
-vpWidth       = terminalWidth - sidebarOuter - gap  // = terminalWidth - sidebarWidth - 6
-input.Width   = vpWidth - 4                         // account for input's own border+padding
-```
-
-At 80 cols: sidebar inner = 20, viewport = 54, input = 50.
-At 120 cols: sidebar inner = 30, viewport = 84, input = 80.
-At 200 cols: sidebar inner = 32 (clamped), viewport = 162, input = 158.
+| `Enter` | Send message (when input non-empty) |
+| `↑` | Scroll message history up |
+| `↓` | Scroll message history down |
+| `Esc` | Return to list mode; cancel RTDB subscription |
+| `ctrl+o` | Open URLs/images from the loaded conversation. Plain `o` can't reach this here — the compose input is focused for the entire detail view, so `o` always types into the message instead; `ctrl+o` is exempted from the focused-input gate specifically for this. |
+| all other | Forwarded to compose input (`j`/`k` type normally) |
 
 ---
 
@@ -83,8 +85,8 @@ At 200 cols: sidebar inner = 32 (clamped), viewport = 162, input = 158.
 **File:** `internal/ui/screens/cmail.go`
 
 **Type:** `CMailModel`
-**Constructor:** `NewCMailModel(currentUser string) CMailModel`
-**Message emitted:** `SendCMailMsg{ConversationID, Body}`
+**Constructor:** `NewCMailModel(currentUser string, client api.Client) CMailModel`
+**Messages emitted:** `SendCMailMsg{ConversationID, Body}`, `CMailConvSelectedMsg{ConversationID}`, `StartConversationMsg{Username}` (from other screens)
 **App field:** `a.cmail`
 **Screen constant:** `screenCMail`
 
@@ -92,8 +94,73 @@ At 200 cols: sidebar inner = 32 (clamped), viewport = 162, input = 158.
 
 | Method | Returns |
 |---|---|
-| `FocusPane() CMailFocus` | Current pane focus |
+| `IsShowingDetail() bool` | Whether detail mode is active |
+| `HasActiveConv() bool` | Alias for `IsShowingDetail()` |
 | `SelectedConv() int` | Cursor index in conversation list |
-| `HasActiveConv() bool` | Whether a conversation is open |
-| `SidebarWidth() int` | Computed sidebar inner width |
-| `InputFocused() bool` | Whether the compose input is active |
+| `InputFocused() bool` | True in detail mode (compose input focused) |
+| `TotalUnread() int` | Sum of `UnreadCount` across all conversations, for the tab-bar badge |
+| `GetFocusedURLs() []string` | URLs across all loaded messages in the open conversation (`URLProvider`); nil outside detail mode |
+
+---
+
+## API Integration
+
+C-Mail uses a hybrid architecture: REST for listing, history, and sending; Firebase RTDB SSE for real-time new message delivery only.
+
+### REST Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/cmail` | List all conversations (unread first, then newest activity) |
+| `GET` | `/v1/cmail/:conversationId` | Load message history (query `?limit=N&before=<timestamp>`; `before` pages further back) |
+| `POST` | `/v1/cmail` | Start or return an existing conversation (body: `{"recipientUsername": "..."}`) |
+| `POST` | `/v1/cmail/:conversationId` | Send a message (body: `{"content": "..."}`) |
+| `POST` | `/v1/cmail/:conversationId/read` | Mark conversation read (resets unread count) |
+
+**Notes:**
+- `POST /v1/cmail` is idempotent — returns 200 for an existing conversation, 201 for a new one.
+- Rate limits: 15 sends/min, 300/day, 150/hour; 5 start/min, 50/day, 30/hour; 60 mark-read/min.
+- Blocked in either direction returns 403.
+
+### RTDB SSE Subscription
+
+Real-time new messages are delivered via Firebase RTDB Server-Sent Events:
+
+```
+Path:   /dm_messages/<conversationId>
+Params: orderBy="timestamp"&limitToLast=50
+Auth:   ?auth=<idToken>
+```
+
+The initial `put` event has `path: "/"` and carries the full historical snapshot — it is **skipped** (history is already loaded via REST `GET /v1/cmail/:id`). All subsequent `put` events have `path: "/<msgId>"` and carry a single new message.
+
+The subscription is opened when a conversation is selected (Enter in list mode) and cancelled when:
+- The user presses Esc (returns to list mode)
+- A different conversation is opened
+- The user navigates away from the C-Mail screen
+
+### API Client Methods
+
+| Method | Signature | Notes |
+|---|---|---|
+| `GetConversations` | `() ([]model.Conversation, error)` | Populates `UnreadCount`, `LastMessage`, and `LastMessageAt` from wire response |
+| `GetMessages` | `(convID string, limit int, before int64) ([]model.Message, error)` | Returns oldest-first; pass `before=0` for the latest page, or a previous message's timestamp for older pages |
+| `SendMessage` | `(convID, body string) (string, error)` | POST to REST endpoint; returns the reply text for reply-only commands (`/help`), empty otherwise |
+| `StartConversation` | `(recipientUsername string) (model.Conversation, error)` | POST to REST; idempotent |
+| `MarkCMailRead` | `(convID string) error` | POST to REST; called when a conversation is opened |
+| `SubscribeDMs` | `(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error)` | RTDB SSE; skips initial snapshot |
+| `RefreshSession` | `() error` | Proactively refreshes the idToken (shared across all screens); used to reconnect a live RTDB subscription after it closes |
+
+### App-Level Wiring
+
+- Conversations are pre-loaded on login via `afterLoginCmd`, and re-fetched every 60s on the same `pollUnreadTickMsg` ticker that refreshes the notifications unread count (`app.go`), so the tab badge stays current even while the user is on another tab.
+- When the user selects a conversation (Enter in list mode), `CMailModel` zeroes that conversation's local `UnreadCount` immediately (optimistic, before the server round-trip) and `CMailConvSelectedMsg` is emitted; App calls `markCMailReadCmd(convID)` to persist the read state server-side.
+- Pressing `c` on a highlighted post, reply, notification, or profile (read-only) emits `StartConversationMsg{Username}`. App calls `StartConversation(username)`, then switches to C-Mail and opens the returned conversation in detail mode. Self-DMs are silently dropped in the App handler.
+
+### Conversation List Display
+
+Each conversation card shows:
+- `@<otherUser>` — username (Highlight style)
+- Timestamp from `LastMessageAt` (Subtle style, right-aligned)
+- `(N)` unread badge when `UnreadCount > 0`
+- One-line preview from `LastMessage` (from the REST list response) or the most-recent loaded message

@@ -10,51 +10,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
-	"github.com/ragnar/cyber-tui/internal/version"
 )
-
-var renderedVersionLine = theme.Subtle.Render("version " + version.Version + " (" + version.Commit + ")")
-
-// menuTabs is the ordered list of navigable screens.
-var menuTabs = []struct {
-	label string
-	s     screen
-}{
-	{"feed", screenFeed},
-	{"notifications", screenNotifications},
-	{"journal", screenJournal},
-	{"bookmarks", screenBookmarks},
-	{"guilds", screenGuilds},
-	{"topics", screenTopics},
-	{"profile", screenProfile},
-	{"settings", screenSettings},
-}
-
-// hint is a compact key+description pair shown in the status bar and help modal.
-type hint struct{ key, desc string }
-
-// sbStyle returns a bare style with the status-bar background.
-func sbStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Background(theme.ColorDimGreen)
-}
-
-// renderHints formats a []hint slice as a compact styled string.
-func renderHints(hints []hint) string {
-	key := sbStyle().Foreground(theme.ColorCyan).Bold(true)
-	desc := sbStyle().Foreground(theme.ColorWhite)
-	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
-	parts := make([]string, 0, len(hints)*3)
-	for i, h := range hints {
-		if i > 0 {
-			parts = append(parts, sep)
-		}
-		parts = append(parts, key.Render(h.key))
-		if h.desc != "" {
-			parts = append(parts, desc.Render(" "+h.desc))
-		}
-	}
-	return strings.Join(parts, "")
-}
 
 // hintRows converts hints to modal row strings, skipping the "?" entry.
 // "↑↓" is expanded to "↑↓ / j/k" so the modal documents both navigation styles.
@@ -73,116 +29,10 @@ func hintRows(hints []hint, rowFn func(string, string) string) []string {
 	return rows
 }
 
-// overlayCenter composites fg centered over bg using ANSI-aware string splicing.
-// Each line of fg replaces the corresponding characters in bg at the centered
-// position, preserving ANSI colour codes on both sides of the splice point.
-func overlayCenter(bg, fg string, bgW, bgH int) string {
-	fgW := lipgloss.Width(fg)
-	fgLines := strings.Split(fg, "\n")
-	fgH := len(fgLines)
-	bgLines := strings.Split(bg, "\n")
-
-	xOff := (bgW - fgW) / 2
-	yOff := (bgH - fgH) / 2
-	if xOff < 0 {
-		xOff = 0
-	}
-	if yOff < 0 {
-		yOff = 0
-	}
-
-	result := make([]string, len(bgLines))
-	copy(result, bgLines)
-
-	for i, fgLine := range fgLines {
-		bi := yOff + i
-		if bi < 0 || bi >= len(result) {
-			continue
-		}
-		bgLine := result[bi]
-		// Pad the background line if it's shorter than the splice end point.
-		bgLineW := ansi.StringWidth(bgLine)
-		needed := xOff + fgW
-		if bgLineW < needed {
-			bgLine += strings.Repeat(" ", needed-bgLineW)
-		}
-		left := ansi.Truncate(bgLine, xOff, "")
-		right := ansi.TruncateLeft(bgLine, xOff+fgW, "")
-		result[bi] = left + fgLine + right
-	}
-	return strings.Join(result, "\n")
-}
-
-// themeIndex returns the index of name in availableThemes, defaulting to 0.
-func themeIndex(name string) int {
-	for i, t := range availableThemes {
-		if t == name {
-			return i
-		}
-	}
-	return 0
-}
-
-// tabIndexOf returns the index of a.active within menuTabs, defaulting to 0.
-func tabIndexOf(a App) int {
-	for i, t := range menuTabs {
-		if t.s == a.active {
-			return i
-		}
-	}
-	return 0
-}
-
-// navigateTabBy computes the App state and load command for moving delta steps
-// through menuTabs from the current active screen.
-func navigateTabBy(a App, delta int) (App, tea.Cmd) {
-	if a.active == screenCMail {
-		a.cmail = a.cmail.CancelSubscription()
-	}
-	idx := (tabIndexOf(a) + delta + len(menuTabs)) % len(menuTabs)
-	a.active = menuTabs[idx].s
-	switch a.active {
-	case screenFeed:
-		a.feed = a.feed.SetFetching()
-		return a, a.loadFeedCmd()
-	case screenChatrooms:
-		return a, a.loadRoomsCmd()
-	case screenCMail:
-		return a, a.loadConvsCmd()
-	case screenProfile:
-		return a, a.loadProfileCmd()
-	case screenNotifications:
-		a.notifications = a.notifications.SetFetching()
-		return a, a.loadNotifsCmd()
-	case screenSettings:
-		return a, nil
-	case screenBookmarks:
-		if !a.bookmarks.IsLoaded() {
-			a.bookmarks = a.bookmarks.SetFetching()
-			return a, a.loadBookmarksCmd("")
-		}
-		return a, nil
-	case screenGuilds:
-		if !a.guilds.IsLoaded() {
-			a.guilds = a.guilds.SetFetching()
-			return a, a.loadGuildsCmd("")
-		}
-		return a, nil
-	case screenTopics:
-		if !a.topics.IsLoaded() {
-			a.topics = a.topics.SetFetching()
-			return a, a.loadTopicsCmd()
-		}
-		return a, nil
-	case screenJournal:
-		a.journal = a.journal.SetFetching()
-		return a, a.loadJournalCmd()
-	}
-	return a, nil
-}
-
 // TabsLayout implements the classic horizontal tab bar layout.
 type TabsLayout struct{}
+
+func (l TabsLayout) NeedsCompactAutoFill(termHeight int) int { return 0 }
 
 // View renders the full terminal output for the tabs layout.
 func (l TabsLayout) View(a App) string {
@@ -246,81 +96,28 @@ func (l TabsLayout) View(a App) string {
 	return base
 }
 
-// HandleNav processes navigation key presses for the tabs layout:
-// number shortcuts 1–8 and left/right arrow tab cycling.
+// HandleNav processes navigation key presses for the tabs layout: the "1"-"9"
+// numeric aliases and left/right arrow tab cycling. The "g"+mnemonic leader
+// chords are handled globally in app.go's handleKeys, ahead of HandleNav,
+// since they apply identically regardless of which layout is active.
 func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
+	if a.active == screenLogin {
+		return a, nil, false
+	}
+	if s, ok := screenForNumber(msg.String()); ok {
+		var cmd tea.Cmd
+		a, cmd = activateScreen(a, s)
+		return a, cmd, true
+	}
 	switch msg.String() {
-	case "1":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenFeed
-			a.feed = a.feed.SetFetching()
-			return a, a.loadFeedCmd(), true
-		}
-	case "2":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenNotifications
-			a.notifications = a.notifications.SetFetching()
-			return a, a.loadNotifsCmd(), true
-		}
-	case "3":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenJournal
-			a.journal = a.journal.SetFetching()
-			return a, a.loadJournalCmd(), true
-		}
-	case "4":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenBookmarks
-			if !a.bookmarks.IsLoaded() {
-				a.bookmarks = a.bookmarks.SetFetching()
-				return a, a.loadBookmarksCmd(""), true
-			}
-			return a, nil, true
-		}
-	case "5":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenGuilds
-			if !a.guilds.IsLoaded() {
-				a.guilds = a.guilds.SetFetching()
-				return a, a.loadGuildsCmd(""), true
-			}
-			return a, nil, true
-		}
-	case "6":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenTopics
-			if !a.topics.IsLoaded() {
-				a.topics = a.topics.SetFetching()
-				return a, a.loadTopicsCmd(), true
-			}
-			return a, nil, true
-		}
-	case "7":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenProfile
-			return a, a.loadProfileCmd(), true
-		}
-	case "8":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenSettings
-			return a, nil, true
-		}
 	case "left":
-		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
+		if a.active != screenPostDetail && a.focus == focusMenu {
 			var cmd tea.Cmd
 			a, cmd = navigateTabBy(a, -1)
 			return a, cmd, true
 		}
 	case "right":
-		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
+		if a.active != screenPostDetail && a.focus == focusMenu {
 			var cmd tea.Cmd
 			a, cmd = navigateTabBy(a, +1)
 			return a, cmd, true
@@ -331,34 +128,7 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 
 // DelegateUpdate routes a tea.Msg to the currently active screen model.
 func (l TabsLayout) DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
-	var cmd tea.Cmd
-	switch a.active {
-	case screenLogin:
-		a.login, cmd = a.login.Update(msg)
-	case screenFeed:
-		a.feed, cmd = a.feed.Update(msg)
-	case screenChatrooms:
-		a.chatrooms, cmd = a.chatrooms.Update(msg)
-	case screenCMail:
-		a.cmail, cmd = a.cmail.Update(msg)
-	case screenProfile:
-		a.profile, cmd = a.profile.Update(msg)
-	case screenPostDetail:
-		a.postDetail, cmd = a.postDetail.Update(msg)
-	case screenNotifications:
-		a.notifications, cmd = a.notifications.Update(msg)
-	case screenSettings:
-		a.settingsScreen, cmd = a.settingsScreen.Update(msg)
-	case screenBookmarks:
-		a.bookmarks, cmd = a.bookmarks.Update(msg)
-	case screenGuilds:
-		a.guilds, cmd = a.guilds.Update(msg)
-	case screenTopics:
-		a.topics, cmd = a.topics.Update(msg)
-	case screenJournal:
-		a.journal, cmd = a.journal.Update(msg)
-	}
-	return a, cmd
+	return delegateScreenUpdate(msg, a)
 }
 
 // HasFocusedInput returns true when the active screen has a focused text input.
@@ -378,22 +148,39 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 		return a.profile.ComposeActive()
 	case screenJournal:
 		return a.journal.ComposeActive()
+	case screenSearch:
+		return a.search.InputFocused()
 	}
 	return false
 }
 
+func (l TabsLayout) ContentWidth(termWidth int) int   { return termWidth }
+func (l TabsLayout) ContentHeight(termHeight int) int { return termHeight }
+
 func (l TabsLayout) renderTabBar(a App) string {
 	var tabs string
-	for _, t := range menuTabs {
-		label := t.label
+	for _, t := range visibleTabs() {
+		badge := ""
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
-			label = fmt.Sprintf("%s (%d)", label, a.polledUnreadCount)
+			badge = fmt.Sprintf(" (%d)", a.polledUnreadCount)
 		}
-		if a.active == t.s {
-			tabs += theme.ActiveTab.Render(label)
-		} else {
-			tabs += theme.Tab.Render(label)
+		if t.s == screenCMail {
+			if n := a.cmail.TotalUnread(); n > 0 {
+				badge = fmt.Sprintf(" (%d)", n)
+			}
 		}
+		isActive := a.active == t.s &&
+			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
+			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())
+		text, mnemonic := theme.TabText, theme.TabMnemonic
+		if isActive {
+			text, mnemonic = theme.ActiveTabText, theme.ActiveTabMnemonic
+		}
+		before, ch, after := splitMnemonic(t.label, t.mnemonic)
+		// Each fragment is rendered independently (rather than wrapping the
+		// whole label in one .Padding style) so the active tab's background
+		// survives across the mnemonic's own ANSI reset — see TabText's doc.
+		tabs += text.Render("  "+before) + mnemonic.Render(ch) + text.Render(after+badge+"  ")
 	}
 	logo := lipgloss.NewStyle().
 		Background(theme.ColorGreen).
@@ -429,6 +216,8 @@ func (l TabsLayout) renderActiveScreen(a App) string {
 		return a.topics.View()
 	case screenJournal:
 		return a.journal.View()
+	case screenSearch:
+		return a.search.View()
 	}
 	return ""
 }
@@ -533,22 +322,22 @@ func (l TabsLayout) screenHints(a App) []hint {
 		if a.feed.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}, more}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
 			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"esc", "back"}, more}
+		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}, {"esc", "back"}, more}
 	case screenProfile:
 		if a.profile.ComposeActive() {
 			return []hint{{"Ctrl+s", "save"}, {"Esc", "cancel"}, {"tab", "cycle"}}
 		}
 		if a.profile.IsReadOnly() {
-			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"tab", "cycle"}, more}
+			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"c", "message"}, {"tab", "cycle"}, more}
 		}
 		return []hint{{"↑↓", "navigate"}, {"e", "edit"}, {"tab", "cycle"}, more}
 	case screenNotifications:
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, {"c", "message"}, more}
 	case screenJournal:
 		if a.journal.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"Ctrl+s", "save"}, {"Ctrl+p", "publish"}, {"Esc", "cancel"}}
@@ -582,14 +371,32 @@ func (l TabsLayout) screenHints(a App) []hint {
 			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, {"esc", "back"}, more}
+	case screenSearch:
+		if a.search.InputFocused() {
+			return []hint{{"enter", "search"}}
+		}
+		if a.search.IsInTypeList() {
+			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
+		}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open / see all"}, {"esc", "edit query"}, more}
 	case screenSettings:
 		base := []hint{{"↑↓", "navigate"}, {"space", "toggle"}, {"tab", "cycle"}, more}
 		if a.settingsScreen.IsDirty() {
 			return append([]hint{{"Ctrl+s", "save"}, {"Esc", "revert"}}, base...)
 		}
 		return base
+	case screenChatrooms:
+		if a.chatrooms.IsShowingDetail() {
+			// '?' (help) is unreachable while the compose input is focused
+			// here, same as plain 'o' — omit "more" and surface ctrl+o instead.
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"esc", "back"}}
+		}
+		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	case screenCMail:
-		return []hint{{"← →", "switch pane"}, {"j/k", "navigate"}, {"enter", "send"}, more}
+		if a.cmail.IsShowingDetail() {
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"esc", "back"}}
+		}
+		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	}
 	return []hint{more}
 }
@@ -623,15 +430,19 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		return lipgloss.JoinHorizontal(lipgloss.Top, k, theme.Subtle.Render(desc))
 	}
 
-	globalSection := lipgloss.JoinVertical(lipgloss.Left,
+	globalRows := append([]string{
 		sectionStyle.Render("global"),
-		row("1-7", "feed · notifs · journal · bookmarks · topics · profile · settings"),
+		row("1-9", "feed · notifs · c-mail · circ · journal · bookmarks · guilds · topics · profile"),
+	}, leaderRows(row)...)
+	globalRows = append(globalRows,
 		row("← →", "cycle tabs"),
+		row("/", "search"),
 		row("t", "theme"),
 		row("v", "density"),
 		row("o", "open url"),
 		row("q", "quit"),
 	)
+	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)
 
 	section := func(title string, extra ...string) string {
 		parts := append([]string{sectionStyle.Render(title)}, hintRows(l.screenHints(a), row)...)
@@ -647,6 +458,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		} else {
 			localSection = section("feed",
 				row("p", "view profile"),
+				row("c", "message"),
 				row("d", "delete own"),
 			)
 		}
@@ -657,6 +469,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 			localSection = section("post detail",
 				row("d", "delete own"),
 				row("p", "view profile"),
+				row("c", "message"),
 			)
 		}
 	case screenProfile:
@@ -665,6 +478,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		} else if a.profile.IsReadOnly() {
 			localSection = section("profile",
 				row("enter", "open"),
+				row("c", "message"),
 			)
 		} else {
 			localSection = section("profile (own)",
@@ -675,6 +489,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		localSection = section("notifications",
 			row("M", "mark all read"),
 			row("p", "view profile"),
+			row("c", "message"),
 		)
 	case screenJournal:
 		if a.journal.ComposeActive() {
@@ -702,12 +517,24 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		} else {
 			localSection = section("topics")
 		}
+	case screenSearch:
+		if a.search.InputFocused() {
+			localSection = section("search")
+		} else {
+			localSection = section("search (results)")
+		}
 	case screenSettings:
 		t := "settings"
 		if a.settingsScreen.IsDirty() {
 			t = "settings (unsaved changes)"
 		}
 		localSection = section(t)
+	case screenChatrooms:
+		if a.chatrooms.IsShowingDetail() {
+			localSection = section("circ (room)")
+		} else {
+			localSection = section("circ")
+		}
 	case screenCMail:
 		localSection = section("c-mail")
 	}

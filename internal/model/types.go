@@ -2,11 +2,12 @@ package model
 
 import "time"
 
-// Tokens holds the three tokens returned by POST /v1/auth/login.
+// Tokens holds the tokens returned by POST /v1/auth/login and POST /v1/auth/refresh.
 type Tokens struct {
 	IDToken      string
 	RefreshToken string
 	RTDBToken    string
+	RTDBUrl      string // regional Firebase RTDB URL returned by the API; use this, never derive it
 }
 
 type User struct {
@@ -116,23 +117,31 @@ type ProfileUpdate struct {
 // They are not sourced from the REST API.
 
 type Message struct {
-	ID        string
-	From      User
-	Body      string
-	CreatedAt time.Time
+	ID          string
+	From        User
+	Body        string
+	CreatedAt   time.Time
+	IsChatAdmin bool // CIRC only: true when From was a chat admin at send time
+	IsSystem    bool // local-only notice (e.g. a /help reply); never sent to or stored by the server
+	IsAction    bool // true for /me and other emote-style commands (undocumented API field);
+	// Body is just the action text with no username baked in — render as "* username body *"
 }
 
 type Conversation struct {
-	ID           string
-	Participants []User
-	Messages     []Message
+	ID            string
+	Participants  []User
+	Messages      []Message
+	UnreadCount   int
+	LastMessage   string
+	LastMessageAt time.Time // timestamp of the most recent message; from API epoch-ms field
 }
 
 type Room struct {
-	ID          string
-	Name        string
-	Description string
-	Members     int
+	ID            string
+	Slug          string
+	Name          string
+	LastMessageAt time.Time
+	SortOrder     int
 }
 
 // NotificationPrefs maps to the notifications sub-object in GET/PATCH /v1/settings.
@@ -177,31 +186,35 @@ type Topic struct {
 
 // Guild maps to the shape returned by GET /v1/guilds and GET /v1/guilds/:slug.
 // IsMember and Role are only populated by the single-guild endpoint.
+// ProfilePictureUrl is captured for future rendering; not currently displayed in the TUI.
 type Guild struct {
-	ID              string
-	Name            string
-	Slug            string
-	Icon            string
-	Bio             string
-	MemberCount     int
-	FounderUsername string
-	CreatedAt       time.Time
-	IsMember        bool
-	Role            string // "founder", "member", or ""
-	Link            string
-	LinkText        string
+	ID                string
+	Name              string
+	Slug              string
+	Icon              string
+	Bio               string
+	MemberCount       int
+	FounderUsername   string
+	CreatedAt         time.Time
+	IsMember          bool
+	Role              string // "founder", "member", or ""
+	Link              string
+	LinkText          string
+	ProfilePictureUrl string
 }
 
 // GuildMember represents a single membership returned by GET /v1/guilds/:slug/members.
+// ProfilePictureUrl is captured for future rendering; not currently displayed in the TUI.
 type GuildMember struct {
-	MembershipID string
-	GuildID      string
-	GuildSlug    string
-	UserID       string
-	Username     string
-	Role         string // "founder" or "member"
-	JoinedAt     time.Time
-	DisplayName  string
+	MembershipID      string
+	GuildID           string
+	GuildSlug         string
+	UserID            string
+	Username          string
+	Role              string // "founder" or "member"
+	JoinedAt          time.Time
+	DisplayName       string
+	ProfilePictureUrl string
 }
 
 // Note is a private note visible only to the author.
@@ -232,6 +245,15 @@ type NoteRevision struct {
 	CreatedAt      time.Time
 }
 
+// SearchPreview is the grouped GET /v1/search?type=all response: up to 8 hits
+// per category, no pagination, no total count. A category at exactly 8 hits
+// may have more — drill into it via SearchPosts/SearchReplies/SearchUsers.
+type SearchPreview struct {
+	Users   []User
+	Posts   []Post
+	Replies []Reply
+}
+
 // NotificationActor is the user who triggered the notification.
 type NotificationActor struct {
 	ID       string
@@ -257,4 +279,8 @@ type Notification struct {
 	ThreadAuthorUsername string // set for thread_reply; the original thread's author
 	GuildName            string // guild display name (seen on guild_new_thread)
 	GuildSlug            string // guild handle from metadata.guildSlug; set on guild reply/post notifications (with isGuildThread)
+	PostSlug             string // slug of the target post; enables deep-link and richer descriptions (v0.7+)
+	PostAuthorUsername   string // author of the target post; used with PostSlug for navigation (v0.7+)
+	PostContent          string // non-empty for post_mention; the text that mentioned you (v0.7+)
+	ReplyContent         string // non-empty for reply_mention; the reply text that mentioned you (v0.7+)
 }

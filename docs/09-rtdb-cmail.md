@@ -6,18 +6,15 @@ Private 1-on-1 messaging (C-Mail) backed by Firebase Realtime Database.
 
 ## Architecture
 
-C-Mail uses Firebase RTDB, not the cyberspace.online REST API. The `rtdbToken` returned by `POST /v1/auth/login` is used to authenticate all RTDB requests.
+C-Mail uses a hybrid of REST and Firebase RTDB. The REST API handles listing, history, and sending; RTDB SSE delivers new messages in real time.
 
 ```
-Login → rtdbToken → ParseRTDBToken → project ID → RTDB base URL
-                                                  ↓
-                                         internal/rtdb.Client
-                                          ├── Get (one-shot)
-                                          ├── Put (write)
-                                          └── Subscribe (SSE stream)
+Login → idToken  → REST /v1/cmail/*  (list, history, send, mark-read)
+      → rtdbUrl  → internal/rtdb.Client
+                       └── Subscribe (SSE stream for live messages only)
 ```
 
-The RTDB base URL is derived automatically from the JWT payload — no additional configuration is required.
+The RTDB base URL is returned directly in the login response (`rtdbUrl` field) — it is no longer derived from the JWT. The `idToken` is passed as `?auth=<idToken>` on all RTDB requests.
 
 ---
 
@@ -30,7 +27,7 @@ func ParseRTDBToken(token string) (projectID string, err error)
 func BaseURL(projectID string) string
 ```
 
-Decodes the Firebase JWT payload (base64, no signature verification) and extracts the `aud` claim (Firebase project ID). `BaseURL` appends `-default-rtdb.firebaseio.com`.
+Decodes the Firebase JWT payload (base64, no signature verification) and extracts the `aud` claim (Firebase project ID). `BaseURL` appends `-default-rtdb.firebaseio.com`. These helpers are retained for compatibility but the RTDB URL is now taken from the `rtdbUrl` field in the login response (which uses a regional domain rather than the default `firebaseio.com` domain — see resolved issue in `docs/00-api-backlog.md`).
 
 ### `client.go`
 
@@ -48,40 +45,24 @@ func (c *Client) Subscribe(ctx, path string, params) <-chan SSEEvent
 **SSE mechanics:**
 - `Subscribe` opens an HTTP connection with `Accept: text/event-stream`.
 - A goroutine reads line-by-line, accumulates `event:` / `data:` lines, dispatches on blank line.
-- The channel is closed when the context is cancelled or the server closes the stream.
-- A `streamClient` with `Timeout: 0` is used for streaming; a 15-second `httpClient` is used for Get/Put.
+- The channel is closed — with a terminal `SSEEvent.Err` set — when: the context is cancelled, the server closes the stream, the server sends a terminal `auth_revoked`/`cancel` event, or the stream goes **idle for 10 minutes** with no line received (any line, including a discarded `:`-prefixed keepalive comment, resets the idle timer). This idle watchdog exists because the server doesn't always cleanly close the TCP connection when the auth token expires — without it, a zombie stream could otherwise hang forever with no signal to reconnect.
+- The connect phase (waiting for response headers) is separately bounded by a **30-second `ResponseHeaderTimeout`** on the streaming transport, so a single connect attempt can't hang indefinitely on a dead network.
+- A `streamClient` with `Timeout: 0` (but the header timeout above) is used for streaming; a 15-second `httpClient` is used for Get/Put.
+- `SetToken` only affects *future* connections — it cannot revive an already-open SSE stream, since the token is fixed in that stream's URL at connect time. See `docs/08-cmail.md` / `docs/33-circ.md` for how the screens layer handles reconnecting a live stream after a token refresh.
 
 ---
 
 ## RTDB Paths
 
-| Operation | Path |
-|---|---|
-| List conversations | `/user_conversations/<userId>` |
-| Fetch message history | `/dm_messages/<conversationId>` |
-| Send message | `/dm_messages/<conversationId>/<msgId>` |
-| Live stream | `/dm_messages/<conversationId>` (SSE) |
+| Operation | Path | Notes |
+|---|---|---|
+| Live stream | `/dm_messages/<conversationId>` (SSE) | Only RTDB path still in use |
 
-### ⚠️ Conversation listing — discovery note
-
-The path `/user_conversations/<userId>` is our best guess based on common Firebase DM patterns. The API reference does not document this path explicitly. If it returns `null` or an unexpected shape, `GetConversations` returns an empty slice (not an error) and logs the raw response when `CYBERSPACE_DEBUG=1` is set.
-
-If the path is wrong, adjust `GetConversations` in `internal/api/client.go` once the correct path is confirmed with the API team.
+All other C-Mail operations (list conversations, load history, send message, mark read) are now handled by the REST API at `/v1/cmail/*`. See `docs/08-cmail.md` for the full endpoint table.
 
 ---
 
 ## DM Wire Format
-
-**Send (PUT):**
-```json
-{
-  "senderId":       "uid-abc",
-  "senderUsername": "molly",
-  "content":        "hello",
-  "timestamp":      { ".sv": "timestamp" },
-  "read":           false
-}
-```
 
 **Receive (SSE `put` event):**
 ```json
@@ -105,11 +86,10 @@ The initial SSE event has `path: "/"` and carries the full snapshot. This is ski
 
 ```
 User presses Enter on conversation list
-  → CMailModel emits SelectConvMsg{ConversationID}
-  → App.Update catches SelectConvMsg
-      ├── cancels any existing dmSub
-      ├── fires loadConvMessagesCmd (history)
-      └── fires openDMSubscriptionCmd (SSE stream)
+  → CMailModel emits CMailConvSelectedMsg{ConversationID} + loadConvMessagesCmd + openDMSubscriptionCmd
+  → App.Update catches CMailConvSelectedMsg → calls markCMailReadCmd(convID) via REST
+  → loadConvMessagesCmd fetches history via REST GET /v1/cmail/:id
+  → openDMSubscriptionCmd starts RTDB SSE stream
 
 openDMSubscriptionCmd resolves
   → dmSubscribedMsg{convID, sub}
@@ -132,7 +112,7 @@ After login, `loginCmd` in `app.go` calls:
 
 ```go
 if hc, ok := a.client.(*api.HTTPClient); ok {
-    _ = hc.InitRTDB(tokens.RTDBToken)
+    _ = hc.InitRTDB(tokens.IDToken, tokens.RTDBUrl)
     hc.SetCurrentUID(user.ID)
 }
 ```
@@ -150,8 +130,8 @@ go run ./cmd/cyber-tui
 1. Log in (auto-login from `.env` works).
 2. Press `3` to navigate to C-Mail.
 3. Conversation list should populate (or show empty if no conversations yet).
-4. Select a conversation with Enter — message history loads in the right pane.
-5. Type a message and press Enter — it is sent via RTDB PUT.
+4. Select a conversation with Enter — message history loads via REST; unread count clears.
+5. Type a message and press Enter — it is sent via REST POST.
 6. On another client/browser, open the same conversation — observe the message arrives.
 7. Send a reply from the other client — it should appear live in the TUI without refreshing.
 8. Press `1` or another tab key — subscription is cleanly cancelled.

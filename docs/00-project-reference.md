@@ -8,7 +8,7 @@ Comprehensive map of every module, file, and artifact in this repository. Use th
 
 **cyber-tui** is a terminal user interface (TUI) client for [cyberspace.online](https://cyberspace.online) — a retro text-only social network. It is written in Go, using [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the TUI event loop, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling, and [Wish](https://github.com/charmbracelet/wish) to optionally host the client over SSH.
 
-The client talks to the cyberspace.online REST API (current target v0.4.1; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages. See `docs/00-latest-api-reference.md` for the current API spec snapshot.
+The client talks to the cyberspace.online REST API (current target v0.7; see CLAUDE.md) and to Firebase Realtime Database (RTDB) for live direct messages and public chatrooms (SSE). See `docs/00-latest-api-reference.md` for the current API spec snapshot.
 
 ---
 
@@ -54,6 +54,7 @@ cyber-tui/
 │       │   ├── settings.go      # Settings screen
 │       │   ├── cmail.go         # Direct messages (C-Mail) screen
 │       │   ├── chatrooms.go     # Public chatrooms screen
+│       │   ├── reconnect.go     # Shared RTDB reconnect backoff/retry helpers (cmail.go + chatrooms.go)
 │       │   ├── compose.go       # Reusable multi-line text editor
 │       │   ├── timeutil.go      # Time formatting helpers
 │       │   ├── timeutil_test.go # Time formatting tests
@@ -120,25 +121,26 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 
 | Type | Purpose |
 |---|---|
-| `Tokens` | IDToken, RefreshToken, RTDBToken returned from login |
+| `Tokens` | IDToken, RefreshToken, RTDBToken, RTDBUrl returned from login |
 | `User` | Profile (ID, username, displayName, email, bio, websiteUrl, websiteName, websiteImageUrl, pinnedPostID, locationName, locationLatitude, locationLongitude) |
 | `Post` | Feed item (ID, authorID, authorUsername, content, title, slug, guildID, guildSlug, isGuildThread, topics, repliesCount, bookmarksCount, isPublic, isNSFW, deleted, createdAt) |
 | `Watch` | Thread-watch record (ID, PostID, CreatedAt) — returned by GET /v1/watches |
 | `Reply` | Comment on a post (ID, postID, authorID, authorUsername, content, parentReplyID, createdAt) |
 | `ProfileUpdate` | Optional fields for PATCH /v1/users/me (all pointer types, includes new website/location fields) |
 | `Message` | DM/chat message (ID, from, body, createdAt) |
-| `Conversation` | 1-on-1 DM thread (ID, participants, messages) |
-| `Room` | Public chatroom (ID, name, description, member count) |
+| `Conversation` | 1-on-1 DM thread (ID, participants, messages, UnreadCount, LastMessage) |
+| `Room` | Public chatroom (ID, slug, name, lastMessageAt, sortOrder) |
 | `NotificationPrefs` | Notification subscription toggles (bookmark, reply, poke) |
 | `Settings` | All user preferences (notifications, content filters, display options) |
-| `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName) |
+| `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName, postSlug, postAuthorUsername, postContent, replyContent) |
 | `Bookmark` | Saved post or reply (ID, type, postID/replyID, content snapshot, author, createdAt) |
 | `Topic` | Tag with post count (slug, postCount) |
-| `Guild` | Guild community (ID, name, slug, icon, bio, memberCount, founderUsername, createdAt, isMember, role, link, linkText) |
-| `GuildMember` | Guild membership record (membershipID, guildID, guildSlug, userID, username, role, joinedAt, displayName) |
+| `Guild` | Guild community (ID, name, slug, icon, bio, memberCount, founderUsername, createdAt, isMember, role, link, linkText, profilePictureUrl) |
+| `GuildMember` | Guild membership record (membershipID, guildID, guildSlug, userID, username, role, joinedAt, displayName, profilePictureUrl) |
 | `Follow` | Follow relationship (ID, followerID, followedID, followerUsername, followedUsername, createdAt) |
 | `Note` | Private journal note (ID, authorID, content, topics, revisionNumber, deleted, createdAt) |
 | `NoteRevision` | Single historical revision of a note (revisionNumber, content, topics, createdAt) |
+| `SearchPreview` | Grouped `type=all` search response (Users, Posts, Replies — up to 8 each, reusing the existing `User`/`Post`/`Reply` types) |
 
 ---
 
@@ -155,7 +157,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Group | Methods |
 |---|---|
 | Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()` |
-| Feed | `GetFeed(cursor)`, `CreatePost(content, title, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)` |
+| Feed | `GetFeed(cursor)`, `CreatePost(content, title, slug, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)` |
 | Thread watching | `GetWatches(cursor)`, `WatchPost(postID)`, `UnwatchPost(postID)` |
 | Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)` |
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
@@ -163,11 +165,14 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Follows | `GetFollowing(cursor)`, `GetFollowers(cursor)`, `GetUserFollows(userID, followType, cursor)`, `Follow(followedID)`, `Unfollow(followID)` |
 | Settings | `GetSettings()`, `UpdateSettings(update)` |
 | Rooms | `GetRooms()`, `GetRoomMessages(roomID, limit)`, `SendRoomMessage(roomID, body)` |
-| Notifications | `GetNotifications(cursor)`, `MarkNotificationRead(id)`, `MarkAllNotificationsRead()` |
+| Notifications | `GetNotifications(cursor, unreadOnly, types)`, `GetUnreadNotificationCount()`, `MarkNotificationRead(id)`, `MarkAllNotificationsRead()` |
 | Bookmarks | `GetBookmarks(cursor)`, `CreateBookmark(postID, replyID)`, `DeleteBookmark(id)` |
 | Topics | `GetTopics(cursor)`, `GetTopicPosts(slug, cursor)` |
+| Guilds | `GetGuilds(cursor)`, `GetGuild(slug)`, `GetGuildPosts(slug, cursor)`, `CreateGuildPost(slug, content, title, postSlug, topics)`, `GetGuildMembers(slug, cursor)`, `JoinGuild(slug)`, `LeaveGuild(slug)` |
 | Notes | `GetNotes(cursor)`, `GetNote(noteID)`, `GetNoteRevision(noteID, revision)`, `GetNoteRevisions(noteID, cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
-| Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
+| Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `StartConversation(recipientUsername)`, `MarkCMailRead(convID)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
+| Chatrooms | `GetRooms()`, `GetRoomMessages(roomID, limit, before)`, `SendRoomMessage(roomID, body)`, `MarkRoomRead(roomID)`, `SubscribeRoom(ctx, roomID) <-chan model.Message` |
+| Search | `Search(query)` (grouped `type=all` preview), `SearchPosts(query, cursor)`, `SearchReplies(query, cursor)`, `SearchUsers(query, cursor)` |
 
 #### `client.go`
 
@@ -192,7 +197,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 - `refresh()` — token refresh path; does not recurse
 - `wirePostToModel()`, `wireReplyToModel()`, `wireUserToModel()`, `wireSettingsToModel()`, `wireNotificationToModel()`, `wireNoteToModel()` — convert API JSON wire types to `model.*` types
 
-**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow` — match the JSON envelope shapes returned by the API.
+**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireRoom`, `wireCircMessage`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData`, `wireSearchPreview` — match the JSON envelope shapes returned by the API.
 
 **Note:** `HTTPClient.tokens` is guarded by a `sync.Mutex`. Bubble Tea runs commands in concurrent goroutines, so reads in `doRequest` and writes in `Login`/`refresh` go through the token accessor methods (`idToken`, `setTokens`, `snapshotTokens`, `applyRefresh`). See `docs/30-security-hardening.md`.
 
@@ -248,28 +253,20 @@ Firebase Realtime Database client. Communicates with RTDB using its REST API and
 
 | Identifier | Kind | Purpose |
 |---|---|---|
-| `Client` | struct | RTDB HTTP client (baseURL, token, httpClient, streamClient) |
-| `SSEEvent` | struct | Single SSE event (Event string, Data []byte, Err error) |
-| `New(baseURL, token)` | func | Production constructor (15s timeout for REST, 0s for SSE) |
+| `Client` | struct | RTDB HTTP client (baseURL, token, idle timeout, httpClient, streamClient) |
+| `SSEEvent` | struct | Single SSE event (Event string, Data []byte, Err error). `Event` is `"auth_revoked"`/`"cancel"` on a terminal server event, always paired with `Err` set. |
+| `New(baseURL, token)` | func | Production constructor (15s timeout for REST; SSE stream has no overall timeout but a 30s `ResponseHeaderTimeout` on connect) |
 | `NewForTesting(baseURL, token, hc)` | func | Test constructor with injected `http.Client` |
 | `Get(ctx, path, params)` | method | One-shot GET, returns raw JSON bytes |
 | `Put(ctx, path, val)` | method | Marshals val to JSON and PUTs it |
-| `Subscribe(ctx, path, params)` | method | Opens SSE stream; returns `<-chan SSEEvent` |
+| `Subscribe(ctx, path, params)` | method | Opens SSE stream; returns `<-chan SSEEvent`, closed (with a terminal `Err`) on cancel, server close, `auth_revoked`/`cancel`, or a 10-minute idle-read timeout |
+| `SetIdleTimeoutForTesting(d)` | method | Test-only override of the idle-read watchdog duration (default 10 min) |
 
-Internal: `readSSE(ctx, reader, ch)` parses the SSE wire format and forwards events; `buildURL(path, params)` constructs authenticated URLs.
-
-#### `jwt.go`
-
-| Identifier | Kind | Purpose |
-|---|---|---|
-| `ParseRTDBToken(token)` | func | Decodes RTDB JWT (no signature verify), extracts "aud" (Firebase project ID) |
-| `BaseURL(projectID)` | func | Returns `https://{projectID}-default-rtdb.firebaseio.com` |
-
-Used by `HTTPClient.InitRTDB` immediately after login to derive the RTDB base URL from the RTDB JWT.
+Internal: `readSSE(ctx, cancel, reader, ch)` parses the SSE wire format, forwards events, and races a per-line idle timer against `ctx.Done()` — any line (including a discarded `:`-comment) resets the timer; `buildURL(path, params)` constructs authenticated URLs under `mu.RLock()`; `SetToken(token)` replaces the auth token under `mu.Lock()` (called by `HTTPClient.applyRefresh` on token refresh) — this only affects *future* connections, since an open SSE stream's token is fixed in its URL at connect time and can't be revived without reconnecting.
 
 #### `client_test.go`
 
-Tests for RTDB REST operations, SSE parsing, and JWT decoding.
+Tests for RTDB REST operations, SSE parsing (including `auth_revoked`/`cancel` terminal events and the idle-read watchdog), and `SetToken` token-update behaviour.
 
 ---
 
@@ -305,7 +302,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 | `WithAutoLogin(email, password)` | method | Pre-fills credentials for programmatic login |
 | `WithSavedEmail(email)` | method | Pre-fills email field on login screen |
 
-**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenGuilds`, `screenTopics`, `screenJournal`, `screenSettings`
+**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenGuilds`, `screenTopics`, `screenJournal`, `screenSearch`, `screenSettings`
 
 **Responsibilities:**
 
@@ -314,7 +311,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 - Manages screen transitions (e.g., `ShowPostMsg` → navigate to PostDetail)
 - Broadcasts `SharedConfigMsg` to all screens on resize, theme change, or settings update
 - Renders tab bar, active screen, and status bar
-- Manages global shortcuts (`1`–`4` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `o` URL opener, `q`/`ctrl+c` quit)
+- Manages global shortcuts (`1`–`9` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `o` URL opener, `q`/`ctrl+c` quit)
 - Handles automatic token refresh on `ErrUnauthorized` responses
 - Surfaces transient errors via a **global notification banner** that replaces the status-bar row, colored by severity, and auto-dismisses after 4 s or on the next keypress (which still performs its normal action)
 - Runs background tick jobs: `schedulePollCmd` (60 s unread count), `scheduleWanderCmd` (1 h wander check)
@@ -449,19 +446,37 @@ Key types: `SettingsModel`, `SaveSettingsMsg`
 
 Direct messages (C-Mail) with live Firebase RTDB integration.
 
-- Two-pane layout: conversation list (left) + active conversation chat (right)
-- Subscribes to RTDB SSE stream via `api.Client.SubscribeDMs()` on conversation selection
+- Two-mode flow: `cmailModeList` (full-width conversation cards) → `cmailModeDetail` (history viewport + compose input); ESC returns to list
+- Subscribes to RTDB SSE stream via `api.Client.SubscribeDMs()` on conversation selection; cancelled on ESC or screen switch
 - `waitForDM(sub)` is a Bubble Tea `Cmd` that blocks on the subscription channel and returns each incoming message as a `tea.Msg`
-- `←`/`→` switch focus between panes; `j`/`k` navigate conversations; Enter sends a message
+- Other person's messages left-aligned; my messages right-aligned (driven by `currentUser` field)
+- `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history in detail mode
+- **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile emits `StartConversationMsg{Username}` (defined in `messages.go`); App calls `StartConversation(username)` via REST, then switches to C-Mail and opens the returned conversation in detail mode; self-DMs are dropped in the App handler. Distinct from `g m` (see "Keyboard Shortcuts" → Global): `c` targets the specific highlighted user, `g m` just opens the C-Mail tab's conversation list — the in-app hint for `c` reads "message" rather than "c-mail" to keep the two from being conflated
+- **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetMessages(convID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on conversation open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
+- **Live-stream reconnect:** when `dmStreamClosedMsg` fires for the still-active conversation (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectConvCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (`reconnectDelay`/`reconnectBackoffSchedule` in `reconnect.go`, shared with `chatrooms.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `CMailReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path, so it's visible even with history already loaded. `cancelDMSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned conversation) is a no-op.
+- **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendMessage`'s reply text is routed through app.go's `cmailCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice`. `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live for CIRC, parsed defensively here) rendered via `renderActionLine` as classic IRC `* username body *`
 
-Key types: `CMailModel`, `CMailFocus` (`FocusCMailLeft` / `FocusCMailRight`)  
-Key internal types: `dmSubscription` (RTDB channel + cancel func), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `cmailMsgsLoadedMsg`
+Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`, `CMailReconnectedMsg`
+Key internal types: `dmSubscription` (RTDB channel + cancel func + `ConvID`), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `dmReconnectedMsg`, `dmReconnectFailedMsg`, `dmReconnectRetryDueMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`
 
 #### `chatrooms.go`
 
-Public chatroom browser and chat (UI complete; API integration deferred).
+Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integration including live RTDB SSE.
 
-- Two-pane layout matching C-Mail
+- Two-mode flow: `chatroomModeList` (full-width room cards) → `chatroomModeDetail` (header + message viewport + compose input); ESC returns to list
+- Room cards show name, `#slug` subtitle, and last-message timestamp (right-aligned)
+- IRC-style message rendering via `renderCircMessages` (see `render.go`): `<username>  body` with right-aligned timestamp; long bodies word-wrap to the viewport width, with room reserved so the timestamp trails the last wrapped line instead of overflowing
+- Subscribes to RTDB SSE stream via `api.Client.SubscribeRoom()` on room selection; cancelled on ESC or screen switch
+- `waitForRoomMsg(sub)` is the Bubble Tea Cmd pump (mirrors `waitForDM` in `cmail.go`)
+- `RoomOpenedMsg` is emitted on Enter; App calls `MarkRoomRead` fire-and-forget
+- `CancelSubscription()` is called by the layout on every key that navigates away
+- **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetRoomMessages(roomID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on room open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
+- **Live-stream reconnect:** when `roomStreamClosedMsg` fires for the still-active room (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectRoomCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (shared `reconnectDelay`/`reconnectBackoffSchedule` from `reconnect.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleRoomReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `RoomReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path. `cancelRoomSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned room) is a no-op.
+- **Admin badge:** `renderCircMessages` shows a `[admin]` tag next to the username when `model.Message.IsChatAdmin` is set (parsed from both the REST and RTDB wire formats)
+- **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendRoomMessage`'s reply text is routed through app.go's `roomCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice` (shared with `cmail.go`). `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live) rendered via `renderActionLine` as classic IRC `* username body *` — see `docs/33-circ.md` for the live-testing findings
+
+Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`
+Key internal types: `roomSubscription` (RTDB channel + cancel func + `RoomID`), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `roomReconnectedMsg`, `roomReconnectFailedMsg`, `roomReconnectRetryDueMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`
 - Room selected with arrow keys or Enter; Enter in the input pane sends via `SendRoomMessageMsg`
 - App handles `SendRoomMessageMsg` → `api.Client.SendRoomMessage()`
 
@@ -518,18 +533,34 @@ Note creation (`n`), editing (`enter`), deletion (`d`), and revision history (`h
 Key types: `JournalModel`, `SubmitSaveNoteMsg`, `SubmitPublishNoteMsg`, `SubmitDeleteNoteMsg`, `LoadMoreJournalMsg`, `LoadNoteRevisionsMsg`, `LoadNoteRevisionMsg`  
 Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNoteContent(noteID, content, topics)`, `DeleteNote(noteID)`, `SetRevisions(noteID, revisions, cursor)`, `SetRevisionPreview(note)`
 
+#### `search.go`
+
+Full-text search across users, posts, and replies — tab `search` (no number key; reached via the global `/` shortcut or `←`/`→` cycling). See `docs/34-search.md`.
+
+- Three modes: query (text input) → preview (grouped, up to 8 hits per category) → type-list (one category, fully paginated). Results stay cached across mode changes.
+- `esc` peels back one level at a time — type-list → preview → query (focused) — and, from the query box (the outermost level; no result list is showing there, so there's nothing left to peel back), leaves Search entirely and returns to the screen `/` was pressed from (`App.searchReturn`, the same return-to-origin pattern as `profileReturn`/`postDetailReturn`). Also the escape hatch if a search request fails: `SetError` never changes the view, so this is otherwise the only way back to normal tab/quit navigation. `esc` always blurs the query box on its way out so a later arrival via tab-cycling (which doesn't call `FocusQuery`) never inherits a stuck focused state.
+- `j`/`k` navigate a flattened row list (section headers are not selectable); `enter` opens a hit or drills into a "see all" row.
+- User hits emit the shared `ShowUserProfileMsg`; post hits emit `ShowSearchPostMsg`; reply hits emit `ShowSearchReplyMsg{PostID, ReplyID}` (fetches the parent post, then scrolls to the reply — same mechanism as the Notifications reply deep-link).
+
+Key types: `SearchModel`, `SubmitSearchMsg`, `DrillSearchTypeMsg`, `LoadMoreSearchMsg`, `ShowSearchPostMsg`, `ShowSearchReplyMsg`, `LeaveSearchMsg`  
+Key methods: `SetPreview(preview, query)`, `SetTypeResults(hitType, posts, replies, users, cursor)`, `AppendTypeResults(...)`, `FocusQuery()`, `InputFocused()`, `IsInTypeList()`, `LastQuery()`
+
 #### `compose.go`
 
 Reusable multi-line text editor embedded in Feed, PostDetail, Profile, and C-Mail.
 
 - Built on `bubbles/textarea`
-- Enter inserts a paragraph break (`\n\n`); ctrl+s or alt+enter emits `ComposeSubmitMsg`; ESC emits `ComposeCancelMsg`
+- Enter inserts a paragraph break (`\n\n`); ctrl+s emits `ComposeSubmitMsg`; ESC emits `ComposeCancelMsg`
 - Auto-expands from `composeMinLines=3` to `composeMaxLines=8` as content grows
 - Character limit and placeholder text are configurable per embedding screen
 - Active/inactive border styling (cyan when focused, dimmed otherwise)
 
-Key types: `ComposeModel`, `ComposeSubmitMsg` (Content), `ComposeCancelMsg`  
-Key methods: `Open(ctx, placeholder)`, `OpenWithContent(ctx, placeholder, content)`, `SetCharLimit(n)`, `SetWidth(w)`, `IsActive()`, `Content()`, `Close()`
+`PostComposePanel` is a unified single-box compose panel for new posts (title, optional slug, body, topics, public/nsfw). Tab cycles through all fields. The `slug` field accepts `[a-z0-9-]` up to 60 chars; an invalid value blocks submit, focuses the slug field, and shows a red inline error. Empty slug is silently omitted from the wire (server generates one).
+
+Key types: `ComposeModel`, `ComposeSubmitMsg` (Content), `ComposeCancelMsg`, `PostComposePanel`  
+Key methods (`ComposeModel`): `Open(ctx, placeholder)`, `OpenWithContent(ctx, placeholder, content)`, `SetCharLimit(n)`, `SetWidth(w)`, `IsActive()`, `Content()`, `Close()`  
+Key methods (`PostComposePanel`): `Open(defaultPublic)`, `Close()`, `TitleValue()`, `SlugValue()`, `TopicsRaw()`, `IsPublic()`, `IsNSFW()`, `PanelHeight()`, `SetWidth(w)`  
+Key functions: `ValidateSlug(s string) error`
 
 #### `timeutil.go`
 
@@ -648,21 +679,76 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 
 ### Global
 
+Two navigation schemes reach the same 11 screens — pick whichever is faster
+for a given target. Both are derived from the single `menuTabs` slice in
+`internal/ui/layout.go`, so TabsLayout and MillerLayout can never disagree
+about what a given key does (a bug that existed before this scheme and was
+fixed alongside it).
+
+**Numeric aliases** — quick access to the first 9 screens by position on the
+tab bar:
+
 | Key | Action |
 |---|---|
 | `1` | Feed |
 | `2` | Notifications |
-| `3` | Journal (private notes) |
-| `4` | Bookmarks |
-| `5` | Topics |
-| `6` | Profile |
-| `7` | Settings |
-| `←` / `→` | Cycle tabs left / right |
+| `3` | C-Mail (direct messages) |
+| `4` | CIRC (public chatrooms) |
+| `5` | Journal (private notes) |
+| `6` | Bookmarks |
+| `7` | Guilds |
+| `8` | Topics |
+| `9` | Profile |
+
+**Leader key** — `g` ("go to") arms a pending state; the very next keypress
+resolves against a mnemonic map to jump directly to any of the 11 screens,
+including Search and Settings which have no numeric alias. An unmapped
+follow-up key silently cancels the pending state rather than doing anything.
+The mnemonic letter is shown highlighted inline within each tab's label on
+the tab bar / nav sidebar as a hint:
+
+| Chord | Screen | Chord | Screen |
+|---|---|---|---|
+| `g f` | Feed | `g g` | Guilds |
+| `g n` | Notifications | `g t` | Topics |
+| `g m` | C-Mail | `g p` | Profile |
+| `g i` | CIRC | `g s` | Search |
+| `g j` | Journal | `g e` | Settings |
+| `g b` | Bookmarks | | |
+
+Only plain letters are used — no `alt+`, function keys, or `ctrl+`/`shift+`
+combinations — since those are caught inconsistently by terminal emulators,
+window managers, or (for `ctrl+`/`shift+` on non-letter keys) aren't
+reliably distinguishable without the Kitty keyboard protocol. `g` isn't
+bound to anything on its own, so there's no ambiguity or timeout to manage.
+
+**Search is hidden from the tab bar / nav sidebar and from `←`/`→` (and
+MillerLayout's `j`/`k`) cycling** — `menuTabs`' `search` entry has
+`hidden: true` (`internal/ui/layout.go`), so `visibleTabs()` (what actually
+renders and what cycling iterates over) skips it, the same treatment
+`screenPostDetail` already had. It's an explicit-entry-only destination:
+the only ways in are `g s` and `/`, and both always land in a focused query
+box (`SearchModel.FocusQuery()`) regardless of whatever state Search was
+last left in — unlike cycling, which for every other screen intentionally
+just resumes wherever it was left. `screenForMnemonic` and the help modal's
+leader-key legend still list `g s` normally; only the rendered tab
+list/cycling exclude it.
+
+Other global keys:
+
+| Key | Action |
+|---|---|
+| `←` / `→` | Cycle tabs left / right (does not include Search, which is hidden — see above) |
+| `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail) |
 | `v` | Toggle dense / relaxed display |
 | `?` | Help modal |
 | `t` | Theme picker |
-| `z` | Timezone picker |
+| `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused |
+| `ctrl+o` | Same as `o`, but reaches the handler even while a compose input is focused — the only way to open links in CIRC/C-Mail, since their input is focused for the entire detail view, not just a transient compose sub-mode |
 | `q` / `ctrl+c` | Quit |
+
+Timezone is set from the Settings screen's own field (`tab`/`shift+tab` to
+cycle), not a global shortcut.
 
 ### Login
 
@@ -683,6 +769,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `enter` | Open post (Posts/Replies tabs) or view user profile (Following/Followers tabs) |
 | `e` | Edit profile (own profile, Info tab) |
 | `f` | Follow / unfollow (read-only profiles) |
+| `c` | Start C-Mail conversation (read-only profiles only) |
 | `esc` | Back to previous screen |
 
 ### Feed
@@ -696,6 +783,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `n` | New post |
 | `d` | Delete selected post (own posts only — prompts y/n) |
 | `p` | View author's profile |
+| `c` | Start C-Mail conversation with post author |
 | `w` | Watch / unwatch the selected thread |
 
 ### Post Detail
@@ -707,18 +795,33 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `r` | Reply to selected post or reply |
 | `d` | Delete selected post or reply (own content only — prompts y/n) |
 | `p` | View author's profile |
+| `c` | Start C-Mail conversation with focused author |
 | `w` | Watch / unwatch the thread (root post focused only; no-op on replies) |
 | `esc` | Back to feed |
 
-### Compose (embedded)
+### Compose
+
+**Reply/inline compose** (`ComposeModel` — replies, guild/topic threads,
+CIRC/C-Mail messages): `enter` inserts a paragraph break (`\n\n`) rather than
+submitting — most terminals can't distinguish `shift+enter` from `enter`
+without the Kitty keyboard protocol, so there's no separate hard-line-break
+key.
 
 | Key | Action |
 |---|---|
 | `enter` | Insert paragraph break |
-| `tab` | Cycle focus: compose → title → topics → compose (Feed only) |
-| `alt+enter` / `ctrl+s` | Submit |
-| `alt+p` | Toggle public flag (Feed compose only) |
-| `alt+s` | Toggle NSFW flag (Feed compose only) |
+| `ctrl+s` | Submit |
+| `esc` | Cancel |
+
+**New post panel** (`PostComposePanel` — Feed's `n`, guild/topic new-thread):
+a single panel with title, slug, body, topics, and public/NSFW checkbox
+fields.
+
+| Key | Action |
+|---|---|
+| `tab` / `shift+tab` | Cycle fields: title → slug → body → topics → public → NSFW |
+| `space` | Toggle the focused checkbox field (public / NSFW) |
+| `ctrl+s` | Submit (validates the slug field first; invalid slug refocuses it with an inline error) |
 | `esc` | Cancel |
 
 ### Notifications
@@ -730,16 +833,69 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `enter` | Jump to referenced post/reply |
 | `m` | Mark selected as read |
 | `M` | Mark all as read |
-| `1` | Toggle unread-only filter |
+| `u` | Toggle unread-only filter |
+| `c` | Start C-Mail conversation with notification actor |
 
 ### C-Mail
 
+**List mode**
+
 | Key | Action |
 |---|---|
-| `j` / `k` or `↓` / `↑` | Navigate conversations (left pane) |
-| `→` | Focus message input |
-| `←` | Focus conversation list |
-| `enter` | Send message |
+| `j` / `↓` | Next conversation |
+| `k` / `↑` | Previous conversation |
+| `enter` | Open conversation (detail mode) |
+
+**Detail mode**
+
+| Key | Action |
+|---|---|
+| `↑` | Scroll message history up |
+| `↓` | Scroll message history down |
+| `enter` | Send message (when input non-empty) |
+| `esc` | Return to list mode |
+| `ctrl+o` | Open URLs/images found across the loaded conversation (plain `o` is captured by the compose input) |
+| all other | Forwarded to compose input (`j`/`k` type normally) |
+
+**From other screens**
+
+| Key | Action |
+|---|---|
+| `c` | Start or open C-Mail conversation with highlighted user (feed, post detail, notifications, read-only profile) — self-DM is a no-op |
+
+### CIRC
+
+**List mode**
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | Next room |
+| `k` / `↑` | Previous room |
+| `enter` | Open room (detail mode) |
+
+**Detail mode**
+
+| Key | Action |
+|---|---|
+| `↑` | Scroll message history up (reaching the top loads older history) |
+| `↓` | Scroll message history down |
+| `enter` | Send message (when input non-empty) |
+| `esc` | Return to list mode |
+| `ctrl+o` | Open URLs/images found across the loaded room history (plain `o` is captured by the compose input) |
+| all other | Forwarded to compose input |
+
+### Search
+
+`esc` peels back one level at a time, same as everywhere else in the app, and — once there's nothing left to peel back — leaves Search entirely and returns to whichever screen `/` was pressed from (the same return-to-origin pattern `p` → profile → `esc` uses):
+
+type-list → preview → query (focused) → **origin screen**
+
+| Key | Action |
+|---|---|
+| `j` / `↓` | Next row (skips section headers) |
+| `k` / `↑` | Previous row |
+| `enter` | Submit the query (in query mode); open the selected hit or drill into a "see all" row (in preview/type-list) |
+| `esc` | Step back one level per the chain above |
 
 ### Settings
 
@@ -801,7 +957,6 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 | Area | Status |
 |---|---|
 | **Chatrooms API** | UI fully built; REST integration deferred (server paths not finalized) |
-| **C-Mail REST** | Conversation list + history loaded from mock; RTDB subscribe wired; full path confirmed post-beta |
 | **HTTPClient thread safety** | Resolved: `tokens` is guarded by a `sync.Mutex` (see `docs/30-security-hardening.md`) |
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized |
 | **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |

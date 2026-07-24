@@ -15,11 +15,15 @@ type Client interface {
 	// tokens (IDToken + RTDBToken) without requiring the user's password.
 	LoginWithRefreshToken(refreshToken string) (model.Tokens, error)
 	Logout() error
+	// RefreshSession proactively refreshes the ID token (and RTDB token) using
+	// the stored refresh token, without waiting for a failed request to trigger
+	// it. Used to reconnect a live RTDB subscription after the token expires.
+	RefreshSession() error
 
 	// Feed — pass empty cursor for first page; use returned cursor for next page.
 	// Returns empty next-cursor when there are no more pages.
 	GetFeed(cursor string) ([]model.Post, string, error)
-	CreatePost(content, title string, topics []string, isPublic, isNSFW bool) (model.Post, error)
+	CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error)
 	// GetPost fetches a single post by ID (used when jumping from a notification).
 	GetPost(postID string) (model.Post, error)
 
@@ -53,15 +57,26 @@ type Client interface {
 	GetSettings() (model.Settings, error)
 	UpdateSettings(update model.Settings) error
 
-	// Chatrooms — NOTE: real impl uses Firebase RTDB with RTDBToken — pending feature/rtdb-chat
+	// Chatrooms — list/history/send via REST; real-time delivery via RTDB SSE.
 	GetRooms() ([]model.Room, error)
-	GetRoomMessages(roomID string, limit int) ([]model.Message, error)
-	SendRoomMessage(roomID, body string) error
+	// GetRoomMessages returns up to limit messages for roomID, oldest-first.
+	// Pass before=0 for the latest page; pass a previous timestamp cursor for older pages.
+	GetRoomMessages(roomID string, limit int, before int64) ([]model.Message, error)
+	// SendRoomMessage returns the server's reply text for reply-only commands
+	// (e.g. /help, which posts no message); empty for normal sends.
+	SendRoomMessage(roomID, body string) (string, error)
+	// MarkRoomRead resets the "new messages" indicator for the caller.
+	MarkRoomRead(roomID string) error
+	// SubscribeRoom opens a live RTDB SSE stream for the given chatroom.
+	// Returns a channel of incoming messages and a cancel function.
+	SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error)
 
 	// Notifications — cursor-paginated; mark-read methods are fire-and-forget.
 	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.
 	// Set unreadOnly to true to request only unread notifications from the server.
-	GetNotifications(cursor string, unreadOnly bool) ([]model.Notification, string, error)
+	// Pass non-nil types to filter by notification type (e.g. []string{"reply","bookmark"});
+	// pass nil for all types.
+	GetNotifications(cursor string, unreadOnly bool, types []string) ([]model.Notification, string, error)
 	// GetUnreadNotificationCount returns the server-side count of unread notifications.
 	// The value is cached for ~5 s on the server side.
 	GetUnreadNotificationCount() (int, error)
@@ -93,7 +108,8 @@ type Client interface {
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetGuildPosts(slug string, cursor string) ([]model.Post, string, error)
 	// CreateGuildPost creates a new thread in a guild. Caller must be a member.
-	CreateGuildPost(slug, content, title string, topics []string) (model.Post, error)
+	// postSlug is optional; pass empty string for server-generated slug.
+	CreateGuildPost(slug, content, title, postSlug string, topics []string) (model.Post, error)
 	// GetGuildMembers returns paginated members for a guild, oldest-joined first.
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetGuildMembers(slug, cursor string) ([]model.GuildMember, string, error)
@@ -144,12 +160,34 @@ type Client interface {
 	// DeleteNote soft-deletes all revisions of a note.
 	DeleteNote(noteID string) error
 
-	// Direct messages — backed by Firebase RTDB (see internal/rtdb).
+	// Direct messages (C-Mail) — list/history/send via REST; real-time delivery via RTDB SSE.
 	GetConversations() ([]model.Conversation, error)
-	GetMessages(conversationID string, limit int) ([]model.Message, error)
-	SendMessage(conversationID, body string) error
-	// SubscribeDMs opens a live SSE stream for the given conversation.
+	// GetMessages returns up to limit messages for conversationID, oldest-first.
+	// Pass before=0 for the latest page; pass a previous message's timestamp for older pages.
+	GetMessages(conversationID string, limit int, before int64) ([]model.Message, error)
+	// SendMessage returns the server's reply text for reply-only commands
+	// (e.g. /help, which posts no message); empty for normal sends.
+	SendMessage(conversationID, body string) (string, error)
+	// StartConversation creates or retrieves a C-Mail conversation with recipientUsername.
+	// Returns 201 for a new conversation, 200 for an existing one (both return the conversation).
+	StartConversation(recipientUsername string) (model.Conversation, error)
+	// MarkCMailRead resets the unread count for the conversation.
+	MarkCMailRead(conversationID string) error
+	// SubscribeDMs opens a live RTDB SSE stream for the given conversation.
 	// Returns a channel of incoming messages and a cancel function.
 	// The channel is closed when cancel is called or the stream ends.
 	SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error)
+
+	// Search — full-text search across users, posts, and replies (v0.7).
+	// Search returns the grouped "type=all" preview: up to 8 hits per category,
+	// no pagination, no total count. A category at exactly 8 hits may have more —
+	// drill into it with SearchPosts/SearchReplies/SearchUsers.
+	Search(query string) (model.SearchPreview, error)
+	// SearchPosts/SearchReplies/SearchUsers return one paginated category.
+	// Pass empty cursor for first page; use the returned cursor for the next page
+	// (opaque to the caller — server-side it's a page number, but callers never
+	// need to know that, matching every other cursor-paginated method here).
+	SearchPosts(query, cursor string) ([]model.Post, string, error)
+	SearchReplies(query, cursor string) ([]model.Reply, string, error)
+	SearchUsers(query, cursor string) ([]model.User, string, error)
 }

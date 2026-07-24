@@ -37,13 +37,15 @@ const (
 	screenGuilds
 	screenTopics
 	screenJournal
+	screenSearch
 )
 
 type focusTarget int
 
 const (
-	focusMenu focusTarget = iota
-	focusList             // reserved for future list navigation
+	focusMenu   focusTarget = iota
+	focusList               // list pane (compact post list in 3-pane Miller)
+	focusDetail             // reading pane (full post view in 3-pane Miller)
 )
 
 // availableThemes is the ordered list of selectable themes shown in the picker.
@@ -80,6 +82,7 @@ func randomCyberRune(exclude rune) rune {
 
 type App struct {
 	layout      Layout
+	layoutName  string // "tabs" (default) or "miller"; used when persisting to config
 	client      api.Client
 	tokens      model.Tokens
 	currentUser model.User
@@ -108,6 +111,11 @@ type App struct {
 	// helpModal state — open with '?', close with any key.
 	helpModalOpen bool
 
+	// leaderPending is armed by the "g" ("go to") leader key and resolved by
+	// the very next keypress against screenForMnemonic — e.g. "g" then "f"
+	// jumps to Feed. An unmapped follow-up key silently cancels it.
+	leaderPending bool
+
 	// urlPicker state — open with 'o' when multiple URLs are available.
 	urlPickerOpen   bool
 	urlPickerItems  []string
@@ -130,6 +138,7 @@ type App struct {
 	guilds         screens.GuildsModel
 	topics         screens.TopicsModel
 	journal        screens.JournalModel
+	search         screens.SearchModel
 
 	// postDetailReturn is the screen to go back to when ESC is pressed in PostDetail.
 	postDetailReturn screen
@@ -137,12 +146,18 @@ type App struct {
 	// profileReturn is the screen to go back to when ESC is pressed in a read-only profile.
 	profileReturn screen
 
+	// searchReturn is the screen to go back to when ESC is pressed at Search's
+	// outermost level (blurred query, nothing left to peel back). Set whenever
+	// '/' switches into Search from somewhere else.
+	searchReturn screen
+
 	// pendingReplyID is set when navigating to PostDetail from a reply/thread_reply
 	// notification. After replies load, PostDetail scrolls to this reply, then it is cleared.
 	pendingReplyID string
 
 	// polledUnreadCount is the single source of truth for the tab badge unread count.
-	// It is synced from: initial/page load, 60-second poll, m/M key, and enter on a notification.
+	// It is synced from: 60-second server poll, m/M key, and enter on a notification.
+	// Never overwrite with the local list count — the server count is always authoritative.
 	polledUnreadCount int
 
 	// settings holds the user's preferences fetched from GET /v1/settings on login.
@@ -204,6 +219,7 @@ type App struct {
 func NewApp(client api.Client) App {
 	return App{
 		layout:             TabsLayout{},
+		layoutName:         "tabs",
 		client:             client,
 		active:             screenLogin,
 		focus:              focusMenu,
@@ -211,7 +227,7 @@ func NewApp(client api.Client) App {
 		wanderLust:         false,
 		login:              screens.NewLoginModel(""),
 		feed:               screens.NewFeedModel(),
-		chatrooms:          screens.NewChatroomsModel(),
+		chatrooms:          screens.NewChatroomsModel("", client),
 		cmail:              screens.NewCMailModel("", client),
 		profile:            screens.NewProfileModel(),
 		postDetail:         screens.NewPostDetailModel(),
@@ -221,6 +237,7 @@ func NewApp(client api.Client) App {
 		guilds:             screens.NewGuildsModel(),
 		topics:             screens.NewTopicsModel(),
 		journal:            screens.NewJournalModel(0),
+		search:             screens.NewSearchModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -259,7 +276,13 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.wanderLust = s.WanderLust
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
+	a.layoutName = s.Layout
+	a.layout = layoutFromName(s.Layout)
 	return a
+}
+
+func layoutFromName(_ string) Layout {
+	return TabsLayout{}
 }
 
 // WithGraphicsProtocol sets the terminal graphics protocol detected at startup.
@@ -318,7 +341,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
-		return a, a.delegateUpdate(msg)
+		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
+		return a, a.delegateUpdate(contentMsg)
 	}
 	// Any keypress dismisses a visible notification early. We do NOT return here,
 	// so the key still flows on to do its normal job; bumping notifyGen neutralizes
@@ -376,6 +400,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleJournal(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleSearch(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleUnauthorized(msg); ok {
 		return a2, cmd
 	}
@@ -408,6 +435,7 @@ func (a App) updateAll(msg tea.Msg) App {
 	a.guilds, _ = a.guilds.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
 	a.journal, _ = a.journal.Update(msg)
+	a.search, _ = a.search.Update(msg)
 	return a
 }
 
@@ -415,7 +443,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.width, Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, OwnGuildSlug: a.currentUser.GuildSlug}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -431,6 +459,7 @@ func (a *App) broadcastBookmarkedIDs() {
 	a.postDetail, _ = a.postDetail.Update(msg)
 	a.guilds, _ = a.guilds.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
+	a.search, _ = a.search.Update(msg)
 }
 
 // broadcastWatchedIDs pushes the current watched-post ID set to all screens
@@ -442,6 +471,7 @@ func (a *App) broadcastWatchedIDs() {
 	a.postDetail, _ = a.postDetail.Update(msg)
 	a.guilds, _ = a.guilds.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
+	a.search, _ = a.search.Update(msg)
 }
 
 // applyWindowSize stores the new terminal dimensions and broadcasts the size
@@ -450,7 +480,8 @@ func (a *App) broadcastWatchedIDs() {
 func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
 	a.width = m.Width
 	a.height = m.Height
-	return a.updateAll(m)
+	contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
+	return a.updateAll(contentMsg)
 }
 
 // handleKeys processes tea.KeyMsg events: modal intercepts, focused-input
@@ -474,12 +505,45 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		return model.(App), cmd, true
 	}
 	// When a screen has a focused text input, let it consume all keys.
-	// ctrl+c is kept as a hard escape hatch.
+	// ctrl+c is kept as a hard escape hatch; ctrl+o reaches the open-link
+	// shortcut too, since plain 'o' is unreachable while chatting (CIRC/
+	// C-Mail's compose input is focused for the entire detail view, not just
+	// a transient sub-mode like Feed's reply box).
 	if a.activeScreenHasFocusedInput() {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
 		}
-		return a, nil, false // fall through to delegateUpdate
+		if m.String() != "ctrl+o" {
+			return a, nil, false // fall through to delegateUpdate
+		}
+	}
+	// "g" arms the leader key; the very next keypress resolves against
+	// screenForMnemonic regardless of what it is (even another global key
+	// like "t" or "q"), so it must be checked ahead of the switch below.
+	if a.leaderPending {
+		a.leaderPending = false
+		if a.active != screenLogin {
+			if s, ok := screenForMnemonic(m.String()); ok {
+				var cmd tea.Cmd
+				a, cmd = activateScreen(a, s)
+				if s == screenSearch {
+					// activateScreen leaves Search in whatever state it was
+					// last left in (correct for arrow-cycling, which no
+					// longer reaches Search at all) — "g s" is a deliberate
+					// "go to Search" action like '/', so it must always focus
+					// the query box the same way '/' already does below.
+					a.search = a.search.FocusQuery()
+				}
+				return a, cmd, true
+			}
+		}
+		return a, nil, true
+	}
+	if m.String() == "g" {
+		if a.active != screenLogin {
+			a.leaderPending = true
+			return a, nil, true
+		}
 	}
 	switch m.String() {
 	case "t":
@@ -510,10 +574,21 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.helpModalOpen = true
 			return a, nil, true
 		}
-	case "o":
+	case "o", "ctrl+o":
 		if a.active != screenLogin {
 			app, cmd := a.handleOpenURL(a.getFocusedURLs())
 			return app, cmd, true
+		}
+	case "/":
+		if a.active != screenLogin {
+			if a.active != screenSearch {
+				a.searchReturn = a.active
+			}
+			a.cmail = a.cmail.CancelSubscription()
+			a.chatrooms = a.chatrooms.CancelSubscription()
+			a.active = screenSearch
+			a.search = a.search.FocusQuery()
+			return a, nil, true
 		}
 	case "ctrl+c", "q":
 		if a.active != screenLogin {
@@ -532,6 +607,13 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.tokens = msg.tokens
 		a.currentUser = msg.user
 		a.cmail = screens.NewCMailModel(msg.user.Username, a.client)
+		a.chatrooms = screens.NewChatroomsModel(msg.user.Username, a.client)
+		// Initialize the fresh models' viewports with the current terminal size.
+		if a.width > 0 {
+			contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(a.width), Height: a.layout.ContentHeight(a.height)}
+			a.cmail, _ = a.cmail.Update(contentMsg)
+			a.chatrooms, _ = a.chatrooms.Update(contentMsg)
+		}
 		return a, a.afterLoginCmd(), true
 	case screens.LoginErrMsg:
 		var cmd tea.Cmd
@@ -546,14 +628,32 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case feedLoadedMsg:
 		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
-		return a, nil, true
+		var detailCmd tea.Cmd
+		a.feed, detailCmd = a.feed.CurrentDetailCmd()
+		// Auto-fill the compact list column if the initial page is shorter than it.
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.feed.PostCount() < min {
+			return a, tea.Batch(detailCmd, a.loadFeedPageCmd(msg.cursor)), true
+		}
+		return a, detailCmd, true
 	case feedPageMsg:
 		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
+		// Keep auto-filling until the compact list column is full.
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.feed.PostCount() < min {
+			return a, a.loadFeedPageCmd(msg.cursor), true
+		}
 		return a, nil, true
 	case screens.RefreshFeedMsg:
 		return a, a.loadFeedCmd(), true
 	case screens.LoadMoreFeedMsg:
 		return a, a.loadFeedPageCmd(msg.Cursor), true
+	case screens.LoadFeedDetailMsg:
+		return a, a.loadFeedDetailCmd(msg.PostID), true
+	case screens.FeedDetailRepliesMsg:
+		a.feed, _ = a.feed.Update(msg)
+		return a, nil, true
+	case screens.FeedDetailNavMsg:
+		a.feed, _ = a.feed.Update(msg)
+		return a, nil, true
 	case screens.ShowPostMsg:
 		a.postDetailReturn = a.active
 		a.active = screenPostDetail
@@ -603,7 +703,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
 	case screens.SubmitReplyMsg:
@@ -653,6 +753,14 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
+	case screens.RoomOpenedMsg:
+		return a, a.markRoomReadCmd(msg.RoomID), true
+	case screens.RoomReconnectedMsg:
+		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
+		return a, cmd, true
+	case roomCommandReplyMsg:
+		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, msg.reply)
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -667,6 +775,28 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
+	case screens.CMailConvSelectedMsg:
+		return a, a.markCMailReadCmd(msg.ConversationID), true
+	case screens.StartConversationMsg:
+		if msg.Username == "" || msg.Username == a.currentUser.Username {
+			return a, nil, true
+		}
+		return a, a.startConversationCmd(msg.Username), true
+	case conversationStartedMsg:
+		a.active = screenCMail
+		a.cmail = a.cmail.SetActiveConversation(msg.conv)
+		convID := msg.conv.ID
+		return a, tea.Batch(
+			a.loadConvsCmd(),
+			a.cmail.ConvOpenCmds(convID),
+			func() tea.Msg { return screens.CMailConvSelectedMsg{ConversationID: convID} },
+		), true
+	case screens.CMailReconnectedMsg:
+		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
+		return a, cmd, true
+	case cmailCommandReplyMsg:
+		a.cmail = a.cmail.AppendSystemMessage(msg.convID, msg.reply)
+		return a, nil, true
 	}
 	return a, nil, false
 }
@@ -792,17 +922,21 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
+		ln := msg.LayoutName
 		return a, func() tea.Msg {
-			if err := a.client.UpdateSettings(s); err != nil {
-				return actionErrMsg{err}
+			if msg.RemoteChanged {
+				if err := a.client.UpdateSettings(s); err != nil {
+					return actionErrMsg{err}
+				}
 			}
 			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
+				cfg.Layout = ln
 			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -811,10 +945,32 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
+		a.layoutName = msg.layoutName
+		a.layout = layoutFromName(msg.layoutName)
+		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
+			var cmds []tea.Cmd
+			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < min {
+				cmds = append(cmds, a.loadFeedPageCmd(cursor))
+			}
+			if a.guilds.IsViewingGuildPosts() {
+				if cursor := a.guilds.PostsNextCursor(); cursor != "" && a.guilds.PostCount() < min {
+					cmds = append(cmds, a.loadGuildPostsPageCmd(a.guilds.ActiveGuild(), cursor))
+				}
+			}
+			if a.topics.IsViewingTopicPosts() {
+				if cursor := a.topics.PostsNextCursor(); cursor != "" && a.topics.PostCount() < min {
+					cmds = append(cmds, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), cursor))
+				}
+			}
+			if len(cmds) > 0 {
+				return a, tea.Batch(cmds...), true
+			}
+		}
 		return a, nil, true
 
 	case wanderTickMsg:
@@ -1133,6 +1289,25 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 		a.guilds = a.guilds.SetGuildPosts(msg.posts, msg.cursor)
+		var detailCmd tea.Cmd
+		a.guilds, detailCmd = a.guilds.CurrentDetailCmd()
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.guilds.PostCount() < min {
+			return a, tea.Batch(detailCmd, a.loadGuildPostsPageCmd(msg.slug, msg.cursor)), true
+		}
+		if detailCmd != nil {
+			return a, detailCmd, true
+		}
+		return a, nil, true
+
+	case screens.LoadGuildThreadMsg:
+		return a, a.loadGuildThreadCmd(msg.PostID), true
+
+	case screens.GuildThreadRepliesMsg:
+		a.guilds, _ = a.guilds.Update(msg)
+		return a, nil, true
+
+	case screens.GuildThreadNavMsg:
+		a.guilds, _ = a.guilds.Update(msg)
 		return a, nil, true
 
 	case screens.LoadMoreGuildPostsMsg:
@@ -1143,6 +1318,9 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 		a.guilds = a.guilds.AppendGuildPosts(msg.posts, msg.cursor)
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.guilds.PostCount() < min {
+			return a, a.loadGuildPostsPageCmd(msg.slug, msg.cursor), true
+		}
 		return a, nil, true
 
 	case screens.RefreshGuildPostsMsg:
@@ -1155,12 +1333,15 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadRepliesCmd(msg.Post.ID), true
 
 	case screens.SubmitGuildPostMsg:
-		return a, a.createGuildPostCmd(msg.Slug, msg.Content, msg.Title, msg.Topics), true
+		return a, a.createGuildPostCmd(msg.Slug, msg.Content, msg.Title, msg.PostSlug, msg.Topics), true
 
 	case guildPostCreatedMsg:
 		return a, a.loadGuildPostsCmd(msg.slug), true
 
 	case screens.ShowUserProfileMsg:
+		if a.active != screenGuilds {
+			return a, nil, false
+		}
 		a.profileReturn = screenGuilds
 		return a, a.loadUserProfileCmd(msg.Username), true
 
@@ -1232,6 +1413,25 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case topicPostsLoadedMsg:
 		a.topics = a.topics.SetTopicPosts(msg.posts, msg.cursor)
+		var detailCmd tea.Cmd
+		a.topics, detailCmd = a.topics.CurrentDetailCmd()
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.topics.PostCount() < min {
+			return a, tea.Batch(detailCmd, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor)), true
+		}
+		if detailCmd != nil {
+			return a, detailCmd, true
+		}
+		return a, nil, true
+
+	case screens.LoadTopicThreadMsg:
+		return a, a.loadTopicThreadCmd(msg.PostID), true
+
+	case screens.TopicThreadRepliesMsg:
+		a.topics, _ = a.topics.Update(msg)
+		return a, nil, true
+
+	case screens.TopicThreadNavMsg:
+		a.topics, _ = a.topics.Update(msg)
 		return a, nil, true
 
 	case screens.LoadMoreTopicPostsMsg:
@@ -1239,6 +1439,9 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case topicPostsPageMsg:
 		a.topics = a.topics.AppendTopicPosts(msg.posts, msg.cursor)
+		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.topics.PostCount() < min {
+			return a, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor), true
+		}
 		return a, nil, true
 
 	case screens.RefreshTopicPostsMsg:
@@ -1290,6 +1493,57 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case noteRevisionPreviewMsg:
 		a.journal = a.journal.SetRevisionPreview(msg.note)
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// handleSearch processes search query, preview, drill-down, and pagination messages.
+func (a App) handleSearch(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case screens.SubmitSearchMsg:
+		return a, a.searchCmd(msg.Query), true
+
+	case searchPreviewLoadedMsg:
+		a.search = a.search.SetPreview(msg.preview, msg.query)
+		return a, nil, true
+
+	case screens.DrillSearchTypeMsg:
+		return a, a.searchTypeCmd(msg.Type, a.search.LastQuery()), true
+
+	case searchTypeLoadedMsg:
+		a.search = a.search.SetTypeResults(msg.hitType, msg.posts, msg.replies, msg.users, msg.cursor)
+		return a, nil, true
+
+	case screens.LoadMoreSearchMsg:
+		return a, a.searchTypePageCmd(msg.Type, a.search.LastQuery(), msg.Cursor), true
+
+	case searchTypePageMsg:
+		a.search = a.search.AppendTypeResults(msg.hitType, msg.posts, msg.replies, msg.users, msg.cursor)
+		return a, nil, true
+
+	case screens.ShowSearchPostMsg:
+		a.postDetailReturn = screenSearch
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.Post)
+		return a, a.loadRepliesCmd(msg.Post.ID), true
+
+	case screens.ShowSearchReplyMsg:
+		a.postDetailReturn = screenSearch
+		a.active = screenPostDetail
+		a.pendingReplyID = msg.ReplyID
+		a.postDetail = a.postDetail.SetPost(model.Post{ID: msg.PostID})
+		return a, tea.Batch(a.loadProfilePostCmd(msg.PostID), a.loadRepliesCmd(msg.PostID)), true
+
+	case screens.ShowUserProfileMsg:
+		if a.active != screenSearch {
+			return a, nil, false
+		}
+		a.profileReturn = screenSearch
+		return a, a.loadUserProfileCmd(msg.Username), true
+
+	case screens.LeaveSearchMsg:
+		a.active = a.searchReturn
 		return a, nil, true
 	}
 	return a, nil, false
@@ -1440,6 +1694,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.topics = a.topics.SetError(m.err)
 	case screenJournal:
 		a.journal = a.journal.SetError(m.err)
+	case screenSearch:
+		a.search = a.search.SetError(m.err)
 	}
 	// Errors never block a screen: the per-screen SetError above only feeds an
 	// inline "couldn't load" empty-state, while the failure is announced in the
@@ -1521,7 +1777,7 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // theme by re-broadcasting the current terminal size. Called synchronously so
 // View() sees fresh content in the same frame.
 func (a *App) refreshViewports() {
-	msg := tea.WindowSizeMsg{Width: a.width, Height: a.height}
+	msg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(a.width), Height: a.layout.ContentHeight(a.height)}
 	a.feed, _ = a.feed.Update(msg)
 	a.chatrooms, _ = a.chatrooms.Update(msg)
 	a.cmail, _ = a.cmail.Update(msg)
@@ -1530,6 +1786,7 @@ func (a *App) refreshViewports() {
 	a.notifications, _ = a.notifications.Update(msg)
 	a.bookmarks, _ = a.bookmarks.Update(msg)
 	a.topics, _ = a.topics.Update(msg)
+	a.guilds, _ = a.guilds.Update(msg)
 	a.journal, _ = a.journal.Update(msg)
 }
 
@@ -1559,6 +1816,10 @@ func (a App) getFocusedURLs() []string {
 		p = a.topics
 	case screenJournal:
 		p = a.journal
+	case screenChatrooms:
+		p = a.chatrooms
+	case screenCMail:
+		p = a.cmail
 	}
 	if p == nil {
 		return nil
@@ -1587,6 +1848,9 @@ func (a App) handleOpenURL(urls []string) (App, tea.Cmd) {
 func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 	parsed, err := neturl.Parse(rawURL)
 	if err != nil {
+		if a.ephemeral {
+			return a.notify(notifyInfo, "Opening links is disabled in SSH sessions")
+		}
 		return a, openExternalURL(rawURL)
 	}
 	if parsed.Host == "cyberspace.online" || parsed.Host == "www.cyberspace.online" {
@@ -1595,6 +1859,11 @@ func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 			a.profileReturn = a.active
 			return a, a.loadUserProfileCmd(parts[1])
 		}
+	}
+	// Ephemeral (SSH-hosted) sessions must never launch host processes or make
+	// the host fetch remote-chosen URLs (browser spawn / SSRF).
+	if a.ephemeral {
+		return a.notify(notifyInfo, "Opening links is disabled in SSH sessions")
 	}
 	if urlutil.IsImageURL(rawURL) &&
 		a.graphicsProtocol != imgview.ProtocolNone &&
@@ -1689,9 +1958,9 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		if err != nil {
 			return screens.LoginErrMsg{Err: err}
 		}
-		// Initialise the RTDB client from the rtdbToken (best effort).
+		// Initialise the RTDB client using the URL returned by the API (best effort).
 		if hc, ok := a.client.(*api.HTTPClient); ok {
-			_ = hc.InitRTDB(tokens.RTDBToken)
+			_ = hc.InitRTDB(tokens.IDToken, tokens.RTDBUrl)
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
@@ -1728,7 +1997,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 			return screens.LoginErrMsg{Err: err}
 		}
 		if hc, ok := a.client.(*api.HTTPClient); ok {
-			_ = hc.InitRTDB(tokens.RTDBToken)
+			_ = hc.InitRTDB(tokens.IDToken, tokens.RTDBUrl)
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
@@ -1768,6 +2037,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.loadWatchesPageCmd(""),
 		a.loadTopicsCmd(),
 		a.loadProfileCmd(),
+		a.loadConvsCmd(),
 		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
 		a.loadSettingsCmd(),
@@ -1787,6 +2057,19 @@ type feedPageMsg struct {
 }
 type roomsLoadedMsg struct{ rooms []model.Room }
 type convsLoadedMsg struct{ convs []model.Conversation }
+
+// roomCommandReplyMsg/cmailCommandReplyMsg carry a reply-only slash command's
+// text (e.g. /help) back from the send response, for local display only —
+// nothing was posted, so nothing arrives via the RTDB subscription.
+type roomCommandReplyMsg struct {
+	roomID string
+	reply  string
+}
+type cmailCommandReplyMsg struct {
+	convID string
+	reply  string
+}
+type conversationStartedMsg struct{ conv model.Conversation }
 type profileLoadedMsg struct{ user model.User }
 type userProfileLoadedMsg struct {
 	user        model.User
@@ -1810,6 +2093,7 @@ type settingsSavedMsg struct {
 	maxThreadDepth int
 	timezone       string
 	imageViewer    string
+	layoutName     string
 }
 type wanderTickMsg struct{}
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
@@ -1965,6 +2249,29 @@ type topicPostsLoadedMsg struct {
 type topicPostsPageMsg struct {
 	posts  []model.Post
 	cursor string
+}
+
+type searchPreviewLoadedMsg struct {
+	preview model.SearchPreview
+	query   string
+}
+
+// searchTypeLoadedMsg/searchTypePageMsg carry one paginated search category's
+// results. Exactly one of posts/replies/users is populated, matching hitType.
+type searchTypeLoadedMsg struct {
+	hitType string
+	posts   []model.Post
+	replies []model.Reply
+	users   []model.User
+	cursor  string
+}
+
+type searchTypePageMsg struct {
+	hitType string
+	posts   []model.Post
+	replies []model.Reply
+	users   []model.User
+	cursor  string
 }
 
 type guildsLoadedMsg struct {
@@ -2174,18 +2481,50 @@ func (a *App) loadUserFollowersCmd(userID, cursor string) tea.Cmd {
 
 func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	return func() tea.Msg {
-		if err := a.client.SendRoomMessage(roomID, body); err != nil {
+		reply, err := a.client.SendRoomMessage(roomID, body)
+		if err != nil {
 			return actionErrMsg{err}
 		}
+		if reply != "" {
+			return roomCommandReplyMsg{roomID: roomID, reply: reply}
+		}
+		return nil
+	}
+}
+
+func (a *App) markRoomReadCmd(roomID string) tea.Cmd {
+	return func() tea.Msg {
+		_ = a.client.MarkRoomRead(roomID) // fire-and-forget
 		return nil
 	}
 }
 
 func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 	return func() tea.Msg {
-		if err := a.client.SendMessage(convID, body); err != nil {
+		reply, err := a.client.SendMessage(convID, body)
+		if err != nil {
 			return actionErrMsg{err}
 		}
+		if reply != "" {
+			return cmailCommandReplyMsg{convID: convID, reply: reply}
+		}
+		return nil
+	}
+}
+
+func (a App) startConversationCmd(username string) tea.Cmd {
+	return func() tea.Msg {
+		conv, err := a.client.StartConversation(username)
+		if err != nil {
+			return actionErrMsg{err}
+		}
+		return conversationStartedMsg{conv: conv}
+	}
+}
+
+func (a *App) markCMailReadCmd(convID string) tea.Cmd {
+	return func() tea.Msg {
+		_ = a.client.MarkCMailRead(convID)
 		return nil
 	}
 }
@@ -2200,6 +2539,36 @@ func (a *App) loadRepliesCmd(postID string) tea.Cmd {
 	}
 }
 
+func (a *App) loadFeedDetailCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		replies, err := a.client.GetPostReplies(postID)
+		if err != nil {
+			return screens.FeedDetailRepliesMsg{PostID: postID}
+		}
+		return screens.FeedDetailRepliesMsg{PostID: postID, Replies: replies}
+	}
+}
+
+func (a *App) loadGuildThreadCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		replies, err := a.client.GetPostReplies(postID)
+		if err != nil {
+			return screens.GuildThreadRepliesMsg{PostID: postID}
+		}
+		return screens.GuildThreadRepliesMsg{PostID: postID, Replies: replies}
+	}
+}
+
+func (a *App) loadTopicThreadCmd(postID string) tea.Cmd {
+	return func() tea.Msg {
+		replies, err := a.client.GetPostReplies(postID)
+		if err != nil {
+			return screens.TopicThreadRepliesMsg{PostID: postID}
+		}
+		return screens.TopicThreadRepliesMsg{PostID: postID, Replies: replies}
+	}
+}
+
 func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := a.client.CreateReply(postID, content, parentReplyID)
@@ -2210,9 +2579,9 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	}
 }
 
-func (a *App) createPostCmd(content, title string, topics []string, isPublic, isNSFW bool) tea.Cmd {
+func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, title, topics, isPublic, isNSFW)
+		_, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW)
 		if err != nil {
 			return actionErrMsg{err}
 		}
@@ -2270,11 +2639,9 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case notifsLoadedMsg:
 		a.notifications = a.notifications.SetNotifs(msg.notifs, msg.cursor)
-		a.polledUnreadCount = a.notifications.UnreadCount()
 		return a, nil, true
 	case notifsPageMsg:
 		a.notifications = a.notifications.AppendNotifs(msg.notifs, msg.cursor)
-		a.polledUnreadCount = a.notifications.UnreadCount()
 		return a, nil, true
 	case screens.RefreshNotifsMsg:
 		return a, a.loadNotifsCmd(), true
@@ -2324,11 +2691,11 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.profileReturn = screenNotifications
 		return a, a.loadUserProfileCmd(msg.Username), true
 	case pollUnreadTickMsg:
-		return a, tea.Batch(a.fetchUnreadCountCmd(), a.schedulePollCmd()), true
+		return a, tea.Batch(a.fetchUnreadCountCmd(), a.loadConvsCmd(), a.schedulePollCmd()), true
 	case unreadCountMsg:
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count
-		if msg.count > prev {
+		if msg.count > prev && !a.notifications.HasPaginated() {
 			return a, a.loadNotifsCmd(), true
 		}
 		return a, nil, true
@@ -2339,7 +2706,7 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 func (a *App) loadNotifsCmd() tea.Cmd {
 	unreadOnly := a.notifications.ShowUnreadOnly()
 	return func() tea.Msg {
-		notifs, cursor, err := a.client.GetNotifications("", unreadOnly)
+		notifs, cursor, err := a.client.GetNotifications("", unreadOnly, nil)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -2350,7 +2717,7 @@ func (a *App) loadNotifsCmd() tea.Cmd {
 func (a *App) loadNotifsPageCmd(cursor string) tea.Cmd {
 	unreadOnly := a.notifications.ShowUnreadOnly()
 	return func() tea.Msg {
-		notifs, nextCursor, err := a.client.GetNotifications(cursor, unreadOnly)
+		notifs, nextCursor, err := a.client.GetNotifications(cursor, unreadOnly, nil)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -2547,6 +2914,54 @@ func (a *App) loadTopicPostsPageCmd(slug, cursor string) tea.Cmd {
 	}
 }
 
+// --- Search commands ---
+
+func (a *App) searchCmd(query string) tea.Cmd {
+	return func() tea.Msg {
+		preview, err := a.client.Search(query)
+		if err != nil {
+			return errMsg{err}
+		}
+		return searchPreviewLoadedMsg{preview: preview, query: query}
+	}
+}
+
+// searchTypeCmd fetches the first page of one search category (a "see all" drill-down).
+func (a *App) searchTypeCmd(hitType, query string) tea.Cmd {
+	return func() tea.Msg {
+		posts, replies, users, cursor, err := a.searchByType(hitType, query, "")
+		if err != nil {
+			return errMsg{err}
+		}
+		return searchTypeLoadedMsg{hitType: hitType, posts: posts, replies: replies, users: users, cursor: cursor}
+	}
+}
+
+// searchTypePageCmd fetches a subsequent page of one search category.
+func (a *App) searchTypePageCmd(hitType, query, cursor string) tea.Cmd {
+	return func() tea.Msg {
+		posts, replies, users, nextCursor, err := a.searchByType(hitType, query, cursor)
+		if err != nil {
+			return errMsg{err}
+		}
+		return searchTypePageMsg{hitType: hitType, posts: posts, replies: replies, users: users, cursor: nextCursor}
+	}
+}
+
+// searchByType dispatches to the matching typed search client method. Exactly
+// one of the three returned slices is populated, matching hitType.
+func (a *App) searchByType(hitType, query, cursor string) (posts []model.Post, replies []model.Reply, users []model.User, nextCursor string, err error) {
+	switch hitType {
+	case "posts":
+		posts, nextCursor, err = a.client.SearchPosts(query, cursor)
+	case "replies":
+		replies, nextCursor, err = a.client.SearchReplies(query, cursor)
+	case "users":
+		users, nextCursor, err = a.client.SearchUsers(query, cursor)
+	}
+	return
+}
+
 // --- Guilds commands ---
 
 func (a *App) loadGuildsCmd(cursor string) tea.Cmd {
@@ -2589,9 +3004,9 @@ func (a *App) loadGuildPostsPageCmd(slug, cursor string) tea.Cmd {
 	}
 }
 
-func (a *App) createGuildPostCmd(slug, content, title string, topics []string) tea.Cmd {
+func (a *App) createGuildPostCmd(slug, content, title, postSlug string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreateGuildPost(slug, content, title, topics)
+		_, err := a.client.CreateGuildPost(slug, content, title, postSlug, topics)
 		if err != nil {
 			return actionErrMsg{err}
 		}
@@ -2713,7 +3128,7 @@ func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 // Published notes have no title, are private, and not marked NSFW.
 func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, "", topics, false, false)
+		_, err := a.client.CreatePost(content, "", "", topics, false, false)
 		if err != nil {
 			return actionErrMsg{err}
 		}

@@ -1,4 +1,4 @@
-﻿# ᑕ¥βєяรקค¢є API v0.5.1
+# ᑕ¥βєяรקค¢є API v0.7
 
 ## Access
 
@@ -44,14 +44,16 @@ Returns:
   "data": {
     "idToken": "eyJhb...",
     "refreshToken": "AMf-...",
-    "rtdbToken": "eyJhb..."
+    "rtdbToken": "eyJhb...",
+    "rtdbUrl": "https://cyberspace-cyberspace-default-rtdb.europe-west1.firebasedatabase.app"
   }
 }
 ```
 
-- `idToken` -- use as Bearer token for all API requests
+- `idToken` -- use as Bearer token for all API requests; also works directly as the `auth` for Realtime Database reads
 - `refreshToken` -- use to get a new idToken when it expires
-- `rtdbToken` -- use to connect to Realtime Database for chat/DMs
+- `rtdbToken` -- optional: a Firebase custom token for SDK-based RTDB access (`signInWithCustomToken`)
+- `rtdbUrl` -- the Realtime Database endpoint for direct real-time reads (just a URL, not a secret); see [Reading in real time](#reading-in-real-time)
 
 ### Refresh Token
 
@@ -63,7 +65,7 @@ POST /v1/auth/refresh
 { "refreshToken": "AMf-..." }
 ```
 
-Returns `{ idToken, rtdbToken }`.
+Returns `{ idToken, rtdbToken, rtdbUrl }`.
 
 ### Resend Verification Email
 
@@ -505,7 +507,7 @@ Returns the guild object plus the caller's membership state: `isMember` (boolean
 GET /v1/guilds/:slug/members?limit=20&cursor=<membershipId>
 ```
 
-Returns memberships oldest-joined first, enriched with each member's `displayName` and `profilePictureUrl`. Banned and shadow-banned members are omitted. `cursor` is a membership ID.
+Returns memberships oldest-joined first, enriched with each member's `displayName` and `profilePictureUrl`. `cursor` is a membership ID.
 
 ```json
 {
@@ -658,7 +660,7 @@ GET /v1/notifications/unread-count
 
 Returns `{ "data": { "count": 7 } }` -- the number of unread notifications for the authenticated user.
 
-Cached for 5 seconds. The count is raw and may include notifications whose actor has since been banned or shadow-banned (those are filtered out of `GET /v1/notifications` but not from this count).
+Cached for 5 seconds. The count may be slightly higher than the number of notifications returned by `GET /v1/notifications`, which applies additional filtering.
 
 ### Mark as Read
 
@@ -812,11 +814,251 @@ Rate limit: 2/min, 15/day.
 
 ---
 
-## Chat & DMs (Realtime Database)
+## C-Mail
 
-Chat (cIRC) and direct messages (C-Mail) use Firebase Realtime Database, not this REST API. The `rtdbToken` returned from login grants access.
+C-Mail is Cyberspace's private 1:1 messaging, stored in Firebase Realtime Database (RTDB). **Sending** goes through this REST API so content is sanitized, rate-limited, and the sender identity is set server-side. **Reading new messages as they arrive** is done by subscribing to the conversation in Realtime Database directly, using your `idToken` — see [Reading in real time](#reading-in-real-time). The `GET` endpoints here are for loading the conversation list and message history.
 
-Full RTDB documentation (endpoints, pagination, presence, and rate limits) is coming soon.
+A conversation is addressed by a `conversationId`. The API derives it server-side from the two participants — you never compute it yourself. Get it from `POST /v1/cmail` (below) or from the conversation list.
+
+### Start / Get a Conversation
+
+```
+POST /v1/cmail
+```
+
+```json
+{ "recipientUsername": "alice" }
+```
+
+Provide either `recipientUsername` or `recipientId`. The API returns (and, if needed, creates) the conversation between you and that user. Idempotent — returns the existing conversation if one already exists (`200`), otherwise creates it (`201`).
+
+```json
+{ "data": { "conversationId": "...", "otherUser": { "userId": "...", "username": "alice" } } }
+```
+
+This is how you **start a new conversation**. To **continue an existing one**, use the `conversationId` from here or from the conversation list.
+
+### List Conversations
+
+```
+GET /v1/cmail
+```
+
+Returns the caller's conversations, unread first then newest activity first. Each entry: `conversationId`, `otherUser` (`userId`, `username`, and `displayName`/`profilePictureUrl` when set), `lastMessage`, `lastMessageAt` (ms epoch), `unreadCount`.
+
+### Read a Conversation
+
+```
+GET /v1/cmail/:conversationId?limit=50&before=<timestamp>
+```
+
+Participant only. Use this to load history — the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-in-real-time), not from here. Returns up to `limit` (1–100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp). Each message: `id`, `senderId`, `senderUsername`, `content`, `timestamp` (ms epoch).
+
+### Send a Message
+
+```
+POST /v1/cmail/:conversationId
+```
+
+```json
+{ "content": "hello there" }
+```
+
+Sends into an existing conversation (start one first via `POST /v1/cmail`). `senderUsername` is always set from your authenticated account — any value in the body is ignored. Blocked in either direction (you blocked them, or they blocked you) returns `403`. Returns `{ "data": { "conversationId": "...", "messageId": "..." } }` (`201`).
+
+Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`) is expanded server-side.
+
+### Mark as Read
+
+```
+POST /v1/cmail/:conversationId/read
+```
+
+Resets your unread count for the conversation to `0`.
+
+### Reading in real time
+
+New messages are delivered by subscribing to the conversation in Realtime Database directly, using the `idToken` you already have.
+
+Your login `idToken` doubles as the Realtime Database credential — pass it as the `auth` query parameter (it's the same token you send as `Authorization: Bearer`). Reads are scoped to your own `auth.uid`, so you see the conversations you're a participant in.
+
+**The database URL.** Connect to:
+
+```
+https://cyberspace-cyberspace-default-rtdb.europe-west1.firebasedatabase.app
+```
+
+This is the `rtdbUrl` value also returned from `/v1/auth/login` and `/v1/auth/refresh` (read it from there rather than hard-coding it). It's a plain endpoint URL, not a secret.
+
+**Subscribe to the conversation** over Server-Sent Events. Open this request and keep it open — the connection stays alive and the database streams an event every time the conversation changes:
+
+```
+GET https://cyberspace-cyberspace-default-rtdb.europe-west1.firebasedatabase.app/dm_messages/<conversationId>.json?auth=<idToken>&orderBy="timestamp"&limitToLast=50
+Accept: text/event-stream
+```
+
+(`conversationId` comes from `POST /v1/cmail` or the conversation list; `<idToken>` is your login token.) Subscribe to `user_conversations/<yourUid>` the same way to get live conversation-list and unread updates.
+
+When the `idToken` expires (~1 hour) the stream closes — get a fresh one from `POST /v1/auth/refresh` and reopen the connection.
+
+The stream stays open and emits an event per change. The first event is a `put` with the whole window; each new message is another `put`/`patch`:
+
+```
+event: put
+data: {"path":"/","data":{"<msgId>":{"senderId":"...","senderUsername":"alice","content":"hi","timestamp":1719700000000}}}
+
+event: put
+data: {"path":"/<newMsgId>","data":{"senderId":"...","senderUsername":"alice","content":"you there?","timestamp":1719700050000}}
+```
+
+A `data` of `null` means that path was deleted. Merge events into your local view by `path`. Subscribe to `user_conversations/<yourUid>` the same way for live conversation-list and unread updates.
+
+(Prefer a Firebase SDK to raw SSE? The `rtdbToken` from login is a custom token you can pass to `signInWithCustomToken`.)
+
+**Stay within bounds (or get denied):**
+
+- You can only read conversations you're a participant in, and your own `user_conversations/<yourUid>` — nothing above those. The database rejects anything broader, so don't try to read the whole tree.
+- **Always** include `orderBy="timestamp"` and a `limitToLast` of **100 or fewer**. Page older history with `&endBefore=<timestamp>`. Unbounded reads pull the entire conversation and may be rejected.
+- Keep one stream open per conversation; don't reconnect in a loop.
+
+## cIRC
+
+cIRC is Cyberspace's multi-user chat rooms, stored in Firebase Realtime Database (RTDB). It works the same way as [C-Mail](#c-mail): **sending** goes through this REST API so content is sanitized, rate-limited, and your identity is set server-side. **Reading new messages as they arrive** is done by subscribing to the room in Realtime Database directly, using your `idToken` — see [Reading a room in real time](#reading-a-room-in-real-time). The `GET` endpoints here are for loading the room list and message history.
+
+A room is addressed by its `roomId` (its slug, e.g. `general`). Messages are plain text and support [commands](#commands).
+
+### List Rooms
+
+```
+GET /v1/circ
+```
+
+Returns the rooms available to you, sorted by `sortOrder` then most-recently-active first. Each entry: `id`, `slug`, `name`, `lastMessageAt` (ms epoch), `sortOrder`.
+
+### Read a Room
+
+```
+GET /v1/circ/:roomId?limit=50&before=<timestamp>
+```
+
+Use this to load history — the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-a-room-in-real-time), not from here. Returns up to `limit` (1–100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp). Each message: `id`, `userId`, `username`, `isChatAdmin`, `content`, `timestamp` (ms epoch). Returns `403` if the room isn't available to you.
+
+### Send a Message
+
+```
+POST /v1/circ/:roomId
+```
+
+```json
+{ "content": "hello world" }
+```
+
+`username` and `isChatAdmin` are always set from your authenticated account — any values in the body are ignored. Returns `{ "data": { "roomId": "...", "messageId": "..." } }` (`201`). Returns `403` if the room isn't available to you.
+
+Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`) is expanded server-side.
+
+### Mark a Room as Read
+
+```
+POST /v1/circ/:roomId/read
+```
+
+Marks the room as viewed for you (drives the "new messages" indicator). Returns `{ "data": { "roomId": "...", "ok": true } }`.
+
+### Reading a room in real time
+
+New messages are delivered by subscribing to the room in Realtime Database directly — the same mechanism [C-Mail uses](#reading-in-real-time), using the `idToken` you already have. Connect to the `rtdbUrl` returned from `/v1/auth/login` and `/v1/auth/refresh` and open a Server-Sent Events stream:
+
+```
+GET https://cyberspace-cyberspace-default-rtdb.europe-west1.firebasedatabase.app/chat_messages/<roomId>.json?auth=<idToken>&orderBy="timestamp"&limitToLast=50
+Accept: text/event-stream
+```
+
+The first event is a `put` with the whole window; each new message is another `put`/`patch`. A `data` of `null` means that path was deleted. Merge events into your local view by `path`.
+
+**Stay within bounds (or get denied):**
+
+- **Always** include `orderBy="timestamp"` and a `limitToLast` of **100 or fewer**. Page older history with `&endBefore=<timestamp>`. Unbounded reads may be rejected.
+- Keep one stream open per room; don't reconnect in a loop.
+- When the `idToken` expires (~1 hour) the stream closes — get a fresh one from `POST /v1/auth/refresh` and reopen the connection.
+
+---
+
+## Search
+
+Full-text search across users, entries, and replies.
+
+```
+GET /v1/search?q=<query>&type=all
+```
+
+Query params:
+- `q` -- required search text (1–512 chars)
+- `type` -- `all` (default), `posts`, `replies`, or `users`
+- `limit` -- 1–50, default 20 (ignored when `type=all`)
+- `page` -- 0-based page number (only for a specific `type`)
+
+**`type=all`** returns a grouped preview — up to 8 hits per group, no pagination:
+
+```json
+{
+  "data": {
+    "users":   [ { "type": "user",  "userId": "uid", "username": "someone", ... } ],
+    "posts":   [ { "type": "post",  "postId": "abc123", "authorUsername": "someone", "content": "...", ... } ],
+    "replies": [ { "type": "reply", "replyId": "r1", "postId": "abc123", "content": "...", ... } ]
+  }
+}
+```
+
+**A specific `type`** returns a paginated list. Each hit carries a `type` field (`post`, `reply`, or `user`):
+
+```
+GET /v1/search?q=neon&type=posts&page=0
+```
+
+```json
+{
+  "data": [
+    {
+      "type": "post",
+      "postId": "abc123",
+      "authorId": "uid",
+      "authorUsername": "someone",
+      "content": "markdown content",
+      "title": "Optional Title",
+      "slug": "optional-title",
+      "topics": ["music"],
+      "repliesCount": 5,
+      "bookmarksCount": 2,
+      "createdAt": "2026-03-27T10:12:01.516Z"
+    }
+  ],
+  "cursor": "1"
+}
+```
+
+`cursor` is the next `page` number (pass it as `?page=`), or `null` on the last page. User hits include `username`, `displayName`, `profilePictureUrl`, `supporterIcon`, guild fields, and follower/post counts; reply hits include `parentPostAuthor`/`parentPostContent` context.
+
+Missing `q` returns `400 VALIDATION_ERROR`. Rate limit: 30/min.
+
+---
+
+## Commands
+
+Both cIRC and C-Mail sends understand IRC-style slash commands. When a message's `content` begins with `/` and matches one of these, the server expands it and stores the result — resolved server-side, so any client gets it for free.
+
+| Command | Effect |
+|---------|--------|
+| `/me <action>` | Third-person action, e.g. `/me waves` |
+| `/poke` `/hug` `/hi5` `/slap` `[@user]` | Emote at a user (or a solo line with no target) |
+| `/dice <notation>` | Roll dice: `/dice`, `/dice:SIDES`, `/dice:COUNT:SIDES`, or full notation (`4d6kh3`, `2d6+3`, `adv`, `d%`, `6x4d6kh3`) |
+| `/8ball <question>` | Ask the magic 8-ball |
+| `/fortune` | A random fortune cookie |
+| `/help` | Returns the command list as `{ "data": { "reply": "…" } }`; posts nothing |
+
+Plain text is posted as-is. A malformed command (e.g. bad `/dice` notation) returns `400 VALIDATION_ERROR`.
+
+> **Undocumented, observed via live testing (2026, cyber-tui client work) — not confirmed against the official docs, re-verify on next drift check:** command messages carry additional fields not listed above. `/me` (and likely the other emote commands) sets `"isAction": true` on the stored/broadcast message, and `content` is just the bare action text with the username stripped out (e.g. `/me tests the plumbing` → `content: "tests the plumbing"`, `isAction: true`) — the client is expected to prepend the username for display. `/8ball` was observed to set `isAction: true` alongside `"isEightball": true` and an `"eightballAnswer"` field. Confirmed live for CIRC (`GET /v1/circ/:roomId`); not yet independently confirmed for C-Mail.
 
 ---
 
@@ -848,6 +1090,7 @@ All responses follow this structure:
 | `CONFLICT` | 409 | Already exists (duplicate follow, taken username) |
 | `RATE_LIMITED` | 429 | Too many requests |
 | `INTERNAL_ERROR` | 500 | Server error |
+| `BAD_GATEWAY` | 502 | Upstream service (e.g. search) unavailable |
 
 ## Rate Limits
 
@@ -867,6 +1110,13 @@ All responses follow this structure:
 | Profile updates | 2 | 15 |
 | Settings updates | 2 | 15 |
 | Watch thread | 10 | 100 |
+| C-Mail message | 15 | 300 |
+| Start C-Mail conversation | 5 | 50 |
+| Mark C-Mail read | 60 | — |
+| cIRC message | 15 | 300 |
+| Mark cIRC room read | 60 | — |
+
+C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour).
 
 `POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour.
 
@@ -889,6 +1139,11 @@ All responses follow this structure:
 | List guilds / members | 30 |
 | List guild threads | 45 |
 | Watch status / list watched | 30 |
+| List C-Mail conversations | 30 |
+| Read a C-Mail conversation | 45 |
+| List cIRC rooms | 30 |
+| Read a cIRC room | 45 |
+| Search | 30 |
 
 Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for daily, 60 seconds for per-minute).
 
@@ -899,7 +1154,8 @@ Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for 
 | Entry/reply/note content | 32,768 chars |
 | Entry title | 100 chars |
 | Entry slug | 60 chars, `[a-z0-9-]` |
-| Chat/DM message | 2,048 chars |
+| cIRC / C-Mail message | 2,048 chars |
+| Search query | 512 chars |
 | Bio | 640 chars |
 | Display name | 64 chars |
 | Website URL | 2,048 chars |
@@ -907,4 +1163,3 @@ Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for 
 | Location name | 64 chars |
 | Topics per entry | 3 |
 | Username | 3-20 chars |
-

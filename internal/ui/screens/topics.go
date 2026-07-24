@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -27,6 +28,26 @@ type RefreshTopicPostsMsg struct{ Slug string }
 type ShowTopicPostMsg struct{ Post model.Post }
 
 type LoadMoreTopicsMsg struct{ Cursor string }
+
+type LoadTopicThreadMsg struct{ PostID string }
+
+type TopicThreadRepliesMsg struct {
+	PostID  string
+	Replies []model.Reply
+}
+
+// TopicThreadDebounceMsg is the delayed message emitted after topicThreadDebounceDelay
+// when the selected post changes. The fetch only proceeds if PostID still matches
+// the current selection, dropping stale ticks from rapid navigation.
+type TopicThreadDebounceMsg struct{ PostID string }
+
+const topicThreadDebounceDelay = time.Second
+
+type TopicThreadNavMsg struct {
+	Delta      int
+	PaneHeight int
+	PaneWidth  int
+}
 
 // Internal view state for the Topics screen
 type topicsView int
@@ -56,6 +77,15 @@ type TopicsModel struct {
 	refreshing  bool
 	loaded      bool
 
+	// Miller 3-pane thread state
+	threadPostID       string
+	maxThreadDepth     int
+	threadReplies      []model.Reply
+	threadFlatTree     []replyNode
+	threadReplyIndex   int
+	threadScrollOffset int
+	threadLoading      bool
+
 	// Shared
 	viewport    viewport.Model
 	itemOffsets []int
@@ -73,7 +103,7 @@ type TopicsModel struct {
 }
 
 func NewTopicsModel() TopicsModel {
-	return TopicsModel{}
+	return TopicsModel{threadReplyIndex: -1}
 }
 
 func (m TopicsModel) visiblePosts() []model.Post {
@@ -187,6 +217,12 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 		if m.ready {
 			m = m.refreshContent()
 		}
+		if msg.MaxThreadDepth != m.maxThreadDepth {
+			m.maxThreadDepth = msg.MaxThreadDepth
+			if len(m.threadReplies) > 0 {
+				m.threadFlatTree = buildReplyTree(m.threadReplies, m.effectiveMaxDepth())
+			}
+		}
 		return m, nil
 
 	case BookmarkedIDsMsg:
@@ -200,6 +236,30 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 		m.watchedPostIDs = msg.PostIDs
 		if m.ready {
 			m = m.refreshContent()
+		}
+		return m, nil
+
+	case TopicThreadRepliesMsg:
+		if msg.PostID == m.threadPostID {
+			m.threadReplies = msg.Replies
+			m.threadFlatTree = buildReplyTree(msg.Replies, m.effectiveMaxDepth())
+			m.threadReplyIndex = -1
+			m.threadScrollOffset = 0
+			m.threadLoading = false
+		}
+		return m, nil
+
+	case TopicThreadDebounceMsg:
+		visible := m.visiblePosts()
+		if m.postIndex < len(visible) && visible[m.postIndex].ID == msg.PostID {
+			m.threadLoading = true
+			return m, func() tea.Msg { return LoadTopicThreadMsg(msg) }
+		}
+		return m, nil
+
+	case TopicThreadNavMsg:
+		if msg.PaneHeight > 0 && msg.PaneWidth > 0 {
+			m = m.pageThreadNav(msg.Delta, msg.PaneHeight, msg.PaneWidth)
 		}
 		return m, nil
 
@@ -226,11 +286,19 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
 				}
-			} else {
+			} else if m.view == viewTopicPosts {
 				if m.postIndex > 0 {
 					m.postIndex--
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
+					var detailCmd tea.Cmd
+					m, detailCmd = m.currentDetailCmd()
+					return m, detailCmd
+				} else if !m.loading && !m.refreshing {
+					slug := m.activeTopic
+					m.refreshing = true
+					m = m.refreshContent()
+					return m, func() tea.Msg { return RefreshTopicPostsMsg{Slug: slug} }
 				}
 			}
 			return m, nil
@@ -249,11 +317,14 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 						return LoadMoreTopicsMsg{Cursor: m.topicsNextCursor}
 					}
 				}
-			} else {
+			} else if m.view == viewTopicPosts {
 				if m.postIndex < len(m.visiblePosts())-1 {
 					m.postIndex++
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
+					var detailCmd tea.Cmd
+					m, detailCmd = m.currentDetailCmd()
+					return m, detailCmd
 				} else if !m.exhausted && !m.loading {
 					m.loading = true
 					m = m.refreshContent()
@@ -418,7 +489,7 @@ func (m TopicsModel) renderTopicItem(index int) string {
 func (m TopicsModel) renderPostItem(p model.Post, selected bool) string {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
 }
 
 func (m TopicsModel) refreshContent() TopicsModel {
@@ -498,6 +569,241 @@ func (m TopicsModel) GetFocusedURLs() []string {
 	}
 	p := visible[m.postIndex]
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
+}
+
+// IsViewingTopicPosts reports whether the topic post list is currently shown (3-pane applies).
+func (m TopicsModel) IsViewingTopicPosts() bool { return m.view == viewTopicPosts }
+
+// ActiveTopicName returns the slug of the currently active topic.
+func (m TopicsModel) ActiveTopicName() string { return m.activeTopic }
+
+func (m TopicsModel) IsCompactListActive() bool { return m.IsViewingTopicPosts() }
+func (m TopicsModel) ListTitle() string          { return "posts (# " + m.ActiveTopicName() + ")" }
+
+// IsAtTop reports whether the first post is selected.
+func (m TopicsModel) IsAtTop() bool { return m.postIndex == 0 }
+
+// PostCount returns the number of currently visible topic posts.
+func (m TopicsModel) PostCount() int { return len(m.visiblePosts()) }
+
+// PostsNextCursor returns the pagination cursor for the next page of topic posts.
+func (m TopicsModel) PostsNextCursor() string { return m.nextCursor }
+
+func (m TopicsModel) effectiveMaxDepth() int {
+	if m.maxThreadDepth <= 0 {
+		return 3
+	}
+	return m.maxThreadDepth
+}
+
+// currentDetailCmd clears the detail pane immediately and starts a debounce timer.
+// The API fetch only fires if the selection hasn't changed by the time the timer expires,
+// avoiding a flood of calls when the user scrolls quickly through the post list.
+func (m TopicsModel) currentDetailCmd() (TopicsModel, tea.Cmd) {
+	visible := m.visiblePosts()
+	if m.postIndex >= len(visible) {
+		return m, nil
+	}
+	postID := visible[m.postIndex].ID
+	if postID == m.threadPostID {
+		return m, nil
+	}
+	m.threadPostID = postID
+	m.threadLoading = false
+	m.threadReplies = nil
+	m.threadFlatTree = nil
+	m.threadReplyIndex = -1
+	m.threadScrollOffset = 0
+	return m, tea.Tick(topicThreadDebounceDelay, func(time.Time) tea.Msg {
+		return TopicThreadDebounceMsg{PostID: postID}
+	})
+}
+
+// CurrentDetailCmd is exported so app.go can trigger the initial detail load when topic posts first arrive.
+// Loads immediately without debounce.
+func (m TopicsModel) CurrentDetailCmd() (TopicsModel, tea.Cmd) {
+	visible := m.visiblePosts()
+	if m.postIndex >= len(visible) {
+		return m, nil
+	}
+	postID := visible[m.postIndex].ID
+	if postID == m.threadPostID {
+		return m, nil
+	}
+	m.threadPostID = postID
+	m.threadLoading = true
+	m.threadReplies = nil
+	m.threadFlatTree = nil
+	m.threadReplyIndex = -1
+	m.threadScrollOffset = 0
+	return m, func() tea.Msg { return LoadTopicThreadMsg{PostID: postID} }
+}
+
+func (m TopicsModel) renderDetailReply(node replyNode, selected bool, width int) string {
+	indentW := node.Depth * 3
+	cardWidth := width - 2 - indentW
+	if cardWidth < 4 {
+		cardWidth = 4
+	}
+	innerWidth := cardWidth - 2
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+	header := theme.Highlight.Render("@" + node.Reply.AuthorUsername)
+	if node.ParentUsername != "" {
+		header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
+	}
+	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false))
+	body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if cardWidth > 0 {
+		boxStyle = boxStyle.Width(cardWidth)
+	}
+	card := boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
+	if indentW > 0 {
+		return lipgloss.NewStyle().MarginLeft(indentW).Render(card)
+	}
+	return card
+}
+
+func (m TopicsModel) renderCompactPost(p model.Post, selected bool, width int) string {
+	username := "@" + p.AuthorUsername
+	var preview string
+	if p.Title != "" {
+		preview = p.Title
+	} else {
+		preview = strings.TrimSpace(strings.SplitN(p.Content, "\n", 2)[0])
+	}
+	const sep = "  "
+	var indicatorAndName string
+	if selected {
+		indicatorAndName = theme.Highlight.Render("▶ " + username)
+	} else {
+		indicatorAndName = theme.Subtle.Render("  ") + theme.Base.Render(username)
+	}
+	prefixWidth := 2 + lipgloss.Width(username) + len(sep)
+	remaining := width - prefixWidth
+	if remaining > 1 {
+		preview = ansiTruncate(preview, remaining)
+	} else {
+		preview = ""
+	}
+	return indicatorAndName + theme.Subtle.Render(sep+preview)
+}
+
+// CompactListView returns the compact single-line topic post list for the Miller list pane.
+func (m TopicsModel) CompactListView(width, height int) string {
+	if !m.ready || m.fetching {
+		return theme.Subtle.Render("  loading…")
+	}
+	visible := m.visiblePosts()
+	if len(visible) == 0 {
+		return theme.Subtle.Render("  no posts")
+	}
+	headerLines := 0
+	var header string
+	if m.refreshing {
+		header = theme.Subtle.Render("  fetching new posts...")
+		headerLines = 1
+	}
+	n := len(visible)
+	listH := height - headerLines
+	if listH < 1 {
+		listH = 1
+	}
+	offset := m.postIndex - listH + 1
+	if offset < 0 {
+		offset = 0
+	}
+	if offset+listH > n {
+		offset = n - listH
+		if offset < 0 {
+			offset = 0
+		}
+	}
+	end := offset + listH
+	if end > n {
+		end = n
+	}
+	lines := make([]string, 0, end-offset+headerLines)
+	if header != "" {
+		lines = append(lines, header)
+	}
+	for i := offset; i < end; i++ {
+		lines = append(lines, m.renderCompactPost(visible[i], i == m.postIndex, width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// pageThreadNav implements pager-style scrolling for the Miller detail pane.
+func (m TopicsModel) pageThreadNav(delta, paneH, paneW int) TopicsModel {
+	visible := m.visiblePosts()
+	if m.postIndex >= len(visible) {
+		return m
+	}
+	p := visible[m.postIndex]
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	_, watched := m.watchedPostIDs[p.ID]
+
+	postCard := RenderPost(p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0)
+	postH := lipgloss.Height(postCard)
+
+	replyStarts := make([]int, len(m.threadFlatTree))
+	replyHeights := make([]int, len(m.threadFlatTree))
+	pos := postH
+	for i, node := range m.threadFlatTree {
+		replyStarts[i] = pos
+		rendered := m.renderDetailReply(node, false, paneW)
+		replyHeights[i] = lipgloss.Height(rendered)
+		pos += replyHeights[i]
+	}
+
+	m.threadReplyIndex, m.threadScrollOffset = millerPageNav(
+		delta, paneH, postH, replyStarts, replyHeights, m.threadReplyIndex, m.threadScrollOffset,
+	)
+	return m
+}
+
+// DetailView returns the full topic post card + threaded replies for the Miller reading pane.
+func (m TopicsModel) DetailView(width, height int) string {
+	if !m.ready {
+		return theme.Subtle.Render("  loading…")
+	}
+	visible := m.visiblePosts()
+	if len(visible) == 0 {
+		return theme.Subtle.Render("  no posts")
+	}
+	if m.postIndex >= len(visible) {
+		return theme.Subtle.Render("  select a post")
+	}
+	p := visible[m.postIndex]
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	_, watched := m.watchedPostIDs[p.ID]
+
+	postSelected := m.threadReplyIndex < 0
+	card := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0)
+
+	var parts []string
+	startLines := []int{0}
+	lineCount := lipgloss.Height(card)
+	parts = append(parts, card)
+
+	if m.threadLoading {
+		parts = append(parts, theme.Subtle.Render("  loading replies…"))
+	} else {
+		for i, node := range m.threadFlatTree {
+			rendered := m.renderDetailReply(node, i == m.threadReplyIndex, width)
+			startLines = append(startLines, lineCount)
+			lineCount += lipgloss.Height(rendered)
+			parts = append(parts, rendered)
+		}
+	}
+
+	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	return sliceContent(fullContent, m.threadScrollOffset, height, lineCount)
 }
 
 // --- Helpers ---
