@@ -638,6 +638,7 @@ Permissions: `0600` (owner read/write only)
 | `autoPassword` | string | — | Pre-fill password (plain text; not recommended) |
 | `sshListenAddr` | string | — | Enable SSH server mode (e.g. `":2222"`) |
 | `sshHostKeyPath` | string | — | Path to SSH host private key |
+| `allowRemoteSsh` | bool | `false` | Permit `sshListenAddr` to bind a non-loopback address. SSH server mode is unauthenticated, so this is off by default |
 | `wanderLust` | bool | `false` | Wander mode toggle; `true` = on, `false` = off |
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
 
@@ -966,3 +967,13 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 | **Profile navigation depth** | Navigating from a Following/Followers tab to another user's profile is single-level; ESC returns to the original `profileReturn` destination, not the intermediate profile |
 | **Feed position — deep pagination** | When returning to the Feed tab, the selected post is restored by ID from the fresh first-page load. If the post was reached via pagination it will not be in page 1 and the feed falls back to the top. Fix options: re-fetch pages sequentially until found (expensive), or skip the tab-switch reload (stale data). Neither is warranted for typical usage. |
 | **Ambiguous-width character stripping** | Unicode EAW = "A" characters (kaomoji symbols, `©`, `®`, `™`, Greek letters, etc.) are stripped at two points: (1) `stripAmbiguousRunes` in `shared.go` strips them from post/reply content before display; (2) `filterAmbiguousKeyMsg` in `shared.go` intercepts `tea.KeyRunes` messages before they reach any `textarea` or `textinput` component (compose, topics, profile fields, C-Mail, chatrooms). Their column width is undefined and varies by terminal/font, causing border overflow and cursor misalignment. Wide (CJK), halfwidth, and zero-width characters are unaffected. |
+
+---
+
+## Code & Security Reviews
+
+Periodic full-repository audits, tracked as dated snapshots so successive reviews can be diffed against each other. Findings are actioned separately (see each report's Actionable Recommendations table); this doc's Deferred/Known Limitations table above tracks accepted long-term gaps.
+
+| Date | Commit | Report |
+|---|---|---|
+| 2026-07-24 | `8835173` | [`docs/reviews/2026-07-24-code-security-review.md`](reviews/2026-07-24-code-security-review.md) |

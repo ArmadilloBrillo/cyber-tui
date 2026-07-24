@@ -16,6 +16,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
@@ -759,7 +760,7 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
 	case roomCommandReplyMsg:
-		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, msg.reply)
+		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, sanitize.Strip(msg.reply))
 		return a, nil, true
 	}
 	return a, nil, false
@@ -795,7 +796,7 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
 	case cmailCommandReplyMsg:
-		a.cmail = a.cmail.AppendSystemMessage(msg.convID, msg.reply)
+		a.cmail = a.cmail.AppendSystemMessage(msg.convID, sanitize.Strip(msg.reply))
 		return a, nil, true
 	}
 	return a, nil, false
