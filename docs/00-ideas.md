@@ -14,5 +14,5 @@
 11. ~~Render fiancé properly?~~
 12. Open 'local' URL's in teh TUI rather than outside, where possible
 13. ~~Implement new API method for unread notifications and unread notification counts.~~
-14. 
+14. Render attachment/markdown links as real OSC 8 terminal hyperlinks (click-to-open) instead of just styled/underlined text.
 
