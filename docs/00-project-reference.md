@@ -451,7 +451,7 @@ Direct messages (C-Mail) with live Firebase RTDB integration.
 - `waitForDM(sub)` is a Bubble Tea `Cmd` that blocks on the subscription channel and returns each incoming message as a `tea.Msg`
 - Other person's messages left-aligned; my messages right-aligned (driven by `currentUser` field)
 - `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history in detail mode
-- **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile emits `StartConversationMsg{Username}` (defined in `messages.go`); App calls `StartConversation(username)` via REST, then switches to C-Mail and opens the returned conversation in detail mode; self-DMs are dropped in the App handler
+- **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile emits `StartConversationMsg{Username}` (defined in `messages.go`); App calls `StartConversation(username)` via REST, then switches to C-Mail and opens the returned conversation in detail mode; self-DMs are dropped in the App handler. Distinct from `g m` (see "Keyboard Shortcuts" → Global): `c` targets the specific highlighted user, `g m` just opens the C-Mail tab's conversation list — the in-app hint for `c` reads "message" rather than "c-mail" to keep the two from being conflated
 - **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetMessages(convID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on conversation open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
 - **Live-stream reconnect:** when `dmStreamClosedMsg` fires for the still-active conversation (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectConvCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (`reconnectDelay`/`reconnectBackoffSchedule` in `reconnect.go`, shared with `chatrooms.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `CMailReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path, so it's visible even with history already loaded. `cancelDMSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned conversation) is a no-op.
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendMessage`'s reply text is routed through app.go's `cmailCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice`. `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live for CIRC, parsed defensively here) rendered via `renderActionLine` as classic IRC `* username body *`
@@ -679,6 +679,15 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 
 ### Global
 
+Two navigation schemes reach the same 11 screens — pick whichever is faster
+for a given target. Both are derived from the single `menuTabs` slice in
+`internal/ui/layout.go`, so TabsLayout and MillerLayout can never disagree
+about what a given key does (a bug that existed before this scheme and was
+fixed alongside it).
+
+**Numeric aliases** — quick access to the first 9 screens by position on the
+tab bar:
+
 | Key | Action |
 |---|---|
 | `1` | Feed |
@@ -690,15 +699,56 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `7` | Guilds |
 | `8` | Topics |
 | `9` | Profile |
-| `←` / `→` | Cycle tabs left / right (includes Search and Settings, which have no number key) |
+
+**Leader key** — `g` ("go to") arms a pending state; the very next keypress
+resolves against a mnemonic map to jump directly to any of the 11 screens,
+including Search and Settings which have no numeric alias. An unmapped
+follow-up key silently cancels the pending state rather than doing anything.
+The mnemonic letter is shown highlighted inline within each tab's label on
+the tab bar / nav sidebar as a hint:
+
+| Chord | Screen | Chord | Screen |
+|---|---|---|---|
+| `g f` | Feed | `g g` | Guilds |
+| `g n` | Notifications | `g t` | Topics |
+| `g m` | C-Mail | `g p` | Profile |
+| `g i` | CIRC | `g s` | Search |
+| `g j` | Journal | `g e` | Settings |
+| `g b` | Bookmarks | | |
+
+Only plain letters are used — no `alt+`, function keys, or `ctrl+`/`shift+`
+combinations — since those are caught inconsistently by terminal emulators,
+window managers, or (for `ctrl+`/`shift+` on non-letter keys) aren't
+reliably distinguishable without the Kitty keyboard protocol. `g` isn't
+bound to anything on its own, so there's no ambiguity or timeout to manage.
+
+**Search is hidden from the tab bar / nav sidebar and from `←`/`→` (and
+MillerLayout's `j`/`k`) cycling** — `menuTabs`' `search` entry has
+`hidden: true` (`internal/ui/layout.go`), so `visibleTabs()` (what actually
+renders and what cycling iterates over) skips it, the same treatment
+`screenPostDetail` already had. It's an explicit-entry-only destination:
+the only ways in are `g s` and `/`, and both always land in a focused query
+box (`SearchModel.FocusQuery()`) regardless of whatever state Search was
+last left in — unlike cycling, which for every other screen intentionally
+just resumes wherever it was left. `screenForMnemonic` and the help modal's
+leader-key legend still list `g s` normally; only the rendered tab
+list/cycling exclude it.
+
+Other global keys:
+
+| Key | Action |
+|---|---|
+| `←` / `→` | Cycle tabs left / right (does not include Search, which is hidden — see above) |
 | `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail) |
 | `v` | Toggle dense / relaxed display |
 | `?` | Help modal |
 | `t` | Theme picker |
-| `z` | Timezone picker |
 | `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused |
 | `ctrl+o` | Same as `o`, but reaches the handler even while a compose input is focused — the only way to open links in CIRC/C-Mail, since their input is focused for the entire detail view, not just a transient compose sub-mode |
 | `q` / `ctrl+c` | Quit |
+
+Timezone is set from the Settings screen's own field (`tab`/`shift+tab` to
+cycle), not a global shortcut.
 
 ### Login
 
@@ -749,15 +799,29 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `w` | Watch / unwatch the thread (root post focused only; no-op on replies) |
 | `esc` | Back to feed |
 
-### Compose (embedded)
+### Compose
+
+**Reply/inline compose** (`ComposeModel` — replies, guild/topic threads,
+CIRC/C-Mail messages): `enter` inserts a paragraph break (`\n\n`) rather than
+submitting — most terminals can't distinguish `shift+enter` from `enter`
+without the Kitty keyboard protocol, so there's no separate hard-line-break
+key.
 
 | Key | Action |
 |---|---|
 | `enter` | Insert paragraph break |
-| `tab` | Cycle focus: compose → title → topics → compose (Feed only) |
-| `alt+enter` / `ctrl+s` | Submit |
-| `alt+p` | Toggle public flag (Feed compose only) |
-| `alt+s` | Toggle NSFW flag (Feed compose only) |
+| `ctrl+s` | Submit |
+| `esc` | Cancel |
+
+**New post panel** (`PostComposePanel` — Feed's `n`, guild/topic new-thread):
+a single panel with title, slug, body, topics, and public/NSFW checkbox
+fields.
+
+| Key | Action |
+|---|---|
+| `tab` / `shift+tab` | Cycle fields: title → slug → body → topics → public → NSFW |
+| `space` | Toggle the focused checkbox field (public / NSFW) |
+| `ctrl+s` | Submit (validates the slug field first; invalid slug refocuses it with an inline error) |
 | `esc` | Cancel |
 
 ### Notifications
@@ -769,7 +833,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 | `enter` | Jump to referenced post/reply |
 | `m` | Mark selected as read |
 | `M` | Mark all as read |
-| `1` | Toggle unread-only filter |
+| `u` | Toggle unread-only filter |
 | `c` | Start C-Mail conversation with notification actor |
 
 ### C-Mail

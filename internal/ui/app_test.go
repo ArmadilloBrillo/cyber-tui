@@ -95,8 +95,9 @@ func TestNavigateTab_RightFromGuilds_GoesToTopics(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// menuTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, search, settings
-	expected := []screen{screenNotifications, screenCMail, screenChatrooms, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSearch, screenSettings, screenFeed}
+	// visibleTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings
+	// (search is hidden — reachable only via "g s"/"/", never by cycling; see navigateTabBy)
+	expected := []screen{screenNotifications, screenCMail, screenChatrooms, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(+1)
 		if a.active != want {
@@ -108,13 +109,43 @@ func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// menuTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, search, settings
-	expected := []screen{screenSettings, screenSearch, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenChatrooms, screenCMail, screenNotifications, screenFeed}
+	// visibleTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings
+	// (search is hidden — reachable only via "g s"/"/", never by cycling; see navigateTabBy)
+	expected := []screen{screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenChatrooms, screenCMail, screenNotifications, screenFeed}
 	for i, want := range expected {
 		a.navigateTab(-1)
 		if a.active != want {
 			t.Errorf("step %d: expected %v, got %v", i+1, want, a.active)
 		}
+	}
+}
+
+// TestNavigateTab_ProfileToSettings_SkipsSearch confirms Search — hidden
+// from the tab rotation — is never landed on while cycling: Profile is the
+// last visible tab before Settings in menuTabs order, with Search sitting
+// between them but excluded.
+func TestNavigateTab_ProfileToSettings_SkipsSearch(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenProfile
+	a.navigateTab(+1)
+	if a.active != screenSettings {
+		t.Errorf("expected screenSettings (skipping hidden screenSearch), got %v", a.active)
+	}
+}
+
+// TestNavigateTab_NoOpWhileOnSearch confirms arrow-key/j-k cycling can't
+// move off Search either, now that it's a hidden, explicit-entry-only
+// destination — the same treatment screenPostDetail already got.
+func TestNavigateTab_NoOpWhileOnSearch(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSearch
+	a.navigateTab(+1)
+	if a.active != screenSearch {
+		t.Errorf("expected navigateTab to no-op while on screenSearch, got %v", a.active)
+	}
+	a.navigateTab(-1)
+	if a.active != screenSearch {
+		t.Errorf("expected navigateTab to no-op while on screenSearch, got %v", a.active)
 	}
 }
 
@@ -155,6 +186,123 @@ func TestActiveScreenHasFocusedInput_ChatroomsDefault(t *testing.T) {
 	// This test guards against regressions where input starts focused unexpectedly
 	if a.chatrooms.InputFocused() {
 		t.Error("chatrooms input should not be focused before a room is selected")
+	}
+}
+
+// --- leader key ("g" + mnemonic) ---
+
+func TestHandleKeys_Leader_G_ArmsAndConsumes(t *testing.T) {
+	a := loggedInApp()
+	a2, cmd, consumed := a.handleKeys(keyMsg("g"))
+	if !consumed {
+		t.Fatal("expected 'g' to be consumed")
+	}
+	if !a2.leaderPending {
+		t.Error("expected leaderPending to be armed after 'g'")
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd from arming the leader key")
+	}
+}
+
+func TestHandleKeys_Leader_G_LoginScreen_NoOp(t *testing.T) {
+	a := newTestApp() // active == screenLogin
+	a2, _, consumed := a.handleKeys(keyMsg("g"))
+	if consumed {
+		t.Error("'g' on login screen should not be consumed")
+	}
+	if a2.leaderPending {
+		t.Error("leaderPending should not arm on login screen")
+	}
+}
+
+func TestHandleKeys_Leader_MappedChord_Navigates(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenProfile
+	a2, _, consumed := a.handleKeys(keyMsg("g"))
+	if !consumed || !a2.leaderPending {
+		t.Fatal("setup: expected 'g' to arm the leader key")
+	}
+	a3, _, consumed := a2.handleKeys(keyMsg("j")) // g j -> Journal
+	if !consumed {
+		t.Fatal("expected the leader chord's second key to be consumed")
+	}
+	if a3.leaderPending {
+		t.Error("expected leaderPending to be cleared after resolving")
+	}
+	if a3.active != screenJournal {
+		t.Errorf("expected screenJournal, got %v", a3.active)
+	}
+}
+
+func TestHandleKeys_Leader_UnmappedChord_CancelsSilently(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenProfile
+	a2, _, _ := a.handleKeys(keyMsg("g"))
+	a3, cmd, consumed := a2.handleKeys(keyMsg("z")) // not a mnemonic
+	if !consumed {
+		t.Fatal("expected the cancelling key to still be consumed (swallowed)")
+	}
+	if a3.leaderPending {
+		t.Error("expected leaderPending to be cleared")
+	}
+	if a3.active != screenProfile {
+		t.Errorf("expected no navigation to occur, still screenProfile, got %v", a3.active)
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd when the chord doesn't resolve")
+	}
+}
+
+func TestHandleKeys_Leader_DoubleG_GoesToGuilds(t *testing.T) {
+	a := loggedInApp()
+	a2, _, _ := a.handleKeys(keyMsg("g"))
+	a3, _, consumed := a2.handleKeys(keyMsg("g")) // g g -> Guilds
+	if !consumed {
+		t.Fatal("expected second 'g' to be consumed")
+	}
+	if a3.active != screenGuilds {
+		t.Errorf("expected screenGuilds, got %v", a3.active)
+	}
+}
+
+func TestHandleKeys_Leader_NotArmed_WhileInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	a2, _, consumed := a.handleKeys(keyMsg("g"))
+	if consumed {
+		t.Error("expected 'g' to NOT be consumed while chatrooms input is focused — it must still type into the compose box")
+	}
+	if a2.leaderPending {
+		t.Error("leaderPending should not arm while a text input is focused")
+	}
+}
+
+func TestHandleKeys_Leader_NumericAliasAndLeaderAgree(t *testing.T) {
+	// "1" through "9" and their equivalent "g"+mnemonic chord must land on
+	// the same screen in both layouts — the drift this feature fixes.
+	for i, tab := range menuTabs[:9] {
+		num := string(rune('1' + i))
+		for _, layout := range []Layout{TabsLayout{}, MillerLayout{}} {
+			a := loggedInApp()
+			a.layout = layout
+			a.active = screenProfile
+			a2, _, _ := a.handleKeys(keyMsg(num))
+			if a2.active != tab.s {
+				t.Errorf("layout %T: key %q: expected %v, got %v", layout, num, tab.s, a2.active)
+			}
+
+			b := loggedInApp()
+			b.layout = layout
+			b.active = screenProfile
+			b2, _, _ := b.handleKeys(keyMsg("g"))
+			b3, _, _ := b2.handleKeys(keyMsg(string(tab.mnemonic)))
+			if b3.active != tab.s {
+				t.Errorf("layout %T: chord \"g %c\": expected %v, got %v", layout, tab.mnemonic, tab.s, b3.active)
+			}
+		}
 	}
 }
 
@@ -408,27 +556,55 @@ func TestSearch_EscToLeave_ReturnsToOriginScreen(t *testing.T) {
 	}
 }
 
-// TestNavigateTab_IntoSearch_SetsSearchReturn reproduces a reported bug:
-// tab-cycling into Search (rather than pressing '/') left searchReturn at
-// its zero value (screenLogin), so Esc from Search would drop an
-// authenticated user on the login screen. navigateTabBy must record the
-// origin screen itself, since it's a second entry point into Search that
-// bypasses the '/' handler's searchReturn assignment.
-func TestNavigateTab_IntoSearch_SetsSearchReturn(t *testing.T) {
+// TestHandleKeys_Leader_G_S_FocusesQueryAndSetsSearchReturn reproduces the
+// reported bug: "g s" switched to screenSearch but never called
+// FocusQuery(), unlike '/' — landing on Search unfocused but still in
+// searchViewQuery is a state the screen doesn't actually handle (see the
+// comment on search.go's Update), so there was no way to type a query.
+// "g s" is a deliberate "go to Search" action, same intent as '/', so it
+// must behave identically: focused query box and searchReturn recorded.
+func TestHandleKeys_Leader_G_S_FocusesQueryAndSetsSearchReturn(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenProfile
-	a.navigateTab(+1)
-	if a.active != screenSearch {
-		t.Fatalf("setup: expected screenSearch, got %v", a.active)
+	a2, _, _ := a.handleKeys(keyMsg("g"))
+	a3, _, consumed := a2.handleKeys(keyMsg("s"))
+	if !consumed {
+		t.Fatal("expected \"g s\" to be consumed")
 	}
-	if a.searchReturn != screenProfile {
-		t.Fatalf("expected searchReturn = screenProfile, got %v", a.searchReturn)
+	if a3.active != screenSearch {
+		t.Fatalf("expected screenSearch, got %v", a3.active)
+	}
+	if a3.searchReturn != screenProfile {
+		t.Errorf("expected searchReturn = screenProfile, got %v", a3.searchReturn)
+	}
+	if !a3.search.InputFocused() {
+		t.Error("expected the query box to be focused after \"g s\", same as '/'")
 	}
 
-	m, _ := a.Update(screens.LeaveSearchMsg{})
-	a2 := m.(App)
-	if a2.active != screenProfile {
-		t.Errorf("expected esc to return to screenProfile (origin), got %v", a2.active)
+	m, _ := a3.Update(screens.LeaveSearchMsg{})
+	a4 := m.(App)
+	if a4.active != screenProfile {
+		t.Errorf("expected esc to return to screenProfile (origin), got %v", a4.active)
+	}
+}
+
+// TestHandleKeys_Leader_G_S_FocusesQuery_EvenAfterStalePreviewState confirms
+// "g s" resets to a focused query box even when Search was previously left
+// mid-browse (a drilled-into preview, query blurred) — not just on a fresh
+// SearchModel where the query happens to start focused.
+func TestHandleKeys_Leader_G_S_FocusesQuery_EvenAfterStalePreviewState(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSearch
+	a.search = a.search.SetPreview(model.SearchPreview{}, "old query")
+	if a.search.InputFocused() {
+		t.Fatal("setup: expected SetPreview to leave the query box blurred")
+	}
+	a.active = screenFeed
+
+	a2, _, _ := a.handleKeys(keyMsg("g"))
+	a3, _, _ := a2.handleKeys(keyMsg("s"))
+	if !a3.search.InputFocused() {
+		t.Error("expected \"g s\" to focus the query box even after a stale preview state")
 	}
 }
 

@@ -96,100 +96,28 @@ func (l TabsLayout) View(a App) string {
 	return base
 }
 
-// HandleNav processes navigation key presses for the tabs layout:
-// number shortcuts 1–8 and left/right arrow tab cycling.
+// HandleNav processes navigation key presses for the tabs layout: the "1"-"9"
+// numeric aliases and left/right arrow tab cycling. The "g"+mnemonic leader
+// chords are handled globally in app.go's handleKeys, ahead of HandleNav,
+// since they apply identically regardless of which layout is active.
 func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
+	if a.active == screenLogin {
+		return a, nil, false
+	}
+	if s, ok := screenForNumber(msg.String()); ok {
+		var cmd tea.Cmd
+		a, cmd = activateScreen(a, s)
+		return a, cmd, true
+	}
 	switch msg.String() {
-	case "1":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.chatrooms = a.chatrooms.CancelSubscription()
-			a.active = screenFeed
-			if !a.feed.IsLoaded() {
-				a.feed = a.feed.SetFetching()
-				return a, a.loadFeedCmd(), true
-			}
-			return a, nil, true
-		}
-	case "2":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.chatrooms = a.chatrooms.CancelSubscription()
-			a.active = screenNotifications
-			if !a.notifications.HasPaginated() {
-				a.notifications = a.notifications.SetFetching()
-				return a, a.loadNotifsCmd(), true
-			}
-			return a, nil, true
-		}
-	case "3":
-		if a.active != screenLogin {
-			a.chatrooms = a.chatrooms.CancelSubscription()
-			a.active = screenCMail
-			return a, a.loadConvsCmd(), true
-		}
-	case "4":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.active = screenChatrooms
-			return a, a.loadRoomsCmd(), true
-		}
-	case "5":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.chatrooms = a.chatrooms.CancelSubscription()
-			a.active = screenJournal
-			a.journal = a.journal.SetFetching()
-			return a, a.loadJournalCmd(), true
-		}
-	case "6":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.chatrooms = a.chatrooms.CancelSubscription()
-			a.active = screenBookmarks
-			if !a.bookmarks.IsLoaded() {
-				a.bookmarks = a.bookmarks.SetFetching()
-				return a, a.loadBookmarksCmd(""), true
-			}
-			return a, nil, true
-		}
-	case "7":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.chatrooms = a.chatrooms.CancelSubscription()
-			a.active = screenGuilds
-			if !a.guilds.IsLoaded() {
-				a.guilds = a.guilds.SetFetching()
-				return a, a.loadGuildsCmd(""), true
-			}
-			return a, nil, true
-		}
-	case "8":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.chatrooms = a.chatrooms.CancelSubscription()
-			a.active = screenTopics
-			if !a.topics.IsLoaded() {
-				a.topics = a.topics.SetFetching()
-				return a, a.loadTopicsCmd(), true
-			}
-			return a, nil, true
-		}
-	case "9":
-		if a.active != screenLogin {
-			a.cmail = a.cmail.CancelSubscription()
-			a.chatrooms = a.chatrooms.CancelSubscription()
-			a.active = screenProfile
-			return a, a.loadProfileCmd(), true
-		}
 	case "left":
-		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
+		if a.active != screenPostDetail && a.focus == focusMenu {
 			var cmd tea.Cmd
 			a, cmd = navigateTabBy(a, -1)
 			return a, cmd, true
 		}
 	case "right":
-		if a.active != screenLogin && a.active != screenPostDetail && a.focus == focusMenu {
+		if a.active != screenPostDetail && a.focus == focusMenu {
 			var cmd tea.Cmd
 			a, cmd = navigateTabBy(a, +1)
 			return a, cmd, true
@@ -231,24 +159,28 @@ func (l TabsLayout) ContentHeight(termHeight int) int { return termHeight }
 
 func (l TabsLayout) renderTabBar(a App) string {
 	var tabs string
-	for _, t := range menuTabs {
-		label := t.label
+	for _, t := range visibleTabs() {
+		badge := ""
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
-			label = fmt.Sprintf("%s (%d)", label, a.polledUnreadCount)
+			badge = fmt.Sprintf(" (%d)", a.polledUnreadCount)
 		}
 		if t.s == screenCMail {
 			if n := a.cmail.TotalUnread(); n > 0 {
-				label = fmt.Sprintf("%s (%d)", label, n)
+				badge = fmt.Sprintf(" (%d)", n)
 			}
 		}
 		isActive := a.active == t.s &&
 			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
 			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())
+		text, mnemonic := theme.TabText, theme.TabMnemonic
 		if isActive {
-			tabs += theme.ActiveTab.Render(label)
-		} else {
-			tabs += theme.Tab.Render(label)
+			text, mnemonic = theme.ActiveTabText, theme.ActiveTabMnemonic
 		}
+		before, ch, after := splitMnemonic(t.label, t.mnemonic)
+		// Each fragment is rendered independently (rather than wrapping the
+		// whole label in one .Padding style) so the active tab's background
+		// survives across the mnemonic's own ANSI reset — see TabText's doc.
+		tabs += text.Render("  "+before) + mnemonic.Render(ch) + text.Render(after+badge+"  ")
 	}
 	logo := lipgloss.NewStyle().
 		Background(theme.ColorGreen).
@@ -390,22 +322,22 @@ func (l TabsLayout) screenHints(a App) []hint {
 		if a.feed.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "c-mail"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}, more}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
 			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "c-mail"}, {"esc", "back"}, more}
+		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}, {"esc", "back"}, more}
 	case screenProfile:
 		if a.profile.ComposeActive() {
 			return []hint{{"Ctrl+s", "save"}, {"Esc", "cancel"}, {"tab", "cycle"}}
 		}
 		if a.profile.IsReadOnly() {
-			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"c", "c-mail"}, {"tab", "cycle"}, more}
+			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"c", "message"}, {"tab", "cycle"}, more}
 		}
 		return []hint{{"↑↓", "navigate"}, {"e", "edit"}, {"tab", "cycle"}, more}
 	case screenNotifications:
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, {"c", "c-mail"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, {"c", "message"}, more}
 	case screenJournal:
 		if a.journal.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"Ctrl+s", "save"}, {"Ctrl+p", "publish"}, {"Esc", "cancel"}}
@@ -498,9 +430,11 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		return lipgloss.JoinHorizontal(lipgloss.Top, k, theme.Subtle.Render(desc))
 	}
 
-	globalSection := lipgloss.JoinVertical(lipgloss.Left,
+	globalRows := append([]string{
 		sectionStyle.Render("global"),
 		row("1-9", "feed · notifs · c-mail · circ · journal · bookmarks · guilds · topics · profile"),
+	}, leaderRows(row)...)
+	globalRows = append(globalRows,
 		row("← →", "cycle tabs"),
 		row("/", "search"),
 		row("t", "theme"),
@@ -508,6 +442,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		row("o", "open url"),
 		row("q", "quit"),
 	)
+	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)
 
 	section := func(title string, extra ...string) string {
 		parts := append([]string{sectionStyle.Render(title)}, hintRows(l.screenHints(a), row)...)
@@ -523,7 +458,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		} else {
 			localSection = section("feed",
 				row("p", "view profile"),
-				row("c", "start c-mail"),
+				row("c", "message"),
 				row("d", "delete own"),
 			)
 		}
@@ -534,7 +469,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 			localSection = section("post detail",
 				row("d", "delete own"),
 				row("p", "view profile"),
-				row("c", "start c-mail"),
+				row("c", "message"),
 			)
 		}
 	case screenProfile:
@@ -543,7 +478,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		} else if a.profile.IsReadOnly() {
 			localSection = section("profile",
 				row("enter", "open"),
-				row("c", "start c-mail"),
+				row("c", "message"),
 			)
 		} else {
 			localSection = section("profile (own)",
@@ -554,7 +489,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		localSection = section("notifications",
 			row("M", "mark all read"),
 			row("p", "view profile"),
-			row("c", "start c-mail"),
+			row("c", "message"),
 		)
 	case screenJournal:
 		if a.journal.ComposeActive() {

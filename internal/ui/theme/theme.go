@@ -75,6 +75,38 @@ var (
 			Bold(true).
 			Padding(0, 2)
 
+	// TabText/ActiveTabText and TabMnemonic/ActiveTabMnemonic are the
+	// no-padding building blocks renderTabBar uses to highlight a tab's
+	// leader-key mnemonic letter inline. Padding is added manually as literal
+	// spaces around the concatenated fragments (see renderTabBar) rather than
+	// via .Padding, because each fragment is rendered independently — nesting
+	// ANSI-styled spans inside a single .Padding call loses the background
+	// on any fragment after the first once its reset code fires.
+	TabText = lipgloss.NewStyle().
+		Foreground(ColorDimGreen)
+
+	TabMnemonic = lipgloss.NewStyle().
+			Foreground(ColorCyan).
+			Bold(true)
+
+	ActiveTabText = lipgloss.NewStyle().
+			Background(ColorDimGreen).
+			Foreground(ColorGreen).
+			Bold(true)
+
+	ActiveTabMnemonic = lipgloss.NewStyle().
+				Background(ColorDimGreen).
+				Foreground(ColorCyan).
+				Bold(true)
+
+	// NavMnemonic highlights a leader-key mnemonic letter within the Miller
+	// layout's vertical nav sidebar, where rows have no background to
+	// preserve, so a single foreground-only style suffices for both the
+	// active and inactive row states.
+	NavMnemonic = lipgloss.NewStyle().
+			Foreground(ColorCyan).
+			Bold(true)
+
 	SelectedRow = lipgloss.NewStyle().
 			Background(ColorDimGreen).
 			Foreground(ColorGreen).
@@ -182,6 +214,27 @@ func applyStyles() {
 		Foreground(ColorGreen).
 		Bold(true).
 		Padding(0, 2)
+
+	TabText = lipgloss.NewStyle().
+		Foreground(ColorDimGreen)
+
+	TabMnemonic = lipgloss.NewStyle().
+		Foreground(ColorCyan).
+		Bold(true)
+
+	ActiveTabText = lipgloss.NewStyle().
+		Background(ColorDimGreen).
+		Foreground(ColorGreen).
+		Bold(true)
+
+	ActiveTabMnemonic = lipgloss.NewStyle().
+		Background(ColorDimGreen).
+		Foreground(ColorCyan).
+		Bold(true)
+
+	NavMnemonic = lipgloss.NewStyle().
+		Foreground(ColorCyan).
+		Bold(true)
 
 	SelectedRow = lipgloss.NewStyle().
 		Background(ColorDimGreen).

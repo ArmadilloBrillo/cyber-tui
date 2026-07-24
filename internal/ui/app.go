@@ -111,6 +111,11 @@ type App struct {
 	// helpModal state — open with '?', close with any key.
 	helpModalOpen bool
 
+	// leaderPending is armed by the "g" ("go to") leader key and resolved by
+	// the very next keypress against screenForMnemonic — e.g. "g" then "f"
+	// jumps to Feed. An unmapped follow-up key silently cancels it.
+	leaderPending bool
+
 	// urlPicker state — open with 'o' when multiple URLs are available.
 	urlPickerOpen   bool
 	urlPickerItems  []string
@@ -510,6 +515,34 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		if m.String() != "ctrl+o" {
 			return a, nil, false // fall through to delegateUpdate
+		}
+	}
+	// "g" arms the leader key; the very next keypress resolves against
+	// screenForMnemonic regardless of what it is (even another global key
+	// like "t" or "q"), so it must be checked ahead of the switch below.
+	if a.leaderPending {
+		a.leaderPending = false
+		if a.active != screenLogin {
+			if s, ok := screenForMnemonic(m.String()); ok {
+				var cmd tea.Cmd
+				a, cmd = activateScreen(a, s)
+				if s == screenSearch {
+					// activateScreen leaves Search in whatever state it was
+					// last left in (correct for arrow-cycling, which no
+					// longer reaches Search at all) — "g s" is a deliberate
+					// "go to Search" action like '/', so it must always focus
+					// the query box the same way '/' already does below.
+					a.search = a.search.FocusQuery()
+				}
+				return a, cmd, true
+			}
+		}
+		return a, nil, true
+	}
+	if m.String() == "g" {
+		if a.active != screenLogin {
+			a.leaderPending = true
+			return a, nil, true
 		}
 	}
 	switch m.String() {
