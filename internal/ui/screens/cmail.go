@@ -46,6 +46,15 @@ type dmSubscribedMsg struct {
 type dmReceivedMsg struct{ msg model.Message }
 type dmStreamClosedMsg struct{ convID string }
 type dmReconnectedMsg struct{ sub *dmSubscription }
+type dmReconnectFailedMsg struct {
+	convID  string
+	attempt int
+	err     error
+}
+type dmReconnectRetryDueMsg struct {
+	convID  string
+	attempt int
+}
 type cmailMsgsLoadedMsg struct {
 	convID string
 	msgs   []model.Message
@@ -96,6 +105,14 @@ type CMailModel struct {
 	dmSub        *dmSubscription
 	activeConvID string
 
+	// Reconnect-retry state, active only between a stream closing and either
+	// a successful reconnect or exhausting maxReconnectAttempts.
+	reconnectAttempt int
+	reconnecting     bool
+	reconnectFailed  bool
+	reconnectCtx     context.Context
+	reconnectCancel  context.CancelFunc
+
 	// History pagination state for the active conversation, reset on open.
 	historyExhausted bool // true once an older-page fetch returns zero messages
 	loadingHistory   bool // guards re-firing while an older-page fetch is in flight
@@ -125,12 +142,20 @@ func NewCMailModel(currentUser string, client api.Client) CMailModel {
 	}
 }
 
-// cancelDMSub stops any active RTDB subscription and clears subscription state.
+// cancelDMSub stops any active RTDB subscription and any in-flight reconnect
+// retry sequence, and clears subscription state.
 func (m CMailModel) cancelDMSub() CMailModel {
 	if m.dmSub != nil {
 		m.dmSub.cancel()
 		m.dmSub = nil
 	}
+	if m.reconnectCancel != nil {
+		m.reconnectCancel()
+		m.reconnectCancel = nil
+	}
+	m.reconnecting = false
+	m.reconnectFailed = false
+	m.reconnectAttempt = 0
 	m.activeConvID = ""
 	return m
 }
@@ -154,23 +179,33 @@ func (m CMailModel) openDMSubscriptionCmd(convID string) tea.Cmd {
 	}
 }
 
-// reconnectConvCmd refreshes the session token and reopens the RTDB subscription
-// for convID after the live stream closed (typically an idToken expiry).
-func (m CMailModel) reconnectConvCmd(convID string) tea.Cmd {
+// reconnectConvCmd makes one reconnect attempt for convID after the live
+// stream closed (idToken expiry, idle-timeout, or a network error) — refreshes
+// the session token and reopens the RTDB subscription. On failure it reports
+// which attempt number just failed so Update can decide whether to back off
+// and retry or give up.
+func (m CMailModel) reconnectConvCmd(ctx context.Context, convID string, attempt int) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
 		if client == nil {
 			return nil
 		}
-		if err := client.RefreshSession(); err != nil {
-			return cmailErrMsg{err}
-		}
-		ch, cancel, err := client.SubscribeDMs(context.Background(), convID)
+		ch, cancel, err := attemptReconnect(client, ctx, func(ctx context.Context) (<-chan model.Message, context.CancelFunc, error) {
+			return client.SubscribeDMs(ctx, convID)
+		})
 		if err != nil {
-			return cmailErrMsg{err}
+			return dmReconnectFailedMsg{convID: convID, attempt: attempt, err: err}
 		}
 		return dmReconnectedMsg{sub: &dmSubscription{ConvID: convID, C: ch, cancel: cancel}}
 	}
+}
+
+// scheduleReconnectRetryCmd waits out the backoff for attempt, then emits a
+// dmReconnectRetryDueMsg to trigger the next reconnect attempt.
+func scheduleReconnectRetryCmd(convID string, attempt int) tea.Cmd {
+	return tea.Tick(reconnectDelay(attempt), func(time.Time) tea.Msg {
+		return dmReconnectRetryDueMsg{convID: convID, attempt: attempt}
+	})
 }
 
 func (m CMailModel) loadConvMessagesCmd(convID string) tea.Cmd {
@@ -354,7 +389,33 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		if m.mode != cmailModeDetail || m.activeConv == nil {
 			return m, nil
 		}
-		return m, m.reconnectConvCmd(m.activeConv.ID)
+		if m.reconnectCancel != nil {
+			m.reconnectCancel()
+		}
+		m.reconnectCtx, m.reconnectCancel = context.WithCancel(context.Background())
+		m.reconnecting = true
+		m.reconnectFailed = false
+		m.reconnectAttempt = 0
+		return m, m.reconnectConvCmd(m.reconnectCtx, m.activeConv.ID, 0)
+
+	case dmReconnectFailedMsg:
+		if msg.convID != m.activeConvID || !m.reconnecting {
+			return m, nil // stale or cancelled sequence
+		}
+		next := msg.attempt + 1
+		if next >= maxReconnectAttempts {
+			m.reconnecting = false
+			m.reconnectFailed = true
+			return m, nil
+		}
+		m.reconnectAttempt = next
+		return m, scheduleReconnectRetryCmd(msg.convID, next)
+
+	case dmReconnectRetryDueMsg:
+		if msg.convID != m.activeConvID || !m.reconnecting {
+			return m, nil // stale or cancelled sequence
+		}
+		return m, m.reconnectConvCmd(m.reconnectCtx, msg.convID, msg.attempt)
 
 	case dmReconnectedMsg:
 		if msg.sub.ConvID != m.activeConvID {
@@ -362,6 +423,9 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 			return m, nil
 		}
 		m.dmSub = msg.sub
+		m.reconnecting = false
+		m.reconnectFailed = false
+		m.reconnectAttempt = 0
 		return m, tea.Batch(waitForDM(m.dmSub), func() tea.Msg { return CMailReconnectedMsg{} })
 
 	case cmailErrMsg:
@@ -688,6 +752,12 @@ func (m CMailModel) View() string {
 		header := theme.Title.Render("@" + other)
 		if m.loadingHistory {
 			header += theme.Subtle.Render("  (loading history…)")
+		}
+		switch {
+		case m.reconnecting:
+			header += theme.Highlight.Render(fmt.Sprintf("  (live updates lost, reconnecting… %d/%d)", m.reconnectAttempt+1, maxReconnectAttempts))
+		case m.reconnectFailed:
+			header += theme.Error.Render("  (live updates lost)")
 		}
 		inputBox := theme.ActiveBorder.Render(m.input.View())
 		return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), inputBox)

@@ -45,8 +45,10 @@ func (c *Client) Subscribe(ctx, path string, params) <-chan SSEEvent
 **SSE mechanics:**
 - `Subscribe` opens an HTTP connection with `Accept: text/event-stream`.
 - A goroutine reads line-by-line, accumulates `event:` / `data:` lines, dispatches on blank line.
-- The channel is closed when the context is cancelled or the server closes the stream.
-- A `streamClient` with `Timeout: 0` is used for streaming; a 15-second `httpClient` is used for Get/Put.
+- The channel is closed — with a terminal `SSEEvent.Err` set — when: the context is cancelled, the server closes the stream, the server sends a terminal `auth_revoked`/`cancel` event, or the stream goes **idle for 10 minutes** with no line received (any line, including a discarded `:`-prefixed keepalive comment, resets the idle timer). This idle watchdog exists because the server doesn't always cleanly close the TCP connection when the auth token expires — without it, a zombie stream could otherwise hang forever with no signal to reconnect.
+- The connect phase (waiting for response headers) is separately bounded by a **30-second `ResponseHeaderTimeout`** on the streaming transport, so a single connect attempt can't hang indefinitely on a dead network.
+- A `streamClient` with `Timeout: 0` (but the header timeout above) is used for streaming; a 15-second `httpClient` is used for Get/Put.
+- `SetToken` only affects *future* connections — it cannot revive an already-open SSE stream, since the token is fixed in that stream's URL at connect time. See `docs/08-cmail.md` / `docs/33-circ.md` for how the screens layer handles reconnecting a live stream after a token refresh.
 
 ---
 
@@ -110,7 +112,7 @@ After login, `loginCmd` in `app.go` calls:
 
 ```go
 if hc, ok := a.client.(*api.HTTPClient); ok {
-    _ = hc.InitRTDB(tokens.RTDBToken)
+    _ = hc.InitRTDB(tokens.IDToken, tokens.RTDBUrl)
     hc.SetCurrentUID(user.ID)
 }
 ```

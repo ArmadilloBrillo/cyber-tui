@@ -49,6 +49,15 @@ type roomSubscribedMsg struct {
 type roomReceivedMsg struct{ msg model.Message }
 type roomStreamClosedMsg struct{ roomID string }
 type roomReconnectedMsg struct{ sub *roomSubscription }
+type roomReconnectFailedMsg struct {
+	roomID  string
+	attempt int
+	err     error
+}
+type roomReconnectRetryDueMsg struct {
+	roomID  string
+	attempt int
+}
 type circMsgsLoadedMsg struct {
 	roomID string
 	msgs   []model.Message
@@ -98,6 +107,14 @@ type ChatroomsModel struct {
 	client       api.Client
 	err          error // last message-load/subscribe failure for the active room; cleared on success
 
+	// Reconnect-retry state, active only between a stream closing and either
+	// a successful reconnect or exhausting maxReconnectAttempts.
+	reconnectAttempt int
+	reconnecting     bool
+	reconnectFailed  bool
+	reconnectCtx     context.Context
+	reconnectCancel  context.CancelFunc
+
 	// History pagination state for the active room, reset on open.
 	historyExhausted bool // true once an older-page fetch returns zero messages
 	loadingHistory   bool // guards re-firing while an older-page fetch is in flight
@@ -126,12 +143,20 @@ func NewChatroomsModel(currentUser string, client api.Client) ChatroomsModel {
 	}
 }
 
-// cancelRoomSub stops any active RTDB subscription and clears subscription state.
+// cancelRoomSub stops any active RTDB subscription and any in-flight
+// reconnect retry sequence, and clears subscription state.
 func (m ChatroomsModel) cancelRoomSub() ChatroomsModel {
 	if m.sub != nil {
 		m.sub.cancel()
 		m.sub = nil
 	}
+	if m.reconnectCancel != nil {
+		m.reconnectCancel()
+		m.reconnectCancel = nil
+	}
+	m.reconnecting = false
+	m.reconnectFailed = false
+	m.reconnectAttempt = 0
 	m.activeRoomID = ""
 	return m
 }
@@ -155,23 +180,33 @@ func (m ChatroomsModel) openRoomSubscriptionCmd(roomID string) tea.Cmd {
 	}
 }
 
-// reconnectRoomCmd refreshes the session token and reopens the RTDB subscription
-// for roomID after the live stream closed (typically an idToken expiry).
-func (m ChatroomsModel) reconnectRoomCmd(roomID string) tea.Cmd {
+// reconnectRoomCmd makes one reconnect attempt for roomID after the live
+// stream closed (idToken expiry, idle-timeout, or a network error) — refreshes
+// the session token and reopens the RTDB subscription. On failure it reports
+// which attempt number just failed so Update can decide whether to back off
+// and retry or give up.
+func (m ChatroomsModel) reconnectRoomCmd(ctx context.Context, roomID string, attempt int) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
 		if client == nil {
 			return nil
 		}
-		if err := client.RefreshSession(); err != nil {
-			return circErrMsg{err}
-		}
-		ch, cancel, err := client.SubscribeRoom(context.Background(), roomID)
+		ch, cancel, err := attemptReconnect(client, ctx, func(ctx context.Context) (<-chan model.Message, context.CancelFunc, error) {
+			return client.SubscribeRoom(ctx, roomID)
+		})
 		if err != nil {
-			return circErrMsg{err}
+			return roomReconnectFailedMsg{roomID: roomID, attempt: attempt, err: err}
 		}
 		return roomReconnectedMsg{sub: &roomSubscription{RoomID: roomID, C: ch, cancel: cancel}}
 	}
+}
+
+// scheduleRoomReconnectRetryCmd waits out the backoff for attempt, then emits
+// a roomReconnectRetryDueMsg to trigger the next reconnect attempt.
+func scheduleRoomReconnectRetryCmd(roomID string, attempt int) tea.Cmd {
+	return tea.Tick(reconnectDelay(attempt), func(time.Time) tea.Msg {
+		return roomReconnectRetryDueMsg{roomID: roomID, attempt: attempt}
+	})
 }
 
 func (m ChatroomsModel) loadRoomMessagesCmd(roomID string) tea.Cmd {
@@ -386,7 +421,33 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		if m.mode != chatroomModeDetail || m.activeRoom == nil {
 			return m, nil
 		}
-		return m, m.reconnectRoomCmd(m.activeRoom.Slug)
+		if m.reconnectCancel != nil {
+			m.reconnectCancel()
+		}
+		m.reconnectCtx, m.reconnectCancel = context.WithCancel(context.Background())
+		m.reconnecting = true
+		m.reconnectFailed = false
+		m.reconnectAttempt = 0
+		return m, m.reconnectRoomCmd(m.reconnectCtx, m.activeRoom.Slug, 0)
+
+	case roomReconnectFailedMsg:
+		if msg.roomID != m.activeRoomID || !m.reconnecting {
+			return m, nil // stale or cancelled sequence
+		}
+		next := msg.attempt + 1
+		if next >= maxReconnectAttempts {
+			m.reconnecting = false
+			m.reconnectFailed = true
+			return m, nil
+		}
+		m.reconnectAttempt = next
+		return m, scheduleRoomReconnectRetryCmd(msg.roomID, next)
+
+	case roomReconnectRetryDueMsg:
+		if msg.roomID != m.activeRoomID || !m.reconnecting {
+			return m, nil // stale or cancelled sequence
+		}
+		return m, m.reconnectRoomCmd(m.reconnectCtx, msg.roomID, msg.attempt)
 
 	case roomReconnectedMsg:
 		if msg.sub.RoomID != m.activeRoomID {
@@ -394,6 +455,9 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			return m, nil
 		}
 		m.sub = msg.sub
+		m.reconnecting = false
+		m.reconnectFailed = false
+		m.reconnectAttempt = 0
 		return m, tea.Batch(waitForRoomMsg(m.sub), func() tea.Msg { return RoomReconnectedMsg{} })
 
 	case circErrMsg:
@@ -591,6 +655,12 @@ func (m ChatroomsModel) View() string {
 		header := theme.Title.Render(name) + "  " + theme.Subtle.Render("#"+slug)
 		if m.loadingHistory {
 			header += theme.Subtle.Render("  (loading history…)")
+		}
+		switch {
+		case m.reconnecting:
+			header += theme.Highlight.Render(fmt.Sprintf("  (live updates lost, reconnecting… %d/%d)", m.reconnectAttempt+1, maxReconnectAttempts))
+		case m.reconnectFailed:
+			header += theme.Error.Render("  (live updates lost)")
 		}
 		inputBox := theme.ActiveBorder.Render(m.input.View())
 		return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), inputBox)
