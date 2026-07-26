@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
-	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
 // hintRows converts hints to modal row strings, skipping the "?" entry.
@@ -557,9 +556,7 @@ func (l TabsLayout) renderURLPicker(a App) string {
 	items := make([]string, len(a.urlPickerItems))
 	for i, u := range a.urlPickerItems {
 		display := u
-		if urlutil.IsImageURL(u) &&
-			a.graphicsProtocol != imgview.ProtocolNone &&
-			a.imageViewer != "browser" {
+		if a.canRenderImageInline(u) {
 			display = "[img] " + display
 		}
 		if len(display) > 60 {
@@ -585,5 +582,15 @@ func (l TabsLayout) renderImageModal(a App) string {
 	for i := range lines {
 		lines[i] = blankLine
 	}
-	return theme.ActiveBorder.Render(strings.Join(lines, "\n"))
+	content := strings.Join(lines, "\n")
+	if len(a.imageCarouselItems) > 1 {
+		// A plain text hint below the image, not overlaid on it — Kitty
+		// placements are an independent compositing layer that can hide text
+		// drawn into their own cells regardless of z-index, so cycling
+		// arrows drawn "on" the image were invisible in practice. This line
+		// renders through the normal bordered-box text path instead.
+		hint := theme.Subtle.Render(fmt.Sprintf("◂ %d/%d ▸", a.imageCarouselIndex+1, len(a.imageCarouselItems)))
+		content += "\n" + lipgloss.PlaceHorizontal(a.imageModalCols, lipgloss.Center, hint)
+	}
+	return theme.ActiveBorder.Render(content)
 }

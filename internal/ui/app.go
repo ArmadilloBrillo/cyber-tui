@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"math"
 	"math/rand"
 	neturl "net/url"
@@ -122,6 +123,17 @@ type App struct {
 	urlPickerItems  []string
 	urlPickerCursor int
 
+	// imageCarousel state — populated when an image is opened from a picker
+	// containing more than one image, letting left/right cycle between them
+	// without closing the image modal. Nil imageCarouselItems means a plain
+	// single-image view (existing behavior, arrows never shown).
+	imageCarouselItems []string
+	imageCarouselIndex int
+	// imageCache holds decoded images already fetched during the current
+	// modal's lifetime, keyed by URL, so cycling back to one skips the
+	// network fetch. Cleared whenever the modal closes.
+	imageCache map[string]image.Image
+
 	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
 	// loc is the parsed *time.Location derived from timezone.
 	timezone string
@@ -192,6 +204,7 @@ type App struct {
 	imageModalCols     int
 	imageModalRows     int
 	imageNeedsCleanup  bool // true after modal closes until a delete-placement frame reaches the terminal
+	imageFetchGen      int  // bumped on every fetch and on close; stale imageFetchedMsg results are dropped
 
 	// ephemeral marks an SSH-hosted session whose state must never be read from
 	// or written to the host operator's config file.
@@ -354,11 +367,24 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.notifyText = ""
 		a.notifyGen++
 	}
-	// Any keypress closes the image modal. Consume the key so it doesn't
+	// Left/right cycle through a picker-opened image carousel without closing
+	// the modal. Any other keypress closes it — consume the key so it doesn't
 	// accidentally trigger another action while the modal is visible.
-	if _, ok := msg.(tea.KeyMsg); ok && a.imageModalOpen {
+	if km, ok := msg.(tea.KeyMsg); ok && a.imageModalOpen {
+		if len(a.imageCarouselItems) > 1 {
+			switch km.String() {
+			case "left":
+				return a.cycleImageCarousel(-1)
+			case "right":
+				return a.cycleImageCarousel(+1)
+			}
+		}
 		a.imageModalOpen = false
 		a.imageNeedsCleanup = (a.graphicsProtocol == imgview.ProtocolKitty)
+		a.imageCarouselItems = nil
+		a.imageCarouselIndex = 0
+		a.imageFetchGen++ // invalidate anything still in flight
+		a.imageCache = nil
 		return a, nil
 	}
 	if a2, cmd, ok := a.handleKeys(msg); ok {
@@ -1880,12 +1906,23 @@ func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 	if a.ephemeral {
 		return a.notify(notifyInfo, "Opening links is disabled in SSH sessions")
 	}
-	if urlutil.IsImageURL(rawURL) &&
-		a.graphicsProtocol != imgview.ProtocolNone &&
-		a.imageViewer != "browser" {
+	if a.canRenderImageInline(rawURL) {
 		return a.openImageInTerminal(rawURL)
 	}
 	return a, openExternalURL(rawURL)
+}
+
+// canRenderImageInline reports whether u should be displayed in the inline
+// terminal image viewer rather than the OS browser: it must look like an
+// image, the terminal must support a graphics protocol, the user's image
+// viewer setting must not be "browser", and the session must not be an
+// ephemeral SSH-hosted one (which must never have the host fetch a
+// remote-chosen URL — see the SSRF guard in routeURL).
+func (a App) canRenderImageInline(u string) bool {
+	return !a.ephemeral &&
+		urlutil.IsImageURL(u) &&
+		a.graphicsProtocol != imgview.ProtocolNone &&
+		a.imageViewer != "browser"
 }
 
 // openExternalURL opens u in the OS default browser as a fire-and-forget command.
@@ -1905,32 +1942,49 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	if displayRows < 1 {
 		displayRows = 1
 	}
+	a.imageFetchGen++
+	gen := a.imageFetchGen
+	cached, hit := a.imageCache[rawURL]
 	return a, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		img, err := imgview.Fetch(ctx, rawURL)
-		if err != nil {
-			return imageFetchedMsg{rawURL: rawURL, err: err}
+		img := cached
+		if !hit {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			var err error
+			img, err = imgview.Fetch(ctx, rawURL)
+			if err != nil {
+				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+			}
 		}
 		switch proto {
 		case imgview.ProtocolKitty:
 			encoded, cols, rows := imgview.EncodeKitty(img, displayCols, displayRows)
-			return imageFetchedMsg{rawURL: rawURL, encoded: encoded, cols: cols, rows: rows}
+			return imageFetchedMsg{rawURL: rawURL, gen: gen, decoded: img, encoded: encoded, cols: cols, rows: rows}
 		case imgview.ProtocolITerm2:
 			encoded, cols, rows, err := imgview.EncodeITerm2(img, displayCols, displayRows)
-			return imageFetchedMsg{rawURL: rawURL, encoded: encoded, cols: cols, rows: rows, err: err}
+			return imageFetchedMsg{rawURL: rawURL, gen: gen, decoded: img, encoded: encoded, cols: cols, rows: rows, err: err}
 		default:
-			return imageFetchedMsg{rawURL: rawURL, err: fmt.Errorf("no graphics protocol")}
+			return imageFetchedMsg{rawURL: rawURL, gen: gen, err: fmt.Errorf("no graphics protocol")}
 		}
 	}
 }
 
 // handleImageViewer processes image fetch results. On success it opens the
-// inline modal overlay; on failure it silently falls back to the browser.
+// inline modal overlay; on failure it falls back to the browser, unless a
+// carousel is already showing an image, in which case it just notifies and
+// leaves the current image displayed rather than surprising the user with a
+// browser tab mid-cycle.
 func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case imageFetchedMsg:
+		if m.gen != a.imageFetchGen {
+			return a, nil, true // superseded by a later cycle or a close
+		}
 		if m.err != nil {
+			if a.imageModalOpen {
+				a2, cmd := a.notify(notifyInfo, "couldn't load image")
+				return a2, cmd, true
+			}
 			return a, openExternalURL(m.rawURL), true
 		}
 		a.imageModalEncoded = m.encoded
@@ -1938,9 +1992,28 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageModalRows = m.rows
 		a.imageModalOpen = true
 		a.imageNeedsCleanup = false
+		if a.imageCache == nil {
+			a.imageCache = make(map[string]image.Image)
+		}
+		a.imageCache[m.rawURL] = m.decoded
+		if a.graphicsProtocol == imgview.ProtocolITerm2 && len(a.imageCarouselItems) > 1 {
+			// iTerm2/WezTerm has no Kitty-style delete-all self-heal; force a
+			// full repaint so a cycled-to smaller image can't leave stray
+			// pixels from the previous one in rows the new frame skips.
+			return a, tea.ClearScreen, true
+		}
 		return a, nil, true
 	}
 	return a, nil, false
+}
+
+// cycleImageCarousel moves to the next/prev image in imageCarouselItems
+// (wrapping around) and starts fetching it. The currently displayed image
+// stays on screen until the new one arrives.
+func (a App) cycleImageCarousel(delta int) (App, tea.Cmd) {
+	n := len(a.imageCarouselItems)
+	a.imageCarouselIndex = (a.imageCarouselIndex + delta + n) % n
+	return a.openImageInTerminal(a.imageCarouselItems[a.imageCarouselIndex])
 }
 
 // handleURLPickerKey processes keyboard input while the URL picker overlay is open.
@@ -1953,6 +2026,25 @@ func (a App) handleURLPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.urlPickerCursor = (a.urlPickerCursor + 1) % n
 	case "enter":
 		u := a.urlPickerItems[a.urlPickerCursor]
+		if a.canRenderImageInline(u) {
+			var images []string
+			idx := 0
+			for _, item := range a.urlPickerItems {
+				if a.canRenderImageInline(item) {
+					if item == u {
+						idx = len(images)
+					}
+					images = append(images, item)
+				}
+			}
+			a.urlPickerOpen = false
+			a.urlPickerItems = nil
+			if len(images) > 1 {
+				a.imageCarouselItems = images
+				a.imageCarouselIndex = idx
+			}
+			return a.openImageInTerminal(u)
+		}
 		a.urlPickerOpen = false
 		a.urlPickerItems = nil
 		return a.routeURL(u)
@@ -2130,6 +2222,8 @@ type notifPostLoadErrMsg struct{ err error }
 // is retained so a failed decode can fall back to opening the browser.
 type imageFetchedMsg struct {
 	rawURL  string
+	gen     int
+	decoded image.Image
 	encoded string
 	cols    int
 	rows    int
