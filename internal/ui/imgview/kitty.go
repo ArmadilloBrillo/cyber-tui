@@ -34,6 +34,11 @@ func EncodeKitty(img image.Image, maxCols, maxRows int) (encoded string, cols, r
 	// a=T: transmit and display. f=32: 32-bit RGBA. s/v: pixel dimensions.
 	// c/r: display size in terminal columns/rows (Kitty scales to fit, preserving aspect ratio).
 	// m=0: final chunk.
-	encoded = fmt.Sprintf("\x1b_Ga=T,f=32,s=%d,v=%d,c=%d,r=%d,m=0;%s\x1b\\", w, h, cols, rows, payload)
+	//
+	// Prefixed with a=d,d=A (delete all placements): a no-op if nothing is
+	// currently displayed, but self-heals a leftover placement from a
+	// previous image whose own close-cleanup frame never reached the
+	// terminal (e.g. dropped behind a slow flush of a large prior image).
+	encoded = fmt.Sprintf("\x1b_Ga=d,d=A\x1b\\\x1b_Ga=T,f=32,s=%d,v=%d,c=%d,r=%d,m=0;%s\x1b\\", w, h, cols, rows, payload)
 	return
 }

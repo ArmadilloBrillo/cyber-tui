@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 )
 
@@ -1173,5 +1174,98 @@ func TestHandleChatrooms_NormalTabEntry_EscStillDropsToList(t *testing.T) {
 	}
 	if escCmd != nil {
 		t.Error("expected no LeaveChatroomsMsg when the room wasn't reached via a deep link")
+	}
+}
+
+// --- Kitty image-modal cleanup survives a fast follow-up keystroke ---
+//
+// Reported behavior: typing while an image loads could leave the Kitty image
+// placement stuck on screen forever, needing a full TUI restart to clear.
+// Root cause: the delete-placement escape was injected into exactly one
+// View() frame, and the very next Update() call unconditionally cleared
+// imageNeedsCleanup regardless of whether the renderer's independent flush
+// ticker had actually sent that frame to the terminal yet. A first fix used a
+// fixed delay before clearing the flag, but Bubble Tea's write()/flush() share
+// a mutex and flush() blocks on the OS write for as long as the terminal takes
+// to drain it — for a large image that can exceed any fixed delay, so the
+// fixed-delay fix still lost the race for big/slow images. imageNeedsCleanup
+// now simply isn't auto-cleared at all: it stays true (re-injecting the
+// delete-placement escape into every closed-state frame) until a new Kitty
+// image is opened, so however long the renderer's backlog takes to drain,
+// the pending cleanup frame is still there once it does.
+
+func TestUpdate_ImageModalClose_Kitty_SetsCleanupFlag(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+
+	m, cmd := a.Update(keyMsg("x"))
+	a2 := m.(App)
+	if a2.imageModalOpen {
+		t.Error("expected the keypress to close the modal")
+	}
+	if !a2.imageNeedsCleanup {
+		t.Error("expected imageNeedsCleanup to be set for the Kitty protocol")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd from closing the modal")
+	}
+}
+
+func TestUpdate_ImageModalClose_ITerm2_NoCleanupFlag(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolITerm2
+	a.imageModalOpen = true
+
+	m, cmd := a.Update(keyMsg("x"))
+	a2 := m.(App)
+	if a2.imageModalOpen {
+		t.Error("expected the keypress to close the modal")
+	}
+	if a2.imageNeedsCleanup {
+		t.Error("iTerm2 has no placement to clean up, expected imageNeedsCleanup to stay false")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd scheduled for iTerm2")
+	}
+}
+
+func TestUpdate_ImageNeedsCleanup_NotAutoCleared(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+
+	m, _ := a.Update(keyMsg("x"))
+	a2 := m.(App)
+	if !a2.imageNeedsCleanup {
+		t.Fatal("setup: expected imageNeedsCleanup to be set after close")
+	}
+
+	// Several unrelated Update cycles (e.g. more typing while the renderer's
+	// flush is still backed up on a large image) must not clear the flag —
+	// only actually opening a new image should.
+	for i := 0; i < 5; i++ {
+		m2, _ := a2.Update(keyMsg("y"))
+		a2 = m2.(App)
+	}
+	if !a2.imageNeedsCleanup {
+		t.Error("expected imageNeedsCleanup to survive unrelated Update calls until a new image opens")
+	}
+}
+
+func TestHandleImageViewer_NewImage_ClearsCleanupFlag(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageNeedsCleanup = true
+
+	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://example.com/x.jpg", encoded: "seq", cols: 10, rows: 5})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if !a2.imageModalOpen {
+		t.Error("expected the new image to open the modal")
+	}
+	if a2.imageNeedsCleanup {
+		t.Error("expected opening a new image to clear any pending cleanup flag")
 	}
 }
