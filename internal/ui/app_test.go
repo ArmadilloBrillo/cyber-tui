@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"image"
 	"strings"
 	"testing"
 	"time"
@@ -1267,5 +1268,258 @@ func TestHandleImageViewer_NewImage_ClearsCleanupFlag(t *testing.T) {
 	}
 	if a2.imageNeedsCleanup {
 		t.Error("expected opening a new image to clear any pending cleanup flag")
+	}
+}
+
+// --- Image carousel: cycling through a picker's images without closing ---
+//
+// When the URL picker holds more than one image URL, opening one now enters
+// a carousel: left/right cycle between the picker's images instead of
+// closing the modal. Any other key still closes it immediately, same as a
+// plain single-image view. Async fetch results are stamped with a
+// generation counter (bumped on every new fetch and on close) so a stale
+// result — from cycling again before the previous fetch resolved, or from
+// closing before it resolved — can never resurrect the modal or overwrite a
+// newer image.
+
+func TestCanRenderImageInline_Ephemeral_AlwaysFalse(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageViewer = "terminal"
+	a.ephemeral = true
+	if a.canRenderImageInline("https://example.com/x.jpg") {
+		t.Error("expected ephemeral (SSH-hosted) sessions to never render images inline")
+	}
+}
+
+func TestHandleURLPickerKey_Enter_MultipleImages_StartsCarousel(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.urlPickerOpen = true
+	a.urlPickerItems = []string{"https://x.com/page", "https://x.com/a.jpg", "https://x.com/b.png"}
+	a.urlPickerCursor = 2 // b.png
+
+	m, cmd := a.handleURLPickerKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a2 := m.(App)
+	if a2.urlPickerOpen {
+		t.Error("expected the picker to close")
+	}
+	if cmd == nil {
+		t.Fatal("expected a fetch cmd")
+	}
+	if len(a2.imageCarouselItems) != 2 {
+		t.Fatalf("expected 2 carousel items (the images only), got %d: %v", len(a2.imageCarouselItems), a2.imageCarouselItems)
+	}
+	if a2.imageCarouselIndex != 1 {
+		t.Errorf("expected carousel index 1 (b.png, the second image), got %d", a2.imageCarouselIndex)
+	}
+}
+
+func TestHandleURLPickerKey_Enter_SingleImage_NoCarousel(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.urlPickerOpen = true
+	a.urlPickerItems = []string{"https://x.com/page", "https://x.com/a.jpg"}
+	a.urlPickerCursor = 1
+
+	m, _ := a.handleURLPickerKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a2 := m.(App)
+	if a2.imageCarouselItems != nil {
+		t.Errorf("expected no carousel with only one image among the picker's URLs, got %v", a2.imageCarouselItems)
+	}
+}
+
+func TestUpdate_ImageModal_LeftRight_CyclesWithoutClosing(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg", "https://x.com/c.jpg"}
+	a.imageCarouselIndex = 0
+	genBefore := a.imageFetchGen
+
+	m, cmd := a.Update(tea.KeyMsg{Type: tea.KeyRight})
+	a2 := m.(App)
+	if !a2.imageModalOpen {
+		t.Error("expected the modal to stay open while cycling")
+	}
+	if a2.imageCarouselIndex != 1 {
+		t.Errorf("expected carousel index 1 after right, got %d", a2.imageCarouselIndex)
+	}
+	if len(a2.imageCarouselItems) != 3 {
+		t.Error("expected carousel items to survive cycling")
+	}
+	if cmd == nil {
+		t.Fatal("expected a fetch cmd for the newly cycled-to image")
+	}
+	if a2.imageFetchGen == genBefore {
+		t.Error("expected imageFetchGen to advance on cycle")
+	}
+
+	m2, _ := a2.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	a3 := m2.(App)
+	if a3.imageCarouselIndex != 0 {
+		t.Errorf("expected carousel index to wrap/return to 0 after left, got %d", a3.imageCarouselIndex)
+	}
+}
+
+func TestUpdate_ImageModal_OtherKey_ClosesAndClearsCarousel(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	a.imageCarouselIndex = 1
+	a.imageCache = map[string]image.Image{"https://x.com/a.jpg": image.NewRGBA(image.Rect(0, 0, 2, 2))}
+	genBefore := a.imageFetchGen
+
+	m, _ := a.Update(keyMsg("x"))
+	a2 := m.(App)
+	if a2.imageModalOpen {
+		t.Error("expected a non-arrow key to close the modal even mid-carousel")
+	}
+	if a2.imageCarouselItems != nil {
+		t.Error("expected carousel state to be cleared on close")
+	}
+	if a2.imageFetchGen == genBefore {
+		t.Error("expected imageFetchGen to advance on close, invalidating any in-flight fetch")
+	}
+	if a2.imageCache != nil {
+		t.Error("expected imageCache to be cleared on close")
+	}
+}
+
+// --- Image cache: cycling back to an already-viewed image skips the fetch ---
+
+func TestOpenImageInTerminal_CacheHit_SkipsFetch(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	cachedImg := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	a.imageCache = map[string]image.Image{"https://x.com/a.jpg": cachedImg}
+
+	_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	// Safe to invoke directly: a cache hit performs no network I/O, so this
+	// stays a fast, deterministic unit test.
+	msg := cmd()
+	fm, ok := msg.(imageFetchedMsg)
+	if !ok {
+		t.Fatalf("expected imageFetchedMsg, got %T", msg)
+	}
+	if fm.err != nil {
+		t.Errorf("expected no error on a cache hit, got %v", fm.err)
+	}
+	if fm.decoded != cachedImg {
+		t.Error("expected the cached image to be reused rather than re-fetched")
+	}
+	if fm.encoded == "" {
+		t.Error("expected the cached image to still be (re-)encoded for the current terminal size")
+	}
+}
+
+func TestHandleImageViewer_Success_PopulatesCache(t *testing.T) {
+	a := loggedInApp()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+
+	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", decoded: img, encoded: "seq", cols: 2, rows: 2})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if a2.imageCache["https://x.com/a.jpg"] != img {
+		t.Error("expected the decoded image to be cached under its URL")
+	}
+}
+
+func TestHandleImageViewer_StaleGeneration_Dropped(t *testing.T) {
+	a := loggedInApp()
+	a.imageFetchGen = 5
+	a.imageModalEncoded = "current"
+
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", gen: 3, encoded: "stale", cols: 1, rows: 1})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled (and dropped)")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd for a stale result")
+	}
+	if a2.imageModalEncoded != "current" {
+		t.Error("expected a stale (superseded) result to be dropped, not overwrite the current image")
+	}
+}
+
+func TestHandleImageViewer_ErrorMidCarousel_NotifiesKeepsImage(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalOpen = true
+	a.imageModalEncoded = "current"
+
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/bad.jpg", err: errors.New("fetch failed")})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if a2.imageModalEncoded != "current" {
+		t.Error("expected the current image to stay displayed on a mid-carousel fetch error")
+	}
+	if a2.notifyText == "" {
+		t.Error("expected a notify on a mid-carousel fetch error")
+	}
+	if cmd == nil {
+		t.Error("expected the notify's cmd (not nil)")
+	}
+}
+
+func TestHandleImageViewer_ErrorNoModalOpen_FallsBackToBrowser(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalOpen = false
+
+	_, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/bad.jpg", err: errors.New("fetch failed")})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if cmd == nil {
+		t.Error("expected a browser-open cmd when nothing was already showing")
+	}
+}
+
+func TestHandleImageViewer_ITerm2CycleSuccess_ForcesClearScreen(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolITerm2
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 10, rows: 5})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if !a2.imageModalOpen {
+		t.Fatal("expected the image to open")
+	}
+	if cmd == nil {
+		t.Error("expected tea.ClearScreen to force a full repaint on an iTerm2 carousel cycle")
+	}
+}
+
+func TestHandleImageViewer_KittyCycleSuccess_NoClearScreen(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+
+	_, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 10, rows: 5})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if cmd != nil {
+		t.Error("Kitty self-heals via its own delete-all prefix, no ClearScreen needed")
+	}
+}
+
+func TestHandleImageViewer_SingleImageSuccess_NoClearScreen(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolITerm2 // even on iTerm2
+
+	_, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", encoded: "seq", cols: 10, rows: 5})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if cmd != nil {
+		t.Error("expected no ClearScreen outside a carousel")
 	}
 }

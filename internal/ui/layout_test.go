@@ -39,6 +39,36 @@ func TestRenderNav_DoesNotShowSearch(t *testing.T) {
 	}
 }
 
+// --- renderImageModal: carousel position hint ---
+//
+// Cycling arrows overlaid directly on the image were invisible in practice —
+// Kitty placements are an independent compositing layer that can hide text
+// drawn into their own cells regardless of z-index. The hint line renders
+// through the normal bordered-box text path instead, so it can't be hidden
+// by an image placement.
+
+func TestRenderImageModal_Carousel_ShowsPositionHint(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalCols = 20
+	a.imageModalRows = 5
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg", "https://x.com/c.jpg"}
+	a.imageCarouselIndex = 1
+	out := ansi.Strip(TabsLayout{}.renderImageModal(a))
+	if !strings.Contains(out, "2/3") {
+		t.Errorf("expected a 2/3 position hint, got: %q", out)
+	}
+}
+
+func TestRenderImageModal_SingleImage_NoHint(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalCols = 20
+	a.imageModalRows = 5
+	out := ansi.Strip(TabsLayout{}.renderImageModal(a))
+	if strings.Contains(out, "◂") || strings.Contains(out, "▸") {
+		t.Errorf("expected no position hint for a plain single-image view, got: %q", out)
+	}
+}
+
 // --- screenForNumber ---
 
 func TestScreenForNumber_1Through9_MatchMenuTabsOrder(t *testing.T) {
