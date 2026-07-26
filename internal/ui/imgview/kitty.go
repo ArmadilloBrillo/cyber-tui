@@ -7,10 +7,10 @@ import (
 )
 
 // EncodeKitty encodes img for display via the Kitty terminal graphics protocol.
-// maxCols is the maximum terminal column width; the image is never upscaled
-// beyond its natural pixel size. Returns the APC escape sequence and the
-// computed display size in terminal columns and rows.
-func EncodeKitty(img image.Image, maxCols int) (encoded string, cols, rows int) {
+// maxCols/maxRows bound the terminal display size; the image is never
+// upscaled beyond its natural pixel size. Returns the APC escape sequence and
+// the computed display size in terminal columns and rows.
+func EncodeKitty(img image.Image, maxCols, maxRows int) (encoded string, cols, rows int) {
 	bounds := img.Bounds()
 	w := bounds.Max.X - bounds.Min.X
 	h := bounds.Max.Y - bounds.Min.Y
@@ -30,8 +30,7 @@ func EncodeKitty(img image.Image, maxCols int) (encoded string, cols, rows int) 
 	}
 
 	payload := base64.StdEncoding.EncodeToString(raw)
-	cols = fitCols(w, maxCols)
-	rows = fitRows(h, w, cols)
+	cols, rows = fitBox(w, h, maxCols, maxRows)
 	// a=T: transmit and display. f=32: 32-bit RGBA. s/v: pixel dimensions.
 	// c/r: display size in terminal columns/rows (Kitty scales to fit, preserving aspect ratio).
 	// m=0: final chunk.

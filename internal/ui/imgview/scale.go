@@ -33,3 +33,23 @@ func fitRows(imgHeight, imgWidth, cols int) int {
 	}
 	return rows
 }
+
+// fitBox computes the terminal cols/rows to display an image of imgWidth x
+// imgHeight pixels within a maxCols x maxRows box, preserving aspect ratio
+// and never upscaling. If fitting to maxCols would make rows exceed maxRows,
+// cols is recomputed from the row constraint instead so both bounds hold.
+func fitBox(imgWidth, imgHeight, maxCols, maxRows int) (cols, rows int) {
+	cols = fitCols(imgWidth, maxCols)
+	rows = fitRows(imgHeight, imgWidth, cols)
+	if maxRows > 0 && rows > maxRows && imgHeight > 0 {
+		rows = maxRows
+		cols = 2 * rows * imgWidth / imgHeight
+		if cols < 1 {
+			cols = 1
+		}
+		if maxCols > 0 && cols > maxCols {
+			cols = maxCols
+		}
+	}
+	return cols, rows
+}

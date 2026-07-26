@@ -1907,6 +1907,10 @@ func openExternalURL(u string) tea.Cmd {
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
 	displayCols := a.width * 4 / 5
+	displayRows := a.height*4/5 - 2 // reserve 2 rows for the modal border
+	if displayRows < 1 {
+		displayRows = 1
+	}
 	return a, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -1916,10 +1920,10 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 		}
 		switch proto {
 		case imgview.ProtocolKitty:
-			encoded, cols, rows := imgview.EncodeKitty(img, displayCols)
+			encoded, cols, rows := imgview.EncodeKitty(img, displayCols, displayRows)
 			return imageFetchedMsg{rawURL: rawURL, encoded: encoded, cols: cols, rows: rows}
 		case imgview.ProtocolITerm2:
-			encoded, cols, rows, err := imgview.EncodeITerm2(img, displayCols)
+			encoded, cols, rows, err := imgview.EncodeITerm2(img, displayCols, displayRows)
 			return imageFetchedMsg{rawURL: rawURL, encoded: encoded, cols: cols, rows: rows, err: err}
 		default:
 			return imageFetchedMsg{rawURL: rawURL, err: fmt.Errorf("no graphics protocol")}
