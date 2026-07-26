@@ -191,7 +191,7 @@ type App struct {
 	imageModalEncoded  string
 	imageModalCols     int
 	imageModalRows     int
-	imageNeedsCleanup  bool // true for one frame after modal closes, to delete Kitty placement
+	imageNeedsCleanup  bool // true after modal closes until a delete-placement frame reaches the terminal
 
 	// ephemeral marks an SSH-hosted session whose state must never be read from
 	// or written to the host operator's config file.
@@ -342,12 +342,6 @@ func (a App) Init() tea.Cmd {
 // handled first and always falls through to delegateUpdate so the active
 // screen can also react to it.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// imageNeedsCleanup is a one-render-cycle flag: it is set true by the
-	// keypress that closes the modal and cleared here at the very start of the
-	// next Update call. This guarantees the cleanup frame is rendered before
-	// the flag is cleared, with no goroutine race.
-	a.imageNeedsCleanup = false
-
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
 		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
@@ -1943,6 +1937,7 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageModalCols = m.cols
 		a.imageModalRows = m.rows
 		a.imageModalOpen = true
+		a.imageNeedsCleanup = false
 		return a, nil, true
 	}
 	return a, nil, false

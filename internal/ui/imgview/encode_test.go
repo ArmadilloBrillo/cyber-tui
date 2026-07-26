@@ -39,6 +39,25 @@ func TestEncodeKitty_CapsRows(t *testing.T) {
 	}
 }
 
+func TestEncodeKitty_PrependsDeleteAllPlacements(t *testing.T) {
+	// EncodeKitty always leads with a delete-all-placements command so
+	// opening a new image self-heals a leftover placement from a previous
+	// image whose own close-cleanup frame never reached the terminal (e.g.
+	// dropped behind a slow flush of a large prior image).
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	seq, _, _ := imgview.EncodeKitty(img, 40, 20)
+	if !strings.HasPrefix(seq, "\x1b_Ga=d,d=A\x1b\\") {
+		t.Errorf("EncodeKitty: expected delete-all-placements prefix, got %q", seq[:min(len(seq), 30)])
+	}
+
+	// Back-to-back calls (as would happen opening several images in a row)
+	// must each still lead with the delete-all command.
+	seq2, _, _ := imgview.EncodeKitty(img, 40, 20)
+	if !strings.HasPrefix(seq2, "\x1b_Ga=d,d=A\x1b\\") {
+		t.Errorf("EncodeKitty: expected delete-all-placements prefix on repeated call, got %q", seq2[:min(len(seq2), 30)])
+	}
+}
+
 func TestEncodeITerm2_ContainsOSC(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.Set(0, 0, color.RGBA{G: 255, A: 255})
