@@ -200,15 +200,3 @@ func ShouldWanderNow(cfg Config) bool {
 		time.Since(cfg.LastWandered) >= WanderInterval
 }
 
-// Clear removes the config file. Returns nil if the file does not exist.
-func Clear() error {
-	path, err := DefaultPath()
-	if err != nil {
-		return err
-	}
-	err = os.Remove(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
-}

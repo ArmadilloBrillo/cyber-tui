@@ -34,7 +34,7 @@ func loggedInApp() App {
 func TestTabIndex_Feed(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	if got := a.tabIndex(); got != 0 {
+	if got := tabIndexOf(a); got != 0 {
 		t.Errorf("expected 0, got %d", got)
 	}
 }
@@ -42,7 +42,7 @@ func TestTabIndex_Feed(t *testing.T) {
 func TestTabIndex_Notifs(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenNotifications
-	if got := a.tabIndex(); got != 1 {
+	if got := tabIndexOf(a); got != 1 {
 		t.Errorf("expected 1, got %d", got)
 	}
 }
@@ -50,7 +50,7 @@ func TestTabIndex_Notifs(t *testing.T) {
 func TestTabIndex_Profile(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenProfile
-	if got := a.tabIndex(); got != 8 {
+	if got := tabIndexOf(a); got != 8 {
 		t.Errorf("expected 8, got %d", got)
 	}
 }
@@ -60,7 +60,7 @@ func TestTabIndex_Profile(t *testing.T) {
 func TestNavigateTab_RightFromFeed(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	a.navigateTab(+1)
+	a, _ = navigateTabBy(a, +1)
 	if a.active != screenNotifications {
 		t.Errorf("expected screenNotifications, got %v", a.active)
 	}
@@ -69,7 +69,7 @@ func TestNavigateTab_RightFromFeed(t *testing.T) {
 func TestNavigateTab_LeftFromFeed_Wraps(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	a.navigateTab(-1)
+	a, _ = navigateTabBy(a, -1)
 	if a.active != screenSettings {
 		t.Errorf("expected screenSettings (wrap), got %v", a.active)
 	}
@@ -78,7 +78,7 @@ func TestNavigateTab_LeftFromFeed_Wraps(t *testing.T) {
 func TestNavigateTab_RightFromBookmarks_GoesToGuilds(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenBookmarks
-	a.navigateTab(+1)
+	a, _ = navigateTabBy(a, +1)
 	if a.active != screenGuilds {
 		t.Errorf("expected screenGuilds, got %v", a.active)
 	}
@@ -87,7 +87,7 @@ func TestNavigateTab_RightFromBookmarks_GoesToGuilds(t *testing.T) {
 func TestNavigateTab_RightFromGuilds_GoesToTopics(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenGuilds
-	a.navigateTab(+1)
+	a, _ = navigateTabBy(a, +1)
 	if a.active != screenTopics {
 		t.Errorf("expected screenTopics, got %v", a.active)
 	}
@@ -100,7 +100,7 @@ func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 	// (search is hidden — reachable only via "g s"/"/", never by cycling; see navigateTabBy)
 	expected := []screen{screenNotifications, screenCMail, screenChatrooms, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenFeed}
 	for i, want := range expected {
-		a.navigateTab(+1)
+		a, _ = navigateTabBy(a, +1)
 		if a.active != want {
 			t.Errorf("step %d: expected %v, got %v", i+1, want, a.active)
 		}
@@ -114,7 +114,7 @@ func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 	// (search is hidden — reachable only via "g s"/"/", never by cycling; see navigateTabBy)
 	expected := []screen{screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenChatrooms, screenCMail, screenNotifications, screenFeed}
 	for i, want := range expected {
-		a.navigateTab(-1)
+		a, _ = navigateTabBy(a, -1)
 		if a.active != want {
 			t.Errorf("step %d: expected %v, got %v", i+1, want, a.active)
 		}
@@ -128,7 +128,7 @@ func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 func TestNavigateTab_ProfileToSettings_SkipsSearch(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenProfile
-	a.navigateTab(+1)
+	a, _ = navigateTabBy(a, +1)
 	if a.active != screenSettings {
 		t.Errorf("expected screenSettings (skipping hidden screenSearch), got %v", a.active)
 	}
@@ -140,11 +140,11 @@ func TestNavigateTab_ProfileToSettings_SkipsSearch(t *testing.T) {
 func TestNavigateTab_NoOpWhileOnSearch(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenSearch
-	a.navigateTab(+1)
+	a, _ = navigateTabBy(a, +1)
 	if a.active != screenSearch {
 		t.Errorf("expected navigateTab to no-op while on screenSearch, got %v", a.active)
 	}
-	a.navigateTab(-1)
+	a, _ = navigateTabBy(a, -1)
 	if a.active != screenSearch {
 		t.Errorf("expected navigateTab to no-op while on screenSearch, got %v", a.active)
 	}

@@ -1745,16 +1745,6 @@ func friendlyErr(err error) string {
 	return err.Error()
 }
 
-// tabIndex returns the index of the currently active screen within menuTabs.
-func (a App) tabIndex() int { return tabIndexOf(a) }
-
-// navigateTab moves the active tab by delta (-1 or +1), wrapping at the ends.
-func (a *App) navigateTab(delta int) tea.Cmd {
-	var cmd tea.Cmd
-	*a, cmd = navigateTabBy(*a, delta)
-	return cmd
-}
-
 func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	*a, cmd = a.layout.DelegateUpdate(msg, *a)
