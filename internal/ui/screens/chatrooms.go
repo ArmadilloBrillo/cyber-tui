@@ -295,6 +295,15 @@ func (m ChatroomsModel) SetCanGoBack(v bool) ChatroomsModel {
 	return m
 }
 
+// ResetToList clears any deep-link flag and drops back to the room list, for
+// ordinary tab navigation into Chatrooms that may still have a deep-linked
+// room open (SetCanGoBack(false) alone left mode stuck on detail).
+func (m ChatroomsModel) ResetToList() ChatroomsModel {
+	m.canGoBack = false
+	m.mode = chatroomModeList
+	return m
+}
+
 // OpenPendingRoom auto-enters detail mode for the slug previously set via
 // SetPendingRoomSlug, once the containing room list has (re)loaded. No-op if
 // no slug is pending or none of the loaded rooms match. The pending slug is

@@ -269,10 +269,10 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 		}
 		return a, nil
 	case screenChatrooms:
-		a.chatrooms = a.chatrooms.SetCanGoBack(false)
+		a.chatrooms = a.chatrooms.ResetToList()
 		return a, a.loadRoomsCmd()
 	case screenCMail:
-		a.cmail = a.cmail.SetCanGoBack(false)
+		a.cmail = a.cmail.ResetToList()
 		return a, a.loadConvsCmd()
 	case screenProfile:
 		return a, a.loadProfileCmd()

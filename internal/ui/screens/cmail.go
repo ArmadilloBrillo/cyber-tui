@@ -272,6 +272,16 @@ func (m CMailModel) SetCanGoBack(v bool) CMailModel {
 	return m
 }
 
+// ResetToList clears any deep-link flag and drops back to the conversation
+// list, for ordinary tab navigation into C-Mail that may still have a
+// deep-linked conversation open (SetCanGoBack(false) alone left mode stuck
+// on detail).
+func (m CMailModel) ResetToList() CMailModel {
+	m.canGoBack = false
+	m.mode = cmailModeList
+	return m
+}
+
 // SetActiveConversation opens a specific conversation (used by external callers).
 // Cancels any existing DM subscription and sets activeConvID so that the
 // dmSubscribedMsg / cmailMsgsLoadedMsg handlers accept the new conversation's results.
