@@ -6,8 +6,21 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
+
+// withTrueColor forces 24-bit color for the duration of a test, so
+// style-dependent assertions (MeHighlight vs Highlight) see distinct ANSI
+// codes instead of identical plain text — the rest of this file's tests rely
+// on the default no-color profile, so this is scoped per-test, not global.
+func withTrueColor(t *testing.T) {
+	t.Helper()
+	theme.Set("cyber")
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+}
 
 var circMsgTime = time.Now().UTC()
 
@@ -25,7 +38,7 @@ func circMsg(username, body string) model.Message {
 func TestRenderCircMessages_WrapsLongBodyWithinWidth(t *testing.T) {
 	const width = 60
 	body := strings.Repeat("a very long word soup that keeps going and going ", 5)
-	out := renderCircMessages([]model.Message{circMsg("alice", body)}, time.UTC, "datetime", width)
+	out := renderCircMessages([]model.Message{circMsg("alice", body)}, time.UTC, "datetime", width, "")
 
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) < 2 {
@@ -48,7 +61,7 @@ func TestRenderCircMessages_WrapsLongBodyWithinWidth(t *testing.T) {
 // when the last wrapped line runs close to the viewport edge.
 func TestRenderCircMessages_TimestampHasGapFromText(t *testing.T) {
 	const width = 60
-	out := renderCircMessages([]model.Message{circMsg("bob", "short reply")}, time.UTC, "datetime", width)
+	out := renderCircMessages([]model.Message{circMsg("bob", "short reply")}, time.UTC, "datetime", width, "")
 
 	line := strings.TrimRight(out, "\n")
 	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
@@ -77,7 +90,7 @@ func TestRenderCircMessages_AdminBadge(t *testing.T) {
 	admin.IsChatAdmin = true
 	regular := circMsg("bob", "hi")
 
-	out := renderCircMessages([]model.Message{admin, regular}, time.UTC, "datetime", width)
+	out := renderCircMessages([]model.Message{admin, regular}, time.UTC, "datetime", width, "")
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
 	if !strings.Contains(lines[0], "[admin]") {
@@ -103,7 +116,7 @@ func TestRenderCircMessages_AdminBadgeWrapsCorrectly(t *testing.T) {
 	msg := circMsg("alice", strings.Repeat("a very long word soup that keeps going ", 5))
 	msg.IsChatAdmin = true
 
-	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width)
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "")
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("expected the long admin message to wrap onto multiple lines, got %d line(s)", len(lines))
@@ -132,7 +145,7 @@ func TestRenderCircMessages_SystemNotice(t *testing.T) {
 	}
 	regular := circMsg("bob", "hi")
 
-	out := renderCircMessages([]model.Message{sys, regular}, time.UTC, "datetime", width)
+	out := renderCircMessages([]model.Message{sys, regular}, time.UTC, "datetime", width, "")
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
 	if !strings.HasPrefix(lines[0], "***") {
@@ -183,7 +196,7 @@ func TestRenderCircMessages_ActionLine(t *testing.T) {
 	action.IsAction = true
 	regular := circMsg("bob", "hi there")
 
-	out := renderCircMessages([]model.Message{action, regular}, time.UTC, "datetime", width)
+	out := renderCircMessages([]model.Message{action, regular}, time.UTC, "datetime", width, "")
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
 	if !strings.HasPrefix(lines[0], "* ragnar tests the plumbing") {
@@ -226,7 +239,7 @@ func TestRenderCircMessages_ActionLineWrapsCorrectly(t *testing.T) {
 	action := circMsg("ragnar", strings.Repeat("does a very long dramatic action sequence ", 5))
 	action.IsAction = true
 
-	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width)
+	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width, "")
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("expected the long action to wrap onto multiple lines, got %d line(s)", len(lines))
@@ -269,5 +282,49 @@ func TestRenderChatMessages_ActionLine(t *testing.T) {
 		if w := lipgloss.Width(l); w > width {
 			t.Errorf("line %d width %d exceeds viewport width %d: %q", i, w, width, l)
 		}
+	}
+}
+
+// TestRenderCircMessages_OwnUsernameUsesMeHighlight confirms the current
+// user's own username renders with theme.MeHighlight rather than the
+// default theme.Highlight used for other users' names.
+func TestRenderCircMessages_OwnUsernameUsesMeHighlight(t *testing.T) {
+	withTrueColor(t)
+	const width = 60
+	mine := circMsg("ragnar", "hi all")
+	other := circMsg("bob", "hello")
+
+	out := renderCircMessages([]model.Message{mine, other}, time.UTC, "datetime", width, "ragnar")
+
+	if !strings.Contains(out, "<"+theme.MeHighlight.Render("ragnar")+">") {
+		t.Errorf("expected own username styled with MeHighlight, got: %q", out)
+	}
+	if strings.Contains(out, "<"+theme.Highlight.Render("ragnar")+">") {
+		t.Errorf("did not expect own username styled with plain Highlight, got: %q", out)
+	}
+	if !strings.Contains(out, "<"+theme.Highlight.Render("bob")+">") {
+		t.Errorf("expected other user's username to keep plain Highlight styling, got: %q", out)
+	}
+}
+
+// TestRenderCircMessages_MentionHighlighted confirms an @mention (or bare
+// mention) of the current user's name inside someone else's message body
+// gets wrapped in theme.MeHighlight, case-insensitively, without touching
+// substrings that merely contain the name.
+func TestRenderCircMessages_MentionHighlighted(t *testing.T) {
+	withTrueColor(t)
+	const width = 60
+	msg := circMsg("bob", "hey @Ragnar and ragnarwessels, is ragnar around?")
+
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "ragnar")
+
+	if !strings.Contains(out, theme.MeHighlight.Render("@Ragnar")) {
+		t.Errorf("expected case-insensitive @mention to be highlighted, got: %q", out)
+	}
+	if !strings.Contains(out, theme.MeHighlight.Render("ragnar")) {
+		t.Errorf("expected bare-word mention to be highlighted, got: %q", out)
+	}
+	if strings.Contains(out, theme.MeHighlight.Render("ragnarwessels")) {
+		t.Errorf("did not expect a substring match (ragnarwessels) to be highlighted, got: %q", out)
 	}
 }

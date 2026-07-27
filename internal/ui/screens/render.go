@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -196,7 +197,7 @@ func listFooter(loading, exhausted bool) string {
 // highlighted. Bodies word-wrap to fit viewportWidth, with room reserved on
 // every wrapped line for the timestamp column so long messages never push it
 // off-screen; continuation lines are indented to align under the body.
-func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int) string {
+func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string) string {
 	if viewportWidth < 20 {
 		viewportWidth = 80
 	}
@@ -211,7 +212,7 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 		tsWidth := lipgloss.Width(ts)
 
 		if msg.IsAction {
-			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth))
+			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser))
 			continue
 		}
 
@@ -222,14 +223,19 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 			adminTagWidth = len(" [admin]")
 		}
 
+		usernameStyle := theme.Highlight
+		if currentUser != "" && msg.From.Username == currentUser {
+			usernameStyle = theme.MeHighlight
+		}
+
 		// Styled prefix: <username>[ [admin]]  (plain width = len(username) + tag + 4)
-		styledPrefix := "<" + theme.Highlight.Render(msg.From.Username) + adminTag + ">  "
+		styledPrefix := "<" + usernameStyle.Render(msg.From.Username) + adminTag + ">  "
 		rawPrefixWidth := len(msg.From.Username) + adminTagWidth + 4
 		indent := strings.Repeat(" ", rawPrefixWidth)
 
 		bodyWidth := max(viewportWidth-rawPrefixWidth-tsWidth-tsGap, 10)
 
-		body := strings.TrimRight(msg.Body, "\n")
+		body := highlightMentions(strings.TrimRight(msg.Body, "\n"), currentUser)
 		lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(body), "\n")
 		last := len(lines) - 1
 
@@ -248,24 +254,43 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 	return sb.String()
 }
 
+// highlightMentions wraps case-insensitive, word-bounded occurrences of
+// currentUser in body (bare or @-prefixed) with theme.MeHighlight, so a
+// mention of the local user stands out in someone else's message.
+func highlightMentions(body, currentUser string) string {
+	if currentUser == "" {
+		return body
+	}
+	re := regexp.MustCompile(`(?i)@?\b` + regexp.QuoteMeta(currentUser) + `\b`)
+	return re.ReplaceAllStringFunc(body, func(match string) string {
+		return theme.MeHighlight.Render(match)
+	})
+}
+
 // renderActionLine renders a /me-style action message in classic IRC form:
 // "* username body *", right-aligned timestamp trailing the last wrapped
 // line — no username bracket, matching how real IRC clients narrate actions
 // in the third person. The API returns IsAction messages with Body already
 // stripped of the username (just the action text), so it's assembled here.
-func renderActionLine(username, body, ts string, viewportWidth int) string {
+func renderActionLine(username, body, ts string, viewportWidth int, currentUser string) string {
 	username = sanitize.Strip(username)
 	const suffix = " *"
 	tsWidth := lipgloss.Width(ts)
 	const tsGap = 2
 
-	prefix := "* " + theme.Highlight.Render(username) + " "
+	usernameStyle := theme.Highlight
+	if currentUser != "" && username == currentUser {
+		usernameStyle = theme.MeHighlight
+	}
+
+	prefix := "* " + usernameStyle.Render(username) + " "
 	rawPrefixWidth := len(username) + 3 // "* " + " "
 	indent := strings.Repeat(" ", rawPrefixWidth)
 
 	bodyWidth := max(viewportWidth-rawPrefixWidth-len(suffix)-tsWidth-tsGap, 10)
 
-	lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(strings.TrimRight(body, "\n")), "\n")
+	body = highlightMentions(strings.TrimRight(body, "\n"), currentUser)
+	lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(body), "\n")
 	last := len(lines) - 1
 
 	var sb strings.Builder
@@ -335,7 +360,7 @@ func renderChatMessages(msgs []model.Message, currentUser string, loc *time.Loca
 		}
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
 		if msg.IsAction {
-			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth))
+			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser))
 			sb.WriteString("\n")
 			continue
 		}
