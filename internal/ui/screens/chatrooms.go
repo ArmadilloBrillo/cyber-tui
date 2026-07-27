@@ -693,7 +693,7 @@ func (m ChatroomsModel) renderMessages() string {
 		}
 		return theme.Subtle.Render("no messages yet")
 	}
-	return renderCircMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width)
+	return renderCircMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser)
 }
 
 func (m ChatroomsModel) View() string {
