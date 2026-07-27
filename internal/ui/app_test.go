@@ -1104,6 +1104,30 @@ func TestHandleCMail_StartConversation_EscReturnsToOrigin(t *testing.T) {
 	}
 }
 
+// TestHandleCMail_ManualTabReentry_ResetsToList mirrors
+// TestHandleChatrooms_ManualTabReentry_ResetsToList for C-Mail: manually
+// switching to the C-Mail tab while a deep-linked conversation is open
+// must drop back to the conversation list, not stay in detail mode.
+func TestHandleCMail_ManualTabReentry_ResetsToList(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+
+	m, cmd, _ := a.handleCMail(screens.StartConversationMsg{Username: "molly"})
+	if cmd == nil {
+		t.Fatal("expected a start-conversation cmd")
+	}
+	m2, _ := m.Update(cmd())
+	a2 := m2.(App)
+	if !a2.cmail.IsShowingDetail() {
+		t.Fatal("expected cmail to land directly in detail mode")
+	}
+
+	a3, _ := activateScreen(a2, screenCMail) // simulates pressing the C-Mail tab instead of Esc
+	if a3.cmail.IsShowingDetail() {
+		t.Error("expected manual tab re-entry to drop back to the conversation list, not stay in the deep-linked conversation")
+	}
+}
+
 func TestHandleCMail_NormalTabEntry_EscStillDropsToList(t *testing.T) {
 	a := loggedInApp()
 	a, _ = activateScreen(a, screenCMail) // ordinary tab/leader-key entry
@@ -1154,6 +1178,29 @@ func TestHandleChatrooms_OpenRoomMsg_EscReturnsToOrigin(t *testing.T) {
 	a3 := m3.(App)
 	if a3.active != screenNotifications {
 		t.Errorf("expected esc to return to screenNotifications (the deep-link origin), got %v", a3.active)
+	}
+}
+
+// TestHandleChatrooms_ManualTabReentry_ResetsToList guards against a bug
+// where switching to the Chatrooms tab manually (key "4", tab bar, leader
+// chord) while a chat_mention deep link had left it in detail mode failed
+// to drop back to the room list — only ESC did, because activateScreen
+// cleared canGoBack without ever resetting mode.
+func TestHandleChatrooms_ManualTabReentry_ResetsToList(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenNotifications
+
+	m, _, _ := a.handleChatrooms(screens.OpenRoomMsg{RoomSlug: "sprawl", NotifID: "n1"})
+	rooms := []model.Room{{ID: "r1", Slug: "sprawl", Name: "Sprawl"}}
+	m2, _ := m.Update(roomsLoadedMsg{rooms: rooms})
+	a2 := m2.(App)
+	if !a2.chatrooms.IsShowingDetail() {
+		t.Fatal("expected chatrooms to auto-enter detail mode for the pending slug")
+	}
+
+	a3, _ := activateScreen(a2, screenChatrooms) // simulates pressing "4" instead of Esc
+	if a3.chatrooms.IsShowingDetail() {
+		t.Error("expected manual tab re-entry to drop back to the room list, not stay in the deep-linked room")
 	}
 }
 
