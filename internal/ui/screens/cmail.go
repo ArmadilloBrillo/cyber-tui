@@ -39,7 +39,7 @@ const (
 	dmTypingDefaultStaleAfterMs = 9000
 	dmTypingIdleThreshold       = 2500 * time.Millisecond
 	dmTypingIdleCheckInterval   = 500 * time.Millisecond
-	dmTypingAnimInterval        = 500 * time.Millisecond // one dot per tick; 1.5s full "." → ".." → "..." cycle
+	dmTypingAnimInterval        = 500 * time.Millisecond // one dot per tick; 2s full "" → "." → ".." → "..." cycle
 )
 
 // dmSubscription holds the live RTDB channel and its cancellation function.
@@ -1031,7 +1031,7 @@ func (m CMailModel) PrependMessages(convID string, msgs []model.Message) CMailMo
 	return m
 }
 
-// typingIndicator returns " is typing" plus an animated 1-3 dot count if the
+// typingIndicator returns " is typing" plus an animated 0-3 dot count if the
 // other participant currently has a fresh entry in m.typingUsers, else "".
 // The username itself is left out — it's appended right after the header's
 // own "@other" title, so together they read as one sentence.
@@ -1042,7 +1042,7 @@ func (m CMailModel) typingIndicator() string {
 	other := m.otherParticipant(*m.activeConv)
 	for _, u := range m.typingUsers {
 		if u.Username == other {
-			dots := strings.Repeat(".", m.typingAnimFrame%3+1)
+			dots := strings.Repeat(".", m.typingAnimFrame%4)
 			return theme.Subtle.Render(" is typing" + dots)
 		}
 	}

@@ -326,7 +326,7 @@ func TestTypingReceived_ShowsIndicatorForOtherParticipant(t *testing.T) {
 
 	m, _ = m.Update(dmTypingReceivedMsg{users: []model.TypingUser{{UserID: "u2", Username: "trinity", Timestamp: time.Now()}}})
 	view := m.View()
-	if !strings.Contains(view, "@trinity is typing.") {
+	if !strings.Contains(view, "@trinity is typing") {
 		t.Errorf("expected the header to read '@trinity is typing...', got: %q", view)
 	}
 	if strings.Count(view, "trinity") != 1 {
@@ -367,11 +367,11 @@ func TestTypingAnimTick_StaleConvIDIgnored(t *testing.T) {
 	}
 }
 
-func TestTypingIndicator_DotsCycleThroughOneTwoThree(t *testing.T) {
+func TestTypingIndicator_DotsCycleThroughZeroOneTwoThree(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
 	m.typingUsers = []model.TypingUser{{UserID: "u2", Username: "trinity", Timestamp: time.Now()}}
 
-	want := []int{1, 2, 3, 1, 2, 3}
+	want := []int{0, 1, 2, 3, 0, 1, 2, 3}
 	for frame, wantDots := range want {
 		m.typingAnimFrame = frame
 		got := strings.Count(m.typingIndicator(), ".")
