@@ -460,19 +460,18 @@ func TestHandleKeys_CtrlSlash_OpensSearchWhileChatroomsInputFocused(t *testing.T
 	}
 }
 
-// TestHandleKeys_CtrlSlashAsNUL_OpensSearchWhileChatroomsInputFocused covers
-// the second real-world encoding of a physical ctrl+/ keystroke: Git
-// Bash/MinTTY on Windows sends a literal NUL byte instead of 0x1F, confirmed
-// via CYBERSPACE_DEBUG_KEYS logging. Bubbletea has no name for that byte, so
-// it arrives as an ordinary KeyRunes key whose String() is "\x00".
-func TestHandleKeys_CtrlSlashAsNUL_OpensSearchWhileChatroomsInputFocused(t *testing.T) {
+// TestHandleKeys_NUL_NotConsumed_WhileChatroomsInputFocused guards a
+// deliberate decision: some terminals (e.g. Git Bash/MinTTY) send a literal
+// NUL byte for ctrl+/ instead of the usual 0x1F, but ctrl+space, ctrl+2, and
+// ctrl+@ conventionally send that identical NUL byte too — genuinely
+// indistinguishable from ctrl+/ at that point. Accepting NUL as a ctrl+/
+// twin was tried and reverted because it risked misfiring on those unrelated
+// keystrokes; ctrl+/ simply doesn't work on terminals that collapse to NUL.
+func TestHandleKeys_NUL_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
-	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}})
-	if !consumed {
-		t.Error("expected the NUL-byte encoding of ctrl+/ to be consumed even while chatrooms input is focused")
-	}
-	if a2.active != screenSearch {
-		t.Errorf("expected the NUL-byte encoding of ctrl+/ to open Search, got %v", a2.active)
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}})
+	if consumed {
+		t.Error("expected a literal NUL byte to NOT be consumed — it's ambiguous with ctrl+space/ctrl+2/ctrl+@, not just ctrl+/")
 	}
 }
 
