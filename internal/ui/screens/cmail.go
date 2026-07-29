@@ -797,7 +797,32 @@ func (m CMailModel) View() string {
 		case m.reconnectFailed:
 			header += theme.Error.Render("  (live updates lost)")
 		}
-		inputBox := theme.ActiveBorder.Render(m.input.View())
+		// textinput.View()'s empty-input placeholder path (placeholderView(),
+		// internal) totals its render at exactly Width, unlike the
+		// typed-content path — Width+len(Prompt)+1 (the whole reason
+		// input.Width is pre-reduced by that amount; see the matching
+		// comment on input.Width above). Hand-building this state, mirroring
+		// the same fix in chatrooms.go, guarantees the same total without
+		// needing to separately verify a second internal quirk.
+		var inputContent string
+		if m.input.Value() == "" {
+			promptView := m.input.PromptStyle.Render(m.input.Prompt)
+			cur := m.input.Cursor
+			placeholder := []rune(m.input.Placeholder)
+			cur.TextStyle = m.input.PlaceholderStyle
+			var rest string
+			if len(placeholder) > 0 {
+				cur.SetChar(string(placeholder[0]))
+				rest = m.input.PlaceholderStyle.Inline(true).Render(string(placeholder[1:]))
+			} else {
+				cur.SetChar(" ")
+			}
+			pad := max(0, m.input.Width-lipgloss.Width(rest))
+			inputContent = promptView + cur.View() + rest + strings.Repeat(" ", pad)
+		} else {
+			inputContent = m.input.View()
+		}
+		inputBox := theme.ActiveBorder.Render(inputContent)
 		divider := theme.Subtle.Render(strings.Repeat("─", max(m.width, 0)))
 		return lipgloss.JoinVertical(lipgloss.Left, header, divider, m.viewport.View(), inputBox)
 	default: // cmailModeList

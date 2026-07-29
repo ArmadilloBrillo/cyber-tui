@@ -290,7 +290,12 @@ func TestDetailView_HeaderHasDividerBeforeMessages(t *testing.T) {
 // inputBoxLines extracts the detail view's bordered input box (top/content/
 // bottom) from a full View() render, located by its rounded-border corners
 // — the only box in this view that uses them (the users panel only has a
-// plain "│" separator column).
+// plain "│" separator column). Each line is trimmed of trailing spaces:
+// lipgloss.JoinVertical pads every line in the block to the width of the
+// widest one (here, the message-area+panel row), so the raw line can carry
+// extra trailing padding that isn't part of the input box itself — right
+// TrimRight is safe because a box line's own rightmost character is always
+// its closing border glyph ("╮"/"│"/"╯"), never a space.
 func inputBoxLines(t *testing.T, view string) (top, content, bottom string) {
 	t.Helper()
 	lines := strings.Split(view, "\n")
@@ -306,7 +311,7 @@ func inputBoxLines(t *testing.T, view string) (top, content, bottom string) {
 	if topIdx == -1 || botIdx != topIdx+2 {
 		t.Fatalf("could not locate the 3-line bordered input box in the view: %q", lines)
 	}
-	return lines[topIdx], lines[topIdx+1], lines[botIdx]
+	return strings.TrimRight(lines[topIdx], " "), strings.TrimRight(lines[topIdx+1], " "), strings.TrimRight(lines[botIdx], " ")
 }
 
 // TestInputBox_WidthConstantBetweenEmptyAndTyped is a regression test for a

@@ -1231,6 +1231,30 @@ func (m ChatroomsModel) View() string {
 			// disappears between frames.
 			pad := max(0, m.input.Width-valWidth-lipgloss.Width(ghost)+1)
 			inputContent = promptView + textView + cur.View() + rest + strings.Repeat(" ", pad)
+		} else if m.input.Value() == "" {
+			// textinput.View()'s empty-input placeholder path
+			// (placeholderView(), internal) totals its render at exactly
+			// Width, unlike the typed-content path above (Width+len(Prompt)+1
+			// — the whole reason input.Width is pre-reduced by that amount).
+			// Hand-building this state too, the same way the ghost branch
+			// above does, guarantees the same total without needing to
+			// separately verify a second internal quirk: matching
+			// PromptWidth+1+(rest+pad) to the typed path's confirmed-correct
+			// total just requires rest+pad to sum to input.Width exactly,
+			// which the pad line below does by definition.
+			promptView := m.input.PromptStyle.Render(m.input.Prompt)
+			cur := m.input.Cursor
+			placeholder := []rune(m.input.Placeholder)
+			cur.TextStyle = m.input.PlaceholderStyle
+			var rest string
+			if len(placeholder) > 0 {
+				cur.SetChar(string(placeholder[0]))
+				rest = m.input.PlaceholderStyle.Inline(true).Render(string(placeholder[1:]))
+			} else {
+				cur.SetChar(" ")
+			}
+			pad := max(0, m.input.Width-lipgloss.Width(rest))
+			inputContent = promptView + cur.View() + rest + strings.Repeat(" ", pad)
 		} else {
 			inputContent = m.input.View()
 		}
