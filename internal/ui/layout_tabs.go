@@ -121,6 +121,17 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 			a, cmd = navigateTabBy(a, +1)
 			return a, cmd, true
 		}
+	case "ctrl+left":
+		// Unlike plain "left", not gated on focus == focusMenu: this is the
+		// ctrl-twin that reaches tab-cycling from CMail/CIRC detail mode,
+		// where the compose input holds focus for the entire view.
+		var cmd tea.Cmd
+		a, cmd = navigateTabBy(a, -1)
+		return a, cmd, true
+	case "ctrl+right":
+		var cmd tea.Cmd
+		a, cmd = navigateTabBy(a, +1)
+		return a, cmd, true
 	}
 	return a, nil, false
 }
@@ -387,13 +398,15 @@ func (l TabsLayout) screenHints(a App) []hint {
 	case screenChatrooms:
 		if a.chatrooms.IsShowingDetail() {
 			// '?' (help) is unreachable while the compose input is focused
-			// here, same as plain 'o' — omit "more" and surface ctrl+o instead.
-			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"esc", "back"}}
+			// here, same as plain 'o' — omit "more" and surface the ctrl-twins
+			// that reach through instead (renderStatusBar already trims this
+			// list on narrow terminals, so listing all of them here is safe).
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"ctrl+q", "quit"}, {"ctrl+t", "theme"}, {"ctrl+/", "search"}, {"ctrl+←→", "tabs"}, {"esc", "back"}}
 		}
 		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	case screenCMail:
 		if a.cmail.IsShowingDetail() {
-			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"esc", "back"}}
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"ctrl+q", "quit"}, {"ctrl+t", "theme"}, {"ctrl+/", "search"}, {"ctrl+←→", "tabs"}, {"esc", "back"}}
 		}
 		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	}

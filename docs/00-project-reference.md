@@ -748,13 +748,19 @@ Other global keys:
 | Key | Action |
 |---|---|
 | `←` / `→` | Cycle tabs left / right (does not include Search, which is hidden — see above) |
+| `ctrl+←` / `ctrl+→` | Same as `←`/`→`, but reaches the handler even while a compose input is focused (Tabs layout only — Miller layout's `←`/`→` mean pane navigation instead, so this ctrl-twin is not offered there) |
 | `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail) |
+| `ctrl+/` | Same as `/`, but reaches the handler even while a compose input is focused. Note: the physical `ctrl+/` keystroke is reported by bubbletea as `KeyType` `ctrl+_` (the name of the 0x1F byte terminals actually send for it), not literally `"ctrl+/"` — matched on that string in `app.go` |
 | `v` | Toggle dense / relaxed display |
-| `?` | Help modal |
+| `?` | Help modal (no ctrl-twin exists — `ctrl+?` is indistinguishable from `ctrl+backspace`/DEL in most terminals) |
 | `t` | Theme picker |
+| `ctrl+t` | Same as `t`, but reaches the handler even while a compose input is focused |
 | `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused |
 | `ctrl+o` | Same as `o`, but reaches the handler even while a compose input is focused — the only way to open links in CIRC/C-Mail, since their input is focused for the entire detail view, not just a transient compose sub-mode |
 | `q` / `ctrl+c` | Quit |
+| `ctrl+q` | Same as `q`, but reaches the handler even while a compose input is focused (`ctrl+c` already worked as a hard escape hatch; `ctrl+q` matches the bare-key mnemonic) |
+
+The four `ctrl+`-prefixed rows above (`ctrl+q`, `ctrl+t`, `ctrl+/`, `ctrl+←`/`ctrl+→`) exist specifically so CIRC/C-Mail's detail view — where the compose input holds focus for the screen's entire lifetime, not just a transient sub-mode — can still reach these global shortcuts; see `activeScreenHasFocusedInput()`'s exemption list in `app.go`.
 
 Timezone is set from the Settings screen's own field (`tab`/`shift+tab` to
 cycle), not a global shortcut.

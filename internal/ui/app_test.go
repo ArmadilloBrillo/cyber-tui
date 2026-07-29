@@ -398,6 +398,100 @@ func TestHandleKeys_O_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
 	}
 }
 
+// --- Ctrl-twins for CMail/CIRC detail mode: ctrl+q, ctrl+t, ctrl+/, ctrl+left/right ---
+
+func TestHandleKeys_CtrlQ_QuitsWhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	_, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if !consumed {
+		t.Error("expected ctrl+q to be consumed even while chatrooms input is focused")
+	}
+	if cmd == nil {
+		t.Error("expected ctrl+q to fire a quit command")
+	}
+}
+
+func TestHandleKeys_Q_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	_, _, consumed := a.handleKeys(keyMsg("q"))
+	if consumed {
+		t.Error("expected plain 'q' to NOT be consumed while chatrooms input is focused — it must still type into the compose box")
+	}
+}
+
+func TestHandleKeys_CtrlT_OpensThemePickerWhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlT})
+	if !consumed {
+		t.Error("expected ctrl+t to be consumed even while chatrooms input is focused")
+	}
+	if !a2.themePickerOpen {
+		t.Error("expected ctrl+t to open the theme picker")
+	}
+}
+
+func TestHandleKeys_T_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	a2, _, consumed := a.handleKeys(keyMsg("t"))
+	if consumed {
+		t.Error("expected plain 't' to NOT be consumed while chatrooms input is focused — it must still type into the compose box")
+	}
+	if a2.themePickerOpen {
+		t.Error("plain 't' must not open the theme picker while chatting")
+	}
+}
+
+// TestHandleKeys_CtrlSlash_OpensSearchWhileChatroomsInputFocused: bubbletea
+// reports the physical ctrl+/ keystroke as KeyType keyUS ("ctrl+_" as a
+// string), the name of the 0x1F byte terminals actually send for it — not
+// literally "ctrl+/". The status-bar hint still displays "ctrl+/" since
+// that's what the user physically presses.
+func TestHandleKeys_CtrlSlash_OpensSearchWhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlUnderscore})
+	if !consumed {
+		t.Error("expected ctrl+/ to be consumed even while chatrooms input is focused")
+	}
+	if a2.active != screenSearch {
+		t.Errorf("expected ctrl+/ to open Search, got %v", a2.active)
+	}
+}
+
+func TestHandleKeys_CtrlLeft_CyclesTabsWhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlLeft})
+	if !consumed {
+		t.Error("expected ctrl+left to be consumed even while chatrooms input is focused")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected ctrl+left to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_CtrlRight_CyclesTabsWhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlRight})
+	if !consumed {
+		t.Error("expected ctrl+right to be consumed even while chatrooms input is focused")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected ctrl+right to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_Left_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if consumed {
+		t.Error("expected plain left arrow to NOT be consumed while chatrooms input is focused")
+	}
+}
+
 // --- Search shortcut ('/') ---
 
 func TestHandleKeys_Slash_OpensSearch(t *testing.T) {
@@ -733,6 +827,34 @@ func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
 	hints := TabsLayout{}.screenHints(a)
 	if !hasHint(hints, "?") {
 		t.Error("expected '?' hint in c-mail list mode — no input is focused there")
+	}
+}
+
+func TestScreenHints_ChatroomsDetail_HasCtrlTwins(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	hints := TabsLayout{}.screenHints(a)
+	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+/", "ctrl+←→"} {
+		if !hasHint(hints, key) {
+			t.Errorf("expected a %q hint in chatrooms detail mode", key)
+		}
+	}
+}
+
+func TestScreenHints_CMailDetail_HasCtrlTwins(t *testing.T) {
+	a := loggedInApp()
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	a.active = screenCMail
+
+	hints := TabsLayout{}.screenHints(a)
+	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+/", "ctrl+←→"} {
+		if !hasHint(hints, key) {
+			t.Errorf("expected a %q hint in c-mail detail mode", key)
+		}
 	}
 }
 

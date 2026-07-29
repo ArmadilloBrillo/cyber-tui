@@ -79,6 +79,10 @@ Full-width message history viewport + fixed compose input at bottom:
 | `↓` | Scroll message history down |
 | `Esc` | Return to list mode; cancel RTDB subscription — or, if this conversation was opened via a deep link (`c` from another screen, or a `dm_message` notification), leave C-Mail entirely and return to that origin screen instead |
 | `ctrl+o` | Open URLs/images from the loaded conversation. Plain `o` can't reach this here — the compose input is focused for the entire detail view, so `o` always types into the message instead; `ctrl+o` is exempted from the focused-input gate specifically for this. |
+| `ctrl+q` | Quit (same as global `q`) |
+| `ctrl+t` | Open theme picker (same as global `t`) |
+| `ctrl+/` | Jump to Search (same as global `/`) |
+| `ctrl+←` / `ctrl+→` | Cycle tabs (same as global `←`/`→`; Tabs layout only) |
 | all other | Forwarded to compose input (`j`/`k` type normally) |
 
 ---
