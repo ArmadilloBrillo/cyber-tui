@@ -56,9 +56,10 @@ func (c *Client) Subscribe(ctx, path string, params) <-chan SSEEvent
 
 | Operation | Path | Notes |
 |---|---|---|
-| Live stream | `/dm_messages/<conversationId>` (SSE) | Only RTDB path still in use |
+| Live stream | `/dm_messages/<conversationId>` (SSE) | New messages |
+| Typing indicator | `/dm_presence/<conversationId>` (SSE) | Who's currently typing; same full-snapshot-per-event shape as CIRC's `/chat_presence/<roomId>` |
 
-All other C-Mail operations (list conversations, load history, send message, mark read) are now handled by the REST API at `/v1/cmail/*`. See `docs/08-cmail.md` for the full endpoint table.
+All other C-Mail operations (list conversations, load history, send message, mark read, announce/clear typing) are handled by the REST API at `/v1/cmail/*`. See `docs/08-cmail.md` for the full endpoint table.
 
 ---
 
@@ -79,6 +80,19 @@ All other C-Mail operations (list conversations, load history, send message, mar
 ```
 
 The initial SSE event has `path: "/"` and carries the full snapshot. This is skipped by the translator — history is loaded separately via `GetMessages`.
+
+**Typing wire format** — one entry in `/dm_presence/<conversationId>`, keyed by userId:
+```json
+{
+  "path": "/uid-abc",
+  "data": {
+    "username":  "molly",
+    "typing":    true,
+    "timestamp": 1700000001000
+  }
+}
+```
+Unlike the message stream, the initial `path: "/"` snapshot **is** consumed (not skipped) — it's the only way to know who's typing when the conversation is first opened. An entry is shown only while `typing == true` and `timestamp` is newer than `staleAfterMs` (9000ms); since a flag going stale produces no RTDB event of its own, the client re-filters on both every event and a 5s ticker — identical caveat to CIRC's `chat_presence` handling.
 
 ---
 
