@@ -1151,7 +1151,17 @@ func (m ChatroomsModel) View() string {
 		case m.reconnectFailed:
 			header += theme.Error.Render("  (live updates lost)")
 		}
-		inputBox := theme.ActiveBorder.Render(m.input.View() + m.mentionGhostText())
+		// textinput.View() pads its own output with trailing spaces out to
+		// its configured Width (see bubbles/textinput.go), so appending the
+		// ghost text after it would land far past the visible cursor.
+		// Shrink a copy's Width by the ghost's rendered width first, so its
+		// padding stops short and leaves exactly enough room.
+		ghost := m.mentionGhostText()
+		input := m.input
+		if ghost != "" {
+			input.Width = max(0, input.Width-lipgloss.Width(ghost))
+		}
+		inputBox := theme.ActiveBorder.Render(input.View() + ghost)
 
 		_, usersW := m.panelWidths()
 		messageArea := m.viewport.View()

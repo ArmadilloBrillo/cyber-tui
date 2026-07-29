@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
@@ -482,5 +483,42 @@ func TestMentionGhostText(t *testing.T) {
 				t.Errorf("mentionGhostText() = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// TestMentionGhostText_DoesNotWidenInputBox is a regression test for a bug
+// where the ghost text was appended after textinput.View()'s own padding
+// (which fills out to its configured Width), landing far past the visible
+// cursor instead of right after it — effectively invisible. The fix shrinks
+// a copy of the input's Width by the ghost's rendered width before calling
+// View(), so the combined content renders at the same total width as the
+// unmodified input would with no ghost at all. (That baseline isn't simply
+// input.Width itself — textinput.View() adds len(Prompt) plus one more
+// column for the phantom end-of-line cursor glyph on top of the padding it
+// computes from Width — so the baseline has to be measured, not assumed.)
+// This duplicates View()'s construction rather than measuring through the
+// full rendered View(), whose lines get padded to the width of the widest
+// line in the block — the message-area+panel row — by lipgloss.JoinVertical,
+// which would contaminate a width measurement taken that way.
+func TestMentionGhostText_DoesNotWidenInputBox(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}}
+	m = setInput(m, "hey @al", 7)
+
+	baseline := lipgloss.Width(m.input.View()) // no ghost, unshrunk Width
+
+	ghost := m.mentionGhostText()
+	if ghost == "" {
+		t.Fatal("expected a ghost text to be present for this setup")
+	}
+	input := m.input
+	input.Width = max(0, input.Width-lipgloss.Width(ghost))
+	content := input.View() + ghost
+
+	if w := lipgloss.Width(content); w != baseline {
+		t.Errorf("input+ghost width = %d, want %d (same as with no ghost at all) — ghost text must not widen the box", w, baseline)
+	}
+	if !strings.Contains(content, "ice") {
+		t.Errorf("expected ghost text %q in the rendered content, got: %q", "ice", content)
 	}
 }
