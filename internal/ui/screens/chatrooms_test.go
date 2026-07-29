@@ -257,3 +257,27 @@ func TestPresenceStreamClosed_StaleRoomIDIgnored(t *testing.T) {
 		t.Error("expected no command for a stale stream-closed event")
 	}
 }
+
+// --- detail view header ---
+
+// TestDetailView_HeaderHasDividerBeforeMessages guards against the divider
+// row (added so the header doesn't float with no visual bottom edge, unlike
+// every other piece of chrome in this view) being dropped in a future edit.
+func TestDetailView_HeaderHasDividerBeforeMessages(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{{From: model.User{Username: "alice"}, Body: "hi"}})
+
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected at least a header, divider, and message line, got %d lines: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "zion") {
+		t.Fatalf("expected line 0 to be the room header, got: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "─") {
+		t.Errorf("expected line 1 to be the divider rule, got: %q", lines[1])
+	}
+	if strings.Contains(lines[0], "─") {
+		t.Errorf("did not expect the divider character on the header line itself, got: %q", lines[0])
+	}
+}

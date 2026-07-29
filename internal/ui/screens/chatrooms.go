@@ -26,7 +26,7 @@ const (
 
 // Rows consumed by the detail view's header and input box (outside the message viewport).
 const (
-	chatroomDetailHeaderRows = 1 // "Room Name  #slug" header
+	chatroomDetailHeaderRows = 2 // "Room Name  #slug  ·  N online" header + divider rule
 	chatroomInputRows        = 3 // bordered textinput: 1 content + 2 border rows
 	chatroomDetailChrome     = chatroomDetailHeaderRows + chatroomInputRows
 )
@@ -1031,7 +1031,8 @@ func (m ChatroomsModel) View() string {
 			sep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", m.viewport.Height), "\n"))
 			messageArea = lipgloss.JoinHorizontal(lipgloss.Top, messageArea, sep, panel)
 		}
-		return lipgloss.JoinVertical(lipgloss.Left, header, messageArea, inputBox)
+		divider := theme.Subtle.Render(strings.Repeat("─", max(m.width, 0)))
+		return lipgloss.JoinVertical(lipgloss.Left, header, divider, messageArea, inputBox)
 	default: // chatroomModeList
 		if !m.ready {
 			return theme.Subtle.Render("loading rooms…")
