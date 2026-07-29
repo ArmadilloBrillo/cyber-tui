@@ -450,3 +450,37 @@ func TestMentionTab_NoOpWithNoMatches(t *testing.T) {
 		t.Error("expected no mentionCycle when nothing matches")
 	}
 }
+
+// --- mentionGhostText ---
+
+func TestMentionGhostText(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}, {Username: "bob"}}
+
+	cases := []struct {
+		name   string
+		value  string
+		cursor int
+		want   string
+	}{
+		{"bare @ previews the first online username", "@", 1, "alice"},
+		{"partial query previews just the remainder", "hey @al", 7, "ice"},
+		{"cursor not at the end is unambiguous-placement limitation", "hey @al there", 7, ""},
+		{"no matches", "hey @zzz", 8, ""},
+		{"fully typed name has nothing left to preview", "hey @alice", 10, ""},
+		{"no mention in progress", "hello", 5, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := setInput(m, c.value, c.cursor)
+			got := m.mentionGhostText()
+			want := c.want
+			if want != "" {
+				want = theme.Subtle.Render(want)
+			}
+			if got != want {
+				t.Errorf("mentionGhostText() = %q, want %q", got, want)
+			}
+		})
+	}
+}

@@ -1058,6 +1058,35 @@ func spliceMention(value string, atPos, cursor int, username string) (newValue s
 	return string(out), atPos + len(replacement)
 }
 
+// mentionGhostText returns the dim, uncommitted remainder of the top
+// mention candidate for display right after the cursor — only when the
+// mention token reaches the very end of the input. That's the only place
+// ghost text can render unambiguously: with trailing text after the token
+// ("hey @al there"), there's no sensible place to draw the preview without
+// overlapping what's already typed. Tab-cycling still works identically in
+// that case — it just won't show this particular hint.
+func (m ChatroomsModel) mentionGhostText() string {
+	value := []rune(m.input.Value())
+	cursor := m.input.Position()
+	if cursor != len(value) {
+		return ""
+	}
+	query, _, ok := mentionQueryAt(m.input.Value(), cursor)
+	if !ok {
+		return ""
+	}
+	matches := matchMentionCandidates(m.roomUsers, query)
+	if len(matches) == 0 {
+		return ""
+	}
+	top := []rune(matches[0].Username)
+	q := []rune(query)
+	if len(top) <= len(q) {
+		return "" // already fully typed/matched — nothing left to preview
+	}
+	return theme.Subtle.Render(string(top[len(q):]))
+}
+
 // sortRoomUsers returns a copy of users ordered admins-first, then
 // alphabetically (case-insensitive) within each block.
 func sortRoomUsers(users []model.RoomUser) []model.RoomUser {
@@ -1122,7 +1151,7 @@ func (m ChatroomsModel) View() string {
 		case m.reconnectFailed:
 			header += theme.Error.Render("  (live updates lost)")
 		}
-		inputBox := theme.ActiveBorder.Render(m.input.View())
+		inputBox := theme.ActiveBorder.Render(m.input.View() + m.mentionGhostText())
 
 		_, usersW := m.panelWidths()
 		messageArea := m.viewport.View()
