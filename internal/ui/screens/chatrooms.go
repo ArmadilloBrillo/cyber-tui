@@ -253,6 +253,15 @@ func (m ChatroomsModel) InputFocused() bool { return m.mode == chatroomModeDetai
 // IsShowingDetail reports whether the detail view is active.
 func (m ChatroomsModel) IsShowingDetail() bool { return m.mode == chatroomModeDetail }
 
+// ActiveRoomSlug returns the slug of the room currently shown in detail view,
+// or "" if no room is open.
+func (m ChatroomsModel) ActiveRoomSlug() string {
+	if m.mode != chatroomModeDetail || m.activeRoom == nil {
+		return ""
+	}
+	return m.activeRoom.Slug
+}
+
 // GetFocusedURLs returns URLs found across all currently loaded messages in
 // the open room, for the 'o' / ctrl+o open-link shortcut. Reachable via
 // ctrl+o even while the compose input is focused, which it always is in

@@ -102,6 +102,12 @@ Pressing `enter` on `poke`, `new_follower`, or `unfollowed` notifications (or an
 
 Both deep-links record Notifications as the return screen (`App.chatroomsReturn` / `App.cmailReturn`) and mark the destination model's `canGoBack = true`, so pressing `Esc` from the room/conversation returns straight back to Notifications instead of dropping to Chatrooms'/C-Mail's own list — see `docs/33-circ.md` and `docs/08-cmail.md`.
 
+### chat_mention suppression for the room currently open
+
+The API has no concept of room presence — there's no join/leave endpoint, so it generates `chat_mention` unconditionally, even for a user actively reading the room the mention happened in (see "No online-users list" in `docs/33-circ.md`). Since that's redundant (the message is already on screen), the client auto-suppresses it: any unread `chat_mention` whose `RoomSlug` matches the room currently open in Chatrooms detail view is marked read (both locally and via `MarkNotificationRead`) as soon as it's fetched, so it never bumps the tab badge or appears unread in the list (`App.suppressActiveRoomMentions` in `internal/ui/app.go`).
+
+"Currently open" requires both: Chatrooms is the foreground screen (`App.active == screenChatrooms`) and that exact room is in detail view (`ChatroomsModel.ActiveRoomSlug()`). Switching to any other tab, or pressing `Esc` back to the room list, immediately stops the suppression for that room — mentions notify normally again from that point on.
+
 ---
 
 ## Notification Types
