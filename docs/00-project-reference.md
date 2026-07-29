@@ -750,7 +750,7 @@ Other global keys:
 | `←` / `→` | Cycle tabs left / right (does not include Search, which is hidden — see above) |
 | `ctrl+←` / `ctrl+→` | Same as `←`/`→`, but reaches the handler even while a compose input is focused (Tabs layout only — Miller layout's `←`/`→` mean pane navigation instead, so this ctrl-twin is not offered there) |
 | `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail) |
-| `ctrl+/` | Same as `/`, but reaches the handler even while a compose input is focused. Note: the physical `ctrl+/` keystroke is reported by bubbletea as `KeyType` `ctrl+_` (the name of the 0x1F byte terminals actually send for it), not literally `"ctrl+/"` — matched on that string in `app.go` |
+| `ctrl+/` | Same as `/`, but reaches the handler even while a compose input is focused. The physical `ctrl+/` keystroke isn't one universal byte: most terminals send 0x1F (bubbletea names it `"ctrl+_"`), but Git Bash/MinTTY on Windows sends a literal NUL byte instead, which bubbletea has no name for — it arrives as an ordinary `KeyRunes` key whose `.String()` is `"\x00"`. Both are matched in `app.go` (confirmed via `CYBERSPACE_DEBUG_KEYS`, see `docs/09-rtdb-cmail.md`). Caveat: `ctrl+space`, `ctrl+2`, and `ctrl+@` conventionally send that same NUL byte on most terminals too, so they're indistinguishable from `ctrl+/` at the byte level — none of the three are bound to anything else today, so this is a latent conflict rather than a live one |
 | `v` | Toggle dense / relaxed display |
 | `?` | Help modal (no ctrl-twin exists — `ctrl+?` is indistinguishable from `ctrl+backspace`/DEL in most terminals) |
 | `t` | Theme picker |

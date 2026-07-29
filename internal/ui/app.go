@@ -539,16 +539,25 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	// their bare key is unreachable while chatting (CIRC/C-Mail's compose
 	// input is focused for the entire detail view, not just a transient
 	// sub-mode like Feed's reply box): ctrl+o (open link), ctrl+q (quit),
-	// ctrl+t (theme picker), ctrl+/ (search — bubbletea reports the physical
-	// ctrl+/ keystroke as "ctrl+_", the name of the 0x1F byte terminals
-	// actually send for it, not literally "ctrl+/"), ctrl+left/right (cycle
-	// tabs).
+	// ctrl+t (theme picker), ctrl+/ (search), ctrl+left/right (cycle tabs).
+	// The physical ctrl+/ keystroke isn't sent as one universal byte: most
+	// terminals send 0x1F (bubbletea names it "ctrl+_"), but Git Bash/MinTTY
+	// on Windows sends a literal NUL byte instead — bubbletea has no name for
+	// that byte, so it comes through as an ordinary KeyRunes key whose
+	// .String() is the raw "\x00" (confirmed via CYBERSPACE_DEBUG_KEYS).
+	// Both are accepted so the shortcut works on either. Caveat: ctrl+space,
+	// ctrl+2, and ctrl+@ conventionally send that same NUL byte on most
+	// terminals too — genuinely indistinguishable from ctrl+/ once it's a
+	// single byte with no other terminal reliably distinguishing it. None of
+	// those three are bound to anything else today, so this is a latent
+	// conflict, not a live one — if any of them are ever bound to a shortcut,
+	// they'd also fire Search-jump under MinTTY.
 	if a.activeScreenHasFocusedInput() {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
 		}
 		switch m.String() {
-		case "ctrl+o", "ctrl+q", "ctrl+t", "ctrl+_", "ctrl+left", "ctrl+right":
+		case "ctrl+o", "ctrl+q", "ctrl+t", "ctrl+_", "\x00", "ctrl+left", "ctrl+right":
 			// fall through to the global switch below
 		default:
 			return a, nil, false // fall through to delegateUpdate
@@ -616,7 +625,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			app, cmd := a.handleOpenURL(a.getFocusedURLs())
 			return app, cmd, true
 		}
-	case "/", "ctrl+_": // ctrl+_ is bubbletea's name for the byte a physical ctrl+/ keystroke sends
+	case "/", "ctrl+_", "\x00": // ctrl+_ (0x1F) and "\x00" (NUL, e.g. Git Bash/MinTTY) are both bytes a physical ctrl+/ keystroke can send
 		if a.active != screenLogin {
 			if a.active != screenSearch {
 				a.searchReturn = a.active

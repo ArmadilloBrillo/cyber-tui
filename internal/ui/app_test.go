@@ -460,6 +460,22 @@ func TestHandleKeys_CtrlSlash_OpensSearchWhileChatroomsInputFocused(t *testing.T
 	}
 }
 
+// TestHandleKeys_CtrlSlashAsNUL_OpensSearchWhileChatroomsInputFocused covers
+// the second real-world encoding of a physical ctrl+/ keystroke: Git
+// Bash/MinTTY on Windows sends a literal NUL byte instead of 0x1F, confirmed
+// via CYBERSPACE_DEBUG_KEYS logging. Bubbletea has no name for that byte, so
+// it arrives as an ordinary KeyRunes key whose String() is "\x00".
+func TestHandleKeys_CtrlSlashAsNUL_OpensSearchWhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}})
+	if !consumed {
+		t.Error("expected the NUL-byte encoding of ctrl+/ to be consumed even while chatrooms input is focused")
+	}
+	if a2.active != screenSearch {
+		t.Errorf("expected the NUL-byte encoding of ctrl+/ to open Search, got %v", a2.active)
+	}
+}
+
 func TestHandleKeys_CtrlLeft_CyclesTabsWhileChatroomsInputFocused(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
 	before := tabIndexOf(a)
