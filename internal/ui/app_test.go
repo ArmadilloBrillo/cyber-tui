@@ -398,6 +398,114 @@ func TestHandleKeys_O_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
 	}
 }
 
+// --- Ctrl-twins for CMail/CIRC detail mode: ctrl+q, ctrl+t, ctrl+/, ctrl+left/right ---
+
+func TestHandleKeys_CtrlQ_QuitsWhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	_, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if !consumed {
+		t.Error("expected ctrl+q to be consumed even while chatrooms input is focused")
+	}
+	if cmd == nil {
+		t.Error("expected ctrl+q to fire a quit command")
+	}
+}
+
+func TestHandleKeys_Q_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	_, _, consumed := a.handleKeys(keyMsg("q"))
+	if consumed {
+		t.Error("expected plain 'q' to NOT be consumed while chatrooms input is focused — it must still type into the compose box")
+	}
+}
+
+func TestHandleKeys_CtrlT_OpensThemePickerWhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlT})
+	if !consumed {
+		t.Error("expected ctrl+t to be consumed even while chatrooms input is focused")
+	}
+	if !a2.themePickerOpen {
+		t.Error("expected ctrl+t to open the theme picker")
+	}
+}
+
+func TestHandleKeys_T_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	a2, _, consumed := a.handleKeys(keyMsg("t"))
+	if consumed {
+		t.Error("expected plain 't' to NOT be consumed while chatrooms input is focused — it must still type into the compose box")
+	}
+	if a2.themePickerOpen {
+		t.Error("plain 't' must not open the theme picker while chatting")
+	}
+}
+
+// TestHandleKeys_CtrlUnderscore_NotConsumed_WhileChatroomsInputFocused
+// guards a deliberate removal: ctrl+/ (bubbletea reports it as KeyType
+// keyUS, string "ctrl+_") was tried as a ctrl-twin for Search, then dropped
+// — the byte a physical ctrl+/ keystroke sends is inconsistent across
+// terminals (0x1F on most, a literal NUL on e.g. Git Bash/MinTTY, itself
+// ambiguous with ctrl+space/ctrl+2/ctrl+@), so there's no reliable encoding
+// to build a shortcut on.
+func TestHandleKeys_CtrlUnderscore_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlUnderscore})
+	if consumed {
+		t.Error("expected ctrl+/ (ctrl+_) to NOT be consumed — the shortcut was removed as unreliable across terminals")
+	}
+}
+
+// TestHandleKeys_NUL_NotConsumed_WhileChatroomsInputFocused guards a
+// deliberate decision: some terminals (e.g. Git Bash/MinTTY) send a literal
+// NUL byte for ctrl+/ instead of the usual 0x1F, but ctrl+space, ctrl+2, and
+// ctrl+@ conventionally send that identical NUL byte too — genuinely
+// indistinguishable from ctrl+/ at that point. Accepting NUL as a ctrl+/
+// twin was tried and reverted because it risked misfiring on those unrelated
+// keystrokes; ctrl+/ simply doesn't work on terminals that collapse to NUL.
+func TestHandleKeys_NUL_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}})
+	if consumed {
+		t.Error("expected a literal NUL byte to NOT be consumed — it's ambiguous with ctrl+space/ctrl+2/ctrl+@, not just ctrl+/")
+	}
+}
+
+func TestHandleKeys_CtrlLeft_CyclesTabsWhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlLeft})
+	if !consumed {
+		t.Error("expected ctrl+left to be consumed even while chatrooms input is focused")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected ctrl+left to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_CtrlRight_CyclesTabsWhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlRight})
+	if !consumed {
+		t.Error("expected ctrl+right to be consumed even while chatrooms input is focused")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected ctrl+right to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_Left_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if consumed {
+		t.Error("expected plain left arrow to NOT be consumed while chatrooms input is focused")
+	}
+}
+
 // --- Search shortcut ('/') ---
 
 func TestHandleKeys_Slash_OpensSearch(t *testing.T) {
@@ -733,6 +841,37 @@ func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
 	hints := TabsLayout{}.screenHints(a)
 	if !hasHint(hints, "?") {
 		t.Error("expected '?' hint in c-mail list mode — no input is focused there")
+	}
+}
+
+func TestScreenHints_ChatroomsDetail_HasCtrlTwins(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	hints := TabsLayout{}.screenHints(a)
+	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+←→"} {
+		if !hasHint(hints, key) {
+			t.Errorf("expected a %q hint in chatrooms detail mode", key)
+		}
+	}
+	if hasHint(hints, "ctrl+/") {
+		t.Error("expected no ctrl+/ hint — the shortcut was removed as unreliable across terminals")
+	}
+}
+
+func TestScreenHints_CMailDetail_HasCtrlTwins(t *testing.T) {
+	a := loggedInApp()
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	a.active = screenCMail
+
+	hints := TabsLayout{}.screenHints(a)
+	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+←→"} {
+		if !hasHint(hints, key) {
+			t.Errorf("expected a %q hint in c-mail detail mode", key)
+		}
 	}
 }
 

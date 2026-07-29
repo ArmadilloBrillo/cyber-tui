@@ -154,6 +154,15 @@ type RoomUser struct {
 	LastSeen    time.Time
 }
 
+// TypingUser is a single entry in a C-Mail conversation's typing indicator —
+// from the dm_presence RTDB stream. Expires fast (staleAfterMs ~9s) rather
+// than tracking long-lived presence like RoomUser.
+type TypingUser struct {
+	UserID    string
+	Username  string
+	Timestamp time.Time
+}
+
 // NotificationPrefs maps to the notifications sub-object in GET/PATCH /v1/settings.
 type NotificationPrefs struct {
 	Bookmark bool

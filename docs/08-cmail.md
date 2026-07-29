@@ -56,6 +56,8 @@ Full-width message history viewport + fixed compose input at bottom:
 
 `/me` and other emotes set an undocumented `isAction` field on the message, discovered via live testing against CIRC (parsed defensively for C-Mail too, but not yet confirmed live there — see `docs/33-circ.md`). `model.Message.IsAction` messages render as `* username body *` (`renderActionLine` in `render.go`) instead of the usual bordered bubble — same classic-IRC treatment as CIRC.
 
+**Typing indicator**: while the compose input is non-empty, the client announces "typing" (`POST .../typing`) and re-announces every `heartbeatMs` (3s, from the response) until the input goes idle for 2.5s or the input is emptied (either clears immediately via `DELETE .../typing`) or a message is sent (the server auto-clears on send, so no explicit clear call is made). Simultaneously, opening a conversation subscribes to the other participant's live typing status (`dm_presence/<conversationId>` RTDB node); when fresh, ` is typing` plus an animated dot count is appended right after the header's `@other` title, reading as one sentence: `@other is typing...` (Subtle style). The dots cycle no-dots → `.` → `..` → `...` on a 500ms tick (`typingAnimTickMsg`/`scheduleTypingAnimCmd`), free-running for as long as the conversation is open. Shown in the detail header only — no list-mode badge.
+
 ---
 
 ## Key Bindings
@@ -77,6 +79,9 @@ Full-width message history viewport + fixed compose input at bottom:
 | `↓` | Scroll message history down |
 | `Esc` | Return to list mode; cancel RTDB subscription — or, if this conversation was opened via a deep link (`c` from another screen, or a `dm_message` notification), leave C-Mail entirely and return to that origin screen instead |
 | `ctrl+o` | Open URLs/images from the loaded conversation. Plain `o` can't reach this here — the compose input is focused for the entire detail view, so `o` always types into the message instead; `ctrl+o` is exempted from the focused-input gate specifically for this. |
+| `ctrl+q` | Quit (same as global `q`) |
+| `ctrl+t` | Open theme picker (same as global `t`) |
+| `ctrl+←` / `ctrl+→` | Cycle tabs (same as global `←`/`→`; Tabs layout only) |
 | all other | Forwarded to compose input (`j`/`k` type normally) |
 
 ---
@@ -117,10 +122,12 @@ C-Mail uses a hybrid architecture: REST for listing, history, and sending; Fireb
 | `POST` | `/v1/cmail` | Start or return an existing conversation (body: `{"recipientUsername": "..."}`) |
 | `POST` | `/v1/cmail/:conversationId` | Send a message (body: `{"content": "..."}`) |
 | `POST` | `/v1/cmail/:conversationId/read` | Mark conversation read (resets unread count) |
+| `POST` | `/v1/cmail/:conversationId/typing` | Announce "typing"; returns `{heartbeatMs, staleAfterMs}` (3000/9000) to honor |
+| `DELETE` | `/v1/cmail/:conversationId/typing` | Clear typing status immediately |
 
 **Notes:**
 - `POST /v1/cmail` is idempotent — returns 200 for an existing conversation, 201 for a new one.
-- Rate limits: 15 sends/min, 300/day, 150/hour; 5 start/min, 50/day, 30/hour; 60 mark-read/min.
+- Rate limits: 15 sends/min, 300/day, 150/hour; 5 start/min, 50/day, 30/hour; 60 mark-read/min; 45 typing on/off per min.
 - Blocked in either direction returns 403.
 
 ### RTDB SSE Subscription
@@ -150,6 +157,9 @@ The subscription is opened when a conversation is selected (Enter in list mode) 
 | `StartConversation` | `(recipientUsername string) (model.Conversation, error)` | POST to REST; idempotent |
 | `MarkCMailRead` | `(convID string) error` | POST to REST; called when a conversation is opened |
 | `SubscribeDMs` | `(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error)` | RTDB SSE; skips initial snapshot |
+| `AnnounceTyping` | `(convID string) (heartbeatMs, staleAfterMs int, err error)` | POST to REST; read the cadence from the response, never hard-code it |
+| `ClearTyping` | `(convID string) error` | DELETE to REST; best-effort, discarded on failure |
+| `SubscribeDMTyping` | `(ctx context.Context, convID string, staleAfterMs int) (<-chan []model.TypingUser, context.CancelFunc, error)` | RTDB SSE on `dm_presence/<convID>`; full filtered snapshot per receive, like `SubscribeRoomPresence` |
 | `RefreshSession` | `() error` | Proactively refreshes the idToken (shared across all screens); used to reconnect a live RTDB subscription after it closes |
 
 ### App-Level Wiring

@@ -171,7 +171,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Topics | `GetTopics(cursor)`, `GetTopicPosts(slug, cursor)` |
 | Guilds | `GetGuilds(cursor)`, `GetGuild(slug)`, `GetGuildPosts(slug, cursor)`, `CreateGuildPost(slug, content, title, postSlug, topics)`, `GetGuildMembers(slug, cursor)`, `JoinGuild(slug)`, `LeaveGuild(slug)` |
 | Notes | `GetNotes(cursor)`, `GetNote(noteID)`, `GetNoteRevision(noteID, revision)`, `GetNoteRevisions(noteID, cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
-| Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `StartConversation(recipientUsername)`, `MarkCMailRead(convID)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
+| Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `StartConversation(recipientUsername)`, `MarkCMailRead(convID)`, `SubscribeDMs(ctx, convID) <-chan model.Message`, `AnnounceTyping(convID)`, `ClearTyping(convID)`, `SubscribeDMTyping(ctx, convID, staleAfterMs) <-chan []model.TypingUser` |
 | Chatrooms | `GetRooms()`, `GetRoomMessages(roomID, limit, before)`, `SendRoomMessage(roomID, body)`, `MarkRoomRead(roomID)`, `SubscribeRoom(ctx, roomID) <-chan model.Message`, `GetRoomUsers(roomID)`, `AnnouncePresence(roomID)`, `LeaveRoomPresence(roomID)`, `SubscribeRoomPresence(ctx, roomID, staleAfterMs) <-chan []model.RoomUser` |
 | Search | `Search(query)` (grouped `type=all` preview), `SearchPosts(query, cursor)`, `SearchReplies(query, cursor)`, `SearchUsers(query, cursor)` |
 
@@ -459,9 +459,10 @@ Direct messages (C-Mail) with live Firebase RTDB integration.
 - **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetMessages(convID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on conversation open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
 - **Live-stream reconnect:** when `dmStreamClosedMsg` fires for the still-active conversation (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectConvCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (`reconnectDelay`/`reconnectBackoffSchedule` in `reconnect.go`, shared with `chatrooms.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `CMailReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path, so it's visible even with history already loaded. `cancelDMSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned conversation) is a no-op.
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendMessage`'s reply text is routed through app.go's `cmailCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice`. `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live for CIRC, parsed defensively here) rendered via `renderActionLine` as classic IRC `* username body *`
+- **Typing indicator:** while the compose input is non-empty, `announceTypingCmd`/`AnnounceTyping` announces "typing" and a self-rescheduling heartbeat `tea.Tick` (`scheduleTypingHeartbeatCmd`, cadence from the server response, never hard-coded) re-announces it; an idle-check `tea.Tick` chain (`scheduleTypingIdleCheckCmd`, 2.5s threshold) clears it (`clearTypingCmd`/`ClearTyping`) once keystrokes stop, or immediately if the input is emptied. Sending a message clears the local flag without a network call (the server auto-clears typing on send). Opening a conversation also subscribes to the other participant's live typing status (`SubscribeDMTyping`, `dm_presence/<convID>` — full filtered snapshot per receive, mirroring `SubscribeRoomPresence`); when fresh, `View()` appends `@other is typing…` to the detail header. Detail-header-only, no list-mode badge.
 
 Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`, `CMailReconnectedMsg`, `LeaveCMailMsg`
-Key internal types: `dmSubscription` (RTDB channel + cancel func + `ConvID`), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `dmReconnectedMsg`, `dmReconnectFailedMsg`, `dmReconnectRetryDueMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`
+Key internal types: `dmSubscription` (RTDB channel + cancel func + `ConvID`), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `dmReconnectedMsg`, `dmReconnectFailedMsg`, `dmReconnectRetryDueMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`; typing: `dmTypingSubscription`, `typingAnnouncedMsg`, `typingHeartbeatTickMsg`, `typingIdleCheckMsg`, `typingAnimTickMsg`, `dmTypingSubscribedMsg`, `dmTypingReceivedMsg`, `dmTypingStreamClosedMsg`
 
 #### `chatrooms.go`
 
@@ -747,13 +748,18 @@ Other global keys:
 | Key | Action |
 |---|---|
 | `←` / `→` | Cycle tabs left / right (does not include Search, which is hidden — see above) |
-| `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail) |
+| `ctrl+←` / `ctrl+→` | Same as `←`/`→`, but reaches the handler even while a compose input is focused (Tabs layout only — Miller layout's `←`/`→` mean pane navigation instead, so this ctrl-twin is not offered there) |
+| `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail); no ctrl-twin — a `ctrl+/` shortcut was tried and removed since the byte a physical ctrl+/ keystroke sends is inconsistent across terminals (0x1F on most, a literal NUL on e.g. Git Bash/MinTTY, itself ambiguous there with `ctrl+space`/`ctrl+2`/`ctrl+@`) |
 | `v` | Toggle dense / relaxed display |
-| `?` | Help modal |
+| `?` | Help modal (no ctrl-twin exists — `ctrl+?` is indistinguishable from `ctrl+backspace`/DEL in most terminals) |
 | `t` | Theme picker |
+| `ctrl+t` | Same as `t`, but reaches the handler even while a compose input is focused |
 | `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused |
 | `ctrl+o` | Same as `o`, but reaches the handler even while a compose input is focused — the only way to open links in CIRC/C-Mail, since their input is focused for the entire detail view, not just a transient compose sub-mode |
 | `q` / `ctrl+c` | Quit |
+| `ctrl+q` | Same as `q`, but reaches the handler even while a compose input is focused (`ctrl+c` already worked as a hard escape hatch; `ctrl+q` matches the bare-key mnemonic) |
+
+The `ctrl+`-prefixed rows above (`ctrl+q`, `ctrl+t`, `ctrl+←`/`ctrl+→`) exist specifically so CIRC/C-Mail's detail view — where the compose input holds focus for the screen's entire lifetime, not just a transient sub-mode — can still reach these global shortcuts; see `activeScreenHasFocusedInput()`'s exemption list in `app.go`.
 
 Timezone is set from the Settings screen's own field (`tab`/`shift+tab` to
 cycle), not a global shortcut.
