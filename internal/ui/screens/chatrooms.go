@@ -834,7 +834,12 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				}
 				if query, atPos, ok := mentionQueryAt(m.input.Value(), m.input.Position()); ok {
 					if matches := matchMentionCandidates(m.roomUsers, query); len(matches) > 0 {
-						m.mentionCycle = &mentionCycle{atPos: atPos, queryEnd: m.input.Position(), matches: matches, index: 0}
+						// index 0 is already showing as the implicit default
+						// preview before any Tab is pressed
+						// (mentionGhostText's no-cycle fallback) — start at
+						// 1 so the first Tab itself is a visible change, not
+						// a no-op.
+						m.mentionCycle = &mentionCycle{atPos: atPos, queryEnd: m.input.Position(), matches: matches, index: 1 % len(matches)}
 					}
 				}
 				return m, nil
@@ -1069,13 +1074,15 @@ func spliceMention(value string, atPos, cursor int, username string) (newValue s
 	return string(out), atPos + len(replacement)
 }
 
-// mentionGhostText returns the dim, uncommitted remainder of the top
-// mention candidate for display right after the cursor — only when the
-// mention token reaches the very end of the input. That's the only place
-// ghost text can render unambiguously: with trailing text after the token
-// ("hey @al there"), there's no sensible place to draw the preview without
-// overlapping what's already typed. Tab-cycling still works identically in
-// that case — it just won't show this particular hint.
+// mentionGhostText returns the plain (unstyled) uncommitted remainder of the
+// mention preview for display right after the cursor — only when the
+// mention token reaches the very end of the input. That's the only place a
+// preview can render unambiguously: with trailing text after the token
+// ("hey @al there"), there's no sensible place to draw it without
+// overlapping what's already typed — Tab/Space still work there, just
+// without this visual hint. Styling is applied by the caller (View()),
+// which needs the first rune split off separately to overlay it on the
+// cursor.
 func (m ChatroomsModel) mentionGhostText() string {
 	value := []rune(m.input.Value())
 	cursor := m.input.Position()
@@ -1101,7 +1108,7 @@ func (m ChatroomsModel) mentionGhostText() string {
 	if len(top) <= len(q) {
 		return "" // already fully typed/matched — nothing left to preview
 	}
-	return theme.Subtle.Render(string(top[len(q):]))
+	return string(top[len(q):])
 }
 
 // sortRoomUsers returns a copy of users ordered admins-first, then
@@ -1168,23 +1175,35 @@ func (m ChatroomsModel) View() string {
 		case m.reconnectFailed:
 			header += theme.Error.Render("  (live updates lost)")
 		}
-		// textinput.View() pads its own output with blank spaces out to its
-		// configured Width regardless of that Width's value (see
-		// bubbles/textinput.go) — the padding always sits right after the
-		// typed text, so merely shrinking Width still leaves a gap before
-		// anything appended after it. To put the ghost text immediately at
-		// the cursor, set Width to the typed content's own width (padding
-		// becomes zero) and add our own trailing padding after the ghost to
-		// keep the box's total width unchanged.
+		// textinput.View() always renders its own cursor — there's no way to
+		// make it overlay ghost text through that API, and its own padding
+		// sits right after the cursor regardless of Width, so appending
+		// anything after View()'s output leaves a gap. Bypass View()
+		// entirely when a ghost is showing: hand-build the line from
+		// textinput's own exported style fields, with the cursor overlaying
+		// the ghost's first rune (the same thing textinput.View() would do
+		// with a blank space) instead of a separate cursor cell.
 		ghost := m.mentionGhostText()
-		input := m.input
-		inputContent := m.input.View()
+		var inputContent string
 		if ghost != "" {
-			originalWidth := m.input.Width
+			ghostRunes := []rune(ghost)
+			cur := m.input.Cursor
+			cur.SetChar(string(ghostRunes[0]))
+			textView := m.input.TextStyle.Inline(true).Render(m.input.Value())
+			promptView := m.input.PromptStyle.Render(m.input.Prompt)
+			rest := theme.Subtle.Render(string(ghostRunes[1:]))
 			valWidth := lipgloss.Width(m.input.Value())
-			input.Width = valWidth
-			pad := max(0, originalWidth-valWidth-lipgloss.Width(ghost))
-			inputContent = input.View() + ghost + strings.Repeat(" ", pad)
+			// +1 matches a quirk of textinput.View()'s own padding math (the
+			// no-ghost path below): it computes padding as Width-valWidth,
+			// without accounting for the phantom end-of-line cursor glyph's
+			// own column — so a no-ghost render is always exactly one column
+			// wider than Width alone would suggest. Matching that here keeps
+			// the box from jittering by one column when a ghost appears or
+			// disappears between frames.
+			pad := max(0, m.input.Width-valWidth-lipgloss.Width(ghost)+1)
+			inputContent = promptView + textView + cur.View() + rest + strings.Repeat(" ", pad)
+		} else {
+			inputContent = m.input.View()
 		}
 		inputBox := theme.ActiveBorder.Render(inputContent)
 

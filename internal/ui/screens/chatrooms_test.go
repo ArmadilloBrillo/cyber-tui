@@ -382,8 +382,11 @@ func TestMentionTab_FirstPressPreviewsWithoutTouchingText(t *testing.T) {
 	if m.input.Position() != 7 {
 		t.Errorf("cursor = %d, want unchanged 7 — Tab must not move the cursor", m.input.Position())
 	}
-	if m.mentionCycle == nil || m.mentionCycle.matches[m.mentionCycle.index].Username != "alice" {
-		t.Fatal("expected a mentionCycle previewing alice")
+	// alice (index 0) is already the implicit default preview before any Tab
+	// — the first Tab must skip straight to the next match (albert) so it's
+	// a visible change, not a no-op.
+	if m.mentionCycle == nil || m.mentionCycle.matches[m.mentionCycle.index].Username != "albert" {
+		t.Fatal("expected the first Tab to preview albert")
 	}
 }
 
@@ -392,14 +395,14 @@ func TestMentionTab_SecondPressCyclesPreviewToNextMatch(t *testing.T) {
 	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
 	m = setInput(m, "hey @al", 7)
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> wraps back to alice
 
 	if m.input.Value() != "hey @al" {
 		t.Errorf("input = %q, want still unchanged %q", m.input.Value(), "hey @al")
 	}
-	if m.mentionCycle.matches[m.mentionCycle.index].Username != "albert" {
-		t.Errorf("preview = %q, want %q (second Tab should advance the preview)", m.mentionCycle.matches[m.mentionCycle.index].Username, "albert")
+	if m.mentionCycle.matches[m.mentionCycle.index].Username != "alice" {
+		t.Errorf("preview = %q, want %q (second Tab should wrap back to the first match)", m.mentionCycle.matches[m.mentionCycle.index].Username, "alice")
 	}
 }
 
@@ -408,12 +411,12 @@ func TestMentionTab_ThirdPressWrapsPreviewAround(t *testing.T) {
 	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
 	m = setInput(m, "hey @al", 7)
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> alice
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert again
 
-	if m.mentionCycle.matches[m.mentionCycle.index].Username != "alice" {
-		t.Errorf("preview = %q, want %q (third Tab should wrap back to the first match)", m.mentionCycle.matches[m.mentionCycle.index].Username, "alice")
+	if m.mentionCycle.matches[m.mentionCycle.index].Username != "albert" {
+		t.Errorf("preview = %q, want %q (third Tab should cycle back to albert)", m.mentionCycle.matches[m.mentionCycle.index].Username, "albert")
 	}
 }
 
@@ -422,14 +425,14 @@ func TestMentionSpace_CommitsCurrentPreviewThenInsertsSpace(t *testing.T) {
 	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
 	m = setInput(m, "hey @al", 7)
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})                            // preview alice
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})                            // preview albert
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}) // commit albert
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})                       // preview albert
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})                       // preview alice
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}) // commit alice
 
-	if m.input.Value() != "hey @albert " {
-		t.Errorf("input = %q, want %q", m.input.Value(), "hey @albert ")
+	if m.input.Value() != "hey @alice " {
+		t.Errorf("input = %q, want %q", m.input.Value(), "hey @alice ")
 	}
-	if m.input.Position() != len([]rune("hey @albert ")) {
+	if m.input.Position() != len([]rune("hey @alice ")) {
 		t.Errorf("cursor = %d, want end of the committed text", m.input.Position())
 	}
 	if m.mentionCycle != nil {
@@ -519,12 +522,8 @@ func TestMentionGhostText(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			m := setInput(m, c.value, c.cursor)
 			got := m.mentionGhostText()
-			want := c.want
-			if want != "" {
-				want = theme.Subtle.Render(want)
-			}
-			if got != want {
-				t.Errorf("mentionGhostText() = %q, want %q", got, want)
+			if got != c.want {
+				t.Errorf("mentionGhostText() = %q, want %q", got, c.want)
 			}
 		})
 	}
@@ -538,13 +537,13 @@ func TestMentionGhostText_ReflectsActiveCyclePreview(t *testing.T) {
 	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
 	m = setInput(m, "hey @al", 7)
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // preview alice
-	if got, want := m.mentionGhostText(), theme.Subtle.Render("ice"); got != want {
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert (skips the already-shown alice)
+	if got, want := m.mentionGhostText(), "bert"; got != want {
 		t.Errorf("after first Tab, mentionGhostText() = %q, want %q", got, want)
 	}
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // preview albert
-	if got, want := m.mentionGhostText(), theme.Subtle.Render("bert"); got != want {
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> alice
+	if got, want := m.mentionGhostText(), "ice"; got != want {
 		t.Errorf("after second Tab, mentionGhostText() = %q, want %q", got, want)
 	}
 }
@@ -553,50 +552,45 @@ func TestMentionGhostText_ReflectsActiveCyclePreview(t *testing.T) {
 // regression test for two related bugs:
 //  1. The ghost text landing far past the visible cursor instead of right
 //     next to it — caused by appending it after textinput.View()'s own
-//     padding, which always fills out to whatever Width it's given
-//     regardless of that Width's value (shrinking Width only shrinks the
-//     gap, never closes it).
-//  2. The box's total width drifting as you type — this reproduces
-//     View()'s actual construction (Width set to the typed content's own
-//     width, so textinput's padding is exactly zero, plus manual trailing
-//     padding after the ghost to keep the total constant) rather than
-//     measuring through the full rendered View(), whose lines get padded to
-//     the width of the widest line in the block — the message-area+panel
-//     row — by lipgloss.JoinVertical, which would contaminate a width
-//     measurement taken that way.
+//     padding, which always fills out to whatever Width it's given.
+//  2. A one-cell gap between the typed text and the ghost from the cursor's
+//     own blank glyph — fixed by overlaying the cursor on the ghost's first
+//     rune instead (mirrors this file's withTrueColor doc comment: tests
+//     here run under the default no-color profile, so cursor.Model.View()
+//     and theme.Subtle.Render both produce plain unstyled text, meaning
+//     the rebuilt line reads as an unbroken "hey @al" + "ice" with nothing
+//     in between).
+//
+// This reproduces View()'s actual construction rather than measuring
+// through the full rendered View(), whose lines get padded to the width of
+// the widest line in the block — the message-area+panel row — by
+// lipgloss.JoinVertical, which would contaminate a width measurement taken
+// that way.
 func TestMentionGhostText_RendersAdjacentToCursorAtConstantWidth(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	m.roomUsers = []model.RoomUser{{Username: "alice"}}
 	m = setInput(m, "hey @al", 7)
 
-	baseline := lipgloss.Width(m.input.View()) // no ghost, unshrunk Width
+	baseline := lipgloss.Width(m.input.View()) // no ghost
 
 	ghost := m.mentionGhostText()
 	if ghost == "" {
 		t.Fatal("expected a ghost text to be present for this setup")
 	}
-	originalWidth := m.input.Width
+	ghostRunes := []rune(ghost)
+	cur := m.input.Cursor
+	cur.SetChar(string(ghostRunes[0]))
+	textView := m.input.TextStyle.Inline(true).Render(m.input.Value())
+	promptView := m.input.PromptStyle.Render(m.input.Prompt)
+	rest := theme.Subtle.Render(string(ghostRunes[1:]))
 	valWidth := lipgloss.Width(m.input.Value())
-	input := m.input
-	input.Width = valWidth
-	pad := max(0, originalWidth-valWidth-lipgloss.Width(ghost))
-	content := input.View() + ghost + strings.Repeat(" ", pad)
+	pad := max(0, m.input.Width-valWidth-lipgloss.Width(ghost)+1) // see View()'s matching comment
+	content := promptView + textView + cur.View() + rest + strings.Repeat(" ", pad)
 
 	if w := lipgloss.Width(content); w != baseline {
-		t.Errorf("input+ghost+padding width = %d, want %d (same as with no ghost at all) — must not widen the box", w, baseline)
+		t.Errorf("rebuilt content width = %d, want %d (same as with no ghost at all) — must not widen the box", w, baseline)
 	}
-	// "hey @al" followed by exactly one cell (the cursor glyph itself) and
-	// then the ghost "ice" — not a long run of padding spaces, which is the
-	// actual bug being guarded against. Tests in this file run under the
-	// default no-color profile (see withTrueColor's doc comment), so
-	// theme.Subtle.Render produces plain unstyled text — no ANSI stripping
-	// needed to check adjacency.
-	if !strings.Contains(content, "hey @al") {
-		t.Fatalf("expected the typed text in the rendered content, got: %q", content)
-	}
-	afterText := content[strings.Index(content, "hey @al")+len("hey @al"):]
-	const wantPrefix = " ice" // one cell for the cursor glyph, then the ghost
-	if !strings.HasPrefix(afterText, wantPrefix) {
-		t.Errorf("expected %q (cursor cell + ghost) immediately after the typed text, got: %q", wantPrefix, afterText)
+	if !strings.Contains(content, "hey @alice") {
+		t.Errorf("expected the typed text and ghost to read as an unbroken %q with the cursor overlaying its first character, got: %q", "hey @alice", content)
 	}
 }
