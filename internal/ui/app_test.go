@@ -1247,11 +1247,39 @@ func TestHandleChatrooms_OpenRoomMsg_EscReturnsToOrigin(t *testing.T) {
 	if escCmd == nil {
 		t.Fatal("expected esc on a deep-linked room to emit LeaveChatroomsMsg")
 	}
-	m3, _ := a2.Update(escCmd())
+	// esc on a deep-linked room now also fires a best-effort leave-presence
+	// call alongside LeaveChatroomsMsg, so the returned cmd is a tea.Batch;
+	// find LeaveChatroomsMsg within it (mirrors how the real runtime would
+	// execute each batched cmd and dispatch its message).
+	leaveMsg := findBatchedMsg[screens.LeaveChatroomsMsg](t, escCmd())
+	m3, _ := a2.Update(leaveMsg)
 	a3 := m3.(App)
 	if a3.active != screenNotifications {
 		t.Errorf("expected esc to return to screenNotifications (the deep-link origin), got %v", a3.active)
 	}
+}
+
+// findBatchedMsg unwraps a tea.BatchMsg (or a plain message) looking for one
+// of type T, executing each batched cmd to find it. Fails the test if T isn't
+// found anywhere.
+func findBatchedMsg[T any](t *testing.T, msg tea.Msg) T {
+	t.Helper()
+	if m, ok := msg.(T); ok {
+		return m
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			if m, ok := c().(T); ok {
+				return m
+			}
+		}
+	}
+	t.Fatalf("expected a message of type %T within %#v", *new(T), msg)
+	var zero T
+	return zero
 }
 
 // TestHandleChatrooms_ManualTabReentry_ResetsToList guards against a bug
@@ -1293,8 +1321,12 @@ func TestHandleChatrooms_NormalTabEntry_EscStillDropsToList(t *testing.T) {
 	if a.chatrooms.IsShowingDetail() {
 		t.Error("expected esc to drop back to Chatrooms' own list when not deep-linked")
 	}
+	// escCmd is no longer nil — esc now always fires a best-effort
+	// leave-presence call — but it must not carry a LeaveChatroomsMsg.
 	if escCmd != nil {
-		t.Error("expected no LeaveChatroomsMsg when the room wasn't reached via a deep link")
+		if _, ok := escCmd().(screens.LeaveChatroomsMsg); ok {
+			t.Error("did not expect LeaveChatroomsMsg when the room wasn't reached via a deep link")
+		}
 	}
 }
 

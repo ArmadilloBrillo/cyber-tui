@@ -142,6 +142,16 @@ type Room struct {
 	Name          string
 	LastMessageAt time.Time
 	SortOrder     int
+	OnlineCount   int
+}
+
+// RoomUser is a single entry in a cIRC room's presence list — from either
+// GET /v1/circ/:roomId/users or the chat_presence RTDB stream.
+type RoomUser struct {
+	UserID      string
+	Username    string
+	IsChatAdmin bool
+	LastSeen    time.Time
 }
 
 // NotificationPrefs maps to the notifications sub-object in GET/PATCH /v1/settings.

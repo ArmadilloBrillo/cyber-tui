@@ -3,6 +3,7 @@ package screens
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +42,15 @@ type roomSubscription struct {
 	cancel context.CancelFunc
 }
 
+// roomPresenceSubscription holds the live presence RTDB channel and its
+// cancellation function. Each receive is a full, filtered snapshot of who's
+// currently online, not a single incremental event (see SubscribeRoomPresence).
+type roomPresenceSubscription struct {
+	RoomID string
+	C      <-chan []model.RoomUser
+	cancel context.CancelFunc
+}
+
 // CIRC SSE subscription message types — unexported, handled within ChatroomsModel.
 type roomSubscribedMsg struct {
 	roomID string
@@ -68,6 +78,25 @@ type circOlderMsgsLoadedMsg struct {
 }
 type circErrMsg struct{ err error }
 
+// Presence message types — unexported, handled entirely within ChatroomsModel.
+// Mirror the message-stream lifecycle types above.
+type roomPresenceAnnouncedMsg struct {
+	roomID       string
+	heartbeatMs  int
+	staleAfterMs int
+}
+type roomHeartbeatTickMsg struct{ roomID string }
+type roomUsersLoadedMsg struct {
+	roomID string
+	users  []model.RoomUser
+}
+type roomPresenceSubscribedMsg struct {
+	roomID string
+	sub    *roomPresenceSubscription
+}
+type roomPresenceReceivedMsg struct{ users []model.RoomUser }
+type roomPresenceStreamClosedMsg struct{ roomID string }
+
 // RoomReconnectedMsg is emitted after the live RTDB stream is successfully
 // re-established following an idToken expiry. App uses it to show a toast.
 type RoomReconnectedMsg struct{}
@@ -80,6 +109,18 @@ func waitForRoomMsg(sub *roomSubscription) tea.Cmd {
 			return roomStreamClosedMsg{roomID: sub.RoomID}
 		}
 		return roomReceivedMsg{msg: msg}
+	}
+}
+
+// waitForRoomPresenceMsg blocks on the presence subscription channel and
+// returns the next snapshot as a tea.Cmd.
+func waitForRoomPresenceMsg(sub *roomPresenceSubscription) tea.Cmd {
+	return func() tea.Msg {
+		users, ok := <-sub.C
+		if !ok {
+			return roomPresenceStreamClosedMsg{roomID: sub.RoomID}
+		}
+		return roomPresenceReceivedMsg{users: users}
 	}
 }
 
@@ -127,6 +168,14 @@ type ChatroomsModel struct {
 	// History pagination state for the active room, reset on open.
 	historyExhausted bool // true once an older-page fetch returns zero messages
 	loadingHistory   bool // guards re-firing while an older-page fetch is in flight
+
+	// Presence state for the active room: who's online (side panel content),
+	// the live presence stream, and the heartbeat cadence read from the
+	// initial POST .../presence response (never hard-coded).
+	roomUsers    []model.RoomUser
+	presenceSub  *roomPresenceSubscription
+	heartbeatMs  int
+	staleAfterMs int
 }
 
 // SendRoomMessageMsg is emitted when the user sends a chatroom message.
@@ -152,12 +201,18 @@ func NewChatroomsModel(currentUser string, client api.Client) ChatroomsModel {
 	}
 }
 
-// cancelRoomSub stops any active RTDB subscription and any in-flight
-// reconnect retry sequence, and clears subscription state.
+// cancelRoomSub stops any active RTDB subscription (message and presence)
+// and any in-flight reconnect retry sequence, and clears subscription state.
+// A stray roomHeartbeatTickMsg firing after this just no-ops (guarded by
+// roomID == m.activeRoomID, which is now "").
 func (m ChatroomsModel) cancelRoomSub() ChatroomsModel {
 	if m.sub != nil {
 		m.sub.cancel()
 		m.sub = nil
+	}
+	if m.presenceSub != nil {
+		m.presenceSub.cancel()
+		m.presenceSub = nil
 	}
 	if m.reconnectCancel != nil {
 		m.reconnectCancel()
@@ -167,6 +222,9 @@ func (m ChatroomsModel) cancelRoomSub() ChatroomsModel {
 	m.reconnectFailed = false
 	m.reconnectAttempt = 0
 	m.activeRoomID = ""
+	m.roomUsers = nil
+	m.heartbeatMs = 0
+	m.staleAfterMs = 0
 	return m
 }
 
@@ -186,6 +244,83 @@ func (m ChatroomsModel) openRoomSubscriptionCmd(roomID string) tea.Cmd {
 			return circErrMsg{err}
 		}
 		return roomSubscribedMsg{roomID: roomID, sub: &roomSubscription{RoomID: roomID, C: ch, cancel: cancel}}
+	}
+}
+
+// announcePresenceCmd announces the caller's presence in roomID, kicking off
+// the heartbeat/users-load/presence-subscribe sequence once it returns.
+func (m ChatroomsModel) announcePresenceCmd(roomID string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		heartbeatMs, staleAfterMs, err := client.AnnouncePresence(roomID)
+		if err != nil {
+			return nil // presence is supplementary; a failed announce just means no panel data
+		}
+		return roomPresenceAnnouncedMsg{roomID: roomID, heartbeatMs: heartbeatMs, staleAfterMs: staleAfterMs}
+	}
+}
+
+// sendHeartbeatCmd re-announces presence for roomID as a best-effort
+// background heartbeat; the result is discarded (failures fail silently,
+// matching presence's supplementary status).
+func (m ChatroomsModel) sendHeartbeatCmd(roomID string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client != nil {
+			_, _, _ = client.AnnouncePresence(roomID)
+		}
+		return nil
+	}
+}
+
+// scheduleHeartbeatCmd self-reschedules a heartbeat tick every heartbeatMs,
+// the same self-rescheduling tea.Tick shape used by app.go's schedulePollCmd.
+func scheduleHeartbeatCmd(roomID string, heartbeatMs int) tea.Cmd {
+	return tea.Tick(time.Duration(heartbeatMs)*time.Millisecond, func(time.Time) tea.Msg {
+		return roomHeartbeatTickMsg{roomID: roomID}
+	})
+}
+
+func (m ChatroomsModel) loadRoomUsersCmd(roomID string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		users, err := client.GetRoomUsers(roomID)
+		if err != nil {
+			return nil // supplementary; the presence stream's next snapshot will fill in
+		}
+		return roomUsersLoadedMsg{roomID: roomID, users: users}
+	}
+}
+
+// leaveRoomPresenceCmd sends a best-effort explicit leave; the result is
+// discarded (the room's user list corrects itself via staleAfterMs expiry
+// even if this fails or is never sent).
+func leaveRoomPresenceCmd(client api.Client, roomID string) tea.Cmd {
+	return func() tea.Msg {
+		if client != nil {
+			_ = client.LeaveRoomPresence(roomID)
+		}
+		return nil
+	}
+}
+
+func (m ChatroomsModel) openRoomPresenceSubscriptionCmd(roomID string, staleAfterMs int) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		ch, cancel, err := client.SubscribeRoomPresence(context.Background(), roomID, staleAfterMs)
+		if err != nil {
+			return nil
+		}
+		return roomPresenceSubscribedMsg{roomID: roomID, sub: &roomPresenceSubscription{RoomID: roomID, C: ch, cancel: cancel}}
 	}
 }
 
@@ -355,6 +490,7 @@ func (m ChatroomsModel) enterRoomDetail(idx int, room model.Room) (ChatroomsMode
 	return m, tea.Batch(
 		m.loadRoomMessagesCmd(room.Slug),
 		m.openRoomSubscriptionCmd(room.Slug),
+		m.announcePresenceCmd(room.Slug),
 		func() tea.Msg { return RoomOpenedMsg{RoomID: roomID} },
 	)
 }
@@ -395,6 +531,20 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 	if m.ready {
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
+	}
+	return m
+}
+
+// SetRoomUsers replaces the presence panel's content, sorted admins-first
+// then alphabetical within each block. Recomputes the message viewport width
+// since the panel's presence affects it (panelWidths collapses to zero width
+// until the first snapshot arrives).
+func (m ChatroomsModel) SetRoomUsers(users []model.RoomUser) ChatroomsModel {
+	m.roomUsers = sortRoomUsers(users)
+	if m.ready {
+		msgW, _ := m.panelWidths()
+		m.viewport.Width = msgW
+		m.viewport.SetContent(m.renderMessages())
 	}
 	return m
 }
@@ -456,15 +606,16 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		m.height = msg.Height
 		listH := msg.Height - theme.ChromeHeight
 		detailH := msg.Height - theme.ChromeHeight - chatroomDetailChrome
+		msgW, _ := m.panelWidths()
 		if !m.ready {
 			m.listVP = viewport.New(msg.Width, listH)
-			m.viewport = viewport.New(msg.Width, detailH)
+			m.viewport = viewport.New(msgW, detailH)
 			m.listVP.SetContent(m.renderRoomCards())
 			m.ready = true
 		} else {
 			m.listVP.Width = msg.Width
 			m.listVP.Height = listH
-			m.viewport.Width = msg.Width
+			m.viewport.Width = msgW
 			m.viewport.Height = detailH
 			m.listVP.SetContent(m.renderRoomCards())
 			if m.activeRoom != nil {
@@ -556,6 +707,64 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		}
 		return m, nil
 
+	// --- Presence lifecycle ---
+
+	case roomPresenceAnnouncedMsg:
+		if msg.roomID != m.activeRoomID {
+			return m, nil // stale — left the room before this returned
+		}
+		m.heartbeatMs = msg.heartbeatMs
+		m.staleAfterMs = msg.staleAfterMs
+		return m, tea.Batch(
+			scheduleHeartbeatCmd(msg.roomID, msg.heartbeatMs),
+			m.loadRoomUsersCmd(msg.roomID),
+			m.openRoomPresenceSubscriptionCmd(msg.roomID, msg.staleAfterMs),
+		)
+
+	case roomHeartbeatTickMsg:
+		if msg.roomID != m.activeRoomID {
+			return m, nil // left the room; let the tick chain die out
+		}
+		return m, tea.Batch(
+			m.sendHeartbeatCmd(msg.roomID),
+			scheduleHeartbeatCmd(msg.roomID, m.heartbeatMs),
+		)
+
+	case roomUsersLoadedMsg:
+		if msg.roomID != m.activeRoomID {
+			return m, nil
+		}
+		return m.SetRoomUsers(msg.users), nil
+
+	case roomPresenceSubscribedMsg:
+		if msg.roomID != m.activeRoomID {
+			msg.sub.cancel()
+			return m, nil
+		}
+		m.presenceSub = msg.sub
+		return m, waitForRoomPresenceMsg(m.presenceSub)
+
+	case roomPresenceReceivedMsg:
+		m = m.SetRoomUsers(msg.users)
+		if m.presenceSub != nil {
+			return m, waitForRoomPresenceMsg(m.presenceSub)
+		}
+		return m, nil
+
+	case roomPresenceStreamClosedMsg:
+		if msg.roomID != m.activeRoomID {
+			return m, nil // stale event from an already-abandoned subscription
+		}
+		m.presenceSub = nil
+		if m.mode != chatroomModeDetail || m.activeRoom == nil {
+			return m, nil
+		}
+		// ponytail: simplest reconnect for a supplementary stream — immediate
+		// retry, no backoff/attempt cap, no UI indicator. Share the message
+		// stream's exponential-backoff state machine (reconnect.go) if this
+		// thrashes in practice.
+		return m, m.openRoomPresenceSubscriptionCmd(msg.roomID, m.staleAfterMs)
+
 	// --- Keyboard ---
 
 	case tea.KeyMsg:
@@ -590,10 +799,17 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		case chatroomModeDetail:
 			switch msg.String() {
 			case "esc":
+				var leaveRoomID string
+				if m.activeRoom != nil {
+					leaveRoomID = m.activeRoom.Slug
+				}
 				if m.canGoBack {
 					m = m.cancelRoomSub()
 					m.canGoBack = false
-					return m, func() tea.Msg { return LeaveChatroomsMsg{} }
+					return m, tea.Batch(
+						leaveRoomPresenceCmd(m.client, leaveRoomID),
+						func() tea.Msg { return LeaveChatroomsMsg{} },
+					)
 				}
 				m = m.cancelRoomSub()
 				m.mode = chatroomModeList
@@ -603,7 +819,7 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				if m.ready {
 					m.listVP.SetContent(m.renderRoomCards())
 				}
-				return m, nil
+				return m, leaveRoomPresenceCmd(m.client, leaveRoomID)
 			case "enter":
 				if m.activeRoom != nil {
 					val := m.input.Value()
@@ -689,7 +905,7 @@ func (m ChatroomsModel) renderRoomCards() string {
 			headerLine = nameStr
 		}
 
-		slugLine := theme.Subtle.Render(fmt.Sprintf("#%s", r.Slug))
+		slugLine := theme.Subtle.Render(fmt.Sprintf("#%s · %d online", r.Slug, r.OnlineCount))
 		content := lipgloss.JoinVertical(lipgloss.Left, headerLine, slugLine)
 
 		boxStyle := theme.Border
@@ -714,6 +930,62 @@ func (m ChatroomsModel) renderMessages() string {
 	return renderCircMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser)
 }
 
+// Panel sizing: the users panel is pinned to a preferred width that
+// comfortably fits an admin marker plus the longest possible username (20
+// chars, the API's max); below roomUsersPanelMinMsgWidth for the message
+// viewport, the panel collapses entirely. Modeled on MillerLayout.paneWidths
+// (internal/ui/layout_miller.go), this codebase's existing solution for a
+// responsive sidebar vs. content width.
+const (
+	roomUsersPanelPreferredWidth = 24 // admin marker(2) + username(20) + padding(2)
+	roomUsersPanelMinMsgWidth    = 40 // message viewport never shrinks below this
+	roomUsersPanelSep            = 1  // vertical separator column
+)
+
+// panelWidths returns the message-viewport and users-panel widths for the
+// screen's current width. The panel collapses to zero (full-width messages)
+// until the first presence snapshot arrives, or on a narrow terminal.
+func (m ChatroomsModel) panelWidths() (msgW, usersW int) {
+	if len(m.roomUsers) == 0 {
+		return m.width, 0
+	}
+	usersW = min(roomUsersPanelPreferredWidth, max(0, m.width*30/100))
+	if m.width-usersW-roomUsersPanelSep < roomUsersPanelMinMsgWidth {
+		return m.width, 0
+	}
+	return m.width - usersW - roomUsersPanelSep, usersW
+}
+
+// sortRoomUsers returns a copy of users ordered admins-first, then
+// alphabetically (case-insensitive) within each block.
+func sortRoomUsers(users []model.RoomUser) []model.RoomUser {
+	out := append([]model.RoomUser(nil), users...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IsChatAdmin != out[j].IsChatAdmin {
+			return out[i].IsChatAdmin
+		}
+		return strings.ToLower(out[i].Username) < strings.ToLower(out[j].Username)
+	})
+	return out
+}
+
+// renderRoomUsersPanel renders the side panel's content — assumed already
+// sorted by sortRoomUsers.
+func renderRoomUsersPanel(users []model.RoomUser) string {
+	if len(users) == 0 {
+		return theme.Subtle.Render("no one else is here")
+	}
+	rows := make([]string, len(users))
+	for i, u := range users {
+		if u.IsChatAdmin {
+			rows[i] = theme.Highlight.Render("★ " + u.Username)
+		} else {
+			rows[i] = u.Username
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
 func (m ChatroomsModel) View() string {
 	switch m.mode {
 	case chatroomModeDetail:
@@ -726,7 +998,8 @@ func (m ChatroomsModel) View() string {
 			name = m.activeRoom.Name
 			slug = m.activeRoom.Slug
 		}
-		header := theme.Title.Render(name) + "  " + theme.Subtle.Render("#"+slug)
+		header := theme.Title.Render(name) + "  " + theme.Subtle.Render("#"+slug) +
+			theme.Subtle.Render(fmt.Sprintf("  ·  %d online", len(m.roomUsers)))
 		if m.loadingHistory {
 			header += theme.Subtle.Render("  (loading history…)")
 		}
@@ -737,7 +1010,16 @@ func (m ChatroomsModel) View() string {
 			header += theme.Error.Render("  (live updates lost)")
 		}
 		inputBox := theme.ActiveBorder.Render(m.input.View())
-		return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), inputBox)
+
+		_, usersW := m.panelWidths()
+		messageArea := m.viewport.View()
+		if usersW > 0 {
+			panel := lipgloss.NewStyle().Width(usersW).Height(m.viewport.Height).MaxHeight(m.viewport.Height).
+				Render(renderRoomUsersPanel(m.roomUsers))
+			sep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", m.viewport.Height), "\n"))
+			messageArea = lipgloss.JoinHorizontal(lipgloss.Top, messageArea, sep, panel)
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, header, messageArea, inputBox)
 	default: // chatroomModeList
 		if !m.ready {
 			return theme.Subtle.Render("loading rooms…")
