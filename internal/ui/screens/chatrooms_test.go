@@ -580,6 +580,7 @@ func TestMentionGhostText_RendersAdjacentToCursorAtConstantWidth(t *testing.T) {
 	ghostRunes := []rune(ghost)
 	cur := m.input.Cursor
 	cur.SetChar(string(ghostRunes[0]))
+	cur.TextStyle = theme.Subtle
 	textView := m.input.TextStyle.Inline(true).Render(m.input.Value())
 	promptView := m.input.PromptStyle.Render(m.input.Prompt)
 	rest := theme.Subtle.Render(string(ghostRunes[1:]))
@@ -592,5 +593,23 @@ func TestMentionGhostText_RendersAdjacentToCursorAtConstantWidth(t *testing.T) {
 	}
 	if !strings.Contains(content, "hey @alice") {
 		t.Errorf("expected the typed text and ghost to read as an unbroken %q with the cursor overlaying its first character, got: %q", "hey @alice", content)
+	}
+}
+
+// TestMentionGhostText_CursorOverlayUsesGhostColor guards against the
+// overlaid character rendering in normal text color during the cursor's
+// text-style blink phase, which would make it indistinguishable from
+// something the user actually typed.
+func TestMentionGhostText_CursorOverlayUsesGhostColor(t *testing.T) {
+	withTrueColor(t)
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}}
+	m = setInput(m, "hey @al", 7)
+	m.input.Cursor.Blink = true // the phase cursor.Model.View() renders via TextStyle
+
+	view := m.View()
+	wantChar := theme.Subtle.Inline(true).Render("i")
+	if !strings.Contains(view, wantChar) {
+		t.Errorf("expected the cursor-overlaid character styled in ghost color (%q) somewhere in the view, got:\n%s", wantChar, view)
 	}
 }

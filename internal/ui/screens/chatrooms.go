@@ -1189,6 +1189,10 @@ func (m ChatroomsModel) View() string {
 			ghostRunes := []rune(ghost)
 			cur := m.input.Cursor
 			cur.SetChar(string(ghostRunes[0]))
+			// Without this, the blink-off phase renders the overlaid
+			// character in the cursor's default TextStyle — i.e. normal
+			// text color, indistinguishable from something actually typed.
+			cur.TextStyle = theme.Subtle
 			textView := m.input.TextStyle.Inline(true).Render(m.input.Value())
 			promptView := m.input.PromptStyle.Render(m.input.Prompt)
 			rest := theme.Subtle.Render(string(ghostRunes[1:]))
