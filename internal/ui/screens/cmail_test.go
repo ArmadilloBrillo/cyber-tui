@@ -3,6 +3,7 @@ package screens
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -86,6 +87,296 @@ func TestCMailInputBox_WidthConstantBetweenEmptyAndTyped(t *testing.T) {
 	for name, l := range map[string]string{"top (typed)": top, "content (typed)": content, "bottom (typed)": bottom} {
 		if w := lipgloss.Width(l); w != m.width {
 			t.Errorf("%s line width = %d, want %d (m.width) — box must not widen once typing starts", name, w, m.width)
+		}
+	}
+}
+
+// --- typing indicator ---
+
+func cmailInConversation(client api.Client, convID string) CMailModel {
+	conv := model.Conversation{ID: convID, Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
+	m := NewCMailModel("neo", client)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
+	m.activeConvID = convID
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+	m.input.Focus() // real usage always focuses on conversation open; without this,
+	// textinput.Update() no-ops (it early-returns when unfocused), silently
+	// breaking any test that types through the normal forwarding path.
+	return m
+}
+
+func TestTypingAnnounced_StoresCadenceAndSchedulesHeartbeat(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m, cmd := m.Update(typingAnnouncedMsg{convID: "c1", heartbeatMs: 3000, staleAfterMs: 9000})
+	if m.typingHeartbeatMs != 3000 {
+		t.Errorf("typingHeartbeatMs = %d, want 3000", m.typingHeartbeatMs)
+	}
+	if cmd == nil {
+		t.Fatal("expected a scheduled heartbeat command")
+	}
+}
+
+func TestTypingAnnounced_StaleConvIDIgnored(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m2, cmd := m.Update(typingAnnouncedMsg{convID: "old-abandoned-conv", heartbeatMs: 3000, staleAfterMs: 9000})
+	if cmd != nil {
+		t.Error("expected no command for a stale announce response")
+	}
+	if m2.typingHeartbeatMs != 0 {
+		t.Errorf("expected typingHeartbeatMs to remain unset, got %d", m2.typingHeartbeatMs)
+	}
+}
+
+func TestTypingHeartbeatTick_StaleConvIDIgnored(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.announcingTyping = true
+	m.typingHeartbeatMs = 3000
+
+	_, cmd := m.Update(typingHeartbeatTickMsg{convID: "old-abandoned-conv"})
+	if cmd != nil {
+		t.Error("expected no command for a heartbeat tick from a conversation the user already left")
+	}
+}
+
+func TestTypingHeartbeatTick_NotAnnouncingIgnored(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.typingHeartbeatMs = 3000
+
+	_, cmd := m.Update(typingHeartbeatTickMsg{convID: "c1"})
+	if cmd != nil {
+		t.Error("expected no command for a heartbeat tick after typing already stopped")
+	}
+}
+
+func TestTypingHeartbeatTick_ActiveReschedules(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.announcingTyping = true
+	m.typingHeartbeatMs = 3000
+
+	_, cmd := m.Update(typingHeartbeatTickMsg{convID: "c1"})
+	if cmd == nil {
+		t.Fatal("expected a batch command (send heartbeat + reschedule tick)")
+	}
+}
+
+func TestTypingSubscribed_StaleConvIDCancelsAndIgnores(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	cancelled := false
+	sub := &dmTypingSubscription{ConvID: "old-abandoned-conv", cancel: func() { cancelled = true }}
+
+	m2, cmd := m.Update(dmTypingSubscribedMsg{convID: "old-abandoned-conv", sub: sub})
+	if !cancelled {
+		t.Error("expected the stale subscription to be cancelled")
+	}
+	if cmd != nil {
+		t.Error("expected no command for a stale subscribe response")
+	}
+	if m2.typingSub != nil {
+		t.Error("expected typingSub to remain nil for a stale subscribe response")
+	}
+}
+
+func TestTypingStreamClosed_ResubscribesWhileConvStillOpen(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m2, cmd := m.Update(dmTypingStreamClosedMsg{convID: "c1"})
+	if m2.typingSub != nil {
+		t.Error("expected typingSub to be cleared")
+	}
+	if cmd == nil {
+		t.Error("expected an immediate resubscribe command")
+	}
+}
+
+func TestTypingStreamClosed_StaleConvIDIgnored(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	_, cmd := m.Update(dmTypingStreamClosedMsg{convID: "old-abandoned-conv"})
+	if cmd != nil {
+		t.Error("expected no command for a stale stream-closed event")
+	}
+}
+
+// TestKeystroke_NonEmptyInput_AnnouncesTypingOnceAcrossMultipleKeys types "h"
+// then "i" and expects announcingTyping to flip false→true exactly once, not
+// re-announce on every keystroke.
+func TestKeystroke_NonEmptyInput_AnnouncesTypingOnceAcrossMultipleKeys(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	if !m.announcingTyping {
+		t.Fatal("expected announcingTyping to be true after the first keystroke")
+	}
+	if cmd == nil {
+		t.Fatal("expected an announce+idle-check command on the first keystroke")
+	}
+	firstKeystrokeAt := m.lastKeystrokeAt
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	if !m.announcingTyping {
+		t.Fatal("expected announcingTyping to remain true after the second keystroke")
+	}
+	if !m.lastKeystrokeAt.After(firstKeystrokeAt) && !m.lastKeystrokeAt.Equal(firstKeystrokeAt) {
+		t.Error("expected lastKeystrokeAt to advance on the second keystroke")
+	}
+	if m.input.Value() != "hi" {
+		t.Fatalf("input.Value() = %q, want hi", m.input.Value())
+	}
+}
+
+// TestKeystroke_EmptyInput_ClearsTypingImmediately backspaces to empty while
+// announcing and expects an immediate clear, not a wait for the idle tick.
+func TestKeystroke_EmptyInput_ClearsTypingImmediately(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.input.SetValue("h")
+	m.input.SetCursor(1)
+	m.announcingTyping = true
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.input.Value() != "" {
+		t.Fatalf("input.Value() = %q, want empty after backspace", m.input.Value())
+	}
+	if m.announcingTyping {
+		t.Error("expected announcingTyping to flip false immediately on emptying the input")
+	}
+	if cmd == nil {
+		t.Fatal("expected a clear-typing command")
+	}
+}
+
+func TestIdleCheck_NoRecentKeystroke_ClearsTyping(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.announcingTyping = true
+	m.lastKeystrokeAt = time.Now().Add(-5 * time.Second)
+
+	m2, cmd := m.Update(typingIdleCheckMsg{convID: "c1"})
+	if m2.announcingTyping {
+		t.Error("expected announcingTyping to flip false after the idle threshold")
+	}
+	if cmd == nil {
+		t.Fatal("expected a clear-typing command")
+	}
+}
+
+func TestIdleCheck_RecentKeystroke_Reschedules(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.announcingTyping = true
+	m.lastKeystrokeAt = time.Now()
+
+	m2, cmd := m.Update(typingIdleCheckMsg{convID: "c1"})
+	if !m2.announcingTyping {
+		t.Error("expected announcingTyping to remain true with a recent keystroke")
+	}
+	if cmd == nil {
+		t.Fatal("expected a rescheduled idle-check command")
+	}
+}
+
+// TestSendMessage_ClearsAnnouncingTypingWithoutNetworkCall presses enter
+// while announcing and expects the local flag to clear, but no ClearTyping
+// call bundled in — the server auto-clears typing on send.
+func TestSendMessage_ClearsAnnouncingTypingWithoutNetworkCall(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.input.SetValue("hello")
+	m.input.SetCursor(5)
+	m.announcingTyping = true
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m2.announcingTyping {
+		t.Error("expected announcingTyping to flip false on send")
+	}
+	if cmd == nil {
+		t.Fatal("expected a SendCMailMsg command")
+	}
+	if msg := cmd(); msg == nil {
+		t.Fatal("expected the command to produce a message")
+	} else if _, ok := msg.(SendCMailMsg); !ok {
+		t.Errorf("expected SendCMailMsg, got %T", msg)
+	}
+}
+
+func TestEsc_SendsClearTypingWhenAnnouncing(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.announcingTyping = true
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected a batch command including clearTypingCmd")
+	}
+}
+
+func TestEsc_NoClearTypingWhenNotAnnouncing(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Error("expected no command when leaving a conversation without an active typing announce")
+	}
+}
+
+// TestTypingReceived_ShowsIndicatorForOtherParticipant confirms the
+// indicator appears right after the header's own "@other" title (not
+// repeating the username a second time) so it reads as one sentence.
+func TestTypingReceived_ShowsIndicatorForOtherParticipant(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m, _ = m.Update(dmTypingReceivedMsg{users: []model.TypingUser{{UserID: "u2", Username: "trinity", Timestamp: time.Now()}}})
+	view := m.View()
+	if !strings.Contains(view, "@trinity is typing") {
+		t.Errorf("expected the header to read '@trinity is typing...', got: %q", view)
+	}
+	if strings.Count(view, "trinity") != 1 {
+		t.Errorf("expected trinity's name to appear exactly once (not repeated in the indicator), got: %q", view)
+	}
+}
+
+func TestTypingReceived_IgnoresEntryForSelf(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m, _ = m.Update(dmTypingReceivedMsg{users: []model.TypingUser{{UserID: "u1", Username: "neo", Timestamp: time.Now()}}})
+	if strings.Contains(m.View(), "is typing") {
+		t.Errorf("did not expect a typing indicator for the current user, got: %q", m.View())
+	}
+}
+
+func TestTypingAnimTick_AdvancesFrameAndReschedules(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m, cmd := m.Update(typingAnimTickMsg{convID: "c1"})
+	if m.typingAnimFrame != 1 {
+		t.Errorf("typingAnimFrame = %d, want 1", m.typingAnimFrame)
+	}
+	if cmd == nil {
+		t.Fatal("expected a rescheduled animation tick command")
+	}
+}
+
+func TestTypingAnimTick_StaleConvIDIgnored(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m2, cmd := m.Update(typingAnimTickMsg{convID: "old-abandoned-conv"})
+	if cmd != nil {
+		t.Error("expected no command for a stale animation tick")
+	}
+	if m2.typingAnimFrame != 0 {
+		t.Errorf("expected typingAnimFrame to remain unchanged, got %d", m2.typingAnimFrame)
+	}
+}
+
+func TestTypingIndicator_DotsCycleThroughZeroOneTwoThree(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.typingUsers = []model.TypingUser{{UserID: "u2", Username: "trinity", Timestamp: time.Now()}}
+
+	want := []int{0, 1, 2, 3, 0, 1, 2, 3}
+	for frame, wantDots := range want {
+		m.typingAnimFrame = frame
+		got := strings.Count(m.typingIndicator(), ".")
+		if got != wantDots {
+			t.Errorf("frame %d: dot count = %d, want %d", frame, got, wantDots)
 		}
 	}
 }

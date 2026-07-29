@@ -534,15 +534,24 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		return model.(App), cmd, true
 	}
 	// When a screen has a focused text input, let it consume all keys.
-	// ctrl+c is kept as a hard escape hatch; ctrl+o reaches the open-link
-	// shortcut too, since plain 'o' is unreachable while chatting (CIRC/
-	// C-Mail's compose input is focused for the entire detail view, not just
-	// a transient sub-mode like Feed's reply box).
+	// ctrl+c is kept as a hard escape hatch; a handful of other global
+	// shortcuts get a ctrl-prefixed twin that reaches through too, since
+	// their bare key is unreachable while chatting (CIRC/C-Mail's compose
+	// input is focused for the entire detail view, not just a transient
+	// sub-mode like Feed's reply box): ctrl+o (open link), ctrl+q (quit),
+	// ctrl+t (theme picker), ctrl+left/right (cycle tabs). ctrl+/ (search)
+	// was tried and removed — the byte a physical ctrl+/ keystroke sends is
+	// inconsistent across terminals (0x1F on most, a literal NUL on e.g. Git
+	// Bash/MinTTY, indistinguishable there from ctrl+space/ctrl+2/ctrl+@), so
+	// there's no reliable encoding to match on.
 	if a.activeScreenHasFocusedInput() {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
 		}
-		if m.String() != "ctrl+o" {
+		switch m.String() {
+		case "ctrl+o", "ctrl+q", "ctrl+t", "ctrl+left", "ctrl+right":
+			// fall through to the global switch below
+		default:
 			return a, nil, false // fall through to delegateUpdate
 		}
 	}
@@ -575,7 +584,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 	}
 	switch m.String() {
-	case "t":
+	case "t", "ctrl+t":
 		if a.active != screenLogin {
 			a.themePickerOpen = true
 			a.themePickerOrig = theme.CurrentName()
@@ -619,7 +628,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.search = a.search.FocusQuery()
 			return a, nil, true
 		}
-	case "ctrl+c", "q":
+	case "ctrl+c", "q", "ctrl+q":
 		if a.active != screenLogin {
 			return a, tea.Quit, true
 		}

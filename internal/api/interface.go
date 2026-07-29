@@ -192,6 +192,18 @@ type Client interface {
 	// Returns a channel of incoming messages and a cancel function.
 	// The channel is closed when cancel is called or the stream ends.
 	SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error)
+	// AnnounceTyping announces that the caller is typing in conversationID.
+	// Returns the heartbeat cadence and staleness window (both ms) to honor —
+	// read these from the response rather than hard-coding them.
+	AnnounceTyping(conversationID string) (heartbeatMs, staleAfterMs int, err error)
+	// ClearTyping clears the caller's typing flag in conversationID immediately.
+	ClearTyping(conversationID string) error
+	// SubscribeDMTyping opens a live RTDB SSE stream for conversationID's
+	// typing node. Each receive is a full, filtered (typing + fresh) snapshot
+	// rather than a single incremental event. staleAfterMs comes from
+	// AnnounceTyping's response, or a fixed default if subscribing before ever
+	// announcing typing ourselves.
+	SubscribeDMTyping(ctx context.Context, conversationID string, staleAfterMs int) (<-chan []model.TypingUser, context.CancelFunc, error)
 
 	// Search — full-text search across users, posts, and replies (v0.7).
 	// Search returns the grouped "type=all" preview: up to 8 hits per category,

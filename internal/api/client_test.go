@@ -651,9 +651,9 @@ func TestHTTPSubscribeDMs_SkipsSnapshotDeliversMessages(t *testing.T) {
 	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		// Initial snapshot — must be skipped by SubscribeDMs.
+		// Initial snapshot â€” must be skipped by SubscribeDMs.
 		writeSSEEvent(w, "put", `{"path":"/","data":{"msg0":{"senderId":"u1","senderUsername":"case","content":"old","timestamp":1700000000000,"read":false}}}`)
-		// New message — must arrive on channel.
+		// New message â€” must arrive on channel.
 		writeSSEEvent(w, "put", `{"path":"/msg1","data":{"senderId":"u2","senderUsername":"molly_millions","content":"hello","timestamp":1700000001000,"read":false}}`)
 	}))
 
@@ -736,7 +736,7 @@ func TestHTTPSubscribeDMs_CancelClosesChannel(t *testing.T) {
 	select {
 	case _, open := <-ch:
 		if open {
-			// Drain remaining events — channel should close shortly.
+			// Drain remaining events â€” channel should close shortly.
 			for range ch {
 			}
 		}
@@ -899,7 +899,7 @@ func TestHTTPGetConversations_SanitizesControlChars(t *testing.T) {
 
 // TestHTTPGetRooms_SanitizesControlChars guards against the same sanitize-bypass
 // class the 2026-07-24 review found in chat messages, applied here to room
-// name/slug — GetRooms was found missing sanitize.Strings during the fix.
+// name/slug â€” GetRooms was found missing sanitize.Strings during the fix.
 func TestHTTPGetRooms_SanitizesControlChars(t *testing.T) {
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeOK(t, w, []map[string]any{
@@ -1055,7 +1055,7 @@ func TestHTTPGetMessages_SanitizesControlChars(t *testing.T) {
 // TestHTTPGetMessages_ParsesIsAction locks in the undocumented isAction field
 // for C-Mail, added defensively alongside CIRC's (unconfirmed live for
 // C-Mail specifically, but the API describes commands as shared between the
-// two — harmless no-op if the field is actually absent there).
+// two â€” harmless no-op if the field is actually absent there).
 func TestHTTPGetMessages_ParsesIsAction(t *testing.T) {
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeOK(t, w, []map[string]any{
@@ -1295,6 +1295,113 @@ func TestHTTPSubscribeRoomPresence_SingleKeyUpdateReplacesEntry(t *testing.T) {
 					t.Errorf("Username contains unstripped ESC: %q", last[0].Username)
 				}
 				return // saw the updated (admin) entry
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for the updated entry, last snapshot: %+v", last)
+		}
+	}
+}
+
+func TestHTTPAnnounceTyping_ParsesCadence(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail/c1/typing" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{"conversationId": "c1", "ok": true, "heartbeatMs": 3000, "staleAfterMs": 9000})
+	})))
+	c.LoginWithRefreshToken("tok")
+	heartbeatMs, staleAfterMs, err := c.AnnounceTyping("c1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if heartbeatMs != 3000 {
+		t.Errorf("heartbeatMs = %d, want 3000", heartbeatMs)
+	}
+	if staleAfterMs != 9000 {
+		t.Errorf("staleAfterMs = %d, want 9000", staleAfterMs)
+	}
+}
+
+func TestHTTPClearTyping_SendsDelete(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmail/c1/typing" || r.Method != http.MethodDelete {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{"conversationId": "c1", "ok": true})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if err := c.ClearTyping("c1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestHTTPSubscribeDMTyping_InitialSnapshotFiltersNonTypingAndStale verifies
+// the initial full-snapshot "put" at path "/" is consumed, and that
+// not-typing/stale entries are filtered out of the delivered snapshot.
+func TestHTTPSubscribeDMTyping_InitialSnapshotFiltersNonTypingAndStale(t *testing.T) {
+	now := time.Now().UnixMilli()
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		data := fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","typing":true,"timestamp":%d},"u2":{"username":"bob","typing":false,"timestamp":%d},"u3":{"username":"carol","typing":true,"timestamp":%d}}}`, now, now, now-500000)
+		writeSSEEvent(w, "put", data)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeDMTyping(context.Background(), "c1", 9000)
+	if err != nil {
+		t.Fatalf("SubscribeDMTyping error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case users, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering a snapshot")
+		}
+		if len(users) != 1 {
+			t.Fatalf("len(users) = %d, want 1 (only alice is typing and fresh): %+v", len(users), users)
+		}
+		if users[0].Username != "alice" {
+			t.Errorf("users[0] = %+v, want alice", users[0])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for snapshot")
+	}
+}
+
+// TestHTTPSubscribeDMTyping_SingleKeyUpdateReplacesEntry verifies a
+// "/<userId>" path event replaces just that user's entry.
+func TestHTTPSubscribeDMTyping_SingleKeyUpdateReplacesEntry(t *testing.T) {
+	now := time.Now().UnixMilli()
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","typing":false,"timestamp":%d}}}`, now))
+		writeSSEEvent(w, "put", fmt.Sprintf(`{"path":"/u1","data":{"username":"evil\u001b[31m","typing":true,"timestamp":%d}}`, now))
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeDMTyping(context.Background(), "c1", 9000)
+	if err != nil {
+		t.Fatalf("SubscribeDMTyping error: %v", err)
+	}
+	defer cancel()
+
+	var last []model.TypingUser
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case users, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before delivering the updated snapshot")
+			}
+			last = users
+			if len(last) == 1 {
+				if strings.ContainsRune(last[0].Username, 0x1b) {
+					t.Errorf("Username contains unstripped ESC: %q", last[0].Username)
+				}
+				return // saw the updated (now-typing) entry
 			}
 		case <-deadline:
 			t.Fatalf("timed out waiting for the updated entry, last snapshot: %+v", last)

@@ -477,6 +477,22 @@ type wireCMailStartResponse struct {
 	OtherUser      wireCMailOtherUser `json:"otherUser"`
 }
 
+// wireTypingResponse is returned by POST/DELETE /v1/cmail/:conversationId/typing.
+type wireTypingResponse struct {
+	ConversationID string `json:"conversationId"`
+	Ok             bool   `json:"ok"`
+	HeartbeatMs    int    `json:"heartbeatMs"`
+	StaleAfterMs   int    `json:"staleAfterMs"`
+}
+
+// wireRTDBTypingEntry is the Firebase shape for one user's entry in
+// /dm_presence/<conversationId>/<userId>.
+type wireRTDBTypingEntry struct {
+	Username  string  `json:"username"`
+	Typing    bool    `json:"typing"`
+	Timestamp float64 `json:"timestamp"` // epoch ms as a Firebase number
+}
+
 // wireRTDBMessage is the Firebase shape for a DM message in /dm_messages/<convId>/<msgId>.
 type wireRTDBMessage struct {
 	SenderID       string  `json:"senderId"`
@@ -2001,6 +2017,145 @@ func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 			msgID := strings.TrimPrefix(d.Path, "/")
 			select {
 			case out <- wireRTDBMessageToModel(msgID, wm):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
+}
+
+// AnnounceTyping announces the caller is typing in conversationID via POST
+// /v1/cmail/:conversationId/typing. Returns the heartbeat cadence and
+// staleness window (both ms) the caller should honor.
+func (c *HTTPClient) AnnounceTyping(conversationID string) (heartbeatMs, staleAfterMs int, err error) {
+	env, err := c.doRequest("POST", "/v1/cmail/"+url.PathEscape(conversationID)+"/typing", nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	var data wireTypingResponse
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return 0, 0, err
+	}
+	return data.HeartbeatMs, data.StaleAfterMs, nil
+}
+
+// ClearTyping clears the caller's typing flag in conversationID immediately
+// via DELETE /v1/cmail/:conversationId/typing.
+func (c *HTTPClient) ClearTyping(conversationID string) error {
+	_, err := c.doRequest("DELETE", "/v1/cmail/"+url.PathEscape(conversationID)+"/typing", nil)
+	return err
+}
+
+// applyTypingEvent merges one RTDB event into state, keyed by userId. Mirrors
+// applyPresenceEvent's "/" full-replace vs "/<userId>" single-entry handling
+// (see that function's doc comment for the nested-patch limitation) — kept as
+// a separate function since wireRTDBTypingEntry's shape (typing+timestamp)
+// differs enough from wireRTDBPresenceEntry (online+lastSeen) that sharing
+// code would cost more than the ~15 lines it'd save.
+func applyTypingEvent(state map[string]wireRTDBTypingEntry, d wireRTDBSSEData) {
+	empty := len(d.Data) == 0 || string(d.Data) == "null"
+	if d.Path == "/" {
+		for k := range state {
+			delete(state, k)
+		}
+		if empty {
+			return
+		}
+		var full map[string]wireRTDBTypingEntry
+		if err := json.Unmarshal(d.Data, &full); err != nil {
+			return
+		}
+		for k, v := range full {
+			sanitize.Strings(&v)
+			state[k] = v
+		}
+		return
+	}
+	userID := strings.TrimPrefix(d.Path, "/")
+	if strings.ContainsRune(userID, '/') {
+		return // nested field patch — see doc comment above
+	}
+	if empty {
+		delete(state, userID)
+		return
+	}
+	var entry wireRTDBTypingEntry
+	if err := json.Unmarshal(d.Data, &entry); err != nil {
+		return
+	}
+	sanitize.Strings(&entry)
+	state[userID] = entry
+}
+
+// filterFreshTyping converts state to the snapshot of users currently typing
+// and not yet stale: typing == true and timestamp newer than staleAfterMs.
+func filterFreshTyping(state map[string]wireRTDBTypingEntry, staleAfterMs int) []model.TypingUser {
+	now := time.Now().UnixMilli()
+	out := make([]model.TypingUser, 0, len(state))
+	for userID, e := range state {
+		if !e.Typing || now-int64(e.Timestamp) >= int64(staleAfterMs) {
+			continue
+		}
+		out = append(out, model.TypingUser{
+			UserID:    userID,
+			Username:  e.Username,
+			Timestamp: time.UnixMilli(int64(e.Timestamp)),
+		})
+	}
+	return out
+}
+
+// SubscribeDMTyping opens a live RTDB SSE stream for conversationID's typing
+// node. Unlike SubscribeDMs, typing entries mutate and expire in place, so
+// each receive is a full, filtered snapshot rather than a single incremental
+// event — the internal state map is re-filtered and re-sent both on every
+// RTDB event and on a periodic timer (an entry going stale produces no event
+// of its own), mirroring SubscribeRoomPresence.
+func (c *HTTPClient) SubscribeDMTyping(ctx context.Context, conversationID string, staleAfterMs int) (<-chan []model.TypingUser, context.CancelFunc, error) {
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	sseEvents := r.Subscribe(ctx, "/dm_presence/"+conversationID, nil)
+	out := make(chan []model.TypingUser, 1)
+	send := func(users []model.TypingUser) {
+		select {
+		case out <- users:
+		default:
+			select {
+			case <-out:
+			default:
+			}
+			select {
+			case out <- users:
+			case <-ctx.Done():
+			}
+		}
+	}
+	go func() {
+		defer close(out)
+		state := map[string]wireRTDBTypingEntry{}
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case ev, ok := <-sseEvents:
+				if !ok || ev.Err != nil {
+					return
+				}
+				if ev.Event != "put" && ev.Event != "patch" {
+					continue
+				}
+				var d wireRTDBSSEData
+				if err := json.Unmarshal(ev.Data, &d); err != nil {
+					continue
+				}
+				applyTypingEvent(state, d)
+				send(filterFreshTyping(state, staleAfterMs))
+			case <-ticker.C:
+				send(filterFreshTyping(state, staleAfterMs))
 			case <-ctx.Done():
 				return
 			}

@@ -549,6 +549,34 @@ func (m *MockClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 	return ch, cancel, nil
 }
 
+// AnnounceTyping returns the documented fixed cadence (3s heartbeat / 9s staleness).
+func (m *MockClient) AnnounceTyping(conversationID string) (heartbeatMs, staleAfterMs int, err error) {
+	return 3000, 9000, nil
+}
+
+func (m *MockClient) ClearTyping(conversationID string) error {
+	return nil
+}
+
+// SubscribeDMTyping delivers one canned "other participant is typing"
+// snapshot after 2 seconds, then closes — mirrors SubscribeRoomPresence's mock.
+func (m *MockClient) SubscribeDMTyping(ctx context.Context, conversationID string, staleAfterMs int) (<-chan []model.TypingUser, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan []model.TypingUser, 1)
+	go func() {
+		defer close(ch)
+		select {
+		case <-time.After(2 * time.Second):
+			select {
+			case ch <- []model.TypingUser{{UserID: mockUsers[1].ID, Username: mockUsers[1].Username, Timestamp: time.Now()}}:
+			case <-ctx.Done():
+			}
+		case <-ctx.Done():
+		}
+	}()
+	return ch, cancel, nil
+}
+
 func (m *MockClient) StartConversation(recipientUsername string) (model.Conversation, error) {
 	return model.Conversation{
 		ID:           "c-new",
