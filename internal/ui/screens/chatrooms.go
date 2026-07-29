@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -49,6 +50,18 @@ type roomPresenceSubscription struct {
 	RoomID string
 	C      <-chan []model.RoomUser
 	cancel context.CancelFunc
+}
+
+// mentionCycle tracks an in-progress @-mention Tab-completion: repeated Tab
+// presses replace the same span with the next candidate, classic
+// shell-completion style. Cleared by any key other than Tab (see the
+// chatroomModeDetail key switch), which locks in whatever text is currently
+// there.
+type mentionCycle struct {
+	atPos   int              // rune index of '@' in the input value
+	end     int              // rune index right after the currently-inserted name
+	matches []model.RoomUser // snapshot taken at cycle start, stable through the session
+	index   int
 }
 
 // CIRC SSE subscription message types — unexported, handled within ChatroomsModel.
@@ -176,6 +189,10 @@ type ChatroomsModel struct {
 	presenceSub  *roomPresenceSubscription
 	heartbeatMs  int
 	staleAfterMs int
+
+	// mentionCycle tracks an in-progress Tab-completion of an @-mention; nil
+	// when not cycling. See mentionCycle's doc comment.
+	mentionCycle *mentionCycle
 }
 
 // SendRoomMessageMsg is emitted when the user sends a chatroom message.
@@ -797,7 +814,31 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			}
 
 		case chatroomModeDetail:
+			// Any key other than Tab ends an in-progress mention cycle and
+			// locks in whatever text is currently there — matches
+			// shell-completion convention.
+			if msg.String() != "tab" {
+				m.mentionCycle = nil
+			}
 			switch msg.String() {
+			case "tab":
+				if c := m.mentionCycle; c != nil && m.input.Position() == c.end {
+					next := (c.index + 1) % len(c.matches)
+					newValue, newEnd := spliceMention(m.input.Value(), c.atPos, c.end, c.matches[next].Username)
+					m.input.SetValue(newValue)
+					m.input.SetCursor(newEnd)
+					m.mentionCycle = &mentionCycle{atPos: c.atPos, end: newEnd, matches: c.matches, index: next}
+					return m, nil
+				}
+				if query, atPos, ok := mentionQueryAt(m.input.Value(), m.input.Position()); ok {
+					if matches := matchMentionCandidates(m.roomUsers, query); len(matches) > 0 {
+						newValue, newEnd := spliceMention(m.input.Value(), atPos, m.input.Position(), matches[0].Username)
+						m.input.SetValue(newValue)
+						m.input.SetCursor(newEnd)
+						m.mentionCycle = &mentionCycle{atPos: atPos, end: newEnd, matches: matches, index: 0}
+					}
+				}
+				return m, nil
 			case "esc":
 				var leaveRoomID string
 				if m.activeRoom != nil {
@@ -955,6 +996,66 @@ func (m ChatroomsModel) panelWidths() (msgW, usersW int) {
 		return m.width, 0
 	}
 	return m.width - roomUsersPanelPreferredWidth - roomUsersPanelSep, roomUsersPanelPreferredWidth
+}
+
+// mentionQueryAt returns the in-progress @-mention text and the rune index
+// of the '@' if cursor sits inside one — an '@' at the start of the input or
+// preceded by whitespace, followed by a run of non-whitespace characters up
+// to cursor. ok is false otherwise (including mid-word cases like
+// "user@host", where the '@' isn't preceded by whitespace/start-of-input).
+func mentionQueryAt(value string, cursor int) (query string, atPos int, ok bool) {
+	runes := []rune(value)
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	i := cursor - 1
+	for i >= 0 && runes[i] != '@' && !unicode.IsSpace(runes[i]) {
+		i--
+	}
+	if i < 0 || runes[i] != '@' {
+		return "", 0, false
+	}
+	if i > 0 && !unicode.IsSpace(runes[i-1]) {
+		return "", 0, false
+	}
+	return string(runes[i+1 : cursor]), i, true
+}
+
+// matchMentionCandidates returns the online users whose username starts with
+// query (case-insensitive), in the same admins-first/alphabetical order
+// SetRoomUsers already sorts m.roomUsers into.
+func matchMentionCandidates(users []model.RoomUser, query string) []model.RoomUser {
+	q := strings.ToLower(query)
+	var out []model.RoomUser
+	for _, u := range users {
+		if strings.HasPrefix(strings.ToLower(u.Username), q) {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// spliceMention replaces value's [atPos:cursor) rune span with "@username"
+// and returns the cursor position right after the inserted name — no
+// trailing space, so a repeated Tab press can keep replacing the same span
+// to cycle to the next candidate.
+func spliceMention(value string, atPos, cursor int, username string) (newValue string, newCursor int) {
+	runes := []rune(value)
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	if atPos > cursor {
+		atPos = cursor
+	}
+	replacement := []rune("@" + username)
+	out := make([]rune, 0, len(runes)-(cursor-atPos)+len(replacement))
+	out = append(out, runes[:atPos]...)
+	out = append(out, replacement...)
+	out = append(out, runes[cursor:]...)
+	return string(out), atPos + len(replacement)
 }
 
 // sortRoomUsers returns a copy of users ordered admins-first, then

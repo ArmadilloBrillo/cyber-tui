@@ -281,3 +281,172 @@ func TestDetailView_HeaderHasDividerBeforeMessages(t *testing.T) {
 		t.Errorf("did not expect the divider character on the header line itself, got: %q", lines[0])
 	}
 }
+
+// --- mentionQueryAt ---
+
+func TestMentionQueryAt(t *testing.T) {
+	cases := []struct {
+		name      string
+		value     string
+		cursor    int
+		wantQuery string
+		wantAtPos int
+		wantOK    bool
+	}{
+		{"bare @ at start", "@", 1, "", 0, true},
+		{"partial mid-sentence", "hey @al", 7, "al", 4, true},
+		{"partial at start", "@al", 3, "al", 0, true},
+		{"no @ at all", "hello", 5, "", 0, false},
+		{"email-like, no leading boundary", "user@host", 9, "", 0, false},
+		{"cleared after a completed mention plus space", "hey @alice ", 11, "", 0, false},
+		{"cursor mid-word still in query", "@alice", 3, "al", 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			query, atPos, ok := mentionQueryAt(c.value, c.cursor)
+			if ok != c.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, c.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if query != c.wantQuery {
+				t.Errorf("query = %q, want %q", query, c.wantQuery)
+			}
+			if atPos != c.wantAtPos {
+				t.Errorf("atPos = %d, want %d", atPos, c.wantAtPos)
+			}
+		})
+	}
+}
+
+// --- matchMentionCandidates ---
+
+func TestMatchMentionCandidates(t *testing.T) {
+	users := []model.RoomUser{
+		{Username: "bob", IsChatAdmin: true},
+		{Username: "alice"},
+		{Username: "Albert"},
+	}
+	// matchMentionCandidates doesn't sort — it filters in whatever order
+	// it's given, matching SetRoomUsers' already-sorted m.roomUsers.
+	got := matchMentionCandidates(users, "al")
+	if len(got) != 2 || got[0].Username != "alice" || got[1].Username != "Albert" {
+		t.Fatalf("got %+v, want [alice, Albert] (case-insensitive prefix match)", got)
+	}
+
+	if got := matchMentionCandidates(users, ""); len(got) != 3 {
+		t.Errorf("empty query should match everyone, got %d", len(got))
+	}
+
+	if got := matchMentionCandidates(users, "zzz"); len(got) != 0 {
+		t.Errorf("expected no matches for a non-existent prefix, got %+v", got)
+	}
+}
+
+// --- spliceMention ---
+
+func TestSpliceMention(t *testing.T) {
+	newValue, newCursor := spliceMention("hey @al there", 4, 7, "alice")
+	if newValue != "hey @alice there" {
+		t.Errorf("newValue = %q, want %q", newValue, "hey @alice there")
+	}
+	if newCursor != 10 {
+		t.Errorf("newCursor = %d, want 10 (right after the inserted name, no trailing space)", newCursor)
+	}
+}
+
+// --- Tab-driven mention cycling (Update-level) ---
+
+func setInput(m ChatroomsModel, value string, cursor int) ChatroomsModel {
+	m.input.SetValue(value)
+	m.input.SetCursor(cursor)
+	return m
+}
+
+func TestMentionTab_FirstPressCompletesToTopMatch(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
+	m = setInput(m, "hey @al", 7)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	if m.input.Value() != "hey @alice" {
+		t.Errorf("input = %q, want %q", m.input.Value(), "hey @alice")
+	}
+	if m.mentionCycle == nil {
+		t.Fatal("expected a mentionCycle to be started")
+	}
+}
+
+func TestMentionTab_SecondPressCyclesToNextMatch(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
+	m = setInput(m, "hey @al", 7)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	if m.input.Value() != "hey @albert" {
+		t.Errorf("input = %q, want %q (second Tab should advance to the next match)", m.input.Value(), "hey @albert")
+	}
+}
+
+func TestMentionTab_ThirdPressWrapsAround(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
+	m = setInput(m, "hey @al", 7)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	if m.input.Value() != "hey @alice" {
+		t.Errorf("input = %q, want %q (third Tab should wrap back to the first match)", m.input.Value(), "hey @alice")
+	}
+}
+
+func TestMentionTab_TypingBetweenPressesStartsFreshCycle(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
+	m = setInput(m, "hey @al", 7)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> "hey @alice"
+	// User types a character, ending the cycle (mirrors a real keystroke:
+	// deletes the trailing "e" and retypes "y" to get "hey @alicy").
+	m = setInput(m, "hey @alicy", 10)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if m.mentionCycle != nil {
+		t.Fatal("expected typing to clear the in-progress mention cycle")
+	}
+}
+
+func TestMentionTab_NoOpWithoutAtSign(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}}
+	m = setInput(m, "hello", 5)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	if m.input.Value() != "hello" {
+		t.Errorf("input = %q, want unchanged %q", m.input.Value(), "hello")
+	}
+	if m.mentionCycle != nil {
+		t.Error("expected no mentionCycle without an @ in progress")
+	}
+}
+
+func TestMentionTab_NoOpWithNoMatches(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}}
+	m = setInput(m, "hey @zzz", 8)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	if m.input.Value() != "hey @zzz" {
+		t.Errorf("input = %q, want unchanged %q", m.input.Value(), "hey @zzz")
+	}
+	if m.mentionCycle != nil {
+		t.Error("expected no mentionCycle when nothing matches")
+	}
+}
