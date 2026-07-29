@@ -39,6 +39,7 @@ const (
 	dmTypingDefaultStaleAfterMs = 9000
 	dmTypingIdleThreshold       = 2500 * time.Millisecond
 	dmTypingIdleCheckInterval   = 500 * time.Millisecond
+	dmTypingAnimInterval        = 500 * time.Millisecond // one dot per tick; 1.5s full "." → ".." → "..." cycle
 )
 
 // dmSubscription holds the live RTDB channel and its cancellation function.
@@ -93,6 +94,7 @@ type typingAnnouncedMsg struct {
 }
 type typingHeartbeatTickMsg struct{ convID string }
 type typingIdleCheckMsg struct{ convID string }
+type typingAnimTickMsg struct{ convID string }
 type dmTypingSubscribedMsg struct {
 	convID string
 	sub    *dmTypingSubscription
@@ -175,10 +177,11 @@ type CMailModel struct {
 	// Typing-indicator state: the read side (subscription to the other
 	// participant's typing status) and the write side (our own announce).
 	typingSub         *dmTypingSubscription
-	typingUsers       []model.TypingUser // latest fresh snapshot; used to render "X is typing…"
+	typingUsers       []model.TypingUser // latest fresh snapshot; used to render "is typing..."
 	announcingTyping  bool               // true from the first keystroke's POST until send/idle-clear
 	lastKeystrokeAt   time.Time          // updated on every keystroke; idle-check compares against this
 	typingHeartbeatMs int                // from AnnounceTyping's response; drives our own re-announce cadence
+	typingAnimFrame   int                // cycles the indicator's animated dot count; free-runs while a conversation is open
 }
 
 // SendCMailMsg is emitted when the user sends a C-Mail message.
@@ -227,6 +230,7 @@ func (m CMailModel) cancelDMSub() CMailModel {
 	m.typingUsers = nil
 	m.announcingTyping = false
 	m.typingHeartbeatMs = 0
+	m.typingAnimFrame = 0
 	return m
 }
 
@@ -292,6 +296,16 @@ func scheduleTypingHeartbeatCmd(convID string, heartbeatMs int) tea.Cmd {
 func scheduleTypingIdleCheckCmd(convID string) tea.Cmd {
 	return tea.Tick(dmTypingIdleCheckInterval, func(time.Time) tea.Msg {
 		return typingIdleCheckMsg{convID: convID}
+	})
+}
+
+// scheduleTypingAnimCmd self-reschedules the indicator's dot-animation tick
+// every dmTypingAnimInterval. Free-runs for as long as a conversation is
+// open, independent of whether anyone is actually typing — same always-on
+// shape as this screen's textinput.Blink cursor animation.
+func scheduleTypingAnimCmd(convID string) tea.Cmd {
+	return tea.Tick(dmTypingAnimInterval, func(time.Time) tea.Msg {
+		return typingAnimTickMsg{convID: convID}
 	})
 }
 
@@ -458,7 +472,12 @@ func (m CMailModel) TotalUnread() int {
 // ConvOpenCmds returns the batch command to load message history and open the
 // live RTDB subscription for convID. Call after SetActiveConversation.
 func (m CMailModel) ConvOpenCmds(convID string) tea.Cmd {
-	return tea.Batch(m.loadConvMessagesCmd(convID), m.openDMSubscriptionCmd(convID), m.openTypingSubscriptionCmd(convID))
+	return tea.Batch(
+		m.loadConvMessagesCmd(convID),
+		m.openDMSubscriptionCmd(convID),
+		m.openTypingSubscriptionCmd(convID),
+		scheduleTypingAnimCmd(convID),
+	)
 }
 
 // InputFocused returns true in detail mode to prevent tab-navigation key capture.
@@ -635,6 +654,13 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		}
 		return m, scheduleTypingIdleCheckCmd(msg.convID)
 
+	case typingAnimTickMsg:
+		if msg.convID != m.activeConvID {
+			return m, nil // conversation closed; let the tick chain die out
+		}
+		m.typingAnimFrame++
+		return m, scheduleTypingAnimCmd(msg.convID)
+
 	case dmTypingSubscribedMsg:
 		if msg.convID != m.activeConvID {
 			msg.sub.cancel()
@@ -709,6 +735,7 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 						m.loadConvMessagesCmd(conv.ID),
 						m.openDMSubscriptionCmd(conv.ID),
 						m.openTypingSubscriptionCmd(conv.ID),
+						scheduleTypingAnimCmd(conv.ID),
 						func() tea.Msg { return CMailConvSelectedMsg{ConversationID: convID} },
 					)
 				}
@@ -1004,8 +1031,10 @@ func (m CMailModel) PrependMessages(convID string, msgs []model.Message) CMailMo
 	return m
 }
 
-// typingIndicator returns "  @other is typing…" if the other participant
-// currently has a fresh entry in m.typingUsers, else "".
+// typingIndicator returns " is typing" plus an animated 1-3 dot count if the
+// other participant currently has a fresh entry in m.typingUsers, else "".
+// The username itself is left out — it's appended right after the header's
+// own "@other" title, so together they read as one sentence.
 func (m CMailModel) typingIndicator() string {
 	if m.activeConv == nil {
 		return ""
@@ -1013,7 +1042,8 @@ func (m CMailModel) typingIndicator() string {
 	other := m.otherParticipant(*m.activeConv)
 	for _, u := range m.typingUsers {
 		if u.Username == other {
-			return theme.Subtle.Render("  " + other + " is typing…")
+			dots := strings.Repeat(".", m.typingAnimFrame%3+1)
+			return theme.Subtle.Render(" is typing" + dots)
 		}
 	}
 	return ""

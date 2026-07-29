@@ -318,12 +318,19 @@ func TestEsc_NoClearTypingWhenNotAnnouncing(t *testing.T) {
 	}
 }
 
+// TestTypingReceived_ShowsIndicatorForOtherParticipant confirms the
+// indicator appears right after the header's own "@other" title (not
+// repeating the username a second time) so it reads as one sentence.
 func TestTypingReceived_ShowsIndicatorForOtherParticipant(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
 
 	m, _ = m.Update(dmTypingReceivedMsg{users: []model.TypingUser{{UserID: "u2", Username: "trinity", Timestamp: time.Now()}}})
-	if !strings.Contains(m.View(), "trinity is typing") {
-		t.Errorf("expected the typing indicator for trinity in the view, got: %q", m.View())
+	view := m.View()
+	if !strings.Contains(view, "@trinity is typing.") {
+		t.Errorf("expected the header to read '@trinity is typing...', got: %q", view)
+	}
+	if strings.Count(view, "trinity") != 1 {
+		t.Errorf("expected trinity's name to appear exactly once (not repeated in the indicator), got: %q", view)
 	}
 }
 
@@ -333,5 +340,43 @@ func TestTypingReceived_IgnoresEntryForSelf(t *testing.T) {
 	m, _ = m.Update(dmTypingReceivedMsg{users: []model.TypingUser{{UserID: "u1", Username: "neo", Timestamp: time.Now()}}})
 	if strings.Contains(m.View(), "is typing") {
 		t.Errorf("did not expect a typing indicator for the current user, got: %q", m.View())
+	}
+}
+
+func TestTypingAnimTick_AdvancesFrameAndReschedules(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m, cmd := m.Update(typingAnimTickMsg{convID: "c1"})
+	if m.typingAnimFrame != 1 {
+		t.Errorf("typingAnimFrame = %d, want 1", m.typingAnimFrame)
+	}
+	if cmd == nil {
+		t.Fatal("expected a rescheduled animation tick command")
+	}
+}
+
+func TestTypingAnimTick_StaleConvIDIgnored(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m2, cmd := m.Update(typingAnimTickMsg{convID: "old-abandoned-conv"})
+	if cmd != nil {
+		t.Error("expected no command for a stale animation tick")
+	}
+	if m2.typingAnimFrame != 0 {
+		t.Errorf("expected typingAnimFrame to remain unchanged, got %d", m2.typingAnimFrame)
+	}
+}
+
+func TestTypingIndicator_DotsCycleThroughOneTwoThree(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.typingUsers = []model.TypingUser{{UserID: "u2", Username: "trinity", Timestamp: time.Now()}}
+
+	want := []int{1, 2, 3, 1, 2, 3}
+	for frame, wantDots := range want {
+		m.typingAnimFrame = frame
+		got := strings.Count(m.typingIndicator(), ".")
+		if got != wantDots {
+			t.Errorf("frame %d: dot count = %d, want %d", frame, got, wantDots)
+		}
 	}
 }
