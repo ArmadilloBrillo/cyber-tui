@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -88,10 +89,26 @@ func main() {
 	} else if cfg.Email != "" {
 		app = app.WithSavedEmail(cfg.Email)
 	}
-	p := tea.NewProgram(
-		app,
-		tea.WithAltScreen(),
-	)
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	// CYBERSPACE_DEBUG_KEYS logs every raw tea.KeyMsg (key + KeyType + runes) to
+	// cyber-tui-keys.log, to diagnose terminal-specific keybinding quirks (e.g.
+	// a terminal not sending the expected byte for a given ctrl-combo) without
+	// having to instrument app logic — see docs/00-project-reference.md.
+	if os.Getenv("CYBERSPACE_DEBUG_KEYS") != "" {
+		logFile, err := tea.LogToFile("cyber-tui-keys.log", "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "CYBERSPACE_DEBUG_KEYS: %v\n", err)
+		} else {
+			defer logFile.Close()
+			opts = append(opts, tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+				if km, ok := msg.(tea.KeyMsg); ok {
+					log.Printf("key: %q type=%v runes=%v alt=%v", km.String(), km.Type, km.Runes, km.Alt)
+				}
+				return msg // pure observer — never alters the message
+			}))
+		}
+	}
+	p := tea.NewProgram(app, opts...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

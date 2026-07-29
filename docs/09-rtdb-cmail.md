@@ -159,3 +159,9 @@ Set `CYBERSPACE_DEBUG=1` to print raw RTDB responses for unknown shapes:
 ```bash
 CYBERSPACE_DEBUG=1 go run ./cmd/cyber-tui
 ```
+
+**`CYBERSPACE_DEBUG_KEYS`** (general-purpose, not RTDB-specific): logs every raw `tea.KeyMsg` (the string bubbletea assigns it, its `KeyType`, and its runes) to `cyber-tui-keys.log` via a `tea.WithFilter` observer in `cmd/cyber-tui/main.go`. Useful for diagnosing terminal-specific keybinding quirks — e.g. confirming exactly what byte sequence a given terminal sends for a ctrl-combo — without instrumenting app logic:
+
+```bash
+CYBERSPACE_DEBUG_KEYS=1 go run ./cmd/cyber-tui
+```
