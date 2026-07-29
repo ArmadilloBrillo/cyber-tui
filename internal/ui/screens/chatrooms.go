@@ -933,9 +933,10 @@ func (m ChatroomsModel) renderMessages() string {
 // Panel sizing: the users panel is pinned to a preferred width that
 // comfortably fits an admin marker plus the longest possible username (20
 // chars, the API's max); below roomUsersPanelMinMsgWidth for the message
-// viewport, the panel collapses entirely. Modeled on MillerLayout.paneWidths
-// (internal/ui/layout_miller.go), this codebase's existing solution for a
-// responsive sidebar vs. content width.
+// viewport, the panel collapses entirely rather than shrinking below its
+// preferred width — an in-between size could be narrower than the worst-case
+// content, and lipgloss/cellbuf.Wrap hard-breaks a too-long unbroken word
+// (a username has no spaces to break on) instead of truncating it.
 const (
 	roomUsersPanelPreferredWidth = 24 // admin marker(2) + username(20) + padding(2)
 	roomUsersPanelMinMsgWidth    = 40 // message viewport never shrinks below this
@@ -943,17 +944,17 @@ const (
 )
 
 // panelWidths returns the message-viewport and users-panel widths for the
-// screen's current width. The panel collapses to zero (full-width messages)
-// until the first presence snapshot arrives, or on a narrow terminal.
+// screen's current width. The panel is either at its full preferred width or
+// fully collapsed (full-width messages) — never an in-between size — until
+// the first presence snapshot arrives, or on a narrow terminal.
 func (m ChatroomsModel) panelWidths() (msgW, usersW int) {
 	if len(m.roomUsers) == 0 {
 		return m.width, 0
 	}
-	usersW = min(roomUsersPanelPreferredWidth, max(0, m.width*30/100))
-	if m.width-usersW-roomUsersPanelSep < roomUsersPanelMinMsgWidth {
+	if m.width-roomUsersPanelPreferredWidth-roomUsersPanelSep < roomUsersPanelMinMsgWidth {
 		return m.width, 0
 	}
-	return m.width - usersW - roomUsersPanelSep, usersW
+	return m.width - roomUsersPanelPreferredWidth - roomUsersPanelSep, roomUsersPanelPreferredWidth
 }
 
 // sortRoomUsers returns a copy of users ordered admins-first, then
@@ -970,17 +971,28 @@ func sortRoomUsers(users []model.RoomUser) []model.RoomUser {
 }
 
 // renderRoomUsersPanel renders the side panel's content — assumed already
-// sorted by sortRoomUsers.
-func renderRoomUsersPanel(users []model.RoomUser) string {
+// sorted by sortRoomUsers. The admin marker always stays theme.Highlight (an
+// admin signal, independent of who's viewing); the username text itself uses
+// theme.MeHighlight for the viewer's own name — same substitution
+// renderCircMessages makes for the message list (render.go) — theme.Highlight
+// for another admin, or unstyled otherwise.
+func renderRoomUsersPanel(users []model.RoomUser, currentUser string) string {
 	if len(users) == 0 {
 		return theme.Subtle.Render("no one else is here")
 	}
 	rows := make([]string, len(users))
 	for i, u := range users {
+		name := u.Username
+		switch {
+		case currentUser != "" && u.Username == currentUser:
+			name = theme.MeHighlight.Render(name)
+		case u.IsChatAdmin:
+			name = theme.Highlight.Render(name)
+		}
 		if u.IsChatAdmin {
-			rows[i] = theme.Highlight.Render("★ " + u.Username)
+			rows[i] = theme.Highlight.Render("★ ") + name
 		} else {
-			rows[i] = u.Username
+			rows[i] = name
 		}
 	}
 	return strings.Join(rows, "\n")
@@ -1015,7 +1027,7 @@ func (m ChatroomsModel) View() string {
 		messageArea := m.viewport.View()
 		if usersW > 0 {
 			panel := lipgloss.NewStyle().Width(usersW).Height(m.viewport.Height).MaxHeight(m.viewport.Height).
-				Render(renderRoomUsersPanel(m.roomUsers))
+				Render(renderRoomUsersPanel(m.roomUsers, m.currentUser))
 			sep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", m.viewport.Height), "\n"))
 			messageArea = lipgloss.JoinHorizontal(lipgloss.Top, messageArea, sep, panel)
 		}

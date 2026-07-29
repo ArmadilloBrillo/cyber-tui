@@ -1,11 +1,13 @@
 package screens
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 // --- sortRoomUsers ---
@@ -41,6 +43,54 @@ func TestSortRoomUsers_DoesNotMutateInput(t *testing.T) {
 	}
 }
 
+// --- renderRoomUsersPanel ---
+
+// TestRenderRoomUsersPanel_OwnNameUsesMeHighlight confirms the viewer's own
+// entry renders with theme.MeHighlight, same as their own username does in
+// the message list (render.go), while a non-admin stranger stays unstyled.
+func TestRenderRoomUsersPanel_OwnNameUsesMeHighlight(t *testing.T) {
+	withTrueColor(t)
+	users := []model.RoomUser{
+		{Username: "ragnar"},
+		{Username: "bob"},
+	}
+
+	out := renderRoomUsersPanel(users, "ragnar")
+
+	if !strings.Contains(out, theme.MeHighlight.Render("ragnar")) {
+		t.Errorf("expected own name styled with MeHighlight, got: %q", out)
+	}
+	if strings.Contains(out, theme.Highlight.Render("bob")) {
+		t.Errorf("did not expect a non-admin stranger to be styled at all, got: %q", out)
+	}
+}
+
+// TestRenderRoomUsersPanel_AdminMarkerStaysHighlightRegardlessOfViewer
+// confirms the ★ marker always renders in theme.Highlight (the admin
+// signal), independent of whether the entry belongs to the viewer — and that
+// the viewer's own admin entry gets MeHighlight on the name, not the
+// admin/Highlight color, so the two signals never collapse into one.
+func TestRenderRoomUsersPanel_AdminMarkerStaysHighlightRegardlessOfViewer(t *testing.T) {
+	withTrueColor(t)
+	users := []model.RoomUser{
+		{Username: "bob", IsChatAdmin: true},    // admin, not the viewer
+		{Username: "ragnar", IsChatAdmin: true}, // admin, and the viewer
+	}
+
+	out := renderRoomUsersPanel(users, "ragnar")
+
+	marker := theme.Highlight.Render("★ ")
+	if strings.Count(out, marker) != 2 {
+		t.Fatalf("expected the ★ marker styled with Highlight on both admin rows, got: %q", out)
+	}
+	if !strings.Contains(out, marker+theme.Highlight.Render("bob")) {
+		t.Errorf("expected the non-viewer admin's name styled with Highlight, got: %q", out)
+	}
+	if !strings.Contains(out, marker+theme.MeHighlight.Render("ragnar")) {
+		t.Errorf("expected the viewer's own admin name styled with MeHighlight (not Highlight), got: %q", out)
+	}
+}
+
 // --- panelWidths ---
 
 func TestPanelWidths_CollapsesWhenNoUsersYet(t *testing.T) {
@@ -62,14 +112,29 @@ func TestPanelWidths_CollapsesOnNarrowTerminal(t *testing.T) {
 func TestPanelWidths_ShowsPanelOnWideTerminal(t *testing.T) {
 	m := ChatroomsModel{width: 160, roomUsers: []model.RoomUser{{Username: "alice"}}}
 	msgW, usersW := m.panelWidths()
-	if usersW == 0 {
-		t.Fatal("expected a non-zero panel width on a wide terminal")
+	if usersW != roomUsersPanelPreferredWidth {
+		t.Errorf("usersW = %d, want exactly roomUsersPanelPreferredWidth (%d)", usersW, roomUsersPanelPreferredWidth)
 	}
 	if msgW+usersW+roomUsersPanelSep != 160 {
 		t.Errorf("msgW(%d) + usersW(%d) + sep(%d) = %d, want 160", msgW, usersW, roomUsersPanelSep, msgW+usersW+roomUsersPanelSep)
 	}
 	if msgW < roomUsersPanelMinMsgWidth {
 		t.Errorf("msgW = %d, must stay >= roomUsersPanelMinMsgWidth (%d)", msgW, roomUsersPanelMinMsgWidth)
+	}
+}
+
+// TestPanelWidths_NeverBetweenZeroAndPreferred guards against a regression to
+// percentage-of-width scaling, which could put the panel narrower than the
+// worst-case content (an admin marker + a 20-char max-length username) and
+// cause a hard mid-word wrap (lipgloss/cellbuf.Wrap breaks unbroken words
+// that exceed the render width rather than truncating them).
+func TestPanelWidths_NeverBetweenZeroAndPreferred(t *testing.T) {
+	for width := 0; width <= 200; width++ {
+		m := ChatroomsModel{width: width, roomUsers: []model.RoomUser{{Username: "alice"}}}
+		_, usersW := m.panelWidths()
+		if usersW != 0 && usersW != roomUsersPanelPreferredWidth {
+			t.Fatalf("width=%d: usersW = %d, want 0 or exactly %d", width, usersW, roomUsersPanelPreferredWidth)
+		}
 	}
 }
 
