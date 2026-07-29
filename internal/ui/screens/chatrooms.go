@@ -844,9 +844,13 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				}
 				return m, nil
 			case " ":
-				if c := m.mentionCycle; c != nil && m.input.Position() == c.queryEnd {
-					candidate := c.matches[c.index].Username
-					newValue, newCursor := spliceMention(m.input.Value(), c.atPos, c.queryEnd, candidate)
+				// Commits whatever mentionActiveCandidate is currently
+				// showing — the active Tab-cycle's pick, or its passive
+				// default (the first match, shown before any Tab press) —
+				// so Space always commits exactly what's ghost-previewed,
+				// never disagreeing with what the user sees.
+				if atPos, cursor, _, candidate, ok := m.mentionActiveCandidate(); ok {
+					newValue, newCursor := spliceMention(m.input.Value(), atPos, cursor, candidate)
 					runes := []rune(newValue)
 					runes = append(runes[:newCursor], append([]rune{' '}, runes[newCursor:]...)...)
 					m.input.SetValue(string(runes))
@@ -1074,6 +1078,33 @@ func spliceMention(value string, atPos, cursor int, username string) (newValue s
 	return string(out), atPos + len(replacement)
 }
 
+// mentionActiveCandidate resolves the mention token at the cursor (if any)
+// and which candidate is currently being previewed — the active Tab-cycle's
+// selection, or with no cycle yet, the first match (the same default
+// mentionGhostText shows before any Tab press). Shared by the ghost preview
+// renderer and Space's commit handler so they can never disagree about what
+// "the current candidate" is — that mismatch was the bug where Space typed
+// immediately after "@al" (no Tab press) inserted a literal space instead of
+// committing the name that was visibly previewed.
+func (m ChatroomsModel) mentionActiveCandidate() (atPos, cursor int, query, candidate string, ok bool) {
+	cursor = m.input.Position()
+	if cursor != len([]rune(m.input.Value())) {
+		return 0, 0, "", "", false
+	}
+	q, ap, mok := mentionQueryAt(m.input.Value(), cursor)
+	if !mok {
+		return 0, 0, "", "", false
+	}
+	if c := m.mentionCycle; c != nil && c.atPos == ap && c.queryEnd == cursor {
+		return ap, cursor, q, c.matches[c.index].Username, true
+	}
+	matches := matchMentionCandidates(m.roomUsers, q)
+	if len(matches) == 0 {
+		return 0, 0, "", "", false
+	}
+	return ap, cursor, q, matches[0].Username, true
+}
+
 // mentionGhostText returns the plain (unstyled) uncommitted remainder of the
 // mention preview for display right after the cursor — only when the
 // mention token reaches the very end of the input. That's the only place a
@@ -1084,24 +1115,9 @@ func spliceMention(value string, atPos, cursor int, username string) (newValue s
 // which needs the first rune split off separately to overlay it on the
 // cursor.
 func (m ChatroomsModel) mentionGhostText() string {
-	value := []rune(m.input.Value())
-	cursor := m.input.Position()
-	if cursor != len(value) {
-		return ""
-	}
-	query, atPos, ok := mentionQueryAt(m.input.Value(), cursor)
+	_, _, query, candidate, ok := m.mentionActiveCandidate()
 	if !ok {
 		return ""
-	}
-	var candidate string
-	if c := m.mentionCycle; c != nil && c.atPos == atPos && c.queryEnd == cursor {
-		candidate = c.matches[c.index].Username
-	} else {
-		matches := matchMentionCandidates(m.roomUsers, query)
-		if len(matches) == 0 {
-			return ""
-		}
-		candidate = matches[0].Username
 	}
 	top := []rune(candidate)
 	q := []rune(query)

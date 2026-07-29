@@ -440,6 +440,30 @@ func TestMentionSpace_CommitsCurrentPreviewThenInsertsSpace(t *testing.T) {
 	}
 }
 
+// TestMentionSpace_CommitsPassiveDefaultPreviewWithoutTab is a regression
+// test for a bug where Space typed immediately after "@al" — with the first
+// match already ghost-previewed by default, but no Tab press yet — didn't
+// commit that preview at all: it fell through to plain space-insertion,
+// producing the literal typed text plus a space (e.g. "hey @al ") instead of
+// committing the name that was visibly showing (e.g. "hey @alice "). Space
+// must commit whatever mentionGhostText is currently displaying, whether or
+// not an explicit Tab-cycle is active.
+func TestMentionSpace_CommitsPassiveDefaultPreviewWithoutTab(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
+	m = setInput(m, "hey @al", 7)
+
+	if got, want := m.mentionGhostText(), "ice"; got != want {
+		t.Fatalf("setup: mentionGhostText() = %q, want %q (alice previewed by default)", got, want)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}) // no Tab press first
+
+	if m.input.Value() != "hey @alice " {
+		t.Errorf("input = %q, want %q — Space must commit the passively-previewed match", m.input.Value(), "hey @alice ")
+	}
+}
+
 func TestMentionSpace_NoOpWithoutActivePreview(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	m = setInput(m, "hey", 3)
