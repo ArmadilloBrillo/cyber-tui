@@ -2752,11 +2752,13 @@ func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
 func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case notifsLoadedMsg:
+		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
 		a.notifications = a.notifications.SetNotifs(msg.notifs, msg.cursor)
-		return a, nil, true
+		return a, cmd, true
 	case notifsPageMsg:
+		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
 		a.notifications = a.notifications.AppendNotifs(msg.notifs, msg.cursor)
-		return a, nil, true
+		return a, cmd, true
 	case screens.RefreshNotifsMsg:
 		return a, a.loadNotifsCmd(), true
 	case screens.LoadMoreNotifsMsg:
@@ -2815,6 +2817,27 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	}
 	return a, nil, false
+}
+
+// suppressActiveRoomMentions marks read (locally + via API) any unread
+// chat_mention notifications for the cIRC room the user currently has open,
+// so being mentioned in a room you're already reading doesn't also notify.
+func (a App) suppressActiveRoomMentions(notifs []model.Notification) (App, tea.Cmd) {
+	roomSlug := a.chatrooms.ActiveRoomSlug()
+	if a.active != screenChatrooms || roomSlug == "" {
+		return a, nil
+	}
+	var cmds []tea.Cmd
+	for i, n := range notifs {
+		if n.Type == "chat_mention" && !n.Read && n.RoomSlug == roomSlug {
+			notifs[i].Read = true
+			if a.polledUnreadCount > 0 {
+				a.polledUnreadCount--
+			}
+			cmds = append(cmds, a.markNotifReadCmd(n.ID))
+		}
+	}
+	return a, tea.Batch(cmds...)
 }
 
 func (a *App) loadNotifsCmd() tea.Cmd {

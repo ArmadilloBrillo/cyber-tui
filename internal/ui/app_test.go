@@ -1012,6 +1012,79 @@ func TestHandleChatrooms_RoomsLoadedMsg_ConsumesPendingSlug(t *testing.T) {
 	}
 }
 
+// --- chat_mention suppression for the room currently open ---
+//
+// Reported behavior: being mentioned in a cIRC room you're actively reading
+// still notified, which reads as redundant since the message is already on
+// screen. Since the API has no room-presence concept (join/leave), the fix
+// filters chat_mention notifications client-side against the locally-tracked
+// open room, only while Chatrooms is the foreground screen.
+
+func TestNotifsLoaded_SuppressesMentionForActiveRoom(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "cyberspace", Name: "Cyberspace"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+	if a.chatrooms.ActiveRoomSlug() != "cyberspace" {
+		t.Fatal("setup: expected the room open in detail mode")
+	}
+	a.polledUnreadCount = 1
+
+	notifs := []model.Notification{{ID: "n1", Type: "chat_mention", RoomSlug: "cyberspace", Read: false}}
+	m, cmd := a.Update(notifsLoadedMsg{notifs: notifs})
+	got := m.(App)
+
+	if got.notifications.UnreadCount() != 0 {
+		t.Errorf("UnreadCount() = %d, want 0 (mention in the open room should be auto-suppressed)", got.notifications.UnreadCount())
+	}
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0 (badge should not bump for the suppressed mention)", got.polledUnreadCount)
+	}
+	if cmd == nil {
+		t.Error("expected a mark-read cmd for the suppressed mention")
+	}
+}
+
+func TestNotifsLoaded_DoesNotSuppress_WhenNotOnChatroomsScreen(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenNotifications // not viewing Chatrooms at all
+	a.polledUnreadCount = 1
+
+	notifs := []model.Notification{{ID: "n1", Type: "chat_mention", RoomSlug: "cyberspace", Read: false}}
+	m, _ := a.Update(notifsLoadedMsg{notifs: notifs})
+	got := m.(App)
+
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("UnreadCount() = %d, want 1 (mention must still notify once the room isn't open)", got.notifications.UnreadCount())
+	}
+	if got.polledUnreadCount != 1 {
+		t.Errorf("polledUnreadCount = %d, want 1 (badge should still reflect the mention)", got.polledUnreadCount)
+	}
+}
+
+func TestNotifsLoaded_DoesNotSuppress_ForADifferentRoom(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+	if a.chatrooms.ActiveRoomSlug() != "zion" {
+		t.Fatal("setup: expected zion open in detail mode")
+	}
+	a.polledUnreadCount = 1
+
+	notifs := []model.Notification{{ID: "n1", Type: "chat_mention", RoomSlug: "cyberspace", Read: false}}
+	m, _ := a.Update(notifsLoadedMsg{notifs: notifs})
+	got := m.(App)
+
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("UnreadCount() = %d, want 1 (mention in a different room must still notify)", got.notifications.UnreadCount())
+	}
+}
+
 func TestHandleCMail_ConvReconnected_ShowsToast(t *testing.T) {
 	a := loggedInApp()
 	m, _ := a.Update(screens.CMailReconnectedMsg{})

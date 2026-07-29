@@ -416,6 +416,7 @@ Notification feed (replies, new followers, pokes, bookmarks, thread replies).
 - `m` emits `MarkNotifReadMsg`; `M` emits `MarkAllNotifsReadMsg`
 - `u` toggles unread-only filter
 - `chat_mention` and `post_mention`/`reply_mention` notifications show an inline `"> …"` preview of the mentioning content (`MessageContent`/`PostContent`/`ReplyContent`)
+- `chat_mention` notifications for the cIRC room currently open in Chatrooms detail view are auto-suppressed (marked read, no badge bump) — see `docs/15-notifications.md`
 
 Key types: `NotificationsModel`, `LoadMoreNotifsMsg`, `RefreshNotifsMsg`, `MarkNotifReadMsg`, `MarkAllNotifsReadMsg`, `ShowNotificationPostMsg`, `OpenRoomMsg`  
 Key methods: `SetNotifs(notifs, cursor)`, `AppendNotifs(notifs, cursor)`
