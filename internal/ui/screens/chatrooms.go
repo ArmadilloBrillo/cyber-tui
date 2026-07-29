@@ -52,14 +52,17 @@ type roomPresenceSubscription struct {
 	cancel context.CancelFunc
 }
 
-// mentionCycle tracks an in-progress @-mention Tab-completion: repeated Tab
-// presses replace the same span with the next candidate, classic
-// shell-completion style. Cleared by any key other than Tab (see the
-// chatroomModeDetail key switch), which locks in whatever text is currently
-// there.
+// mentionCycle tracks an in-progress @-mention preview: repeated Tab presses
+// change which candidate is shown as ghost text, without touching m.input at
+// all — text and cursor stay exactly as typed. Typing a space commits the
+// currently-previewed candidate as real text; any other key just clears the
+// preview, leaving whatever was actually typed untouched (see the
+// chatroomModeDetail key switch).
 type mentionCycle struct {
-	atPos   int              // rune index of '@' in the input value
-	end     int              // rune index right after the currently-inserted name
+	atPos    int              // rune index of '@' in the input value
+	queryEnd int              // rune index where the typed query ends — equals
+	// the cursor for as long as the preview is active; text/cursor never
+	// move during a cycle, only via a space-commit or by clearing it
 	matches []model.RoomUser // snapshot taken at cycle start, stable through the session
 	index   int
 }
@@ -814,31 +817,39 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			}
 
 		case chatroomModeDetail:
-			// Any key other than Tab ends an in-progress mention cycle and
-			// locks in whatever text is currently there — matches
-			// shell-completion convention.
-			if msg.String() != "tab" {
+			// Any key other than Tab or Space ends an in-progress mention
+			// preview: Tab cycles which candidate is shown, Space commits
+			// the current one. Everything else just clears the preview,
+			// leaving whatever was actually typed untouched — nothing is
+			// ever auto-inserted without one of those two keys.
+			if msg.String() != "tab" && msg.String() != " " {
 				m.mentionCycle = nil
 			}
 			switch msg.String() {
 			case "tab":
-				if c := m.mentionCycle; c != nil && m.input.Position() == c.end {
+				if c := m.mentionCycle; c != nil && m.input.Position() == c.queryEnd {
 					next := (c.index + 1) % len(c.matches)
-					newValue, newEnd := spliceMention(m.input.Value(), c.atPos, c.end, c.matches[next].Username)
-					m.input.SetValue(newValue)
-					m.input.SetCursor(newEnd)
-					m.mentionCycle = &mentionCycle{atPos: c.atPos, end: newEnd, matches: c.matches, index: next}
+					m.mentionCycle = &mentionCycle{atPos: c.atPos, queryEnd: c.queryEnd, matches: c.matches, index: next}
 					return m, nil
 				}
 				if query, atPos, ok := mentionQueryAt(m.input.Value(), m.input.Position()); ok {
 					if matches := matchMentionCandidates(m.roomUsers, query); len(matches) > 0 {
-						newValue, newEnd := spliceMention(m.input.Value(), atPos, m.input.Position(), matches[0].Username)
-						m.input.SetValue(newValue)
-						m.input.SetCursor(newEnd)
-						m.mentionCycle = &mentionCycle{atPos: atPos, end: newEnd, matches: matches, index: 0}
+						m.mentionCycle = &mentionCycle{atPos: atPos, queryEnd: m.input.Position(), matches: matches, index: 0}
 					}
 				}
 				return m, nil
+			case " ":
+				if c := m.mentionCycle; c != nil && m.input.Position() == c.queryEnd {
+					candidate := c.matches[c.index].Username
+					newValue, newCursor := spliceMention(m.input.Value(), c.atPos, c.queryEnd, candidate)
+					runes := []rune(newValue)
+					runes = append(runes[:newCursor], append([]rune{' '}, runes[newCursor:]...)...)
+					m.input.SetValue(string(runes))
+					m.input.SetCursor(newCursor + 1)
+					m.mentionCycle = nil
+					return m, nil
+				}
+				m.mentionCycle = nil
 			case "esc":
 				var leaveRoomID string
 				if m.activeRoom != nil {
@@ -1071,15 +1082,21 @@ func (m ChatroomsModel) mentionGhostText() string {
 	if cursor != len(value) {
 		return ""
 	}
-	query, _, ok := mentionQueryAt(m.input.Value(), cursor)
+	query, atPos, ok := mentionQueryAt(m.input.Value(), cursor)
 	if !ok {
 		return ""
 	}
-	matches := matchMentionCandidates(m.roomUsers, query)
-	if len(matches) == 0 {
-		return ""
+	var candidate string
+	if c := m.mentionCycle; c != nil && c.atPos == atPos && c.queryEnd == cursor {
+		candidate = c.matches[c.index].Username
+	} else {
+		matches := matchMentionCandidates(m.roomUsers, query)
+		if len(matches) == 0 {
+			return ""
+		}
+		candidate = matches[0].Username
 	}
-	top := []rune(matches[0].Username)
+	top := []rune(candidate)
 	q := []rune(query)
 	if len(top) <= len(q) {
 		return "" // already fully typed/matched — nothing left to preview
@@ -1151,17 +1168,25 @@ func (m ChatroomsModel) View() string {
 		case m.reconnectFailed:
 			header += theme.Error.Render("  (live updates lost)")
 		}
-		// textinput.View() pads its own output with trailing spaces out to
-		// its configured Width (see bubbles/textinput.go), so appending the
-		// ghost text after it would land far past the visible cursor.
-		// Shrink a copy's Width by the ghost's rendered width first, so its
-		// padding stops short and leaves exactly enough room.
+		// textinput.View() pads its own output with blank spaces out to its
+		// configured Width regardless of that Width's value (see
+		// bubbles/textinput.go) — the padding always sits right after the
+		// typed text, so merely shrinking Width still leaves a gap before
+		// anything appended after it. To put the ghost text immediately at
+		// the cursor, set Width to the typed content's own width (padding
+		// becomes zero) and add our own trailing padding after the ghost to
+		// keep the box's total width unchanged.
 		ghost := m.mentionGhostText()
 		input := m.input
+		inputContent := m.input.View()
 		if ghost != "" {
-			input.Width = max(0, input.Width-lipgloss.Width(ghost))
+			originalWidth := m.input.Width
+			valWidth := lipgloss.Width(m.input.Value())
+			input.Width = valWidth
+			pad := max(0, originalWidth-valWidth-lipgloss.Width(ghost))
+			inputContent = input.View() + ghost + strings.Repeat(" ", pad)
 		}
-		inputBox := theme.ActiveBorder.Render(input.View() + ghost)
+		inputBox := theme.ActiveBorder.Render(inputContent)
 
 		_, usersW := m.panelWidths()
 		messageArea := m.viewport.View()
