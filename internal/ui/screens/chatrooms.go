@@ -59,12 +59,14 @@ type roomPresenceSubscription struct {
 // preview, leaving whatever was actually typed untouched (see the
 // chatroomModeDetail key switch).
 type mentionCycle struct {
-	atPos    int              // rune index of '@' in the input value
-	queryEnd int              // rune index where the typed query ends — equals
+	atPos    int // rune index of '@' in the input value
+	queryEnd int // rune index where the typed query ends — equals
 	// the cursor for as long as the preview is active; text/cursor never
 	// move during a cycle, only via a space-commit or by clearing it
-	matches []model.RoomUser // snapshot taken at cycle start, stable through the session
-	index   int
+	index int // Tab-press count since the cycle started; wrapped against
+	// matchMentionCandidates' live result at use time (mentionActiveCandidate)
+	// rather than stored, so someone joining or leaving the room mid-cycle is
+	// reflected on the very next Tab press instead of needing a fresh cycle
 }
 
 // CIRC SSE subscription message types — unexported, handled within ChatroomsModel.
@@ -837,19 +839,19 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			switch msg.String() {
 			case "tab":
 				if c := m.mentionCycle; c != nil && m.input.Position() == c.queryEnd {
-					next := (c.index + 1) % len(c.matches)
-					m.mentionCycle = &mentionCycle{atPos: c.atPos, queryEnd: c.queryEnd, matches: c.matches, index: next}
+					m.mentionCycle = &mentionCycle{atPos: c.atPos, queryEnd: c.queryEnd, index: c.index + 1}
 					return m, nil
 				}
-				if query, atPos, ok := mentionQueryAt(m.input.Value(), m.input.Position()); ok {
-					if matches := matchMentionCandidates(m.roomUsers, query); len(matches) > 0 {
-						// index 0 is already showing as the implicit default
-						// preview before any Tab is pressed
-						// (mentionGhostText's no-cycle fallback) — start at
-						// 1 so the first Tab itself is a visible change, not
-						// a no-op.
-						m.mentionCycle = &mentionCycle{atPos: atPos, queryEnd: m.input.Position(), matches: matches, index: 1 % len(matches)}
-					}
+				if atPos, cursor, _, _, ok := m.mentionActiveCandidate(); ok {
+					// index 1, not 0: index 0 is already showing as the
+					// implicit default preview before any Tab is pressed
+					// (mentionActiveCandidate's no-cycle fallback) — start
+					// at 1 so the first Tab itself is a visible change, not
+					// a no-op. Wrapped against the live match count at use
+					// time (mentionActiveCandidate), not here, so this is
+					// still correct even if the list has exactly one match
+					// by the time it's read back.
+					m.mentionCycle = &mentionCycle{atPos: atPos, queryEnd: cursor, index: 1}
 				}
 				return m, nil
 			case " ":
@@ -1104,12 +1106,12 @@ func (m ChatroomsModel) mentionActiveCandidate() (atPos, cursor int, query, cand
 	if !mok {
 		return 0, 0, "", "", false
 	}
-	if c := m.mentionCycle; c != nil && c.atPos == ap && c.queryEnd == cursor {
-		return ap, cursor, q, c.matches[c.index].Username, true
-	}
 	matches := matchMentionCandidates(m.roomUsers, q)
 	if len(matches) == 0 {
 		return 0, 0, "", "", false
+	}
+	if c := m.mentionCycle; c != nil && c.atPos == ap && c.queryEnd == cursor {
+		return ap, cursor, q, matches[c.index%len(matches)].Username, true
 	}
 	return ap, cursor, q, matches[0].Username, true
 }

@@ -442,7 +442,7 @@ func TestMentionTab_FirstPressPreviewsWithoutTouchingText(t *testing.T) {
 	// alice (index 0) is already the implicit default preview before any Tab
 	// — the first Tab must skip straight to the next match (albert) so it's
 	// a visible change, not a no-op.
-	if m.mentionCycle == nil || m.mentionCycle.matches[m.mentionCycle.index].Username != "albert" {
+	if m.mentionCycle == nil || m.mentionGhostText() != "bert" {
 		t.Fatal("expected the first Tab to preview albert")
 	}
 }
@@ -458,8 +458,8 @@ func TestMentionTab_SecondPressCyclesPreviewToNextMatch(t *testing.T) {
 	if m.input.Value() != "hey @al" {
 		t.Errorf("input = %q, want still unchanged %q", m.input.Value(), "hey @al")
 	}
-	if m.mentionCycle.matches[m.mentionCycle.index].Username != "alice" {
-		t.Errorf("preview = %q, want %q (second Tab should wrap back to the first match)", m.mentionCycle.matches[m.mentionCycle.index].Username, "alice")
+	if got := m.mentionGhostText(); got != "ice" {
+		t.Errorf("ghost = %q, want %q (second Tab should wrap back to the first match, alice)", got, "ice")
 	}
 }
 
@@ -472,8 +472,52 @@ func TestMentionTab_ThirdPressWrapsPreviewAround(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> alice
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert again
 
-	if m.mentionCycle.matches[m.mentionCycle.index].Username != "albert" {
-		t.Errorf("preview = %q, want %q (third Tab should cycle back to albert)", m.mentionCycle.matches[m.mentionCycle.index].Username, "albert")
+	if got := m.mentionGhostText(); got != "bert" {
+		t.Errorf("ghost = %q, want %q (third Tab should cycle back to albert)", got, "bert")
+	}
+}
+
+// TestMentionTab_ReflectsPersonLeavingMidCycle guards against reintroducing
+// the snapshot-at-cycle-start design: matches used to be captured once when
+// cycling began and reused for the rest of the session, so someone who left
+// the room mid-cycle stayed offered indefinitely. Candidates are now
+// resolved fresh on every Tab press instead.
+func TestMentionTab_ReflectsPersonLeavingMidCycle(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
+	m = setInput(m, "hey @al", 7)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert
+	if got := m.mentionGhostText(); got != "bert" {
+		t.Fatalf("setup: ghost = %q, want %q (albert)", got, "bert")
+	}
+
+	m.roomUsers = []model.RoomUser{{Username: "alice"}} // albert left
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	if got := m.mentionGhostText(); got != "ice" {
+		t.Errorf("ghost = %q, want %q (alice) — must not keep offering albert after they left", got, "ice")
+	}
+}
+
+// TestMentionTab_ReflectsPersonJoiningMidCycle is the join-side counterpart:
+// someone who joins mid-cycle must become reachable by continuing to Tab,
+// not require the user to retype the query to start a fresh cycle.
+func TestMentionTab_ReflectsPersonJoiningMidCycle(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
+	m = setInput(m, "hey @al", 7)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert
+	if got := m.mentionGhostText(); got != "bert" {
+		t.Fatalf("setup: ghost = %q, want %q (albert)", got, "bert")
+	}
+
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}, {Username: "alan"}} // alan joined
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	if got := m.mentionGhostText(); got != "an" {
+		t.Errorf("ghost = %q, want %q (alan) — a newly-joined match must become reachable without a fresh cycle", got, "an")
 	}
 }
 
