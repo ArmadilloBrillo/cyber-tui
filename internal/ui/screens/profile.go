@@ -703,8 +703,8 @@ func (m ProfileModel) View() string {
 	var counts string
 	if m.showFollowerCount {
 		counts = theme.Subtle.Render(fmt.Sprintf(
-			"%d followers · %d following · %d posts",
-			m.user.FollowersCount, m.user.FollowingCount, m.user.PostsCount,
+			"%d followers · %d following",
+			m.user.FollowersCount, m.user.FollowingCount,
 		))
 	}
 

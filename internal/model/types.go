@@ -25,7 +25,6 @@ type User struct {
 	LocationLongitude float64
 	FollowersCount    int
 	FollowingCount    int
-	PostsCount        int
 	GuildSlug         string // empty when not a guild member
 	GuildID           string
 	GuildName         string

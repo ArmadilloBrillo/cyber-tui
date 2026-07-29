@@ -1746,7 +1746,6 @@ func TestHTTPGetProfile_CountFields(t *testing.T) {
 			"username":       "ragnar",
 			"followersCount": 35,
 			"followingCount": 45,
-			"postsCount":     6,
 		})
 	})))
 	c.Login("u@example.com", "pass")
@@ -1760,9 +1759,6 @@ func TestHTTPGetProfile_CountFields(t *testing.T) {
 	}
 	if user.FollowingCount != 45 {
 		t.Errorf("FollowingCount = %d, want 45", user.FollowingCount)
-	}
-	if user.PostsCount != 6 {
-		t.Errorf("PostsCount = %d, want 6", user.PostsCount)
 	}
 }
 
