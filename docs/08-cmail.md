@@ -46,6 +46,7 @@ Full-width message history viewport + fixed compose input at bottom:
 
 - Other person's messages: left-aligned (`@username  timestamp` header, then body)
 - My messages: right-aligned (`timestamp  @me` header, then body)
+- **Compose input width**: `input.Width` is set to `terminalWidth - 4 - len(Prompt) - 1`, not just `terminalWidth - 4` — see `docs/33-circ.md`'s matching bullet for why (a `bubbles/textinput` quirk where its empty-placeholder render and typed-content render total different widths, which without this compensation silently grew the box 3 columns wider than the header above it the instant any character was typed).
 
 **Scroll-to-load history**: scrolling to the top of the loaded messages (`↑`) automatically fetches the next older page (`GetMessages(conversationID, 50, before)`, `before` = the oldest loaded message's timestamp) and prepends it, preserving scroll position. The header shows `(loading history…)` while a page is in flight. Stops once a fetch returns no messages. If a fetch fails, `loadingHistory` resets so a retry is possible on the next scroll-to-top, and the viewport shows "couldn't load messages" instead of a misleading "no messages" if nothing has loaded yet.
 

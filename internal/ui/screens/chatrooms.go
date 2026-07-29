@@ -642,7 +642,16 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				m.viewport.SetContent(m.renderMessages())
 			}
 		}
-		m.input.Width = msg.Width - 4
+		// textinput.View() renders 3 columns wider than Width the instant
+		// there's any typed content: it adds Prompt's width (never
+		// subtracted from its own padding math) plus 1 more for the phantom
+		// end-of-line cursor glyph — neither of which its *empty*
+		// placeholder rendering adds. Compensating here keeps the box at a
+		// constant intended width once you start typing (previously it
+		// silently grew 3 columns wider than the header/divider above it,
+		// pushing the right border off-screen on any terminal where those
+		// 3 columns were the difference between fitting and not).
+		m.input.Width = msg.Width - 4 - lipgloss.Width(m.input.Prompt) - 1
 
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat

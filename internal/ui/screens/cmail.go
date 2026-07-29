@@ -374,7 +374,14 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 				m.viewport.SetContent(m.renderMessages())
 			}
 		}
-		m.input.Width = msg.Width - 4
+		// See the matching comment in chatrooms.go: textinput.View() renders
+		// 3 columns wider than Width the instant there's any typed content
+		// (Prompt's width plus the phantom end-of-line cursor glyph, neither
+		// subtracted from its own padding math, unlike the empty-placeholder
+		// render). Compensating here keeps the box from silently growing
+		// wider than the header above it and pushing its right border
+		// off-screen as soon as the user starts typing.
+		m.input.Width = msg.Width - 4 - lipgloss.Width(m.input.Prompt) - 1
 
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat

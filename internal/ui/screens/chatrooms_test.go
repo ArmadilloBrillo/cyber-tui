@@ -287,6 +287,58 @@ func TestDetailView_HeaderHasDividerBeforeMessages(t *testing.T) {
 	}
 }
 
+// inputBoxLines extracts the detail view's bordered input box (top/content/
+// bottom) from a full View() render, located by its rounded-border corners
+// — the only box in this view that uses them (the users panel only has a
+// plain "│" separator column).
+func inputBoxLines(t *testing.T, view string) (top, content, bottom string) {
+	t.Helper()
+	lines := strings.Split(view, "\n")
+	topIdx, botIdx := -1, -1
+	for i, l := range lines {
+		if strings.Contains(l, "╭") {
+			topIdx = i
+		}
+		if strings.Contains(l, "╰") {
+			botIdx = i
+		}
+	}
+	if topIdx == -1 || botIdx != topIdx+2 {
+		t.Fatalf("could not locate the 3-line bordered input box in the view: %q", lines)
+	}
+	return lines[topIdx], lines[topIdx+1], lines[botIdx]
+}
+
+// TestInputBox_WidthConstantBetweenEmptyAndTyped is a regression test for a
+// bug where textinput.View()'s *empty* placeholder rendering and its normal
+// (typed-content) rendering total different widths — the placeholder path
+// sums to exactly Width, but typed content adds Prompt's width plus one more
+// for the phantom end-of-line cursor glyph, neither subtracted from its own
+// padding math. Without compensating for that gap when setting input.Width,
+// the box silently rendered 3 columns wider than the header/divider above it
+// the instant any character was typed, pushing its right border off-screen
+// on any terminal where those 3 columns were the difference between fitting
+// and not (reproduced via tmux against the built binary, not just this
+// test). Both states must render at exactly m.width.
+func TestInputBox_WidthConstantBetweenEmptyAndTyped(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	top, content, bottom := inputBoxLines(t, m.View())
+	for name, l := range map[string]string{"top (empty)": top, "content (empty)": content, "bottom (empty)": bottom} {
+		if w := lipgloss.Width(l); w != m.width {
+			t.Errorf("%s line width = %d, want %d (m.width)", name, w, m.width)
+		}
+	}
+
+	m = setInput(m, "hello world", 11)
+	top, content, bottom = inputBoxLines(t, m.View())
+	for name, l := range map[string]string{"top (typed)": top, "content (typed)": content, "bottom (typed)": bottom} {
+		if w := lipgloss.Width(l); w != m.width {
+			t.Errorf("%s line width = %d, want %d (m.width) — box must not widen once typing starts", name, w, m.width)
+		}
+	}
+}
+
 // --- mentionQueryAt ---
 
 func TestMentionQueryAt(t *testing.T) {
