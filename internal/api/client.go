@@ -170,7 +170,6 @@ type wireUser struct {
 	LocationLongitude float64      `json:"locationLongitude"`
 	FollowersCount    int          `json:"followersCount"`
 	FollowingCount    int          `json:"followingCount"`
-	PostsCount        int          `json:"postsCount"`
 	GuildSlug         string       `json:"guildSlug"`
 	GuildID           string       `json:"guildId"`
 	GuildName         string       `json:"guildName"`
@@ -817,7 +816,6 @@ func wireUserToModel(w wireUser) model.User {
 		LocationLongitude: w.LocationLongitude,
 		FollowersCount:    w.FollowersCount,
 		FollowingCount:    w.FollowingCount,
-		PostsCount:        w.PostsCount,
 		GuildSlug:         w.GuildSlug,
 		GuildID:           w.GuildID,
 		GuildName:         w.GuildName,

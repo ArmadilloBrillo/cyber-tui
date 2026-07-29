@@ -16,7 +16,6 @@ func testUser() model.User {
 		Bio:            "test bio",
 		FollowersCount: 35,
 		FollowingCount: 45,
-		PostsCount:     6,
 	}
 }
 
@@ -62,9 +61,6 @@ func TestProfileView_CountsDisplayed(t *testing.T) {
 	}
 	if !strings.Contains(view, "45 following") {
 		t.Errorf("View should contain '45 following', got:\n%s", view)
-	}
-	if !strings.Contains(view, "6 posts") {
-		t.Errorf("View should contain '6 posts', got:\n%s", view)
 	}
 }
 
