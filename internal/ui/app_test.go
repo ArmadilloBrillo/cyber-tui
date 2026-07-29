@@ -444,19 +444,18 @@ func TestHandleKeys_T_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
 	}
 }
 
-// TestHandleKeys_CtrlSlash_OpensSearchWhileChatroomsInputFocused: bubbletea
-// reports the physical ctrl+/ keystroke as KeyType keyUS ("ctrl+_" as a
-// string), the name of the 0x1F byte terminals actually send for it — not
-// literally "ctrl+/". The status-bar hint still displays "ctrl+/" since
-// that's what the user physically presses.
-func TestHandleKeys_CtrlSlash_OpensSearchWhileChatroomsInputFocused(t *testing.T) {
+// TestHandleKeys_CtrlUnderscore_NotConsumed_WhileChatroomsInputFocused
+// guards a deliberate removal: ctrl+/ (bubbletea reports it as KeyType
+// keyUS, string "ctrl+_") was tried as a ctrl-twin for Search, then dropped
+// — the byte a physical ctrl+/ keystroke sends is inconsistent across
+// terminals (0x1F on most, a literal NUL on e.g. Git Bash/MinTTY, itself
+// ambiguous with ctrl+space/ctrl+2/ctrl+@), so there's no reliable encoding
+// to build a shortcut on.
+func TestHandleKeys_CtrlUnderscore_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
-	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlUnderscore})
-	if !consumed {
-		t.Error("expected ctrl+/ to be consumed even while chatrooms input is focused")
-	}
-	if a2.active != screenSearch {
-		t.Errorf("expected ctrl+/ to open Search, got %v", a2.active)
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlUnderscore})
+	if consumed {
+		t.Error("expected ctrl+/ (ctrl+_) to NOT be consumed — the shortcut was removed as unreliable across terminals")
 	}
 }
 
@@ -848,10 +847,13 @@ func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
 func TestScreenHints_ChatroomsDetail_HasCtrlTwins(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
 	hints := TabsLayout{}.screenHints(a)
-	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+/", "ctrl+←→"} {
+	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+←→"} {
 		if !hasHint(hints, key) {
 			t.Errorf("expected a %q hint in chatrooms detail mode", key)
 		}
+	}
+	if hasHint(hints, "ctrl+/") {
+		t.Error("expected no ctrl+/ hint — the shortcut was removed as unreliable across terminals")
 	}
 }
 
@@ -866,7 +868,7 @@ func TestScreenHints_CMailDetail_HasCtrlTwins(t *testing.T) {
 	a.active = screenCMail
 
 	hints := TabsLayout{}.screenHints(a)
-	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+/", "ctrl+←→"} {
+	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+←→"} {
 		if !hasHint(hints, key) {
 			t.Errorf("expected a %q hint in c-mail detail mode", key)
 		}

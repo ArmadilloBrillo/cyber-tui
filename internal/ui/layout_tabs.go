@@ -401,12 +401,12 @@ func (l TabsLayout) screenHints(a App) []hint {
 			// here, same as plain 'o' — omit "more" and surface the ctrl-twins
 			// that reach through instead (renderStatusBar already trims this
 			// list on narrow terminals, so listing all of them here is safe).
-			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"ctrl+q", "quit"}, {"ctrl+t", "theme"}, {"ctrl+/", "search"}, {"ctrl+←→", "tabs"}, {"esc", "back"}}
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"ctrl+q", "quit"}, {"ctrl+t", "theme"}, {"ctrl+←→", "tabs"}, {"esc", "back"}}
 		}
 		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	case screenCMail:
 		if a.cmail.IsShowingDetail() {
-			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"ctrl+q", "quit"}, {"ctrl+t", "theme"}, {"ctrl+/", "search"}, {"ctrl+←→", "tabs"}, {"esc", "back"}}
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"ctrl+q", "quit"}, {"ctrl+t", "theme"}, {"ctrl+←→", "tabs"}, {"esc", "back"}}
 		}
 		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	}

@@ -539,20 +539,17 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	// their bare key is unreachable while chatting (CIRC/C-Mail's compose
 	// input is focused for the entire detail view, not just a transient
 	// sub-mode like Feed's reply box): ctrl+o (open link), ctrl+q (quit),
-	// ctrl+t (theme picker), ctrl+/ (search), ctrl+left/right (cycle tabs).
-	// ctrl+/'s "ctrl+_" (0x1F) encoding is matched, but not the literal NUL
-	// byte (0x00) some terminals (e.g. Git Bash/MinTTY) send for it instead —
-	// ctrl+space, ctrl+2, and ctrl+@ conventionally send that identical NUL
-	// byte too, genuinely indistinguishable from ctrl+/ at that point, so
-	// accepting it risked silently misfiring on an unrelated keystroke.
-	// ctrl+/ simply doesn't work as a shortcut on terminals that collapse it
-	// to NUL — no code-side fix exists for that.
+	// ctrl+t (theme picker), ctrl+left/right (cycle tabs). ctrl+/ (search)
+	// was tried and removed — the byte a physical ctrl+/ keystroke sends is
+	// inconsistent across terminals (0x1F on most, a literal NUL on e.g. Git
+	// Bash/MinTTY, indistinguishable there from ctrl+space/ctrl+2/ctrl+@), so
+	// there's no reliable encoding to match on.
 	if a.activeScreenHasFocusedInput() {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
 		}
 		switch m.String() {
-		case "ctrl+o", "ctrl+q", "ctrl+t", "ctrl+_", "ctrl+left", "ctrl+right":
+		case "ctrl+o", "ctrl+q", "ctrl+t", "ctrl+left", "ctrl+right":
 			// fall through to the global switch below
 		default:
 			return a, nil, false // fall through to delegateUpdate
@@ -620,7 +617,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			app, cmd := a.handleOpenURL(a.getFocusedURLs())
 			return app, cmd, true
 		}
-	case "/", "ctrl+_": // ctrl+_ is bubbletea's name for the 0x1F byte a physical ctrl+/ keystroke sends on most terminals
+	case "/":
 		if a.active != screenLogin {
 			if a.active != screenSearch {
 				a.searchReturn = a.active

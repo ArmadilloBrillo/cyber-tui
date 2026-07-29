@@ -749,8 +749,7 @@ Other global keys:
 |---|---|
 | `←` / `→` | Cycle tabs left / right (does not include Search, which is hidden — see above) |
 | `ctrl+←` / `ctrl+→` | Same as `←`/`→`, but reaches the handler even while a compose input is focused (Tabs layout only — Miller layout's `←`/`→` mean pane navigation instead, so this ctrl-twin is not offered there) |
-| `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail) |
-| `ctrl+/` | Same as `/`, but reaches the handler even while a compose input is focused. Matched on `"ctrl+_"`, bubbletea's name for the 0x1F byte most terminals send for this keystroke. **Known limitation:** some terminals (e.g. Git Bash/MinTTY on Windows, confirmed via `CYBERSPACE_DEBUG_KEYS`, see `docs/09-rtdb-cmail.md`) send a literal NUL byte instead — deliberately *not* matched, since `ctrl+space`, `ctrl+2`, and `ctrl+@` conventionally send that identical NUL byte too, and accepting it would risk misfiring on those unrelated keystrokes. `ctrl+/` simply doesn't work as a shortcut on terminals that collapse it to NUL |
+| `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail); no ctrl-twin — a `ctrl+/` shortcut was tried and removed since the byte a physical ctrl+/ keystroke sends is inconsistent across terminals (0x1F on most, a literal NUL on e.g. Git Bash/MinTTY, itself ambiguous there with `ctrl+space`/`ctrl+2`/`ctrl+@`) |
 | `v` | Toggle dense / relaxed display |
 | `?` | Help modal (no ctrl-twin exists — `ctrl+?` is indistinguishable from `ctrl+backspace`/DEL in most terminals) |
 | `t` | Theme picker |
@@ -760,7 +759,7 @@ Other global keys:
 | `q` / `ctrl+c` | Quit |
 | `ctrl+q` | Same as `q`, but reaches the handler even while a compose input is focused (`ctrl+c` already worked as a hard escape hatch; `ctrl+q` matches the bare-key mnemonic) |
 
-The four `ctrl+`-prefixed rows above (`ctrl+q`, `ctrl+t`, `ctrl+/`, `ctrl+←`/`ctrl+→`) exist specifically so CIRC/C-Mail's detail view — where the compose input holds focus for the screen's entire lifetime, not just a transient sub-mode — can still reach these global shortcuts; see `activeScreenHasFocusedInput()`'s exemption list in `app.go`.
+The `ctrl+`-prefixed rows above (`ctrl+q`, `ctrl+t`, `ctrl+←`/`ctrl+→`) exist specifically so CIRC/C-Mail's detail view — where the compose input holds focus for the screen's entire lifetime, not just a transient sub-mode — can still reach these global shortcuts; see `activeScreenHasFocusedInput()`'s exemption list in `app.go`.
 
 Timezone is set from the Settings screen's own field (`tab`/`shift+tab` to
 cycle), not a global shortcut.
