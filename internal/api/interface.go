@@ -70,6 +70,21 @@ type Client interface {
 	// SubscribeRoom opens a live RTDB SSE stream for the given chatroom.
 	// Returns a channel of incoming messages and a cancel function.
 	SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error)
+	// GetRoomUsers returns who's currently present in roomID (server-side
+	// staleness-filtered already; no client-side filtering needed).
+	GetRoomUsers(roomID string) ([]model.RoomUser, error)
+	// AnnouncePresence announces the caller's presence in roomID. Returns the
+	// heartbeat cadence and staleness window (both ms) to honor — read these
+	// from the response rather than hard-coding them.
+	AnnouncePresence(roomID string) (heartbeatMs, staleAfterMs int, err error)
+	// LeaveRoomPresence removes the caller from roomID's presence list immediately.
+	LeaveRoomPresence(roomID string) error
+	// SubscribeRoomPresence opens a live RTDB SSE stream for roomID's presence
+	// node. Unlike SubscribeRoom, entries mutate/expire in place, so each
+	// receive is a full, filtered (online + fresh) snapshot rather than a
+	// single incremental event. staleAfterMs comes from AnnouncePresence's
+	// response.
+	SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int) (<-chan []model.RoomUser, context.CancelFunc, error)
 
 	// Notifications — cursor-paginated; mark-read methods are fire-and-forget.
 	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.

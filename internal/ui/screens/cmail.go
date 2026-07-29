@@ -26,7 +26,7 @@ const (
 
 // Rows consumed by the detail view's header and input box (outside the history viewport).
 const (
-	cmailDetailHeaderRows = 1 // "@otheruser" header
+	cmailDetailHeaderRows = 2 // "@otheruser" header + divider rule
 	cmailInputRows        = 3 // bordered textinput: 1 content + 2 border rows
 	cmailDetailChrome     = cmailDetailHeaderRows + cmailInputRows
 )
@@ -374,7 +374,14 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 				m.viewport.SetContent(m.renderMessages())
 			}
 		}
-		m.input.Width = msg.Width - 4
+		// See the matching comment in chatrooms.go: textinput.View() renders
+		// 3 columns wider than Width the instant there's any typed content
+		// (Prompt's width plus the phantom end-of-line cursor glyph, neither
+		// subtracted from its own padding math, unlike the empty-placeholder
+		// render). Compensating here keeps the box from silently growing
+		// wider than the header above it and pushing its right border
+		// off-screen as soon as the user starts typing.
+		m.input.Width = msg.Width - 4 - lipgloss.Width(m.input.Prompt) - 1
 
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
@@ -790,8 +797,34 @@ func (m CMailModel) View() string {
 		case m.reconnectFailed:
 			header += theme.Error.Render("  (live updates lost)")
 		}
-		inputBox := theme.ActiveBorder.Render(m.input.View())
-		return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), inputBox)
+		// textinput.View()'s empty-input placeholder path (placeholderView(),
+		// internal) totals its render at exactly Width, unlike the
+		// typed-content path — Width+len(Prompt)+1 (the whole reason
+		// input.Width is pre-reduced by that amount; see the matching
+		// comment on input.Width above). Hand-building this state, mirroring
+		// the same fix in chatrooms.go, guarantees the same total without
+		// needing to separately verify a second internal quirk.
+		var inputContent string
+		if m.input.Value() == "" {
+			promptView := m.input.PromptStyle.Render(m.input.Prompt)
+			cur := m.input.Cursor
+			placeholder := []rune(m.input.Placeholder)
+			cur.TextStyle = m.input.PlaceholderStyle
+			var rest string
+			if len(placeholder) > 0 {
+				cur.SetChar(string(placeholder[0]))
+				rest = m.input.PlaceholderStyle.Inline(true).Render(string(placeholder[1:]))
+			} else {
+				cur.SetChar(" ")
+			}
+			pad := max(0, m.input.Width-lipgloss.Width(rest))
+			inputContent = promptView + cur.View() + rest + strings.Repeat(" ", pad)
+		} else {
+			inputContent = m.input.View()
+		}
+		inputBox := theme.ActiveBorder.Render(inputContent)
+		divider := theme.Subtle.Render(strings.Repeat("─", max(m.width, 0)))
+		return lipgloss.JoinVertical(lipgloss.Left, header, divider, m.viewport.View(), inputBox)
 	default: // cmailModeList
 		if !m.ready {
 			return theme.Subtle.Render("loading c-mail…")

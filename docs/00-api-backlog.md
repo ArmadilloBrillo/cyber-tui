@@ -104,12 +104,15 @@ cIRC REST API is now fully documented. A room is addressed by its `roomId` (slug
 | `POST /v1/circ/:roomId` | POST | Send a message to a room (supports slash commands) | **Done** — feature 33 |
 | `POST /v1/circ/:roomId/read` | POST | Mark room as read (drives "new messages" indicator) | **Done** — feature 33 |
 | RTDB `chat_messages/<roomId>` | SSE | Subscribe to real-time new messages | **Done** — feature 33 |
+| `GET /v1/circ/:roomId/users` | GET | List who's currently in a room | **Done** — cIRC presence |
+| `POST`/`DELETE /v1/circ/:roomId/presence` | POST/DELETE | Announce/heartbeat and leave presence | **Done** — cIRC presence |
+| RTDB `chat_presence/<roomId>` | SSE | Subscribe to real-time presence changes | **Done** — cIRC presence |
 
 Notes:
-- Each room message includes `isChatAdmin` flag — parsed into `model.Message.IsChatAdmin` and shown as a `[admin]` badge in the TUI.
-- Rate limits: 15 sends/min, 300/day, 150/hour; 60 mark-read/min.
+- Each room message includes `isChatAdmin` flag — parsed into `model.Message.IsChatAdmin`. No longer shown as a `[admin]` badge on the message line; admin status now lives only in the online-users side panel (see `docs/33-circ.md`).
+- Rate limits: 15 sends/min, 300/day, 150/hour; 60 mark-read/min; 60 list-users/min; 30 presence heartbeat-or-leave/min.
 - 403 if room isn't available to you.
-- Online-users list: API has no such endpoint — deferred.
+- Online-users list: implemented (cIRC presence) — `GET .../users` for the initial list, `chat_presence` RTDB stream for live updates, `POST`/`DELETE .../presence` for announce/heartbeat/leave. Room-list cards also show `onlineCount` from `GET /v1/circ`.
 - Slash command rendering: server expands `/me`, `/poke`, `/dice` etc. server-side; no client-side preview yet.
 
 ### Search (new in v0.7)

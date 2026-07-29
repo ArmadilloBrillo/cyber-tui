@@ -1152,6 +1152,156 @@ func TestHTTPSendRoomMessage_EmptyReplyForNormalSend(t *testing.T) {
 	}
 }
 
+func TestHTTPGetRoomUsers_ParsesFields(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/circ/general/users" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, []map[string]any{
+			{"userId": "u1", "username": "case", "isChatAdmin": true, "lastSeen": 1700000001000},
+			{"userId": "u2", "username": "molly", "isChatAdmin": false, "lastSeen": 1700000002000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	users, err := c.GetRoomUsers("general")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("len(users) = %d, want 2", len(users))
+	}
+	if users[0].Username != "case" || !users[0].IsChatAdmin {
+		t.Errorf("users[0] = %+v, want case/admin", users[0])
+	}
+	if users[1].Username != "molly" || users[1].IsChatAdmin {
+		t.Errorf("users[1] = %+v, want molly/non-admin", users[1])
+	}
+}
+
+func TestHTTPGetRoomUsers_SanitizesControlChars(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"userId": "u1", "username": "evil\u001b[31m", "isChatAdmin": false, "lastSeen": 1700000001000},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	users, err := c.GetRoomUsers("general")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.ContainsRune(users[0].Username, 0x1b) {
+		t.Errorf("Username contains unstripped ESC: %q", users[0].Username)
+	}
+}
+
+func TestHTTPAnnouncePresence_ParsesCadence(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/circ/general/presence" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{"roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000})
+	})))
+	c.LoginWithRefreshToken("tok")
+	heartbeatMs, staleAfterMs, err := c.AnnouncePresence("general")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if heartbeatMs != 30000 {
+		t.Errorf("heartbeatMs = %d, want 30000", heartbeatMs)
+	}
+	if staleAfterMs != 180000 {
+		t.Errorf("staleAfterMs = %d, want 180000", staleAfterMs)
+	}
+}
+
+func TestHTTPLeaveRoomPresence_SendsDelete(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/circ/general/presence" || r.Method != http.MethodDelete {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{"roomId": "general", "ok": true})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if err := c.LeaveRoomPresence("general"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestHTTPSubscribeRoomPresence_InitialSnapshotFiltersOfflineAndStale verifies
+// the initial full-snapshot "put" at path "/" is consumed (not skipped, unlike
+// SubscribeRoom's message stream), and that offline/stale entries are filtered
+// out of the delivered snapshot.
+func TestHTTPSubscribeRoomPresence_InitialSnapshotFiltersOfflineAndStale(t *testing.T) {
+	now := time.Now().UnixMilli()
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		data := fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","isChatAdmin":true,"online":true,"lastSeen":%d},"u2":{"username":"bob","isChatAdmin":false,"online":false,"lastSeen":%d},"u3":{"username":"carol","isChatAdmin":false,"online":true,"lastSeen":%d}}}`, now, now, now-500000)
+		writeSSEEvent(w, "put", data)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000)
+	if err != nil {
+		t.Fatalf("SubscribeRoomPresence error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case users, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering a snapshot")
+		}
+		if len(users) != 1 {
+			t.Fatalf("len(users) = %d, want 1 (only alice is online and fresh): %+v", len(users), users)
+		}
+		if users[0].Username != "alice" || !users[0].IsChatAdmin {
+			t.Errorf("users[0] = %+v, want alice/admin", users[0])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for snapshot")
+	}
+}
+
+// TestHTTPSubscribeRoomPresence_SingleKeyUpdateReplacesEntry verifies a
+// "/<userId>" path event replaces just that user's entry.
+func TestHTTPSubscribeRoomPresence_SingleKeyUpdateReplacesEntry(t *testing.T) {
+	now := time.Now().UnixMilli()
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","isChatAdmin":false,"online":true,"lastSeen":%d}}}`, now))
+		writeSSEEvent(w, "put", fmt.Sprintf(`{"path":"/u1","data":{"username":"evil\u001b[31m","isChatAdmin":true,"online":true,"lastSeen":%d}}`, now))
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000)
+	if err != nil {
+		t.Fatalf("SubscribeRoomPresence error: %v", err)
+	}
+	defer cancel()
+
+	var last []model.RoomUser
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case users, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before delivering the updated snapshot")
+			}
+			last = users
+			if len(last) == 1 && last[0].IsChatAdmin {
+				if strings.ContainsRune(last[0].Username, 0x1b) {
+					t.Errorf("Username contains unstripped ESC: %q", last[0].Username)
+				}
+				return // saw the updated (admin) entry
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for the updated entry, last snapshot: %+v", last)
+		}
+	}
+}
+
 func TestHTTPStartConversation_ReturnsConversation(t *testing.T) {
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/cmail" || r.Method != http.MethodPost {

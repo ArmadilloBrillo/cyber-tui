@@ -406,6 +406,32 @@ type wireRoom struct {
 	Name          string `json:"name"`
 	LastMessageAt int64  `json:"lastMessageAt"` // epoch ms
 	SortOrder     int    `json:"sortOrder"`
+	OnlineCount   int    `json:"onlineCount"`
+}
+
+// wireRoomUser is a single entry from GET /v1/circ/:roomId/users.
+type wireRoomUser struct {
+	UserID      string `json:"userId"`
+	Username    string `json:"username"`
+	IsChatAdmin bool   `json:"isChatAdmin"`
+	LastSeen    int64  `json:"lastSeen"` // epoch ms
+}
+
+// wirePresenceResponse is returned by POST/DELETE /v1/circ/:roomId/presence.
+type wirePresenceResponse struct {
+	RoomID       string `json:"roomId"`
+	Ok           bool   `json:"ok"`
+	HeartbeatMs  int    `json:"heartbeatMs"`
+	StaleAfterMs int    `json:"staleAfterMs"`
+}
+
+// wireRTDBPresenceEntry is the Firebase shape for one user's entry in
+// /chat_presence/<roomId>/<userId>.
+type wireRTDBPresenceEntry struct {
+	Username    string  `json:"username"`
+	IsChatAdmin bool    `json:"isChatAdmin"`
+	Online      bool    `json:"online"`
+	LastSeen    float64 `json:"lastSeen"` // epoch ms as a Firebase number
 }
 
 // wireCircMessage is a single message from GET /v1/circ/:roomId.
@@ -1513,6 +1539,7 @@ func (c *HTTPClient) GetRooms() ([]model.Room, error) {
 			Name:          w.Name,
 			LastMessageAt: time.UnixMilli(w.LastMessageAt),
 			SortOrder:     w.SortOrder,
+			OnlineCount:   w.OnlineCount,
 		}
 	}
 	return out, nil
@@ -1621,6 +1648,172 @@ func (c *HTTPClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 			msgID := strings.TrimPrefix(d.Path, "/")
 			select {
 			case out <- wireRTDBCircMessageToModel(msgID, wm):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
+}
+
+// GetRoomUsers returns who's currently present in roomID via GET /v1/circ/:roomId/users.
+// The response is already staleness-filtered server-side.
+func (c *HTTPClient) GetRoomUsers(roomID string) ([]model.RoomUser, error) {
+	env, err := c.doRequest("GET", "/v1/circ/"+url.PathEscape(roomID)+"/users", nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireRoomUser
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]model.RoomUser, len(wire))
+	for i, w := range wire {
+		sanitize.Strings(&w)
+		out[i] = model.RoomUser{
+			UserID:      w.UserID,
+			Username:    w.Username,
+			IsChatAdmin: w.IsChatAdmin,
+			LastSeen:    time.UnixMilli(w.LastSeen),
+		}
+	}
+	return out, nil
+}
+
+// AnnouncePresence announces the caller's presence in roomID via POST
+// /v1/circ/:roomId/presence. Returns the heartbeat cadence and staleness
+// window (both ms) the caller should honor.
+func (c *HTTPClient) AnnouncePresence(roomID string) (heartbeatMs, staleAfterMs int, err error) {
+	env, err := c.doRequest("POST", "/v1/circ/"+url.PathEscape(roomID)+"/presence", nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	var data wirePresenceResponse
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return 0, 0, err
+	}
+	return data.HeartbeatMs, data.StaleAfterMs, nil
+}
+
+// LeaveRoomPresence removes the caller from roomID's presence list immediately
+// via DELETE /v1/circ/:roomId/presence.
+func (c *HTTPClient) LeaveRoomPresence(roomID string) error {
+	_, err := c.doRequest("DELETE", "/v1/circ/"+url.PathEscape(roomID)+"/presence", nil)
+	return err
+}
+
+// applyPresenceEvent merges one RTDB event into state, keyed by userId.
+// A "/" path replaces the whole map (the initial full-snapshot event, or a
+// full-tree deletion). A "/<userId>" path replaces or deletes that entry.
+// Deeper nested paths (e.g. a patch to just "/<userId>/lastSeen") are not
+// specially handled and are ignored — a documented limitation; in practice
+// each presence write replaces a user's whole entry.
+func applyPresenceEvent(state map[string]wireRTDBPresenceEntry, d wireRTDBSSEData) {
+	empty := len(d.Data) == 0 || string(d.Data) == "null"
+	if d.Path == "/" {
+		for k := range state {
+			delete(state, k)
+		}
+		if empty {
+			return
+		}
+		var full map[string]wireRTDBPresenceEntry
+		if err := json.Unmarshal(d.Data, &full); err != nil {
+			return
+		}
+		for k, v := range full {
+			sanitize.Strings(&v)
+			state[k] = v
+		}
+		return
+	}
+	userID := strings.TrimPrefix(d.Path, "/")
+	if strings.ContainsRune(userID, '/') {
+		return // nested field patch — see doc comment above
+	}
+	if empty {
+		delete(state, userID)
+		return
+	}
+	var entry wireRTDBPresenceEntry
+	if err := json.Unmarshal(d.Data, &entry); err != nil {
+		return
+	}
+	sanitize.Strings(&entry)
+	state[userID] = entry
+}
+
+// filterFreshPresence converts state to the sorted-by-caller snapshot of
+// currently-online, non-stale users, per the docs' rule: online == true and
+// lastSeen newer than staleAfterMs.
+func filterFreshPresence(state map[string]wireRTDBPresenceEntry, staleAfterMs int) []model.RoomUser {
+	now := time.Now().UnixMilli()
+	out := make([]model.RoomUser, 0, len(state))
+	for userID, e := range state {
+		if !e.Online || now-int64(e.LastSeen) >= int64(staleAfterMs) {
+			continue
+		}
+		out = append(out, model.RoomUser{
+			UserID:      userID,
+			Username:    e.Username,
+			IsChatAdmin: e.IsChatAdmin,
+			LastSeen:    time.UnixMilli(int64(e.LastSeen)),
+		})
+	}
+	return out
+}
+
+// SubscribeRoomPresence opens a live RTDB SSE stream for roomID's presence
+// node. Unlike SubscribeRoom, presence entries mutate and expire in place, so
+// each receive is a full, filtered snapshot rather than a single incremental
+// event — the internal state map is re-filtered and re-sent both on every
+// RTDB event and on a periodic timer (an entry going stale produces no event
+// of its own). The channel is only ever sent the latest snapshot (older
+// pending ones are dropped) so a slow consumer never blocks the stream.
+func (c *HTTPClient) SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int) (<-chan []model.RoomUser, context.CancelFunc, error) {
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	sseEvents := r.Subscribe(ctx, "/chat_presence/"+roomID, nil)
+	out := make(chan []model.RoomUser, 1)
+	send := func(users []model.RoomUser) {
+		select {
+		case out <- users:
+		default:
+			select {
+			case <-out:
+			default:
+			}
+			select {
+			case out <- users:
+			case <-ctx.Done():
+			}
+		}
+	}
+	go func() {
+		defer close(out)
+		state := map[string]wireRTDBPresenceEntry{}
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case ev, ok := <-sseEvents:
+				if !ok || ev.Err != nil {
+					return
+				}
+				if ev.Event != "put" && ev.Event != "patch" {
+					continue
+				}
+				var d wireRTDBSSEData
+				if err := json.Unmarshal(ev.Data, &d); err != nil {
+					continue
+				}
+				applyPresenceEvent(state, d)
+				send(filterFreshPresence(state, staleAfterMs))
+			case <-ticker.C:
+				send(filterFreshPresence(state, staleAfterMs))
 			case <-ctx.Done():
 				return
 			}
