@@ -26,7 +26,7 @@ const (
 
 // Rows consumed by the detail view's header and input box (outside the history viewport).
 const (
-	cmailDetailHeaderRows = 1 // "@otheruser" header
+	cmailDetailHeaderRows = 2 // "@otheruser" header + divider rule
 	cmailInputRows        = 3 // bordered textinput: 1 content + 2 border rows
 	cmailDetailChrome     = cmailDetailHeaderRows + cmailInputRows
 )
@@ -791,7 +791,8 @@ func (m CMailModel) View() string {
 			header += theme.Error.Render("  (live updates lost)")
 		}
 		inputBox := theme.ActiveBorder.Render(m.input.View())
-		return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), inputBox)
+		divider := theme.Subtle.Render(strings.Repeat("─", max(m.width, 0)))
+		return lipgloss.JoinVertical(lipgloss.Left, header, divider, m.viewport.View(), inputBox)
 	default: // cmailModeList
 		if !m.ready {
 			return theme.Subtle.Render("loading c-mail…")
