@@ -518,6 +518,11 @@ func (m ChatroomsModel) loadOlderRoomMessagesCmd(roomID string, before int64) te
 // InputFocused returns true in detail mode to prevent tab-navigation key capture.
 func (m ChatroomsModel) InputFocused() bool { return m.mode == chatroomModeDetail }
 
+// ComposeEmpty reports whether the compose input has no typed text — used by
+// App to let plain left/right fall through to tab-cycling instead of being
+// captured as cursor movement (see handleKeys' focused-input gate in app.go).
+func (m ChatroomsModel) ComposeEmpty() bool { return m.input.Value() == "" }
+
 // IsShowingDetail reports whether the detail view is active.
 func (m ChatroomsModel) IsShowingDetail() bool { return m.mode == chatroomModeDetail }
 

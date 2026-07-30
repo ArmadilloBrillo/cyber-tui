@@ -498,11 +498,52 @@ func TestHandleKeys_CtrlRight_CyclesTabsWhileChatroomsInputFocused(t *testing.T)
 	}
 }
 
-func TestHandleKeys_Left_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
+// A backgrounded Circ room resumes detail mode directly on tab-return (see
+// PR #58/#59), so the very first left/right after switching back used to be
+// swallowed into a compose box the user never asked to type into — plain
+// left/right now falls through to tab-cycling specifically when that box is
+// empty, since there's nothing for it to move a cursor over anyway. Once
+// there's text in it (typed just now, or a draft left over from before
+// backgrounding), left/right goes back to being captured for cursor
+// movement, same as it always has.
+
+func TestHandleKeys_Left_CyclesTabs_WhileChatroomsInputFocusedAndComposeEmpty(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.ComposeEmpty() {
+		t.Fatal("setup: expected an empty compose box")
+	}
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if !consumed {
+		t.Error("expected plain left arrow to be consumed (tab-cycle) while the compose box is empty")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected plain left arrow to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_Right_CyclesTabs_WhileChatroomsInputFocusedAndComposeEmpty(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyRight})
+	if !consumed {
+		t.Error("expected plain right arrow to be consumed (tab-cycle) while the compose box is empty")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected plain right arrow to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_Left_NotConsumed_WhileChatroomsInputFocusedAndComposeHasText(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	cm, _ := a.chatrooms.Update(keyMsg("h")) // types into the compose box, not a nav key
+	a.chatrooms = cm
+	if a.chatrooms.ComposeEmpty() {
+		t.Fatal("setup: expected a non-empty compose box")
+	}
 	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
 	if consumed {
-		t.Error("expected plain left arrow to NOT be consumed while chatrooms input is focused")
+		t.Error("expected plain left arrow to NOT be consumed while there's text in the compose box — it must move the cursor instead")
 	}
 }
 

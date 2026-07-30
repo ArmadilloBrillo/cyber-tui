@@ -80,6 +80,8 @@ only ever supposed to be entered focused.
 
 Arrow keys and the numeric/leader jumps are blocked from tab navigation when a text input is focused (CIRC, C-Mail, Search's query box, compose panels) so typing works normally in those screens.
 
+**Exception — plain `←`/`→` out of an empty Circ compose box:** since a backgrounded Circ room resumes detail mode (and its always-focused compose input) directly on tab-return rather than dropping to the room list, the very first `←`/`→` after switching back would otherwise be swallowed into a box the user never asked to type into. `app.go`'s focused-input gate (`handleKeys`) lets plain `←`/`→` fall through to tab-cycling specifically when `ChatroomsModel.ComposeEmpty()` is true; with any text in the box (typed just now, or a draft left over from before backgrounding) it's captured for cursor movement as usual, and `ctrl+←`/`ctrl+→` remains the general-purpose way out. See `docs/33-circ.md`'s keyboard shortcuts table.
+
 ## Status Bar
 
 Anchored to the bottom of the terminal at all times. Resizes correctly with the window. Shows the logged-in username on the left and key hints on the right.
