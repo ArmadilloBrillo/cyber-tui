@@ -2,7 +2,6 @@ package screens
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -228,7 +227,7 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 
 		bodyWidth := max(viewportWidth-rawPrefixWidth-tsWidth-tsGap, 10)
 
-		body := highlightMentions(strings.TrimRight(msg.Body, "\n"), currentUser)
+		body := markdown.RenderInline(strings.TrimRight(msg.Body, "\n"), currentUser)
 		lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(body), "\n")
 		last := len(lines) - 1
 
@@ -245,19 +244,6 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 		}
 	}
 	return sb.String()
-}
-
-// highlightMentions wraps case-insensitive, word-bounded occurrences of
-// currentUser in body (bare or @-prefixed) with theme.MeHighlight, so a
-// mention of the local user stands out in someone else's message.
-func highlightMentions(body, currentUser string) string {
-	if currentUser == "" {
-		return body
-	}
-	re := regexp.MustCompile(`(?i)@?\b` + regexp.QuoteMeta(currentUser) + `\b`)
-	return re.ReplaceAllStringFunc(body, func(match string) string {
-		return theme.MeHighlight.Render(match)
-	})
 }
 
 // renderActionLine renders a /me-style action message in classic IRC form:
@@ -282,7 +268,7 @@ func renderActionLine(username, body, ts string, viewportWidth int, currentUser 
 
 	bodyWidth := max(viewportWidth-rawPrefixWidth-len(suffix)-tsWidth-tsGap, 10)
 
-	body = highlightMentions(strings.TrimRight(body, "\n"), currentUser)
+	body = markdown.RenderInline(strings.TrimRight(body, "\n"), currentUser)
 	lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(body), "\n")
 	last := len(lines) - 1
 
