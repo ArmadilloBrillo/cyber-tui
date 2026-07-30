@@ -774,6 +774,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadRepliesCmd(msg.postID), true
 	case screens.BackToFeedMsg:
 		a.active = a.postDetailReturn
+		a.postDetail = a.postDetail.Close()
 		return a, nil, true
 	case screens.ShowUserProfileMsg:
 		if a.active != screenPostDetail {

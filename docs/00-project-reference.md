@@ -381,11 +381,13 @@ Single post with all its replies in a scrollable pager.
 - `j`/`k` (or arrows) navigate/select post or individual replies
 - `r` on a selected item opens the compose box (top-level or nested reply)
 - `d` on the selected item (own post or own reply) shows a y/n confirmation overlay; on `y` emits `DeletePostMsg` or `DeleteReplyMsg`
-- ESC emits `BackToFeedMsg` → App returns to feed
+- ESC emits `BackToFeedMsg` → App returns to `postDetailReturn` (whichever of the 7 origins — Feed, Profile, Bookmarks, Guilds, Topics, Notifications, Search — opened the post) and closes it (`PostDetailModel.Close()`)
 - `ScrollToReply(replyID)` scrolls to a specific reply (used by Notifications to deep-link)
+- **Persists across tab switches**: switching away from PostDetail (any nav key) no longer closes it — `PostDetailModel.SetPost` (the only thing that resets its state) isn't called again until a *different* post is opened, so the open post, its scroll position, and any in-progress reply draft just sit there until you come back. `activateScreen` (`layout.go`) checks `PostDetailModel.HasPost()`: landing on the origin tab *from elsewhere* resumes the post instead of showing that tab's own list; re-navigating to the origin tab *from PostDetail itself* (its own key/chord, or plain/ctrl `←`/`→` landing back on it, though cycling never does in one step — see `tabIndexOf`) is the escape hatch that actually closes it, matching Circ/C-Mail's re-press-the-tab-key convention. If the post was opened from inside a browsed Guild/Topic, closing it lands back on that same guild/topic, not the top-level list — Guilds/Topics' own browse state is untouched throughout, and PostDetail's check runs first in `activateScreen` so it "wins" while open. Mirrors Circ's background-room persistence (`docs/33-circ.md`) but architecturally simpler: pure REST content, no live subscription to keep alive. The tab-bar/nav "in detail" marker (`docs/02-menu-bar-navigation.md`) reflects this the same way it does for Circ/Guilds/Topics.
+- Plain `←`/`→` cycle tabs from PostDetail exactly like `ctrl+←`/`ctrl+→` already did (previously excluded — a live bug, not intentional). Cycling's tab-position lookup (`tabIndexOf`) resolves `screenPostDetail` to `postDetailReturn`'s position rather than defaulting to Feed's, so cycling away is anchored to wherever the post was actually opened from.
 
 Key types: `PostDetailModel`, `BackToFeedMsg`, `SubmitReplyMsg` (postID, parentReplyID, content), `DeletePostMsg`, `DeleteReplyMsg`  
-Key methods: `SetCurrentUsername(username)`, `RemoveReply(replyID)`
+Key methods: `SetCurrentUsername(username)`, `RemoveReply(replyID)`, `HasPost()`, `Close()`
 
 #### `profile.go`
 

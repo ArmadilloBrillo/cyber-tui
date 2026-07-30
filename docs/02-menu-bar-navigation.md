@@ -50,24 +50,24 @@ only ever supposed to be entered focused.
   open (indistinguishable from a tab never visited), and Guilds/Topics had no
   equivalent signal at all.
   - **The marker shows even while the tab isn't selected**, for Circ,
-    Guilds, and Topics specifically — their detail state is genuinely still
+    Guilds, Topics, and PostDetail — their detail state is genuinely still
     live/persisted in the background: an open Circ room keeps its RTDB
     subscription streaming regardless of the active tab (`docs/33-circ.md`),
-    and Guilds/Topics' browse state is simply never reset by `activateScreen`
-    on tab-away. The marker's color follows `selected` (bright/active when
-    you're looking at that tab, the tab's ordinary dim/inactive color when
-    it's open elsewhere) rather than a different glyph, so "you're here" and
-    "it's open elsewhere" read as the same kind of state at different
-    brightness, not two unrelated indicators.
-  - **C-Mail and PostDetail are selected-only** — deliberately excluded from
-    the background case. `CMailModel.CancelSubscription()` (tab-away) tears
-    the conversation's subscription down immediately but doesn't reset
-    `m.mode`, which lingers as `cmailModeDetail` (stale, not live) until the
-    next `ResetToList()`; showing a marker off that stale field would
-    misrepresent an already-closed conversation as still open — C-Mail's
-    real "something happened" signal is the aggregate unread badge across
-    all conversations, not one left-open thread. PostDetail has no
-    background resumption at all — leaving it abandons it entirely.
+    Guilds/Topics' browse state is simply never reset by `activateScreen` on
+    tab-away, and an open post (`PostDetailModel.HasPost()`) stays open until
+    explicitly closed (see below). The marker's color follows `selected`
+    (bright/active when you're looking at that tab, the tab's ordinary
+    dim/inactive color when it's open elsewhere) rather than a different
+    glyph, so "you're here" and "it's open elsewhere" read as the same kind
+    of state at different brightness, not two unrelated indicators.
+  - **C-Mail alone is selected-only** — deliberately excluded from the
+    background case. `CMailModel.CancelSubscription()` (tab-away) tears the
+    conversation's subscription down immediately but doesn't reset `m.mode`,
+    which lingers as `cmailModeDetail` (stale, not live) until the next
+    `ResetToList()`; showing a marker off that stale field would misrepresent
+    an already-closed conversation as still open — C-Mail's real "something
+    happened" signal is the aggregate unread badge across all conversations,
+    not one left-open thread.
 - All tabs are the same height — no layout jumping on tab change
 
 ## Navigation
@@ -81,6 +81,8 @@ only ever supposed to be entered focused.
 Arrow keys and the numeric/leader jumps are blocked from tab navigation when a text input is focused (CIRC, C-Mail, Search's query box, compose panels) so typing works normally in those screens.
 
 **Exception — plain `←`/`→` out of an empty Circ compose box:** since a backgrounded Circ room resumes detail mode (and its always-focused compose input) directly on tab-return rather than dropping to the room list, the very first `←`/`→` after switching back would otherwise be swallowed into a box the user never asked to type into. `app.go`'s focused-input gate (`handleKeys`) lets plain `←`/`→` fall through to tab-cycling specifically when `ChatroomsModel.ComposeEmpty()` is true; with any text in the box (typed just now, or a draft left over from before backgrounding) it's captured for cursor movement as usual, and `ctrl+←`/`ctrl+→` remains the general-purpose way out. See `docs/33-circ.md`'s keyboard shortcuts table.
+
+**PostDetail cycles like any other screen:** plain `←`/`→` now cycle tabs from PostDetail exactly like `ctrl+←`/`ctrl+→` already did — the earlier `a.active != screenPostDetail` exclusion in `TabsLayout.HandleNav` was a live bug, not intentional (`screenPostDetail` isn't itself a tab, so it was never meant to be excluded from cycling, just absent from `visibleTabs()`). `tabIndexOf` resolves `screenPostDetail` to `postDetailReturn`'s position rather than defaulting to Feed's, so cycling away is anchored to wherever the post was actually opened from — and since cycling always moves to a *different* tab, it can never itself land back on the origin in one step, so it never triggers PostDetail's close-on-return-to-origin escape hatch (see `docs/00-project-reference.md`'s `postdetail.go` section).
 
 ## Status Bar
 

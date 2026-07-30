@@ -636,6 +636,125 @@ func TestShowSearchReplyMsg_NavigatesToPostDetailAndScrollsToReply(t *testing.T)
 	}
 }
 
+// --- PostDetail persists across tab switches ---
+//
+// Mirrors Circ's background-room persistence (PR #58): a post left open
+// (not explicitly closed) resumes automatically when navigation lands back
+// on the tab it was opened from, instead of showing that tab's own list.
+// Re-navigating to the origin tab *from PostDetail itself* is the escape
+// hatch that actually closes it — same convention as Circ/C-Mail's
+// re-press-the-tab-key pattern.
+
+func openPostFrom(a App, origin screen) App {
+	a.active = screenPostDetail
+	a.postDetailReturn = origin
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1"})
+	return a
+}
+
+func TestActivateScreen_PostDetail_ResumesOnReturnToOrigin(t *testing.T) {
+	a := openPostFrom(loggedInApp(), screenBookmarks)
+
+	a, _ = activateScreen(a, screenFeed) // jump to an unrelated tab
+	if a.active != screenFeed {
+		t.Fatalf("setup: expected screenFeed, got %v", a.active)
+	}
+	if !a.postDetail.HasPost() {
+		t.Error("expected the post to stay open in the background after switching to an unrelated tab")
+	}
+
+	a, _ = activateScreen(a, screenBookmarks) // return to the origin
+	if a.active != screenPostDetail {
+		t.Errorf("expected returning to Bookmarks to resume PostDetail, got %v", a.active)
+	}
+	if !a.postDetail.HasPost() {
+		t.Error("expected the post to still be open after resuming")
+	}
+}
+
+func TestActivateScreen_PostDetail_ClosesViaOriginTabEscapeHatch(t *testing.T) {
+	a := openPostFrom(loggedInApp(), screenBookmarks)
+
+	a, _ = activateScreen(a, screenBookmarks) // re-press Bookmarks' own key from PostDetail
+	if a.active != screenBookmarks {
+		t.Errorf("expected the escape hatch to land on Bookmarks' list, got %v", a.active)
+	}
+	if a.postDetail.HasPost() {
+		t.Error("expected the post to be closed after using the escape hatch")
+	}
+}
+
+func TestHandlePostDetail_Esc_ClosesPost(t *testing.T) {
+	a := openPostFrom(loggedInApp(), screenBookmarks)
+
+	m, _ := a.Update(screens.BackToFeedMsg{})
+	a2 := m.(App)
+	if a2.active != screenBookmarks {
+		t.Errorf("expected esc to return to Bookmarks, got %v", a2.active)
+	}
+	if a2.postDetail.HasPost() {
+		t.Error("expected esc to close the post")
+	}
+}
+
+func TestActivateScreen_PostDetail_ClosingLeavesBrowsedGuildIntact(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
+	a.guilds = a.guilds.SetGuilds([]model.Guild{{ID: "g1", Name: "Alpha", Slug: "alpha"}}, "")
+	gm, _ := a.guilds.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.guilds = gm
+	if !a.guilds.IsBrowsingGuild() {
+		t.Fatal("setup: expected to be browsing a guild")
+	}
+
+	a = openPostFrom(a, screenGuilds) // open a post from within that guild
+
+	a, _ = activateScreen(a, screenGuilds) // close it via the escape hatch
+	if a.active != screenGuilds {
+		t.Fatalf("expected escape hatch to land on Guilds, got %v", a.active)
+	}
+	if a.postDetail.HasPost() {
+		t.Error("expected the post to be closed")
+	}
+	if !a.guilds.IsBrowsingGuild() {
+		t.Error("expected closing the post to still show the browsed guild, not the guild list — Guilds' own browse state is untouched by PostDetail")
+	}
+}
+
+func TestHandleKeys_Left_CyclesTabs_FromPostDetail(t *testing.T) {
+	a := openPostFrom(loggedInApp(), screenBookmarks)
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if !consumed {
+		t.Error("expected plain left arrow to be consumed (tab-cycle) from PostDetail")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected plain left arrow to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_Right_CyclesTabs_FromPostDetail(t *testing.T) {
+	a := openPostFrom(loggedInApp(), screenBookmarks)
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyRight})
+	if !consumed {
+		t.Error("expected plain right arrow to be consumed (tab-cycle) from PostDetail")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected plain right arrow to cycle to a different tab")
+	}
+}
+
+func TestTabIndexOf_PostDetail_AnchorsOnOriginNotFeed(t *testing.T) {
+	a := openPostFrom(loggedInApp(), screenBookmarks)
+
+	got := tabIndexOf(a)
+	want := tabIndexOf(App{active: screenBookmarks})
+	if got != want {
+		t.Errorf("tabIndexOf(PostDetail from Bookmarks) = %d, want %d (Bookmarks' own position)", got, want)
+	}
+}
+
 // TestHandleKeys_EscBlursSearchQuery_ThenQuitWorks reproduces the reported
 // bug: after opening Search, esc must be able to blur the query box so 'q'
 // (and tab navigation) work again — this held even when a search failed,
