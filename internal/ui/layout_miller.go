@@ -298,13 +298,19 @@ func (l MillerLayout) renderNav(a App) string {
 				badge = fmt.Sprintf(" ●%d", n)
 			}
 		}
-		isActive := a.active == t.s &&
-			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
-			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())
+		selected, detail := tabVisualState(a, t.s)
 		marker := "  "
 		base := theme.Subtle
-		if isActive {
+		if selected {
+			// ▷ (open) marks "selected, one level deep" — a Circ room,
+			// C-Mail conversation, Guilds/Topics browse, or a PostDetail
+			// opened from this tab (see tabVisualState) — vs. ▶ for
+			// selected-at-the-top-level. Mirrors the trailing "›" in
+			// TabsLayout's renderTabBar.
 			marker = "▶ "
+			if detail {
+				marker = "▷ "
+			}
 			if a.focus == focusMenu {
 				base = theme.Highlight
 			}

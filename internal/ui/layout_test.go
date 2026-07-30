@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/ragnar/cyber-tui/internal/model"
 )
 
 // --- visibleTabs ---
@@ -36,6 +38,154 @@ func TestRenderNav_DoesNotShowSearch(t *testing.T) {
 	out := ansi.Strip(MillerLayout{}.renderNav(a))
 	if strings.Contains(out, "search") {
 		t.Errorf("expected the nav sidebar to omit the hidden Search entry, got: %q", out)
+	}
+}
+
+// --- tabVisualState ---
+//
+// Unifies what used to be an ad hoc isActive expression duplicated (and
+// drifting) between renderTabBar and renderNav: a tab is "selected" while
+// a.active matches it directly, or PostDetail is open and was reached from
+// it (postDetailReturn); it's additionally "in detail" — one level deep —
+// for an open Circ room/C-Mail conversation/Guilds-Topics browse, or
+// whenever PostDetail itself is what's open.
+
+func TestTabVisualState_Unselected(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	selected, detail := tabVisualState(a, screenCMail)
+	if selected || detail {
+		t.Errorf("selected=%v detail=%v, want false,false for a tab that isn't active", selected, detail)
+	}
+}
+
+func TestTabVisualState_SelectedListMode_NoDetail(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	selected, detail := tabVisualState(a, screenFeed)
+	if !selected || detail {
+		t.Errorf("selected=%v detail=%v, want true,false for the active tab in its top-level view", selected, detail)
+	}
+}
+
+func TestTabVisualState_ChatroomsDetail(t *testing.T) {
+	a := loggedInApp()
+	a, _ = activateScreen(a, screenChatrooms)
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+
+	selected, detail := tabVisualState(a, screenChatrooms)
+	if !selected || !detail {
+		t.Errorf("selected=%v detail=%v, want true,true with a room open", selected, detail)
+	}
+}
+
+func TestTabVisualState_CMailDetail(t *testing.T) {
+	a := loggedInApp()
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	a.active = screenCMail
+
+	selected, detail := tabVisualState(a, screenCMail)
+	if !selected || !detail {
+		t.Errorf("selected=%v detail=%v, want true,true with a conversation open", selected, detail)
+	}
+}
+
+func TestTabVisualState_GuildsBrowsingGuild(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
+	a.guilds = a.guilds.SetGuilds([]model.Guild{{ID: "g1", Name: "Alpha", Slug: "alpha"}}, "")
+	gm, _ := a.guilds.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.guilds = gm
+
+	selected, detail := tabVisualState(a, screenGuilds)
+	if !selected || !detail {
+		t.Errorf("selected=%v detail=%v, want true,true while browsing a guild", selected, detail)
+	}
+}
+
+func TestTabVisualState_TopicsBrowsingTopic(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenTopics
+	a.topics = a.topics.SetTopics([]model.Topic{{Slug: "tech"}}, "")
+	tm, _ := a.topics.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.topics = tm
+
+	selected, detail := tabVisualState(a, screenTopics)
+	if !selected || !detail {
+		t.Errorf("selected=%v detail=%v, want true,true while browsing a topic", selected, detail)
+	}
+}
+
+func TestTabVisualState_PostDetail_CreditsOriginTab(t *testing.T) {
+	for _, origin := range []screen{screenFeed, screenGuilds} {
+		a := loggedInApp()
+		a.active = screenPostDetail
+		a.postDetailReturn = origin
+
+		selected, detail := tabVisualState(a, origin)
+		if !selected || !detail {
+			t.Errorf("origin %v: selected=%v detail=%v, want true,true while PostDetail is open", origin, selected, detail)
+		}
+
+		// A different tab must not also claim the PostDetail state.
+		other := screenNotifications
+		if origin == screenNotifications {
+			other = screenSettings
+		}
+		selected, detail = tabVisualState(a, other)
+		if selected || detail {
+			t.Errorf("origin %v, other tab %v: selected=%v detail=%v, want false,false", origin, other, selected, detail)
+		}
+	}
+}
+
+// --- renderTabBar / renderNav: detail marker reflects tabVisualState ---
+
+func TestRenderTabBar_ShowsDetailMarker(t *testing.T) {
+	a := loggedInApp()
+	a.width = 100
+	a, _ = activateScreen(a, screenChatrooms)
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+
+	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	if !strings.Contains(out, "›") {
+		t.Errorf("expected a detail marker (›) in the tab bar with a room open, got: %q", out)
+	}
+}
+
+func TestRenderTabBar_NoDetailMarkerInListMode(t *testing.T) {
+	a := loggedInApp()
+	a.width = 100
+	a, _ = activateScreen(a, screenChatrooms)
+
+	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	if strings.Contains(out, "›") {
+		t.Errorf("expected no detail marker while Chatrooms is still in list mode, got: %q", out)
+	}
+}
+
+func TestRenderNav_ShowsOpenMarkerForDetail(t *testing.T) {
+	a := loggedInApp()
+	a, _ = activateScreen(a, screenChatrooms)
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+
+	out := ansi.Strip(MillerLayout{}.renderNav(a))
+	if !strings.Contains(out, "▷") {
+		t.Errorf("expected the open (▷) marker in the nav sidebar with a room open, got: %q", out)
 	}
 }
 

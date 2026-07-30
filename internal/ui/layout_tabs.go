@@ -184,18 +184,26 @@ func (l TabsLayout) renderTabBar(a App) string {
 				badge = fmt.Sprintf(" (%d)", n)
 			}
 		}
-		isActive := a.active == t.s &&
-			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
-			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())
+		selected, detail := tabVisualState(a, t.s)
 		text, mnemonic := theme.TabText, theme.TabMnemonic
-		if isActive {
+		if selected {
 			text, mnemonic = theme.ActiveTabText, theme.ActiveTabMnemonic
+		}
+		marker := ""
+		if detail {
+			// A trailing chevron on top of the active highlight — "selected,
+			// one level deep" — for a Circ room, C-Mail conversation,
+			// Guilds/Topics browse, or a PostDetail opened from this tab
+			// (see tabVisualState). Previously these states just silently
+			// dropped the active highlight, rendering identically to a tab
+			// never visited.
+			marker = " ›"
 		}
 		before, ch, after := splitMnemonic(t.label, t.mnemonic)
 		// Each fragment is rendered independently (rather than wrapping the
 		// whole label in one .Padding style) so the active tab's background
 		// survives across the mnemonic's own ANSI reset — see TabText's doc.
-		tabs += text.Render("  "+before) + mnemonic.Render(ch) + text.Render(after+badge+"  ")
+		tabs += text.Render("  "+before) + mnemonic.Render(ch) + text.Render(after+badge+marker+"  ")
 	}
 	logo := lipgloss.NewStyle().
 		Background(theme.ColorGreen).

@@ -99,6 +99,34 @@ func visibleTabs() []navTab {
 	return out
 }
 
+// tabVisualState reports whether tab t is the one currently selected, and if
+// so, whether the app is one level deep in it — an open Circ room, an open
+// C-Mail conversation, a Guilds/Topics browse, or PostDetail opened from t
+// (postDetailReturn == t, since PostDetail is a single shared screen reused
+// by six origin tabs rather than duplicated per-origin). Both TabsLayout and
+// MillerLayout call this so the two layouts can never disagree about which
+// state a tab is in.
+func tabVisualState(a App, t screen) (selected, detail bool) {
+	selected = a.active == t || (a.active == screenPostDetail && a.postDetailReturn == t)
+	if !selected {
+		return false, false
+	}
+	if a.active == screenPostDetail {
+		return true, true
+	}
+	switch t {
+	case screenChatrooms:
+		return true, a.chatrooms.IsShowingDetail()
+	case screenCMail:
+		return true, a.cmail.IsShowingDetail()
+	case screenGuilds:
+		return true, a.guilds.IsBrowsingGuild() || a.guilds.IsBrowsingMembers()
+	case screenTopics:
+		return true, a.topics.IsBrowsingTopic()
+	}
+	return true, false
+}
+
 var renderedVersionLine = theme.Subtle.Render("version " + version.Version + " (" + version.Commit + ")")
 
 // hint is a compact key+description pair shown in the status bar and help modal.
