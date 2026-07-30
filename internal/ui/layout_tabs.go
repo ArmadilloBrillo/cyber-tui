@@ -184,18 +184,28 @@ func (l TabsLayout) renderTabBar(a App) string {
 				badge = fmt.Sprintf(" (%d)", n)
 			}
 		}
-		isActive := a.active == t.s &&
-			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
-			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())
+		selected, detail := tabVisualState(a, t.s)
 		text, mnemonic := theme.TabText, theme.TabMnemonic
-		if isActive {
+		if selected {
 			text, mnemonic = theme.ActiveTabText, theme.ActiveTabMnemonic
+		}
+		marker := ""
+		if detail {
+			// A trailing chevron for "one level deep" — a Circ room,
+			// Guilds/Topics browse, a C-Mail conversation, or a PostDetail
+			// opened from this tab (see tabVisualState). Rendered via `text`
+			// below, so it inherits the active highlight when this tab is
+			// selected, or the ordinary dim/inactive style when it isn't —
+			// Circ/Guilds/Topics report detail even while backgrounded (their
+			// state is genuinely still live/persisted there), so the dim
+			// variant is what shows a room/browse left open on another tab.
+			marker = " ›"
 		}
 		before, ch, after := splitMnemonic(t.label, t.mnemonic)
 		// Each fragment is rendered independently (rather than wrapping the
 		// whole label in one .Padding style) so the active tab's background
 		// survives across the mnemonic's own ANSI reset — see TabText's doc.
-		tabs += text.Render("  "+before) + mnemonic.Render(ch) + text.Render(after+badge+"  ")
+		tabs += text.Render("  "+before) + mnemonic.Render(ch) + text.Render(after+badge+marker+"  ")
 	}
 	logo := lipgloss.NewStyle().
 		Background(theme.ColorGreen).

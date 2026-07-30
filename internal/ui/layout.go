@@ -99,6 +99,45 @@ func visibleTabs() []navTab {
 	return out
 }
 
+// tabVisualState reports whether tab t is the one currently selected, and
+// whether it's one level deep in a detail sub-view — an open Circ room, an
+// open C-Mail conversation, a Guilds/Topics browse, or PostDetail opened from
+// t (postDetailReturn == t, since PostDetail is a single shared screen reused
+// by six origin tabs rather than duplicated per-origin). Both TabsLayout and
+// MillerLayout call this so the two layouts can never disagree about which
+// state a tab is in.
+//
+// detail is reported even while t isn't selected for Circ/Guilds/Topics,
+// since their detail state is genuinely still live in the background: Circ's
+// open room keeps its RTDB subscription streaming regardless of the active
+// tab (see IsRoomStreamMsg in app.go), and Guilds/Topics' browse state is
+// simply never reset by activateScreen on tab-away. C-Mail and PostDetail are
+// selected-only instead: CMailModel.CancelSubscription (tab-away) tears the
+// conversation's subscription down immediately but doesn't reset m.mode, so
+// it lingers as cmailModeDetail — stale, not live — until the next
+// ResetToList(); surfacing that in the background would claim a conversation
+// is still open when it's already been torn down (C-Mail's actual "something
+// happened" signal is the aggregate unread badge, not a left-open
+// conversation). PostDetail has no background resumption at all.
+func tabVisualState(a App, t screen) (selected, detail bool) {
+	selected = a.active == t || (a.active == screenPostDetail && a.postDetailReturn == t)
+
+	switch t {
+	case screenChatrooms:
+		detail = a.chatrooms.IsShowingDetail()
+	case screenGuilds:
+		detail = a.guilds.IsBrowsingGuild() || a.guilds.IsBrowsingMembers()
+	case screenTopics:
+		detail = a.topics.IsBrowsingTopic()
+	case screenCMail:
+		detail = selected && a.cmail.IsShowingDetail()
+	}
+	if selected && a.active == screenPostDetail {
+		detail = true
+	}
+	return selected, detail
+}
+
 var renderedVersionLine = theme.Subtle.Render("version " + version.Version + " (" + version.Commit + ")")
 
 // hint is a compact key+description pair shown in the status bar and help modal.

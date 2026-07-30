@@ -67,6 +67,7 @@ Long bodies word-wrap to fit the terminal width; continuation lines are indented
 | `ctrl+q` | Quit (same as global `q`) |
 | `ctrl+t` | Open theme picker (same as global `t`) |
 | `ctrl+←` / `ctrl+→` | Cycle tabs (same as global `←`/`→`; Tabs layout only) |
+| `←` / `→` | Cycle tabs — but only when the compose input is empty (detail mode, Tabs layout). With text in the box (just typed, or a draft left over from switching tabs away and back — the room and its subscription stay open in the background, see "Room stays open across tab switches" above), plain `←`/`→` moves the cursor instead and `ctrl+←`/`ctrl+→` is the way out, same as it's always been. Otherwise, resuming a backgrounded room on tab-return would silently swallow the very first `←`/`→` press into an empty box the user never asked to type into. See `ChatroomsModel.ComposeEmpty()`. |
 | `Tab` | Preview/cycle `@mention` completion from online users, without touching the real text (detail mode, compose input) |
 | `Space` | Commit the currently-previewed `@mention`, if any, then insert the space (detail mode, compose input) |
 

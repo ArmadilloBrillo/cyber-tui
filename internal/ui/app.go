@@ -548,8 +548,21 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
 		}
-		switch m.String() {
-		case "ctrl+o", "ctrl+q", "ctrl+t", "ctrl+left", "ctrl+right":
+		// A backgrounded Circ room resumes detail mode (and its "always
+		// focused" compose input, see ChatroomsModel.InputFocused) the
+		// instant you tab back into it — so plain left/right otherwise gets
+		// captured into a box you never asked to type into, forcing
+		// ctrl+left/right for what was plain left/right on every other tab a
+		// moment ago. An empty compose box has nothing for left/right to do
+		// anyway, so let it fall through to tab-cycling in that case only;
+		// once there's text (typed just now, or a draft left over from
+		// before backgrounding), left/right goes back to normal cursor
+		// movement and ctrl+left/right remains the way out, same as today.
+		bareArrowEscapesEmptyCompose := (m.String() == "left" || m.String() == "right") &&
+			a.active == screenChatrooms && a.chatrooms.ComposeEmpty()
+		switch {
+		case m.String() == "ctrl+o", m.String() == "ctrl+q", m.String() == "ctrl+t",
+			m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
 			// fall through to the global switch below
 		default:
 			return a, nil, false // fall through to delegateUpdate

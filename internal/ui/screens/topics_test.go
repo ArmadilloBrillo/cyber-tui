@@ -23,6 +23,23 @@ func sampleTopicPosts() []model.Post {
 	}
 }
 
+// --- IsBrowsingTopic / esc ---
+
+func TestTopics_Esc_ClearsIsBrowsingTopic(t *testing.T) {
+	m := screens.NewTopicsModel()
+	m = m.SetTopics(sampleTopics(), "")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m.SetTopicPosts(sampleTopicPosts(), "") // Enter only fires the load cmd; this is what flips m.view to viewTopicPosts
+	if !m.IsBrowsingTopic() {
+		t.Fatal("setup: expected IsBrowsingTopic() to be true after entering a topic")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.IsBrowsingTopic() {
+		t.Error("expected IsBrowsingTopic() to be false after esc back to the topic list")
+	}
+}
+
 // --- FilterNSFW ---
 
 func TestTopics_FilterNSFW_HidesNSFWPost(t *testing.T) {
