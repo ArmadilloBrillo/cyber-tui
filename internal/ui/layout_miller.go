@@ -299,21 +299,24 @@ func (l MillerLayout) renderNav(a App) string {
 			}
 		}
 		selected, detail := tabVisualState(a, t.s)
+		// ▷ (open) marks "one level deep" — a Circ room, Guilds/Topics
+		// browse, a C-Mail conversation, or a PostDetail opened from this
+		// tab (see tabVisualState) — vs. ▶ for selected-at-the-top-level, or
+		// no marker at all. Mirrors the trailing "›" in TabsLayout's
+		// renderTabBar. detail can be true while unselected (Circ/Guilds/
+		// Topics persist in the background); base only brightens when
+		// selected, so a backgrounded ▷ renders dim — "open elsewhere",
+		// distinct from the bright ▷ meaning "open, and you're looking at it".
 		marker := "  "
-		base := theme.Subtle
-		if selected {
-			// ▷ (open) marks "selected, one level deep" — a Circ room,
-			// C-Mail conversation, Guilds/Topics browse, or a PostDetail
-			// opened from this tab (see tabVisualState) — vs. ▶ for
-			// selected-at-the-top-level. Mirrors the trailing "›" in
-			// TabsLayout's renderTabBar.
+		switch {
+		case detail:
+			marker = "▷ "
+		case selected:
 			marker = "▶ "
-			if detail {
-				marker = "▷ "
-			}
-			if a.focus == focusMenu {
-				base = theme.Highlight
-			}
+		}
+		base := theme.Subtle
+		if selected && a.focus == focusMenu {
+			base = theme.Highlight
 		}
 		before, ch, after := splitMnemonic(t.label, t.mnemonic)
 		// No background is set on base/mnemonic here, so — unlike renderTabBar —

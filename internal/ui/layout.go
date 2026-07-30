@@ -99,32 +99,43 @@ func visibleTabs() []navTab {
 	return out
 }
 
-// tabVisualState reports whether tab t is the one currently selected, and if
-// so, whether the app is one level deep in it — an open Circ room, an open
-// C-Mail conversation, a Guilds/Topics browse, or PostDetail opened from t
-// (postDetailReturn == t, since PostDetail is a single shared screen reused
+// tabVisualState reports whether tab t is the one currently selected, and
+// whether it's one level deep in a detail sub-view — an open Circ room, an
+// open C-Mail conversation, a Guilds/Topics browse, or PostDetail opened from
+// t (postDetailReturn == t, since PostDetail is a single shared screen reused
 // by six origin tabs rather than duplicated per-origin). Both TabsLayout and
 // MillerLayout call this so the two layouts can never disagree about which
 // state a tab is in.
+//
+// detail is reported even while t isn't selected for Circ/Guilds/Topics,
+// since their detail state is genuinely still live in the background: Circ's
+// open room keeps its RTDB subscription streaming regardless of the active
+// tab (see IsRoomStreamMsg in app.go), and Guilds/Topics' browse state is
+// simply never reset by activateScreen on tab-away. C-Mail and PostDetail are
+// selected-only instead: CMailModel.CancelSubscription (tab-away) tears the
+// conversation's subscription down immediately but doesn't reset m.mode, so
+// it lingers as cmailModeDetail — stale, not live — until the next
+// ResetToList(); surfacing that in the background would claim a conversation
+// is still open when it's already been torn down (C-Mail's actual "something
+// happened" signal is the aggregate unread badge, not a left-open
+// conversation). PostDetail has no background resumption at all.
 func tabVisualState(a App, t screen) (selected, detail bool) {
 	selected = a.active == t || (a.active == screenPostDetail && a.postDetailReturn == t)
-	if !selected {
-		return false, false
-	}
-	if a.active == screenPostDetail {
-		return true, true
-	}
+
 	switch t {
 	case screenChatrooms:
-		return true, a.chatrooms.IsShowingDetail()
-	case screenCMail:
-		return true, a.cmail.IsShowingDetail()
+		detail = a.chatrooms.IsShowingDetail()
 	case screenGuilds:
-		return true, a.guilds.IsBrowsingGuild() || a.guilds.IsBrowsingMembers()
+		detail = a.guilds.IsBrowsingGuild() || a.guilds.IsBrowsingMembers()
 	case screenTopics:
-		return true, a.topics.IsBrowsingTopic()
+		detail = a.topics.IsBrowsingTopic()
+	case screenCMail:
+		detail = selected && a.cmail.IsShowingDetail()
 	}
-	return true, false
+	if selected && a.active == screenPostDetail {
+		detail = true
+	}
+	return selected, detail
 }
 
 var renderedVersionLine = theme.Subtle.Render("version " + version.Version + " (" + version.Commit + ")")

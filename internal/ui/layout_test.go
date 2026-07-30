@@ -49,6 +49,14 @@ func TestRenderNav_DoesNotShowSearch(t *testing.T) {
 // it (postDetailReturn); it's additionally "in detail" — one level deep —
 // for an open Circ room/C-Mail conversation/Guilds-Topics browse, or
 // whenever PostDetail itself is what's open.
+//
+// detail is reported even while a tab isn't selected for Circ/Guilds/Topics,
+// since their detail state is genuinely still live/persisted in the
+// background (see tabVisualState's doc comment). C-Mail and PostDetail are
+// selected-only: C-Mail's mode lingers stale between leaving and the next
+// ResetToList() even though its subscription was already torn down, so
+// showing it in the background would misrepresent a conversation as still
+// open.
 
 func TestTabVisualState_Unselected(t *testing.T) {
 	a := loggedInApp()
@@ -124,6 +132,84 @@ func TestTabVisualState_TopicsBrowsingTopic(t *testing.T) {
 	}
 }
 
+// --- background persistence: Circ/Guilds/Topics report detail while unselected ---
+
+func TestTabVisualState_ChatroomsDetail_PersistsWhenBackgrounded(t *testing.T) {
+	a := loggedInApp()
+	a, _ = activateScreen(a, screenChatrooms)
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+
+	a, _ = activateScreen(a, screenFeed) // background Chatrooms
+
+	selected, detail := tabVisualState(a, screenChatrooms)
+	if selected {
+		t.Error("expected Chatrooms to not be selected after switching to Feed")
+	}
+	if !detail {
+		t.Error("expected Chatrooms to still report detail=true — the room stays open in the background")
+	}
+}
+
+func TestTabVisualState_GuildsBrowsing_PersistsWhenBackgrounded(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
+	a.guilds = a.guilds.SetGuilds([]model.Guild{{ID: "g1", Name: "Alpha", Slug: "alpha"}}, "")
+	gm, _ := a.guilds.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.guilds = gm
+
+	a.active = screenFeed // background Guilds
+
+	selected, detail := tabVisualState(a, screenGuilds)
+	if selected {
+		t.Error("expected Guilds to not be selected after switching to Feed")
+	}
+	if !detail {
+		t.Error("expected Guilds to still report detail=true — browse state isn't reset on tab-away")
+	}
+}
+
+func TestTabVisualState_TopicsBrowsing_PersistsWhenBackgrounded(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenTopics
+	a.topics = a.topics.SetTopics([]model.Topic{{Slug: "tech"}}, "")
+	tm, _ := a.topics.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.topics = tm
+
+	a.active = screenFeed // background Topics
+
+	selected, detail := tabVisualState(a, screenTopics)
+	if selected {
+		t.Error("expected Topics to not be selected after switching to Feed")
+	}
+	if !detail {
+		t.Error("expected Topics to still report detail=true — browse state isn't reset on tab-away")
+	}
+}
+
+func TestTabVisualState_CMailDetail_DoesNotPersistWhenBackgrounded(t *testing.T) {
+	a := loggedInApp()
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	a.active = screenCMail
+
+	a.active = screenFeed // background C-Mail — mode is still cmailModeDetail here, stale
+
+	selected, detail := tabVisualState(a, screenCMail)
+	if selected {
+		t.Error("expected C-Mail to not be selected after switching to Feed")
+	}
+	if detail {
+		t.Error("expected C-Mail to report detail=false while backgrounded — its subscription was already torn down, so this would misrepresent a closed conversation as still open")
+	}
+}
+
 func TestTabVisualState_PostDetail_CreditsOriginTab(t *testing.T) {
 	for _, origin := range []screen{screenFeed, screenGuilds} {
 		a := loggedInApp()
@@ -186,6 +272,54 @@ func TestRenderNav_ShowsOpenMarkerForDetail(t *testing.T) {
 	out := ansi.Strip(MillerLayout{}.renderNav(a))
 	if !strings.Contains(out, "▷") {
 		t.Errorf("expected the open (▷) marker in the nav sidebar with a room open, got: %q", out)
+	}
+}
+
+func TestRenderTabBar_ShowsDetailMarkerWhenBackgrounded(t *testing.T) {
+	a := loggedInApp()
+	a.width = 100
+	a, _ = activateScreen(a, screenChatrooms)
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+	a, _ = activateScreen(a, screenFeed) // background Chatrooms
+
+	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	if !strings.Contains(out, "›") {
+		t.Errorf("expected a detail marker for the backgrounded room, got: %q", out)
+	}
+}
+
+func TestRenderTabBar_NoDetailMarkerForBackgroundedCMail(t *testing.T) {
+	a := loggedInApp()
+	a.width = 100
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	a.active = screenFeed // background C-Mail
+
+	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	if strings.Contains(out, "›") {
+		t.Errorf("expected no detail marker for backgrounded C-Mail (its conversation was already torn down), got: %q", out)
+	}
+}
+
+func TestRenderNav_ShowsOpenMarkerWhenBackgrounded(t *testing.T) {
+	a := loggedInApp()
+	a, _ = activateScreen(a, screenChatrooms)
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+	a, _ = activateScreen(a, screenFeed) // background Chatrooms
+
+	out := ansi.Strip(MillerLayout{}.renderNav(a))
+	if !strings.Contains(out, "▷") {
+		t.Errorf("expected the open (▷) marker in the nav sidebar for the backgrounded room, got: %q", out)
 	}
 }
 

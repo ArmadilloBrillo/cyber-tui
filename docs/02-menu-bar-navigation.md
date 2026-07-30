@@ -35,20 +35,39 @@ only ever supposed to be entered focused.
   highlighted in cyan inline within the label itself — e.g. `feed`'s `f`,
   `c-mail`'s `m` — so the leader-key hint is visible without opening the
   help modal (`?`)
-- **"In detail" marker**: a selected tab that's currently one level deep —
-  an open Circ room, an open C-Mail conversation, browsing into a Guild or
-  Topic, or PostDetail opened from that tab — keeps its active highlight and
-  gets an extra marker on top: a trailing `›` in TabsLayout (e.g. `circ ›`),
-  or the nav sidebar's `▶` marker becomes `▷` in MillerLayout. Both layouts
-  compute this from one shared function, `tabVisualState(a, screen) (selected,
-  detail bool)` (`internal/ui/layout.go`), so they can't disagree about which
-  state a tab is in. `selected` covers both "this screen is `a.active`" and
-  "PostDetail is open and `postDetailReturn` points back to this tab" (since
-  PostDetail is a single screen shared by six origins — Feed, Bookmarks,
-  Profile, Guilds, Topics, Notifications — rather than duplicated per-origin).
-  Before this, Circ/C-Mail silently dropped the active highlight entirely
-  once a room/conversation was open (indistinguishable from a tab never
-  visited), and Guilds/Topics had no equivalent signal at all.
+- **"In detail" marker**: a tab that's currently one level deep — an open
+  Circ room, an open C-Mail conversation, browsing into a Guild or Topic, or
+  PostDetail opened from that tab — gets a marker: a trailing `›` in
+  TabsLayout (e.g. `circ ›`), or the nav sidebar's `▶`/blank marker becomes
+  `▷` in MillerLayout. Both layouts compute this from one shared function,
+  `tabVisualState(a, screen) (selected, detail bool)` (`internal/ui/layout.go`),
+  so they can't disagree about which state a tab is in. `selected` covers
+  both "this screen is `a.active`" and "PostDetail is open and
+  `postDetailReturn` points back to this tab" (since PostDetail is a single
+  screen shared by six origins — Feed, Bookmarks, Profile, Guilds, Topics,
+  Notifications — rather than duplicated per-origin). Before this, Circ/C-Mail
+  silently dropped the active highlight entirely once a room/conversation was
+  open (indistinguishable from a tab never visited), and Guilds/Topics had no
+  equivalent signal at all.
+  - **The marker shows even while the tab isn't selected**, for Circ,
+    Guilds, and Topics specifically — their detail state is genuinely still
+    live/persisted in the background: an open Circ room keeps its RTDB
+    subscription streaming regardless of the active tab (`docs/33-circ.md`),
+    and Guilds/Topics' browse state is simply never reset by `activateScreen`
+    on tab-away. The marker's color follows `selected` (bright/active when
+    you're looking at that tab, the tab's ordinary dim/inactive color when
+    it's open elsewhere) rather than a different glyph, so "you're here" and
+    "it's open elsewhere" read as the same kind of state at different
+    brightness, not two unrelated indicators.
+  - **C-Mail and PostDetail are selected-only** — deliberately excluded from
+    the background case. `CMailModel.CancelSubscription()` (tab-away) tears
+    the conversation's subscription down immediately but doesn't reset
+    `m.mode`, which lingers as `cmailModeDetail` (stale, not live) until the
+    next `ResetToList()`; showing a marker off that stale field would
+    misrepresent an already-closed conversation as still open — C-Mail's
+    real "something happened" signal is the aggregate unread badge across
+    all conversations, not one left-open thread. PostDetail has no
+    background resumption at all — leaving it abandons it entirely.
 - All tabs are the same height — no layout jumping on tab change
 
 ## Navigation

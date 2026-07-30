@@ -191,12 +191,14 @@ func (l TabsLayout) renderTabBar(a App) string {
 		}
 		marker := ""
 		if detail {
-			// A trailing chevron on top of the active highlight — "selected,
-			// one level deep" — for a Circ room, C-Mail conversation,
-			// Guilds/Topics browse, or a PostDetail opened from this tab
-			// (see tabVisualState). Previously these states just silently
-			// dropped the active highlight, rendering identically to a tab
-			// never visited.
+			// A trailing chevron for "one level deep" — a Circ room,
+			// Guilds/Topics browse, a C-Mail conversation, or a PostDetail
+			// opened from this tab (see tabVisualState). Rendered via `text`
+			// below, so it inherits the active highlight when this tab is
+			// selected, or the ordinary dim/inactive style when it isn't —
+			// Circ/Guilds/Topics report detail even while backgrounded (their
+			// state is genuinely still live/persisted there), so the dim
+			// variant is what shows a room/browse left open on another tab.
 			marker = " ›"
 		}
 		before, ch, after := splitMnemonic(t.label, t.mnemonic)
