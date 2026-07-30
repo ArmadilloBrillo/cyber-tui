@@ -83,8 +83,9 @@ type Client interface {
 	// node. Unlike SubscribeRoom, entries mutate/expire in place, so each
 	// receive is a full, filtered (online + fresh) snapshot rather than a
 	// single incremental event. staleAfterMs comes from AnnouncePresence's
-	// response.
-	SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int) (<-chan []model.RoomUser, context.CancelFunc, error)
+	// response. initial seeds the merge state (pass the last known-good user
+	// list on a reconnect so the panel doesn't flash empty; nil otherwise).
+	SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int, initial []model.RoomUser) (<-chan []model.RoomUser, context.CancelFunc, error)
 
 	// Notifications — cursor-paginated; mark-read methods are fire-and-forget.
 	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.

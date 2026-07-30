@@ -35,6 +35,13 @@ func (c *flakySubscribeClient) SubscribeRoom(ctx context.Context, roomID string)
 	return c.MockClient.SubscribeRoom(ctx, roomID)
 }
 
+func (c *flakySubscribeClient) SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int, initial []model.RoomUser) (<-chan []model.RoomUser, context.CancelFunc, error) {
+	if atomic.AddInt32(&c.subscribeFailures, -1) >= 0 {
+		return nil, nil, errors.New("boom")
+	}
+	return c.MockClient.SubscribeRoomPresence(ctx, roomID, staleAfterMs, initial)
+}
+
 // failingRefreshClient always fails RefreshSession, for exercising give-up
 // after exhausting reconnect attempts.
 type failingRefreshClient struct {
@@ -220,6 +227,189 @@ func TestChatroomsReconnect_IgnoresResultForAbandonedRoom(t *testing.T) {
 	}
 	// cmd may be non-nil (it cancels the stale sub synchronously already), but must not
 	// be the reconnected-toast batch.
+	_ = cmd
+}
+
+func TestChatroomsPresenceReconnect_StaleEventIgnored(t *testing.T) {
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	m.activeRoomID = "zion"
+	m.mode = chatroomModeDetail
+
+	_, cmd := m.Update(roomPresenceStreamClosedMsg{roomID: "old-abandoned-room"})
+	if cmd != nil {
+		t.Error("expected no reconnect command for a stale stream-closed event")
+	}
+}
+
+// TestChatroomsPresenceReconnect_RefreshesSessionBeforeResubscribing guards
+// the fix for the gap where presence reconnect used to resubscribe directly
+// without refreshing the shared session token first (unlike the message
+// stream's reconnect, which always has). failingRefreshClient's
+// RefreshSession always errors, so seeing a roomPresenceReconnectFailedMsg
+// here proves RefreshSession is actually called on this path.
+func TestChatroomsPresenceReconnect_RefreshesSessionBeforeResubscribing(t *testing.T) {
+	client := &failingRefreshClient{MockClient: api.NewMockClient()}
+	room := model.Room{ID: "r1", Slug: "zion", Name: "Zion"}
+	m := NewChatroomsModel("neo", client)
+	m.activeRoomID = "zion"
+	m.activeRoom = &room
+	m.mode = chatroomModeDetail
+	m.staleAfterMs = 180000
+
+	_, cmd := m.Update(roomPresenceStreamClosedMsg{roomID: "zion"})
+	if cmd == nil {
+		t.Fatal("expected a reconnect command")
+	}
+	msg := cmd()
+	failed, ok := msg.(roomPresenceReconnectFailedMsg)
+	if !ok {
+		t.Fatalf("expected roomPresenceReconnectFailedMsg (RefreshSession failing), got %T", msg)
+	}
+	if failed.roomID != "zion" || failed.attempt != 0 {
+		t.Errorf("unexpected failed msg: %+v", failed)
+	}
+}
+
+func TestChatroomsPresenceReconnect_SucceedsForActiveRoom(t *testing.T) {
+	room := model.Room{ID: "r1", Slug: "zion", Name: "Zion"}
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	m.activeRoomID = "zion"
+	m.activeRoom = &room
+	m.mode = chatroomModeDetail
+	m.staleAfterMs = 180000
+	m.roomUsers = []model.RoomUser{{UserID: "1", Username: "alice"}}
+
+	_, cmd := m.Update(roomPresenceStreamClosedMsg{roomID: "zion"})
+	if cmd == nil {
+		t.Fatal("expected a reconnect command")
+	}
+	msg := cmd()
+	reconnected, ok := msg.(roomPresenceReconnectedMsg)
+	if !ok {
+		t.Fatalf("expected roomPresenceReconnectedMsg, got %T", msg)
+	}
+	if reconnected.sub == nil || reconnected.sub.RoomID != "zion" {
+		t.Fatalf("expected reconnected sub for room zion, got %+v", reconnected.sub)
+	}
+
+	m2, cmd2 := m.Update(reconnected)
+	if m2.presenceSub != reconnected.sub {
+		t.Error("expected presenceSub to be set to the reconnected subscription")
+	}
+	if cmd2 == nil {
+		t.Error("expected a command to resume waiting on the reconnected subscription")
+	}
+}
+
+func TestChatroomsPresenceReconnect_RetriesWithBackoffThenSucceeds(t *testing.T) {
+	withShortBackoff(t)
+
+	client := &flakySubscribeClient{MockClient: api.NewMockClient(), subscribeFailures: 2}
+	room := model.Room{ID: "r1", Slug: "zion", Name: "Zion"}
+	m := NewChatroomsModel("neo", client)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.activeRoomID = "zion"
+	m.activeRoom = &room
+	m.mode = chatroomModeDetail
+	m.staleAfterMs = 180000
+
+	m, cmd := m.Update(roomPresenceStreamClosedMsg{roomID: "zion"})
+	if !m.presenceReconnecting {
+		t.Fatal("expected presenceReconnecting to be true after stream closed")
+	}
+
+	var succeeded bool
+	for i := 0; i < 10 && cmd != nil && !succeeded; i++ {
+		msg := cmd()
+		m, cmd = m.Update(msg)
+		if _, ok := msg.(roomPresenceReconnectedMsg); ok {
+			succeeded = true
+		}
+	}
+
+	if !succeeded {
+		t.Fatal("expected reconnect to eventually succeed")
+	}
+	if m.presenceReconnecting || m.presenceReconnectFailed {
+		t.Errorf("expected reconnect state cleared after success, got presenceReconnecting=%v presenceReconnectFailed=%v", m.presenceReconnecting, m.presenceReconnectFailed)
+	}
+	if m.presenceSub == nil {
+		t.Error("expected presenceSub to be set after successful reconnect")
+	}
+}
+
+func TestChatroomsPresenceReconnect_GivesUpAfterMaxAttempts(t *testing.T) {
+	withShortBackoff(t)
+
+	client := &failingRefreshClient{MockClient: api.NewMockClient()}
+	room := model.Room{ID: "r1", Slug: "zion", Name: "Zion"}
+	m := NewChatroomsModel("neo", client)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.activeRoomID = "zion"
+	m.activeRoom = &room
+	m.mode = chatroomModeDetail
+	m.staleAfterMs = 180000
+
+	m, cmd := m.Update(roomPresenceStreamClosedMsg{roomID: "zion"})
+	for i := 0; i < 20 && cmd != nil && !m.presenceReconnectFailed; i++ {
+		msg := cmd()
+		m, cmd = m.Update(msg)
+	}
+
+	if !m.presenceReconnectFailed {
+		t.Fatal("expected presenceReconnectFailed to be true after exhausting all attempts")
+	}
+	if m.presenceReconnecting {
+		t.Error("expected presenceReconnecting to be false once attempts are exhausted")
+	}
+	if m.presenceSub != nil {
+		t.Error("expected presenceSub to remain nil after giving up")
+	}
+}
+
+func TestChatroomsPresenceReconnect_CancelSubscriptionStopsRetrySequence(t *testing.T) {
+	client := &failingRefreshClient{MockClient: api.NewMockClient()}
+	room := model.Room{ID: "r1", Slug: "zion", Name: "Zion"}
+	m := NewChatroomsModel("neo", client)
+	m.activeRoomID = "zion"
+	m.activeRoom = &room
+	m.mode = chatroomModeDetail
+	m.staleAfterMs = 180000
+
+	m, cmd := m.Update(roomPresenceStreamClosedMsg{roomID: "zion"})
+	if !m.presenceReconnecting {
+		t.Fatal("expected presenceReconnecting to be true after stream closed")
+	}
+	failMsg := cmd()
+
+	m = m.CancelSubscription()
+	if m.presenceReconnecting {
+		t.Error("expected presenceReconnecting to be false after CancelSubscription")
+	}
+	if m.presenceReconnectCancel != nil {
+		t.Error("expected presenceReconnectCancel to be cleared after CancelSubscription")
+	}
+
+	// A late-arriving result for the cancelled sequence must be a no-op.
+	m2, cmd2 := m.Update(failMsg)
+	if cmd2 != nil {
+		t.Error("expected no further command from a stale reconnect result after cancellation")
+	}
+	if m2.presenceReconnecting || m2.presenceReconnectFailed {
+		t.Error("expected reconnect state to stay cleared after a stale result")
+	}
+}
+
+func TestChatroomsPresenceReconnect_IgnoresResultForAbandonedRoom(t *testing.T) {
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	m.activeRoomID = "sprawl" // user navigated to a different room in the meantime
+	m.mode = chatroomModeDetail
+
+	sub := &roomPresenceSubscription{RoomID: "zion", C: make(chan []model.RoomUser), cancel: func() {}}
+	m2, cmd := m.Update(roomPresenceReconnectedMsg{sub: sub})
+	if m2.presenceSub != nil {
+		t.Error("expected presenceSub to stay nil when the reconnect result is for an abandoned room")
+	}
 	_ = cmd
 }
 

@@ -1719,14 +1719,43 @@ func (c *HTTPClient) LeaveRoomPresence(roomID string) error {
 }
 
 // applyPresenceEvent merges one RTDB event into state, keyed by userId.
-// A "/" path replaces the whole map (the initial full-snapshot event, or a
-// full-tree deletion). A "/<userId>" path replaces or deletes that entry.
-// Deeper nested paths (e.g. a patch to just "/<userId>/lastSeen") are not
-// specially handled and are ignored — a documented limitation; in practice
-// each presence write replaces a user's whole entry.
-func applyPresenceEvent(state map[string]wireRTDBPresenceEntry, d wireRTDBSSEData) {
+// A "put" at "/" replaces the whole map (a genuine full-snapshot event, or a
+// full-tree deletion). A "patch" at "/" is Firebase's shape for a
+// multi-location update touching several top-level keys at once (e.g. one
+// user leaving, or several updating together) — only those listed keys are
+// merged in (a null value deletes that key), leaving every other entry in
+// state untouched. Conflating the two used to wipe the entire room's presence
+// on a single-user "patch" removal, with everyone else only trickling back as
+// their own next heartbeat re-added them. A "/<userId>" path replaces or
+// deletes that one entry directly, regardless of event type. Deeper nested
+// paths (e.g. a patch to just "/<userId>/lastSeen") are not specially handled
+// and are ignored — a documented limitation; in practice each presence write
+// replaces a user's whole entry.
+func applyPresenceEvent(state map[string]wireRTDBPresenceEntry, event string, d wireRTDBSSEData) {
 	empty := len(d.Data) == 0 || string(d.Data) == "null"
 	if d.Path == "/" {
+		if event != "put" {
+			if empty {
+				return
+			}
+			var patch map[string]json.RawMessage
+			if err := json.Unmarshal(d.Data, &patch); err != nil {
+				return
+			}
+			for k, raw := range patch {
+				if len(raw) == 0 || string(raw) == "null" {
+					delete(state, k)
+					continue
+				}
+				var v wireRTDBPresenceEntry
+				if err := json.Unmarshal(raw, &v); err != nil {
+					continue
+				}
+				sanitize.Strings(&v)
+				state[k] = v
+			}
+			return
+		}
 		for k := range state {
 			delete(state, k)
 		}
@@ -1786,7 +1815,13 @@ func filterFreshPresence(state map[string]wireRTDBPresenceEntry, staleAfterMs in
 // RTDB event and on a periodic timer (an entry going stale produces no event
 // of its own). The channel is only ever sent the latest snapshot (older
 // pending ones are dropped) so a slow consumer never blocks the stream.
-func (c *HTTPClient) SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int) (<-chan []model.RoomUser, context.CancelFunc, error) {
+//
+// initial seeds the merge state so a resubscribe (reconnect after a dropped
+// stream) doesn't render an empty panel until the first fresh snapshot
+// arrives — callers should pass the last known-good user list on reconnect,
+// or nil for a brand-new subscription. Seeded entries age out normally via
+// the existing staleAfterMs filter if they turn out to be gone.
+func (c *HTTPClient) SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int, initial []model.RoomUser) (<-chan []model.RoomUser, context.CancelFunc, error) {
 	r, err := c.rtdbOrErr()
 	if err != nil {
 		return nil, nil, err
@@ -1810,14 +1845,41 @@ func (c *HTTPClient) SubscribeRoomPresence(ctx context.Context, roomID string, s
 	}
 	go func() {
 		defer close(out)
-		state := map[string]wireRTDBPresenceEntry{}
+		state := make(map[string]wireRTDBPresenceEntry, len(initial))
+		for _, u := range initial {
+			state[u.UserID] = wireRTDBPresenceEntry{
+				Username:    u.Username,
+				IsChatAdmin: u.IsChatAdmin,
+				Online:      true,
+				LastSeen:    float64(u.LastSeen.UnixMilli()),
+			}
+		}
+		if len(state) > 0 {
+			// Make the seeded (last known-good) list visible right away, rather
+			// than leaving the panel showing nothing until the first fresh
+			// event or ticker tick — that gap is what made a resubscribe look
+			// like a mass user drop.
+			send(filterFreshPresence(state, staleAfterMs))
+		}
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case ev, ok := <-sseEvents:
-				if !ok || ev.Err != nil {
+				if !ok {
+					if c.isDebug() {
+						log.Printf("[chat_presence %s] stream channel closed", roomID)
+					}
 					return
+				}
+				if ev.Err != nil {
+					if c.isDebug() {
+						log.Printf("[chat_presence %s] stream error: %v", roomID, ev.Err)
+					}
+					return
+				}
+				if c.isDebug() {
+					log.Printf("[chat_presence %s] event=%q data=%s", roomID, ev.Event, ev.Data)
 				}
 				if ev.Event != "put" && ev.Event != "patch" {
 					continue
@@ -1826,7 +1888,7 @@ func (c *HTTPClient) SubscribeRoomPresence(ctx context.Context, roomID string, s
 				if err := json.Unmarshal(ev.Data, &d); err != nil {
 					continue
 				}
-				applyPresenceEvent(state, d)
+				applyPresenceEvent(state, ev.Event, d)
 				send(filterFreshPresence(state, staleAfterMs))
 			case <-ticker.C:
 				send(filterFreshPresence(state, staleAfterMs))
@@ -2048,14 +2110,37 @@ func (c *HTTPClient) ClearTyping(conversationID string) error {
 }
 
 // applyTypingEvent merges one RTDB event into state, keyed by userId. Mirrors
-// applyPresenceEvent's "/" full-replace vs "/<userId>" single-entry handling
-// (see that function's doc comment for the nested-patch limitation) — kept as
-// a separate function since wireRTDBTypingEntry's shape (typing+timestamp)
-// differs enough from wireRTDBPresenceEntry (online+lastSeen) that sharing
-// code would cost more than the ~15 lines it'd save.
-func applyTypingEvent(state map[string]wireRTDBTypingEntry, d wireRTDBSSEData) {
+// applyPresenceEvent's "put"-vs-"patch" full-replace vs multi-key-merge
+// handling at "/" (see that function's doc comment for why the two must be
+// told apart) and its "/<userId>" single-entry handling — kept as a separate
+// function since wireRTDBTypingEntry's shape (typing+timestamp) differs
+// enough from wireRTDBPresenceEntry (online+lastSeen) that sharing code would
+// cost more than the ~15 lines it'd save.
+func applyTypingEvent(state map[string]wireRTDBTypingEntry, event string, d wireRTDBSSEData) {
 	empty := len(d.Data) == 0 || string(d.Data) == "null"
 	if d.Path == "/" {
+		if event != "put" {
+			if empty {
+				return
+			}
+			var patch map[string]json.RawMessage
+			if err := json.Unmarshal(d.Data, &patch); err != nil {
+				return
+			}
+			for k, raw := range patch {
+				if len(raw) == 0 || string(raw) == "null" {
+					delete(state, k)
+					continue
+				}
+				var v wireRTDBTypingEntry
+				if err := json.Unmarshal(raw, &v); err != nil {
+					continue
+				}
+				sanitize.Strings(&v)
+				state[k] = v
+			}
+			return
+		}
 		for k := range state {
 			delete(state, k)
 		}
@@ -2152,7 +2237,7 @@ func (c *HTTPClient) SubscribeDMTyping(ctx context.Context, conversationID strin
 				if err := json.Unmarshal(ev.Data, &d); err != nil {
 					continue
 				}
-				applyTypingEvent(state, d)
+				applyTypingEvent(state, ev.Event, d)
 				send(filterFreshTyping(state, staleAfterMs))
 			case <-ticker.C:
 				send(filterFreshTyping(state, staleAfterMs))

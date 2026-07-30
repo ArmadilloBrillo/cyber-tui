@@ -479,7 +479,7 @@ func (m *MockClient) LeaveRoomPresence(roomID string) error {
 
 // SubscribeRoomPresence returns a channel that delivers the same canned
 // GetRoomUsers snapshot once after 1 second, then closes.
-func (m *MockClient) SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int) (<-chan []model.RoomUser, context.CancelFunc, error) {
+func (m *MockClient) SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int, initial []model.RoomUser) (<-chan []model.RoomUser, context.CancelFunc, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	ch := make(chan []model.RoomUser, 1)
 	go func() {

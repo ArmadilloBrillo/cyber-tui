@@ -1227,6 +1227,39 @@ func TestHTTPLeaveRoomPresence_SendsDelete(t *testing.T) {
 	}
 }
 
+// TestHTTPSubscribeRoomPresence_SeedsFromInitialBeforeFirstEvent verifies a
+// resubscribe seeded with a caller-supplied "last known-good" list delivers
+// that list immediately, before any RTDB event arrives — the fix for a
+// resubscribe otherwise rendering an empty panel until the first fresh
+// snapshot/patch shows up.
+func TestHTTPSubscribeRoomPresence_SeedsFromInitialBeforeFirstEvent(t *testing.T) {
+	now := time.Now()
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		<-r.Context().Done() // never send an event — only the seed should be visible
+	}))
+
+	seed := []model.RoomUser{{UserID: "u1", Username: "alice", IsChatAdmin: true, LastSeen: now}}
+	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000, seed)
+	if err != nil {
+		t.Fatalf("SubscribeRoomPresence error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case users, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering the seeded snapshot")
+		}
+		if len(users) != 1 || users[0].Username != "alice" {
+			t.Fatalf("users = %+v, want the seeded alice entry", users)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the seeded snapshot — no event ever arrived, so seeding must deliver it directly")
+	}
+}
+
 // TestHTTPSubscribeRoomPresence_InitialSnapshotFiltersOfflineAndStale verifies
 // the initial full-snapshot "put" at path "/" is consumed (not skipped, unlike
 // SubscribeRoom's message stream), and that offline/stale entries are filtered
@@ -1241,7 +1274,7 @@ func TestHTTPSubscribeRoomPresence_InitialSnapshotFiltersOfflineAndStale(t *test
 		<-r.Context().Done()
 	}))
 
-	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000)
+	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000, nil)
 	if err != nil {
 		t.Fatalf("SubscribeRoomPresence error: %v", err)
 	}
@@ -1263,6 +1296,54 @@ func TestHTTPSubscribeRoomPresence_InitialSnapshotFiltersOfflineAndStale(t *test
 	}
 }
 
+// TestHTTPSubscribeRoomPresence_RootPatchMergesInsteadOfReplacing guards a
+// real bug found via live debug logging: Firebase frames a single user's
+// removal (e.g. leaving the room) as a "patch" event at path "/" with just
+// that one key set to null — a multi-location update meaning "touch only
+// these keys," not a full-snapshot replace. Treating every "/" event as a
+// full replace (as "put" correctly is) wiped every other online user out of
+// the local state on one person's departure, who then only trickled back in
+// as their own next heartbeat re-added them individually.
+func TestHTTPSubscribeRoomPresence_RootPatchMergesInsteadOfReplacing(t *testing.T) {
+	now := time.Now().UnixMilli()
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","isChatAdmin":false,"online":true,"lastSeen":%d},"u2":{"username":"bob","isChatAdmin":false,"online":true,"lastSeen":%d}}}`, now, now))
+		writeSSEEvent(w, "patch", `{"path":"/","data":{"u2":null}}`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000, nil)
+	if err != nil {
+		t.Fatalf("SubscribeRoomPresence error: %v", err)
+	}
+	defer cancel()
+
+	var last []model.RoomUser
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case users, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before delivering the post-patch snapshot")
+			}
+			last = users
+			if len(last) == 1 {
+				if last[0].Username != "alice" {
+					t.Fatalf("expected alice to remain after bob's root-patch removal, got %+v", last)
+				}
+				return
+			}
+			if len(last) == 0 {
+				t.Fatal("root patch removing one user wiped the whole presence list")
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for the post-patch snapshot, last snapshot: %+v", last)
+		}
+	}
+}
+
 // TestHTTPSubscribeRoomPresence_SingleKeyUpdateReplacesEntry verifies a
 // "/<userId>" path event replaces just that user's entry.
 func TestHTTPSubscribeRoomPresence_SingleKeyUpdateReplacesEntry(t *testing.T) {
@@ -1275,7 +1356,7 @@ func TestHTTPSubscribeRoomPresence_SingleKeyUpdateReplacesEntry(t *testing.T) {
 		<-r.Context().Done()
 	}))
 
-	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000)
+	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000, nil)
 	if err != nil {
 		t.Fatalf("SubscribeRoomPresence error: %v", err)
 	}
@@ -1367,6 +1448,50 @@ func TestHTTPSubscribeDMTyping_InitialSnapshotFiltersNonTypingAndStale(t *testin
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for snapshot")
+	}
+}
+
+// TestHTTPSubscribeDMTyping_RootPatchMergesInsteadOfReplacing is the
+// applyTypingEvent counterpart of
+// TestHTTPSubscribeRoomPresence_RootPatchMergesInsteadOfReplacing — same bug,
+// same fix, mirrored function.
+func TestHTTPSubscribeDMTyping_RootPatchMergesInsteadOfReplacing(t *testing.T) {
+	now := time.Now().UnixMilli()
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","typing":true,"timestamp":%d},"u2":{"username":"bob","typing":true,"timestamp":%d}}}`, now, now))
+		writeSSEEvent(w, "patch", `{"path":"/","data":{"u2":null}}`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeDMTyping(context.Background(), "c1", 9000)
+	if err != nil {
+		t.Fatalf("SubscribeDMTyping error: %v", err)
+	}
+	defer cancel()
+
+	var last []model.TypingUser
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case users, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before delivering the post-patch snapshot")
+			}
+			last = users
+			if len(last) == 1 {
+				if last[0].Username != "alice" {
+					t.Fatalf("expected alice to remain after bob's root-patch removal, got %+v", last)
+				}
+				return
+			}
+			if len(last) == 0 {
+				t.Fatal("root patch removing one user wiped the whole typing list")
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for the post-patch snapshot, last snapshot: %+v", last)
+		}
 	}
 }
 

@@ -108,6 +108,18 @@ func main() {
 			}))
 		}
 	}
+	// cfg.Debug ("debug": true in ~/.cyber-tui.json) enables verbose RTDB
+	// output (api.HTTPClient.isDebug) — redirect the standard log package to
+	// a file for the run so that output, wherever it's logged from, never
+	// hits the terminal and corrupts the alt-screen display.
+	if cfg.Debug {
+		logFile, err := tea.LogToFile("cyber-tui-debug.log", "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "debug: %v\n", err)
+		} else {
+			defer logFile.Close()
+		}
+	}
 	p := tea.NewProgram(app, opts...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

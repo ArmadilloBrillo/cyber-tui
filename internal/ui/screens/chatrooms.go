@@ -112,8 +112,21 @@ type roomPresenceSubscribedMsg struct {
 	roomID string
 	sub    *roomPresenceSubscription
 }
-type roomPresenceReceivedMsg struct{ users []model.RoomUser }
+type roomPresenceReceivedMsg struct {
+	sub   *roomPresenceSubscription // identifies which subscription produced this, so a stale/orphaned one can't clobber the active list
+	users []model.RoomUser
+}
 type roomPresenceStreamClosedMsg struct{ roomID string }
+type roomPresenceReconnectedMsg struct{ sub *roomPresenceSubscription }
+type roomPresenceReconnectFailedMsg struct {
+	roomID  string
+	attempt int
+	err     error
+}
+type roomPresenceReconnectRetryDueMsg struct {
+	roomID  string
+	attempt int
+}
 
 // RoomReconnectedMsg is emitted after the live RTDB stream is successfully
 // re-established following an idToken expiry. App uses it to show a toast.
@@ -138,7 +151,7 @@ func waitForRoomPresenceMsg(sub *roomPresenceSubscription) tea.Cmd {
 		if !ok {
 			return roomPresenceStreamClosedMsg{roomID: sub.RoomID}
 		}
-		return roomPresenceReceivedMsg{users: users}
+		return roomPresenceReceivedMsg{sub: sub, users: users}
 	}
 }
 
@@ -195,6 +208,15 @@ type ChatroomsModel struct {
 	heartbeatMs  int
 	staleAfterMs int
 
+	// Presence-stream reconnect-retry state, mirroring the message stream's
+	// reconnect* fields above but tracked separately since the two streams
+	// can each independently close and reconnect.
+	presenceReconnectAttempt int
+	presenceReconnecting     bool
+	presenceReconnectFailed  bool
+	presenceReconnectCtx     context.Context
+	presenceReconnectCancel  context.CancelFunc
+
 	// mentionCycle tracks an in-progress Tab-completion of an @-mention; nil
 	// when not cycling. See mentionCycle's doc comment.
 	mentionCycle *mentionCycle
@@ -240,9 +262,16 @@ func (m ChatroomsModel) cancelRoomSub() ChatroomsModel {
 		m.reconnectCancel()
 		m.reconnectCancel = nil
 	}
+	if m.presenceReconnectCancel != nil {
+		m.presenceReconnectCancel()
+		m.presenceReconnectCancel = nil
+	}
 	m.reconnecting = false
 	m.reconnectFailed = false
 	m.reconnectAttempt = 0
+	m.presenceReconnecting = false
+	m.presenceReconnectFailed = false
+	m.presenceReconnectAttempt = 0
 	m.activeRoomID = ""
 	m.roomUsers = nil
 	m.heartbeatMs = 0
@@ -338,7 +367,7 @@ func (m ChatroomsModel) openRoomPresenceSubscriptionCmd(roomID string, staleAfte
 		if client == nil {
 			return nil
 		}
-		ch, cancel, err := client.SubscribeRoomPresence(context.Background(), roomID, staleAfterMs)
+		ch, cancel, err := client.SubscribeRoomPresence(context.Background(), roomID, staleAfterMs, nil)
 		if err != nil {
 			return nil
 		}
@@ -372,6 +401,37 @@ func (m ChatroomsModel) reconnectRoomCmd(ctx context.Context, roomID string, att
 func scheduleRoomReconnectRetryCmd(roomID string, attempt int) tea.Cmd {
 	return tea.Tick(reconnectDelay(attempt), func(time.Time) tea.Msg {
 		return roomReconnectRetryDueMsg{roomID: roomID, attempt: attempt}
+	})
+}
+
+// reconnectRoomPresenceCmd makes one reconnect attempt for roomID's presence
+// stream after it closed — refreshes the session token (shared with the
+// message stream via attemptReconnect, so a token expiry the presence stream
+// notices first doesn't retry against the same stale token) and reopens the
+// presence subscription, seeded with the last known-good user list so the
+// panel doesn't flash empty while the fresh snapshot is in flight.
+func (m ChatroomsModel) reconnectRoomPresenceCmd(ctx context.Context, roomID string, staleAfterMs int, attempt int) tea.Cmd {
+	client := m.client
+	knownUsers := m.roomUsers
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		ch, cancel, err := attemptReconnect(client, ctx, func(ctx context.Context) (<-chan []model.RoomUser, context.CancelFunc, error) {
+			return client.SubscribeRoomPresence(ctx, roomID, staleAfterMs, knownUsers)
+		})
+		if err != nil {
+			return roomPresenceReconnectFailedMsg{roomID: roomID, attempt: attempt, err: err}
+		}
+		return roomPresenceReconnectedMsg{sub: &roomPresenceSubscription{RoomID: roomID, C: ch, cancel: cancel}}
+	}
+}
+
+// scheduleRoomPresenceReconnectRetryCmd waits out the backoff for attempt,
+// then emits a roomPresenceReconnectRetryDueMsg to trigger the next attempt.
+func scheduleRoomPresenceReconnectRetryCmd(roomID string, attempt int) tea.Cmd {
+	return tea.Tick(reconnectDelay(attempt), func(time.Time) tea.Msg {
+		return roomPresenceReconnectRetryDueMsg{roomID: roomID, attempt: attempt}
 	})
 }
 
@@ -772,15 +832,22 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			msg.sub.cancel()
 			return m, nil
 		}
+		// A quick leave/re-enter of the same room slug can leave a prior,
+		// still-live subscription for this roomID orphaned; cancel it rather
+		// than leaking its goroutine/SSE connection now that a fresh one has
+		// taken over.
+		if m.presenceSub != nil && m.presenceSub != msg.sub {
+			m.presenceSub.cancel()
+		}
 		m.presenceSub = msg.sub
 		return m, waitForRoomPresenceMsg(m.presenceSub)
 
 	case roomPresenceReceivedMsg:
-		m = m.SetRoomUsers(msg.users)
-		if m.presenceSub != nil {
-			return m, waitForRoomPresenceMsg(m.presenceSub)
+		if msg.sub != m.presenceSub {
+			return m, nil // stale/orphaned subscription — don't let it clobber the active list
 		}
-		return m, nil
+		m = m.SetRoomUsers(msg.users)
+		return m, waitForRoomPresenceMsg(m.presenceSub)
 
 	case roomPresenceStreamClosedMsg:
 		if msg.roomID != m.activeRoomID {
@@ -790,11 +857,47 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		if m.mode != chatroomModeDetail || m.activeRoom == nil {
 			return m, nil
 		}
-		// ponytail: simplest reconnect for a supplementary stream — immediate
-		// retry, no backoff/attempt cap, no UI indicator. Share the message
-		// stream's exponential-backoff state machine (reconnect.go) if this
-		// thrashes in practice.
-		return m, m.openRoomPresenceSubscriptionCmd(msg.roomID, m.staleAfterMs)
+		if m.presenceReconnectCancel != nil {
+			m.presenceReconnectCancel()
+		}
+		m.presenceReconnectCtx, m.presenceReconnectCancel = context.WithCancel(context.Background())
+		m.presenceReconnecting = true
+		m.presenceReconnectFailed = false
+		m.presenceReconnectAttempt = 0
+		return m, m.reconnectRoomPresenceCmd(m.presenceReconnectCtx, msg.roomID, m.staleAfterMs, 0)
+
+	case roomPresenceReconnectFailedMsg:
+		if msg.roomID != m.activeRoomID || !m.presenceReconnecting {
+			return m, nil // stale or cancelled sequence
+		}
+		next := msg.attempt + 1
+		if next >= maxReconnectAttempts {
+			m.presenceReconnecting = false
+			m.presenceReconnectFailed = true
+			return m, nil
+		}
+		m.presenceReconnectAttempt = next
+		return m, scheduleRoomPresenceReconnectRetryCmd(msg.roomID, next)
+
+	case roomPresenceReconnectRetryDueMsg:
+		if msg.roomID != m.activeRoomID || !m.presenceReconnecting {
+			return m, nil // stale or cancelled sequence
+		}
+		return m, m.reconnectRoomPresenceCmd(m.presenceReconnectCtx, msg.roomID, m.staleAfterMs, msg.attempt)
+
+	case roomPresenceReconnectedMsg:
+		if msg.sub.RoomID != m.activeRoomID {
+			msg.sub.cancel()
+			return m, nil
+		}
+		if m.presenceSub != nil && m.presenceSub != msg.sub {
+			m.presenceSub.cancel()
+		}
+		m.presenceSub = msg.sub
+		m.presenceReconnecting = false
+		m.presenceReconnectFailed = false
+		m.presenceReconnectAttempt = 0
+		return m, waitForRoomPresenceMsg(m.presenceSub)
 
 	// --- Keyboard ---
 
