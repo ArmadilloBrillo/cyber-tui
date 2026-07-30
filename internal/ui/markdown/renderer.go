@@ -6,6 +6,7 @@ package markdown
 import (
 	"fmt"
 	"html"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -109,6 +110,72 @@ func Render(content string, width int) string {
 	return r.renderDocument(docNode)
 }
 
+// mdInlineParser registers only a paragraph block parser (no heading, list,
+// blockquote, fenced-code, thematic-break, or HTML-block parsers), so a line
+// starting with "#", "-", ">", "```", or "---" is never reinterpreted as
+// block syntax — it stays literal chat text. Inline parsing still runs the
+// normal CommonMark set (parser.DefaultInlineParsers: code span, link,
+// autolink, raw HTML, emphasis/strong) plus bare-URL detection
+// (extension.NewLinkifyParser, the same one extension.GFM's Linkify wraps).
+// No @mention node here — CIRC has its own bespoke mention system layered on
+// top by the caller.
+var mdInlineParser = parser.NewParser(
+	parser.WithBlockParsers(util.Prioritized(parser.NewParagraphParser(), 1000)),
+	parser.WithInlineParsers(
+		append(parser.DefaultInlineParsers(), util.Prioritized(extension.NewLinkifyParser(), 999))...,
+	),
+)
+
+// RenderInline renders only inline markdown spans (emphasis/strong, code
+// spans, links, bare-URL autolinks) — no block-level reinterpretation
+// (headings, lists, blockquotes, tables, code fences) and no line-break
+// reflow. Each line is parsed independently and rejoined with "\n" verbatim,
+// since goldmark's soft-line-break-to-space behavior only triggers when
+// multiple lines reach the parser as one paragraph — for freeform one-line
+// chat text, unlike Render's full GFM document parsing, this is what a chat
+// message actually needs: styling within a line, not restructuring of it.
+//
+// highlightUser, if non-empty, bolds case-insensitive, word-bounded
+// occurrences of that username (bare or "@"-prefixed) in theme.MeHighlight
+// instead of the default theme.Base — done here, in the same pass as the
+// rest of the styling, rather than as a separate post-render string-splice:
+// splicing a fresh Render() call into already-ANSI-rendered text is broken,
+// since that inner call's own SGR reset terminates all active attributes,
+// not just what it set, silently killing any surrounding style for
+// everything after the match. Pass "" for no highlighting.
+func RenderInline(content, highlightUser string) string {
+	content = html.UnescapeString(content)
+	content = sanitize.Strip(content)
+	content = norm.NFC.String(content)
+	content = stripAmbiguousRunes(content)
+	if content == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = renderInlineLine(line, highlightUser)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderInlineLine(line, highlightUser string) string {
+	if strings.TrimSpace(line) == "" {
+		return line
+	}
+	src := []byte(line)
+	reader := text.NewReader(src)
+	doc := mdInlineParser.Parse(reader)
+	docNode, ok := doc.(*ast.Document)
+	if !ok {
+		return line
+	}
+	r := &renderer{source: src, width: 0}
+	if highlightUser != "" {
+		r.highlightRe = regexp.MustCompile(`(?i)@?\b` + regexp.QuoteMeta(highlightUser) + `\b`)
+	}
+	return r.renderDocument(docNode)
+}
+
 // FirstLine strips markdown syntax and returns the first non-empty line as
 // plain text. Use this for compact single-line previews where full rendering
 // is not appropriate (bookmarks, profile post lists).
@@ -142,6 +209,13 @@ func FirstLine(content string) string {
 type renderer struct {
 	source []byte
 	width  int
+
+	// highlightRe, if non-nil, matches occurrences of a username (case-
+	// insensitive, word-bounded, bare or "@"-prefixed) within plain text runs
+	// to bold in theme.MeHighlight instead of theme.Base — see RenderInline's
+	// doc comment for why this happens here rather than as a post-render
+	// pass. Compiled once per RenderInline call, not per text node.
+	highlightRe *regexp.Regexp
 }
 
 func (r *renderer) renderDocument(doc *ast.Document) string {
@@ -344,13 +418,14 @@ func (r *renderer) renderInline(node ast.Node) string {
 	switch n := node.(type) {
 	case *ast.Text:
 		val := strings.TrimRight(string(n.Value(r.source)), "\n")
+		rendered := r.renderPlainText(val)
 		if n.SoftLineBreak() {
-			return theme.Base.Render(val) + " "
+			return rendered + " "
 		}
 		if n.HardLineBreak() {
-			return theme.Base.Render(val) + "\n"
+			return rendered + "\n"
 		}
-		return theme.Base.Render(val)
+		return rendered
 
 	case *ast.String:
 		return theme.Base.Render(string(n.Value))
@@ -399,6 +474,36 @@ func (r *renderer) renderInline(node ast.Node) string {
 	default:
 		return r.collectInlines(node)
 	}
+}
+
+// renderPlainText renders a run of plain (non-emphasis/code/link) text,
+// splitting out and bolding any occurrence of r.highlightRe in
+// theme.MeHighlight — done at this raw-text level, before any ANSI is
+// emitted, rather than by re-rendering an already-styled string (which is
+// broken: an inner Render call's own SGR reset would terminate all active
+// attributes, not just what it set, silently breaking the surrounding style
+// for everything after the match).
+func (r *renderer) renderPlainText(val string) string {
+	if r.highlightRe == nil {
+		return theme.Base.Render(val)
+	}
+	locs := r.highlightRe.FindAllStringIndex(val, -1)
+	if locs == nil {
+		return theme.Base.Render(val)
+	}
+	var sb strings.Builder
+	last := 0
+	for _, loc := range locs {
+		if loc[0] > last {
+			sb.WriteString(theme.Base.Render(val[last:loc[0]]))
+		}
+		sb.WriteString(theme.MeHighlight.Render(val[loc[0]:loc[1]]))
+		last = loc[1]
+	}
+	if last < len(val) {
+		sb.WriteString(theme.Base.Render(val[last:]))
+	}
+	return sb.String()
 }
 
 // rawTextNode extracts plain unformatted text from a node's inline children.

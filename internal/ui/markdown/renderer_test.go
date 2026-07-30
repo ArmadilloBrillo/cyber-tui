@@ -509,3 +509,178 @@ func TestFirstLine_EntityEncodedEscapesStripped(t *testing.T) {
 		t.Errorf("FirstLine leaked a raw escape: %q", got)
 	}
 }
+
+// --- RenderInline ---
+
+func TestRenderInline_EmptyInput(t *testing.T) {
+	if got := RenderInline("", ""); got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+}
+
+func TestRenderInline_Bold(t *testing.T) {
+	raw := RenderInline("this is **bold** text", "")
+	plain := strip(raw)
+	if !strings.Contains(plain, "bold") {
+		t.Errorf("bold text not in output: %q", plain)
+	}
+	if strings.Contains(plain, "**") {
+		t.Errorf("raw ** markers remain in output: %q", plain)
+	}
+	if !strings.Contains(raw, "\x1b[1m") && !strings.Contains(raw, "\x1b[1;") {
+		t.Errorf("no bold ANSI code in output: %q", raw)
+	}
+}
+
+func TestRenderInline_Italic(t *testing.T) {
+	raw := RenderInline("*sigh* whatever", "")
+	plain := strip(raw)
+	if !strings.Contains(plain, "sigh") {
+		t.Errorf("italic text not in output: %q", plain)
+	}
+	if strings.Contains(plain, "*sigh*") {
+		t.Errorf("raw * markers remain in output: %q", plain)
+	}
+}
+
+func TestRenderInline_InlineCode(t *testing.T) {
+	raw := RenderInline("run `go test ./...` please", "")
+	plain := strip(raw)
+	if !strings.Contains(plain, "go test ./...") {
+		t.Errorf("inline code text not in output: %q", plain)
+	}
+	if strings.Contains(plain, "`") {
+		t.Errorf("raw backtick markers remain in output: %q", plain)
+	}
+}
+
+func TestRenderInline_MarkdownLink(t *testing.T) {
+	raw := RenderInline("see [the docs](https://example.com)", "")
+	plain := strip(raw)
+	if !strings.Contains(plain, "the docs") {
+		t.Errorf("link text not in output: %q", plain)
+	}
+	if strings.Contains(plain, "[the docs](") {
+		t.Errorf("raw link syntax remains in output: %q", plain)
+	}
+}
+
+func TestRenderInline_BareURLAutolinked(t *testing.T) {
+	raw := RenderInline("check https://example.com/path for details", "")
+	plain := strip(raw)
+	if !strings.Contains(plain, "https://example.com/path") {
+		t.Errorf("bare URL not preserved in output: %q", plain)
+	}
+	if !strings.Contains(raw, "\x1b[") {
+		t.Errorf("expected bare URL to be styled (underlined), got no ANSI codes: %q", raw)
+	}
+}
+
+// TestRenderInline_LeadingBlockCharsStayLiteral guards the entire reason
+// RenderInline exists instead of reusing Render: lines that happen to start
+// with markdown block syntax must render as plain chat text, not be
+// reinterpreted as a heading/list/blockquote/thematic-break/code-fence.
+func TestRenderInline_LeadingBlockCharsStayLiteral(t *testing.T) {
+	cases := []string{
+		"# thoughts for today",
+		"- get milk",
+		"> what did you say",
+		"1. first thing",
+		"---",
+		"```go",
+	}
+	for _, in := range cases {
+		got := strip(RenderInline(in, ""))
+		if got != in {
+			t.Errorf("RenderInline(%q) = %q, want unchanged literal text (no block reinterpretation)", in, got)
+		}
+	}
+}
+
+// TestRenderInline_MultiLineKeepsLineBoundaries guards against reflow: a
+// literal "\n" in chat content (e.g. a multi-line /fortune reply) must
+// produce the same number of lines back, not get merged into one paragraph
+// with soft line breaks collapsed to spaces (which is what Render would do).
+func TestRenderInline_MultiLineKeepsLineBoundaries(t *testing.T) {
+	in := "first line\nsecond line\nthird line"
+	got := strip(RenderInline(in, ""))
+	lines := strings.Split(got, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines preserved, got %d: %q", len(lines), got)
+	}
+	if lines[0] != "first line" || lines[1] != "second line" || lines[2] != "third line" {
+		t.Errorf("line content/order not preserved: %q", got)
+	}
+}
+
+func TestRenderInline_NoMentionNodeStyling(t *testing.T) {
+	// RenderInline deliberately excludes the @mention AST node (CIRC has its
+	// own bespoke mention system layered on top by the caller) — an @mention
+	// should pass through as literal text, not get theme.Highlight styling.
+	raw := RenderInline("hey @alice look at this", "")
+	if !strings.Contains(strip(raw), "@alice") {
+		t.Errorf("expected @alice to remain in output: %q", strip(raw))
+	}
+}
+
+// --- RenderInline highlightUser ---
+
+func TestRenderInline_HighlightUserBoldsMatch(t *testing.T) {
+	raw := RenderInline("@ragnar hi there", "ragnar")
+	if !strings.Contains(raw, theme.MeHighlight.Render("@ragnar")) {
+		t.Errorf("expected @ragnar to be styled with theme.MeHighlight, got: %q", raw)
+	}
+}
+
+// TestRenderInline_HighlightUserPreservesSurroundingStyle is the regression
+// test for the reported bug: "@ragnar 1" rendered "1" correctly in
+// theme.Base's color, but "@ragnar 1 2" rendered "1" unstyled and only "2"
+// back in theme.Base — because highlighting used to be a second pass that
+// spliced a fresh Render() call into already-rendered text, and that inner
+// call's own SGR reset silently killed the surrounding style for everything
+// after the match. Note: extension.NewLinkifyParser's Trigger() fires on
+// every space (to check for a URL starting right after it), so goldmark
+// splits "@ragnar 1 2" into three separate ast.Text nodes ("@ragnar", " 1",
+// " 2") even though nothing links — each is still individually rendered
+// through renderPlainText, so "1" and "2" each get their own theme.Base call
+// rather than one merged span. Visually identical (adjacent same-styled ANSI
+// spans render seamlessly), so this asserts both are present, not that
+// they're merged into one Render() call.
+func TestRenderInline_HighlightUserPreservesSurroundingStyle(t *testing.T) {
+	raw := RenderInline("@ragnar 1 2", "ragnar")
+	if !strings.Contains(raw, theme.MeHighlight.Render("@ragnar")) {
+		t.Errorf("expected @ragnar to be styled with theme.MeHighlight, got: %q", raw)
+	}
+	if !strings.Contains(raw, theme.Base.Render(" 1")) {
+		t.Errorf("expected the text right after the mention (' 1') to keep theme.Base styling, got: %q", raw)
+	}
+	if !strings.Contains(raw, theme.Base.Render(" 2")) {
+		t.Errorf("expected trailing text (' 2') to also keep theme.Base styling, not left unstyled by a broken reset after the mention, got: %q", raw)
+	}
+}
+
+func TestRenderInline_HighlightUserCaseInsensitiveWordBounded(t *testing.T) {
+	raw := RenderInline("hey Ragnar and ragnarwessels, is ragnar around?", "ragnar")
+	if !strings.Contains(raw, theme.MeHighlight.Render("Ragnar")) {
+		t.Errorf("expected case-insensitive match to be highlighted, got: %q", raw)
+	}
+	if !strings.Contains(raw, theme.MeHighlight.Render("ragnar")) {
+		t.Errorf("expected bare-word match to be highlighted, got: %q", raw)
+	}
+	if strings.Contains(raw, theme.MeHighlight.Render("ragnarwessels")) {
+		t.Errorf("did not expect a substring match (ragnarwessels) to be highlighted, got: %q", raw)
+	}
+}
+
+func TestRenderInline_NoHighlightUserUnaffected(t *testing.T) {
+	raw := RenderInline("@ragnar 1 2", "")
+	if strings.Contains(raw, theme.MeHighlight.Render("@ragnar")) {
+		t.Errorf("expected no highlighting when highlightUser is empty, got: %q", raw)
+	}
+	if !strings.Contains(strip(raw), "@ragnar 1 2") {
+		t.Errorf("expected the literal text to survive unchanged, got: %q", strip(raw))
+	}
+	if !strings.Contains(raw, "\x1b[") {
+		t.Errorf("expected the line to still carry theme.Base ANSI styling, got: %q", raw)
+	}
+}
