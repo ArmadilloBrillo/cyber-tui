@@ -263,6 +263,61 @@ func TestPresenceStreamClosed_StaleRoomIDIgnored(t *testing.T) {
 	}
 }
 
+// TestPresenceReceived_StaleSubscriptionIgnored guards the fix for a race
+// where a quick leave/re-enter of the same room can leave an orphaned prior
+// presence subscription running; without checking which subscription a
+// roomPresenceReceivedMsg came from, its snapshot could still clobber the
+// current (correct) list.
+func TestPresenceReceived_StaleSubscriptionIgnored(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	oldSub := &roomPresenceSubscription{RoomID: "zion", C: make(chan []model.RoomUser)}
+	newSub := &roomPresenceSubscription{RoomID: "zion", C: make(chan []model.RoomUser)}
+	m.presenceSub = newSub
+	m.roomUsers = []model.RoomUser{{UserID: "1", Username: "bob"}}
+
+	m2, cmd := m.Update(roomPresenceReceivedMsg{sub: oldSub, users: []model.RoomUser{{Username: "alice"}}})
+	if len(m2.roomUsers) != 1 || m2.roomUsers[0].Username != "bob" {
+		t.Errorf("expected roomUsers to be untouched by the orphaned subscription's snapshot, got %+v", m2.roomUsers)
+	}
+	if cmd != nil {
+		t.Error("expected no re-arm command for a stale subscription's snapshot")
+	}
+}
+
+func TestPresenceReceived_ActiveSubscriptionApplies(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	sub := &roomPresenceSubscription{RoomID: "zion", C: make(chan []model.RoomUser)}
+	m.presenceSub = sub
+
+	m2, cmd := m.Update(roomPresenceReceivedMsg{sub: sub, users: []model.RoomUser{{Username: "alice"}}})
+	if len(m2.roomUsers) != 1 {
+		t.Errorf("expected roomUsers to be updated from the active subscription, got %+v", m2.roomUsers)
+	}
+	if cmd == nil {
+		t.Error("expected a re-arm command to keep waiting on the active subscription")
+	}
+}
+
+// TestPresenceSubscribed_ReplacingLiveSubscriptionCancelsThePrevious guards
+// against leaking an orphaned subscription's goroutine/SSE connection when a
+// second roomPresenceSubscribedMsg for the same room arrives while one is
+// already active (the quick leave/re-enter race).
+func TestPresenceSubscribed_ReplacingLiveSubscriptionCancelsThePrevious(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	cancelled := false
+	oldSub := &roomPresenceSubscription{RoomID: "zion", cancel: func() { cancelled = true }}
+	m.presenceSub = oldSub
+
+	newSub := &roomPresenceSubscription{RoomID: "zion", cancel: func() {}}
+	m2, _ := m.Update(roomPresenceSubscribedMsg{roomID: "zion", sub: newSub})
+	if !cancelled {
+		t.Error("expected the previously active subscription to be cancelled when replaced")
+	}
+	if m2.presenceSub != newSub {
+		t.Error("expected presenceSub to be updated to the new subscription")
+	}
+}
+
 // --- detail view header ---
 
 // TestDetailView_HeaderHasDividerBeforeMessages guards against the divider
