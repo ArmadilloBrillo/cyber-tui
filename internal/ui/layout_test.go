@@ -189,6 +189,25 @@ func TestTabVisualState_TopicsBrowsing_PersistsWhenBackgrounded(t *testing.T) {
 	}
 }
 
+func TestTabVisualState_TopicsBrowsing_ClearsOnEsc(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenTopics
+	a.topics = a.topics.SetTopics([]model.Topic{{Slug: "tech"}}, "")
+	tm, _ := a.topics.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	tm = tm.SetTopicPosts([]model.Post{{ID: "p1", AuthorUsername: "alice"}}, "") // Enter only fires the load cmd; this is what flips m.view to viewTopicPosts
+	tm, _ = tm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	a.topics = tm
+
+	if selected, detail := tabVisualState(a, screenTopics); !selected || detail {
+		t.Errorf("selected=%v detail=%v, want true,false after esc back to the topic list", selected, detail)
+	}
+
+	a.active = screenFeed // background Topics after esc
+	if selected, detail := tabVisualState(a, screenTopics); selected || detail {
+		t.Errorf("selected=%v detail=%v, want false,false — esc should clear detail even once backgrounded", selected, detail)
+	}
+}
+
 func TestTabVisualState_CMailDetail_DoesNotPersistWhenBackgrounded(t *testing.T) {
 	a := loggedInApp()
 	a.cmail = a.cmail.SetConversations([]model.Conversation{
