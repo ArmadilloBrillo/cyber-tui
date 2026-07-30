@@ -253,8 +253,8 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 	if a.active == screenCMail {
 		a.cmail = a.cmail.CancelSubscription()
 	}
-	if a.active == screenChatrooms {
-		a.chatrooms = a.chatrooms.CancelSubscription()
+	if a.active == screenChatrooms && s != screenChatrooms {
+		a.chatrooms = a.chatrooms.SetFocused(false)
 	}
 	prev := a.active
 	a.active = s
@@ -269,6 +269,16 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 		}
 		return a, nil
 	case screenChatrooms:
+		a.chatrooms = a.chatrooms.SetFocused(true)
+		// A room left open when the user last switched away to a *different*
+		// tab kept its RTDB subscription live in the background (see
+		// IsRoomStreamMsg) — resume it as-is instead of bouncing back to the
+		// room list. Re-pressing the Chatrooms key while already on it (prev
+		// == screenChatrooms) is the deliberate escape hatch out of a
+		// chat_mention deep link, so that case still resets to the list.
+		if prev != screenChatrooms && a.chatrooms.HasLiveRoom() {
+			return a, nil
+		}
 		a.chatrooms = a.chatrooms.ResetToList()
 		return a, a.loadRoomsCmd()
 	case screenCMail:

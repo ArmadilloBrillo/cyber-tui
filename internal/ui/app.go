@@ -623,7 +623,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.searchReturn = a.active
 			}
 			a.cmail = a.cmail.CancelSubscription()
-			a.chatrooms = a.chatrooms.CancelSubscription()
+			a.chatrooms = a.chatrooms.SetFocused(false)
 			a.active = screenSearch
 			a.search = a.search.FocusQuery()
 			return a, nil, true
@@ -816,6 +816,16 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.LeaveChatroomsMsg:
 		a.active = a.chatroomsReturn
 		return a, nil, true
+	default:
+		// Keep the open room's RTDB subscription (and its reconnect/heartbeat
+		// chains) alive while another tab is active — see SetFocused and
+		// IsRoomStreamMsg. When Chatrooms *is* active, delegateUpdate already
+		// routes these the normal way, so this only fires while backgrounded.
+		if a.active != screenChatrooms && screens.IsRoomStreamMsg(msg) {
+			var cmd tea.Cmd
+			a.chatrooms, cmd = a.chatrooms.Update(msg)
+			return a, cmd, true
+		}
 	}
 	return a, nil, false
 }
