@@ -25,7 +25,6 @@ type User struct {
 	LocationLongitude float64
 	FollowersCount    int
 	FollowingCount    int
-	PostsCount        int
 	GuildSlug         string // empty when not a guild member
 	GuildID           string
 	GuildName         string
@@ -142,6 +141,25 @@ type Room struct {
 	Name          string
 	LastMessageAt time.Time
 	SortOrder     int
+	OnlineCount   int
+}
+
+// RoomUser is a single entry in a cIRC room's presence list — from either
+// GET /v1/circ/:roomId/users or the chat_presence RTDB stream.
+type RoomUser struct {
+	UserID      string
+	Username    string
+	IsChatAdmin bool
+	LastSeen    time.Time
+}
+
+// TypingUser is a single entry in a C-Mail conversation's typing indicator —
+// from the dm_presence RTDB stream. Expires fast (staleAfterMs ~9s) rather
+// than tracking long-lived presence like RoomUser.
+type TypingUser struct {
+	UserID    string
+	Username  string
+	Timestamp time.Time
 }
 
 // NotificationPrefs maps to the notifications sub-object in GET/PATCH /v1/settings.
@@ -283,4 +301,7 @@ type Notification struct {
 	PostAuthorUsername   string // author of the target post; used with PostSlug for navigation (v0.7+)
 	PostContent          string // non-empty for post_mention; the text that mentioned you (v0.7+)
 	ReplyContent         string // non-empty for reply_mention; the reply text that mentioned you (v0.7+)
+	RoomSlug             string // chat_mention: metadata.roomSlug; the cIRC room to jump to
+	RoomName             string // chat_mention: metadata.roomName; display name of the room
+	MessageContent       string // non-empty for chat_mention; the chat message that mentioned you
 }

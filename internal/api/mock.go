@@ -408,9 +408,9 @@ func (m *MockClient) UpdateSettings(update model.Settings) error {
 
 func (m *MockClient) GetRooms() ([]model.Room, error) {
 	return []model.Room{
-		{ID: "r1", Slug: "zion", Name: "Zion", LastMessageAt: time.Now().Add(-2 * time.Minute), SortOrder: 1},
-		{ID: "r2", Slug: "sprawl", Name: "Sprawl", LastMessageAt: time.Now().Add(-15 * time.Minute), SortOrder: 2},
-		{ID: "r3", Slug: "freeside", Name: "Freeside", LastMessageAt: time.Now().Add(-1 * time.Hour), SortOrder: 3},
+		{ID: "r1", Slug: "zion", Name: "Zion", LastMessageAt: time.Now().Add(-2 * time.Minute), SortOrder: 1, OnlineCount: 2},
+		{ID: "r2", Slug: "sprawl", Name: "Sprawl", LastMessageAt: time.Now().Add(-15 * time.Minute), SortOrder: 2, OnlineCount: 1},
+		{ID: "r3", Slug: "freeside", Name: "Freeside", LastMessageAt: time.Now().Add(-1 * time.Hour), SortOrder: 3, OnlineCount: 0},
 	}, nil
 }
 
@@ -452,6 +452,43 @@ func (m *MockClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 				Body:      "incoming mock room message",
 				CreatedAt: time.Now(),
 			}:
+			case <-ctx.Done():
+			}
+		case <-ctx.Done():
+		}
+	}()
+	return ch, cancel, nil
+}
+
+// GetRoomUsers returns a couple of canned users, one flagged as admin.
+func (m *MockClient) GetRoomUsers(roomID string) ([]model.RoomUser, error) {
+	return []model.RoomUser{
+		{UserID: "2", Username: mockUsers[1].Username, IsChatAdmin: true, LastSeen: time.Now()},
+		{UserID: "1", Username: mockUsers[0].Username, LastSeen: time.Now().Add(-30 * time.Second)},
+	}, nil
+}
+
+// AnnouncePresence returns a fixed 30s heartbeat / 3min staleness window.
+func (m *MockClient) AnnouncePresence(roomID string) (heartbeatMs, staleAfterMs int, err error) {
+	return 30000, 180000, nil
+}
+
+func (m *MockClient) LeaveRoomPresence(roomID string) error {
+	return nil
+}
+
+// SubscribeRoomPresence returns a channel that delivers the same canned
+// GetRoomUsers snapshot once after 1 second, then closes.
+func (m *MockClient) SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int, initial []model.RoomUser) (<-chan []model.RoomUser, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan []model.RoomUser, 1)
+	go func() {
+		defer close(ch)
+		users, _ := m.GetRoomUsers(roomID)
+		select {
+		case <-time.After(1 * time.Second):
+			select {
+			case ch <- users:
 			case <-ctx.Done():
 			}
 		case <-ctx.Done():
@@ -505,6 +542,34 @@ func (m *MockClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 				From:      mockUsers[1],
 				Body:      "incoming mock message",
 				CreatedAt: time.Now(),
+			}
+		case <-ctx.Done():
+		}
+	}()
+	return ch, cancel, nil
+}
+
+// AnnounceTyping returns the documented fixed cadence (3s heartbeat / 9s staleness).
+func (m *MockClient) AnnounceTyping(conversationID string) (heartbeatMs, staleAfterMs int, err error) {
+	return 3000, 9000, nil
+}
+
+func (m *MockClient) ClearTyping(conversationID string) error {
+	return nil
+}
+
+// SubscribeDMTyping delivers one canned "other participant is typing"
+// snapshot after 2 seconds, then closes — mirrors SubscribeRoomPresence's mock.
+func (m *MockClient) SubscribeDMTyping(ctx context.Context, conversationID string, staleAfterMs int) (<-chan []model.TypingUser, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan []model.TypingUser, 1)
+	go func() {
+		defer close(ch)
+		select {
+		case <-time.After(2 * time.Second):
+			select {
+			case ch <- []model.TypingUser{{UserID: mockUsers[1].ID, Username: mockUsers[1].Username, Timestamp: time.Now()}}:
+			case <-ctx.Done():
 			}
 		case <-ctx.Done():
 		}

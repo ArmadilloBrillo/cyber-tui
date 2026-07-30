@@ -7,10 +7,10 @@ import (
 )
 
 // EncodeKitty encodes img for display via the Kitty terminal graphics protocol.
-// maxCols is the maximum terminal column width; the image is never upscaled
-// beyond its natural pixel size. Returns the APC escape sequence and the
-// computed display size in terminal columns and rows.
-func EncodeKitty(img image.Image, maxCols int) (encoded string, cols, rows int) {
+// maxCols/maxRows bound the terminal display size; the image is never
+// upscaled beyond its natural pixel size. Returns the APC escape sequence and
+// the computed display size in terminal columns and rows.
+func EncodeKitty(img image.Image, maxCols, maxRows int) (encoded string, cols, rows int) {
 	bounds := img.Bounds()
 	w := bounds.Max.X - bounds.Min.X
 	h := bounds.Max.Y - bounds.Min.Y
@@ -30,11 +30,15 @@ func EncodeKitty(img image.Image, maxCols int) (encoded string, cols, rows int) 
 	}
 
 	payload := base64.StdEncoding.EncodeToString(raw)
-	cols = fitCols(w, maxCols)
-	rows = fitRows(h, w, cols)
+	cols, rows = fitBox(w, h, maxCols, maxRows)
 	// a=T: transmit and display. f=32: 32-bit RGBA. s/v: pixel dimensions.
 	// c/r: display size in terminal columns/rows (Kitty scales to fit, preserving aspect ratio).
 	// m=0: final chunk.
-	encoded = fmt.Sprintf("\x1b_Ga=T,f=32,s=%d,v=%d,c=%d,r=%d,m=0;%s\x1b\\", w, h, cols, rows, payload)
+	//
+	// Prefixed with a=d,d=A (delete all placements): a no-op if nothing is
+	// currently displayed, but self-heals a leftover placement from a
+	// previous image whose own close-cleanup frame never reached the
+	// terminal (e.g. dropped behind a slow flush of a large prior image).
+	encoded = fmt.Sprintf("\x1b_Ga=d,d=A\x1b\\\x1b_Ga=T,f=32,s=%d,v=%d,c=%d,r=%d,m=0;%s\x1b\\", w, h, cols, rows, payload)
 	return
 }

@@ -154,6 +154,33 @@ func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 	return m
 }
 
+// HasPost reports whether a post is currently open or persisted in the
+// background — used by activateScreen to decide whether returning to the
+// origin tab should resume it instead of that tab's own list.
+func (m PostDetailModel) HasPost() bool { return m.post.ID != "" }
+
+// Close resets PostDetailModel back to "no post open" — called on Esc or on
+// re-navigating to the post's own origin tab (the escape hatch out of a
+// persisted PostDetail — see activateScreen). Preserves layout/broadcast-only
+// fields (width/height/ready/relaxed/loc/timeDisplayFormat/currentUsername/
+// the bookmark+watch ID sets) since those aren't re-supplied by the next
+// SetPost either — only the SetPost-adjacent fields plus compose/confirming
+// (which SetPost itself doesn't reset) are cleared.
+func (m PostDetailModel) Close() PostDetailModel {
+	m.post = model.Post{}
+	m.replies = nil
+	m.flatTree = nil
+	m.replyOffsets = nil
+	m.replyHeights = nil
+	m.postHeight = 0
+	m.selectedReply = -1
+	m.loading = false
+	m.err = nil
+	m.compose = m.compose.Close()
+	m.confirming = pdConfirmNone
+	return m
+}
+
 func (m PostDetailModel) SetReplies(replies []model.Reply) PostDetailModel {
 	m.selectedReply = -1 // keep post selected after replies load
 	m.loading = false

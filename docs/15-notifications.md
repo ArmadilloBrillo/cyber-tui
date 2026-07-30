@@ -38,12 +38,20 @@ Each notification renders as a single line inside a bordered box:
 
 | Type | Icon |
 |------|------|
-| `reply` / `reply_mention` / `thread_reply` | `↩` / `@` |
+| `reply` / `thread_reply` | `↩` |
+| `reply_mention` / `post_mention` | `@` |
 | `new_post_friend` / `new_post_following` | `★` |
 | `bookmark` | `♥` |
 | `new_follower` | `+` |
+| `unfollowed` | `☹` |
 | `guild_new_thread` | `#` |
 | `poke` | `~` |
+| `chat_mention` | `»` |
+| `dm_message` | `✉` |
+| `supporter_granted` / `supporter_removed` | `$` |
+| `hacker_granted` / `hacker_removed` | `^` |
+| `image_permission_*` / `attachment_permission_*` | `%` |
+| `system_ban` | `☠` |
 
 ### Day separators
 
@@ -74,7 +82,7 @@ Notifications are grouped by calendar day in the user's configured timezone:
 |-----|--------|
 | `j` / `↓` | Move to next notification |
 | `k` / `↑` | Move to previous notification; at top: refresh |
-| `enter` | Open post/reply for navigable notifications |
+| `enter` | Open post/reply for navigable notifications; jump to the room for `chat_mention`; open the C-Mail conversation for `dm_message` |
 | `p` | View actor's profile |
 | `m` | Mark selected notification as read |
 | `M` | Mark all notifications as read |
@@ -83,7 +91,22 @@ Notifications are grouped by calendar day in the user's configured timezone:
 
 ### Non-navigable types
 
-Pressing `enter` on `poke` or `new_follower` notifications (or any with an empty target ID) is a no-op.
+Pressing `enter` on `poke`, `new_follower`, or `unfollowed` notifications (or any with an empty target ID) opens the actor's profile; it's a no-op only if the actor is unknown.
+
+### chat_mention and dm_message navigation
+
+`chat_mention` and `dm_message` are navigable, but not to a post — `enter` jumps to their respective live surface instead:
+
+- `chat_mention` → emits `OpenRoomMsg{RoomSlug, NotifID}`. App switches to the Chatrooms screen, reloads the room list, and auto-enters detail mode for the matching room (`ChatroomsModel.SetPendingRoomSlug` / `OpenPendingRoom`), the same as if the user had cursored to that room and pressed `enter` themselves.
+- `dm_message` → emits the existing `StartConversationMsg{Username}` (the same message the `c` key already sends from any screen), opening or creating the C-Mail conversation with the sender.
+
+Both deep-links record Notifications as the return screen (`App.chatroomsReturn` / `App.cmailReturn`) and mark the destination model's `canGoBack = true`, so pressing `Esc` from the room/conversation returns straight back to Notifications instead of dropping to Chatrooms'/C-Mail's own list — see `docs/33-circ.md` and `docs/08-cmail.md`.
+
+### chat_mention suppression for the room currently open
+
+The API has no concept of room presence — there's no join/leave endpoint, so it generates `chat_mention` unconditionally, even for a user actively reading the room the mention happened in (see "No online-users list" in `docs/33-circ.md`). Since that's redundant (the message is already on screen), the client auto-suppresses it: any unread `chat_mention` whose `RoomSlug` matches the room currently open in Chatrooms detail view is marked read (both locally and via `MarkNotificationRead`) as soon as it's fetched, so it never bumps the tab badge or appears unread in the list (`App.suppressActiveRoomMentions` in `internal/ui/app.go`).
+
+"Currently open" requires both: Chatrooms is the foreground screen (`App.active == screenChatrooms`) and that exact room is in detail view (`ChatroomsModel.ActiveRoomSlug()`). Switching to any other tab, or pressing `Esc` back to the room list, immediately stops the suppression for that room — mentions notify normally again from that point on.
 
 ---
 
@@ -94,11 +117,24 @@ Pressing `enter` on `poke` or `new_follower` notifications (or any with an empty
 | `new_post_friend` / `new_post_following` | published something. |
 | `bookmark` | saved your entry. |
 | `new_follower` | started following you. |
+| `unfollowed` | unfollowed you. |
 | `reply` | replied to your post. |
 | `reply_mention` | mentioned you in a reply. |
+| `post_mention` | mentioned you in a post. |
+| `chat_mention` | mentioned you in #\<roomName\>. (falls back to `#<roomSlug>`, then "mentioned you in chat." if neither is present) |
+| `dm_message` | sent you a message. |
 | `thread_reply` | replied in @username's thread. (falls back to "a thread you're following" if author unknown) |
 | `guild_new_thread` | posted a new thread in #\<guildName\>. (falls back to "posted a new thread." if guild name absent) |
 | `poke` | poked you. ¯\_(ツ)_/¯ |
+| `supporter_granted` / `supporter_removed` | granted/removed your Supporter status. |
+| `hacker_granted` / `hacker_removed` | granted/removed your Hacker status. |
+| `image_permission_granted` / `image_permission_removed` | granted/removed your image permissions. |
+| `attachment_permission_granted` / `attachment_permission_removed` | granted/removed your attachment permissions. |
+| `system_ban` | your account has been banned. |
+
+### Inline content preview
+
+`post_mention`, `reply_mention`, and `chat_mention` show a truncated `"> …"` preview line under the summary, sourced from `PostContent`, `ReplyContent`, and `MessageContent` respectively — the text that mentioned the user, without navigating away.
 
 ### Guild context
 
@@ -178,6 +214,25 @@ A notification can point to a post that has since been deleted; the notification
 }
 ```
 
+A `chat_mention` notification's `metadata` carries room context and the mentioning message instead:
+
+```json
+{
+  "id": "def",
+  "type": "chat_mention",
+  "read": false,
+  "createdAt": "2026-07-24T09:40:05.206Z",
+  "actorId": "user-456",
+  "actorUsername": "tangelic",
+  "targetId": "cyberspace",
+  "metadata": {
+    "roomSlug": "cyberspace",
+    "roomName": "The Sprawl",
+    "messageContent": "@ragnar you here?"
+  }
+}
+```
+
 Note: the actor is returned as flat fields (`actorId`, `actorUsername`), not a nested object.
 
 As of API **v0.5.0** the server `docs.md` documents this notification object and its `metadata` keys (previously reverse-engineered); the shape above matches the documented schema. `metadata` is open-ended — unknown keys are treated as optional.
@@ -199,6 +254,13 @@ type Notification struct {
     ThreadAuthorUsername string // metadata.authorUsername; set for thread_reply
     GuildName            string // metadata.guildName; rarer display-name variant
     GuildSlug            string // metadata.guildSlug; guild handle shown as #slug
+    PostSlug             string // metadata.postSlug; slug of the target post (v0.7+)
+    PostAuthorUsername   string // metadata.authorUsername; author of the target post (v0.7+)
+    PostContent          string // metadata.postContent; non-empty for post_mention (v0.7+)
+    ReplyContent         string // metadata.replyContent; non-empty for reply_mention (v0.7+)
+    RoomSlug             string // metadata.roomSlug; chat_mention room to jump to
+    RoomName             string // metadata.roomName; chat_mention room display name
+    MessageContent       string // metadata.messageContent; non-empty for chat_mention
 }
 
 type NotificationActor struct {

@@ -129,10 +129,11 @@ Shared domain types used by both the API client and the UI. All types map 1-to-1
 | `ProfileUpdate` | Optional fields for PATCH /v1/users/me (all pointer types, includes new website/location fields) |
 | `Message` | DM/chat message (ID, from, body, createdAt) |
 | `Conversation` | 1-on-1 DM thread (ID, participants, messages, UnreadCount, LastMessage) |
-| `Room` | Public chatroom (ID, slug, name, lastMessageAt, sortOrder) |
+| `Room` | Public chatroom (ID, slug, name, lastMessageAt, sortOrder, onlineCount) |
+| `RoomUser` | Presence entry for a cIRC room (userID, username, isChatAdmin, lastSeen) |
 | `NotificationPrefs` | Notification subscription toggles (bookmark, reply, poke) |
 | `Settings` | All user preferences (notifications, content filters, display options) |
-| `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName, postSlug, postAuthorUsername, postContent, replyContent) |
+| `Notification` | Alert event (ID, type, read status, actor, targetID, targetType, replyID, threadAuthorUsername, guildName, guildSlug, postSlug, postAuthorUsername, postContent, replyContent, roomSlug, roomName, messageContent) |
 | `Bookmark` | Saved post or reply (ID, type, postID/replyID, content snapshot, author, createdAt) |
 | `Topic` | Tag with post count (slug, postCount) |
 | `Guild` | Guild community (ID, name, slug, icon, bio, memberCount, founderUsername, createdAt, isMember, role, link, linkText, profilePictureUrl) |
@@ -170,8 +171,8 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Topics | `GetTopics(cursor)`, `GetTopicPosts(slug, cursor)` |
 | Guilds | `GetGuilds(cursor)`, `GetGuild(slug)`, `GetGuildPosts(slug, cursor)`, `CreateGuildPost(slug, content, title, postSlug, topics)`, `GetGuildMembers(slug, cursor)`, `JoinGuild(slug)`, `LeaveGuild(slug)` |
 | Notes | `GetNotes(cursor)`, `GetNote(noteID)`, `GetNoteRevision(noteID, revision)`, `GetNoteRevisions(noteID, cursor)`, `CreateNote(content, topics)`, `UpdateNote(noteID, content, topics)`, `DeleteNote(noteID)` |
-| Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `StartConversation(recipientUsername)`, `MarkCMailRead(convID)`, `SubscribeDMs(ctx, convID) <-chan model.Message` |
-| Chatrooms | `GetRooms()`, `GetRoomMessages(roomID, limit, before)`, `SendRoomMessage(roomID, body)`, `MarkRoomRead(roomID)`, `SubscribeRoom(ctx, roomID) <-chan model.Message` |
+| Direct Messages | `GetConversations()`, `GetMessages(convID, limit)`, `SendMessage(convID, body)`, `StartConversation(recipientUsername)`, `MarkCMailRead(convID)`, `SubscribeDMs(ctx, convID) <-chan model.Message`, `AnnounceTyping(convID)`, `ClearTyping(convID)`, `SubscribeDMTyping(ctx, convID, staleAfterMs) <-chan []model.TypingUser` |
+| Chatrooms | `GetRooms()`, `GetRoomMessages(roomID, limit, before)`, `SendRoomMessage(roomID, body)`, `MarkRoomRead(roomID)`, `SubscribeRoom(ctx, roomID) <-chan model.Message`, `GetRoomUsers(roomID)`, `AnnouncePresence(roomID)`, `LeaveRoomPresence(roomID)`, `SubscribeRoomPresence(ctx, roomID, staleAfterMs) <-chan []model.RoomUser` |
 | Search | `Search(query)` (grouped `type=all` preview), `SearchPosts(query, cursor)`, `SearchReplies(query, cursor)`, `SearchUsers(query, cursor)` |
 
 #### `client.go`
@@ -197,7 +198,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 - `refresh()` — token refresh path; does not recurse
 - `wirePostToModel()`, `wireReplyToModel()`, `wireUserToModel()`, `wireSettingsToModel()`, `wireNotificationToModel()`, `wireNoteToModel()` — convert API JSON wire types to `model.*` types
 
-**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireRoom`, `wireCircMessage`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData`, `wireSearchPreview` — match the JSON envelope shapes returned by the API.
+**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireRoom`, `wireCircMessage`, `wireRoomUser`, `wirePresenceResponse`, `wireRTDBPresenceEntry`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData`, `wireSearchPreview` — match the JSON envelope shapes returned by the API.
 
 **Note:** `HTTPClient.tokens` is guarded by a `sync.Mutex`. Bubble Tea runs commands in concurrent goroutines, so reads in `doRequest` and writes in `Login`/`refresh` go through the token accessor methods (`idToken`, `setTokens`, `snapshotTokens`, `applyRefresh`). See `docs/30-security-hardening.md`.
 
@@ -380,11 +381,13 @@ Single post with all its replies in a scrollable pager.
 - `j`/`k` (or arrows) navigate/select post or individual replies
 - `r` on a selected item opens the compose box (top-level or nested reply)
 - `d` on the selected item (own post or own reply) shows a y/n confirmation overlay; on `y` emits `DeletePostMsg` or `DeleteReplyMsg`
-- ESC emits `BackToFeedMsg` → App returns to feed
+- ESC emits `BackToFeedMsg` → App returns to `postDetailReturn` (whichever of the 7 origins — Feed, Profile, Bookmarks, Guilds, Topics, Notifications, Search — opened the post) and closes it (`PostDetailModel.Close()`)
 - `ScrollToReply(replyID)` scrolls to a specific reply (used by Notifications to deep-link)
+- **Persists across tab switches**: switching away from PostDetail (any nav key) no longer closes it — `PostDetailModel.SetPost` (the only thing that resets its state) isn't called again until a *different* post is opened, so the open post, its scroll position, and any in-progress reply draft just sit there until you come back. `activateScreen` (`layout.go`) checks `PostDetailModel.HasPost()`: landing on the origin tab *from elsewhere* resumes the post instead of showing that tab's own list; re-navigating to the origin tab *from PostDetail itself* (its own key/chord, or plain/ctrl `←`/`→` landing back on it, though cycling never does in one step — see `tabIndexOf`) is the escape hatch that actually closes it, matching Circ/C-Mail's re-press-the-tab-key convention. If the post was opened from inside a browsed Guild/Topic, closing it lands back on that same guild/topic, not the top-level list — Guilds/Topics' own browse state is untouched throughout, and PostDetail's check runs first in `activateScreen` so it "wins" while open. Mirrors Circ's background-room persistence (`docs/33-circ.md`) but architecturally simpler: pure REST content, no live subscription to keep alive. The tab-bar/nav "in detail" marker (`docs/02-menu-bar-navigation.md`) reflects this the same way it does for Circ/Guilds/Topics.
+- Plain `←`/`→` cycle tabs from PostDetail exactly like `ctrl+←`/`ctrl+→` already did (previously excluded — a live bug, not intentional). Cycling's tab-position lookup (`tabIndexOf`) resolves `screenPostDetail` to `postDetailReturn`'s position rather than defaulting to Feed's, so cycling away is anchored to wherever the post was actually opened from.
 
 Key types: `PostDetailModel`, `BackToFeedMsg`, `SubmitReplyMsg` (postID, parentReplyID, content), `DeletePostMsg`, `DeleteReplyMsg`  
-Key methods: `SetCurrentUsername(username)`, `RemoveReply(replyID)`
+Key methods: `SetCurrentUsername(username)`, `RemoveReply(replyID)`, `HasPost()`, `Close()`
 
 #### `profile.go`
 
@@ -412,11 +415,13 @@ Notification feed (replies, new followers, pokes, bookmarks, thread replies).
 
 - Cursor-based pagination matching the feed pattern
 - `j`/`k` navigate; Up at top emits `RefreshNotifsMsg`
-- `enter` emits `ShowNotificationPostMsg` → App navigates to PostDetail (includes ReplyID for scroll-to)
+- `enter` emits `ShowNotificationPostMsg` → App navigates to PostDetail (includes ReplyID for scroll-to) for post/reply notifications; `OpenRoomMsg` (jump to the cIRC room) for `chat_mention`; `StartConversationMsg` (open/create the C-Mail conversation with the sender) for `dm_message`
 - `m` emits `MarkNotifReadMsg`; `M` emits `MarkAllNotifsReadMsg`
-- `1` toggles unread-only filter
+- `u` toggles unread-only filter
+- `chat_mention` and `post_mention`/`reply_mention` notifications show an inline `"> …"` preview of the mentioning content (`MessageContent`/`PostContent`/`ReplyContent`)
+- `chat_mention` notifications for the cIRC room currently open in Chatrooms detail view are auto-suppressed (marked read, no badge bump) — see `docs/15-notifications.md`
 
-Key types: `NotificationsModel`, `LoadMoreNotifsMsg`, `RefreshNotifsMsg`, `MarkNotifReadMsg`, `MarkAllNotifsReadMsg`, `ShowNotificationPostMsg`  
+Key types: `NotificationsModel`, `LoadMoreNotifsMsg`, `RefreshNotifsMsg`, `MarkNotifReadMsg`, `MarkAllNotifsReadMsg`, `ShowNotificationPostMsg`, `OpenRoomMsg`  
 Key methods: `SetNotifs(notifs, cursor)`, `AppendNotifs(notifs, cursor)`
 
 #### `settings.go`
@@ -446,37 +451,44 @@ Key types: `SettingsModel`, `SaveSettingsMsg`
 
 Direct messages (C-Mail) with live Firebase RTDB integration.
 
-- Two-mode flow: `cmailModeList` (full-width conversation cards) → `cmailModeDetail` (history viewport + compose input); ESC returns to list
+- Two-mode flow: `cmailModeList` (full-width conversation cards) → `cmailModeDetail` (history viewport + compose input); ESC returns to list — unless the conversation was reached via a deep link (see "Starting a conversation" below), in which case ESC leaves C-Mail entirely and returns to the origin screen
 - Subscribes to RTDB SSE stream via `api.Client.SubscribeDMs()` on conversation selection; cancelled on ESC or screen switch
 - `waitForDM(sub)` is a Bubble Tea `Cmd` that blocks on the subscription channel and returns each incoming message as a `tea.Msg`
 - Other person's messages left-aligned; my messages right-aligned (driven by `currentUser` field)
 - `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history in detail mode
-- **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile emits `StartConversationMsg{Username}` (defined in `messages.go`); App calls `StartConversation(username)` via REST, then switches to C-Mail and opens the returned conversation in detail mode; self-DMs are dropped in the App handler. Distinct from `g m` (see "Keyboard Shortcuts" → Global): `c` targets the specific highlighted user, `g m` just opens the C-Mail tab's conversation list — the in-app hint for `c` reads "message" rather than "c-mail" to keep the two from being conflated
+- **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile (or opening a `dm_message` notification) emits `StartConversationMsg{Username}` (defined in `messages.go`); App records the originating screen in `App.cmailReturn` and sets `CMailModel.canGoBack = true`, then calls `StartConversation(username)` via REST, switches to C-Mail, and opens the returned conversation in detail mode; self-DMs are dropped in the App handler. Distinct from `g m` (see "Keyboard Shortcuts" → Global): `c` targets the specific highlighted user, `g m` just opens the C-Mail tab's conversation list — the in-app hint for `c` reads "message" rather than "c-mail" to keep the two from being conflated
+- **Deep-link ESC:** when `canGoBack` is true, ESC in detail mode emits `LeaveCMailMsg` instead of dropping to the conversation list; App sets `active = cmailReturn`, returning straight to whatever screen the conversation was opened from. Entering C-Mail through ordinary tab/leader-key navigation calls `CMailModel.ResetToList()` in `activateScreen` (`layout.go`), which clears `canGoBack` *and* forces `mode` back to list — so manually switching to the C-Mail tab while a deep-linked conversation is still open also drops to the list instead of leaving it stuck in detail mode, same as ESC — this mirrors the `canGoBack`/`profileReturn` pattern in `profile.go`
 - **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetMessages(convID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on conversation open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
 - **Live-stream reconnect:** when `dmStreamClosedMsg` fires for the still-active conversation (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectConvCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (`reconnectDelay`/`reconnectBackoffSchedule` in `reconnect.go`, shared with `chatrooms.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `CMailReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path, so it's visible even with history already loaded. `cancelDMSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned conversation) is a no-op.
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendMessage`'s reply text is routed through app.go's `cmailCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice`. `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live for CIRC, parsed defensively here) rendered via `renderActionLine` as classic IRC `* username body *`
+- **Typing indicator:** while the compose input is non-empty, `announceTypingCmd`/`AnnounceTyping` announces "typing" and a self-rescheduling heartbeat `tea.Tick` (`scheduleTypingHeartbeatCmd`, cadence from the server response, never hard-coded) re-announces it; an idle-check `tea.Tick` chain (`scheduleTypingIdleCheckCmd`, 2.5s threshold) clears it (`clearTypingCmd`/`ClearTyping`) once keystrokes stop, or immediately if the input is emptied. Sending a message clears the local flag without a network call (the server auto-clears typing on send). Opening a conversation also subscribes to the other participant's live typing status (`SubscribeDMTyping`, `dm_presence/<convID>` — full filtered snapshot per receive, mirroring `SubscribeRoomPresence`); when fresh, `View()` appends `@other is typing…` to the detail header. Detail-header-only, no list-mode badge.
 
-Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`, `CMailReconnectedMsg`
-Key internal types: `dmSubscription` (RTDB channel + cancel func + `ConvID`), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `dmReconnectedMsg`, `dmReconnectFailedMsg`, `dmReconnectRetryDueMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`
+Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`, `CMailReconnectedMsg`, `LeaveCMailMsg`
+Key internal types: `dmSubscription` (RTDB channel + cancel func + `ConvID`), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `dmReconnectedMsg`, `dmReconnectFailedMsg`, `dmReconnectRetryDueMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`; typing: `dmTypingSubscription`, `typingAnnouncedMsg`, `typingHeartbeatTickMsg`, `typingIdleCheckMsg`, `typingAnimTickMsg`, `dmTypingSubscribedMsg`, `dmTypingReceivedMsg`, `dmTypingStreamClosedMsg`
 
 #### `chatrooms.go`
 
 Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integration including live RTDB SSE.
 
-- Two-mode flow: `chatroomModeList` (full-width room cards) → `chatroomModeDetail` (header + message viewport + compose input); ESC returns to list
-- Room cards show name, `#slug` subtitle, and last-message timestamp (right-aligned)
+- Two-mode flow: `chatroomModeList` (full-width room cards) → `chatroomModeDetail` (header + message viewport + compose input); ESC returns to list — unless the room was reached via a deep link (see "Jump-to-room from a notification" below), in which case ESC leaves Chatrooms entirely and returns to the origin screen
+- Room cards show name, `#slug · N online` subtitle (`onlineCount` from `GET /v1/circ`), and last-message timestamp (right-aligned)
 - IRC-style message rendering via `renderCircMessages` (see `render.go`): `<username>  body` with right-aligned timestamp; long bodies word-wrap to the viewport width, with room reserved so the timestamp trails the last wrapped line instead of overflowing
-- Subscribes to RTDB SSE stream via `api.Client.SubscribeRoom()` on room selection; cancelled on ESC or screen switch
+- Subscribes to RTDB SSE stream via `api.Client.SubscribeRoom()` on room selection; cancelled only on ESC (leaving the room) or logout — an ordinary tab switch now leaves it running in the background (see below)
 - `waitForRoomMsg(sub)` is the Bubble Tea Cmd pump (mirrors `waitForDM` in `cmail.go`)
 - `RoomOpenedMsg` is emitted on Enter; App calls `MarkRoomRead` fire-and-forget
-- `CancelSubscription()` is called by the layout on every key that navigates away
+- `CancelSubscription()` is called only when the room is actually left (ESC), not on tab switch
+- **Background across tab switches:** `activateScreen` (`layout.go`) no longer cancels the Chatrooms subscription on tab-away — it calls `ChatroomsModel.SetFocused(false)` instead, which only stops unread-badge counting; the RTDB message/presence streams, heartbeat, and reconnect-retry chains keep running because `App.handleChatrooms` (`app.go`) routes any message matching `screens.IsRoomStreamMsg` to `a.chatrooms.Update` whenever Chatrooms isn't the active screen. `ChatroomsModel.unreadCount` increments on each `roomReceivedMsg` while unfocused and is shown as a `(N)` tab-bar badge (`renderTabBar`/`renderNav`); `SetFocused(true)` on return clears it. Switching back into Chatrooms from a *different* tab skips `ResetToList()` when `HasLiveRoom()` is true, resuming the same room; re-pressing the Chatrooms key while *already* on it still resets to the list (the escape hatch out of a `chat_mention` deep link — see below). Only the one room the user had open stays live, not every joined room.
 - **Scroll-to-load history:** reaching the top of the loaded messages via `↑` fetches the next older page (`GetRoomMessages(roomID, 50, before)`, `before` = oldest loaded message's timestamp) and prepends it via `PrependMessages`, preserving scroll offset; guarded by `loadingHistory`/`historyExhausted` fields, reset on room open. A failed fetch resets `loadingHistory` (so a retry is possible) and sets `err`, which `renderMessages()` surfaces as "couldn't load messages" when the list is still empty.
 - **Live-stream reconnect:** when `roomStreamClosedMsg` fires for the still-active room (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectRoomCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (shared `reconnectDelay`/`reconnectBackoffSchedule` from `reconnect.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleRoomReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `RoomReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path. `cancelRoomSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned room) is a no-op.
-- **Admin badge:** `renderCircMessages` shows a `[admin]` tag next to the username when `model.Message.IsChatAdmin` is set (parsed from both the REST and RTDB wire formats)
+- **Presence — online users panel:** entering a room announces presence (`AnnouncePresence`), starts a self-rescheduling heartbeat `tea.Tick` at the server-specified `heartbeatMs` (never hard-coded), loads the initial list (`GetRoomUsers`), and opens a live presence RTDB stream (`SubscribeRoomPresence`, `chat_presence/<roomId>` — unlike the message stream, each receive is a full filtered snapshot, not a diff). A responsive side panel (`panelWidths`, `renderRoomUsersPanel`) shows admins (`★`-marked) then everyone else, both alphabetical (`sortRoomUsers`); it collapses on narrow terminals or before the first snapshot arrives. The header shows a live `N online` count. Leaving via ESC sends an explicit `LeaveRoomPresence`; a tab switch/search no longer tears the room down at all, so presence/heartbeat just keep running in the background — the server's `staleAfterMs` expiry only matters if the app is closed mid-session — see `docs/33-circ.md` Known limitations. Admin status is no longer shown as a `[admin]` tag on individual messages (removed from `renderCircMessages`) now that the panel is the single source for it.
+- **Own name & mentions:** `renderCircMessages`/`renderActionLine` style the current user's own username in `theme.MeHighlight` (bold white) instead of `theme.Highlight` (yellow) for the message-author prefix, and pass `currentUser` straight into `markdown.RenderInline` for the body — its `highlightUser` param bolds the same case-insensitive, word-bounded mentions (bare or `@`-prefixed) at the same raw-text level as the rest of the inline styling, not as a separate post-render pass (a prior version did this via a `highlightMentions` regex splicing a fresh `Render()` call into already-ANSI-rendered text, which broke surrounding styling after the match — see `docs/33-circ.md`) — white rather than cyan since cyan is already the CIRC room-title/border/tab-mnemonic color
+- **Jump-to-room from a notification:** Notifications' `enter` on a `chat_mention` emits `OpenRoomMsg{RoomSlug, NotifID}`; App records the originating screen in `App.chatroomsReturn`, activates this screen (reloading the room list, since Chatrooms wasn't already active and has no live room yet — `activateScreen` calls `ChatroomsModel.ResetToList()` as part of that, clearing `canGoBack` and forcing list mode, so `canGoBack` is set back to `true` right after), and calls `SetPendingRoomSlug`, then `OpenPendingRoom()` (called from the `roomsLoadedMsg` handler) auto-enters detail mode for the matching room via the shared `enterRoomDetail` helper — the same code path the list `enter` keybinding uses
+- **Deep-link ESC:** when `canGoBack` is true, ESC in detail mode emits `LeaveChatroomsMsg` instead of dropping to the room list; App sets `active = chatroomsReturn`, returning straight to Notifications (or wherever else a future deep link originates). Re-pressing the Chatrooms key while *already* on the screen still calls `ChatroomsModel.ResetToList()` in `activateScreen`, clearing `canGoBack` and forcing `mode` back to list — the intentional escape hatch out of a deep-linked room without ESC. Switching into Chatrooms from a *different* tab, however, resumes whatever room was left open instead of resetting (`activateScreen` only resets when the previously active screen wasn't already Chatrooms — see "Background across tab switches" above) — this mirrors the `canGoBack`/`profileReturn` pattern in `profile.go`, also just adopted by `cmail.go`
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendRoomMessage`'s reply text is routed through app.go's `roomCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice` (shared with `cmail.go`). `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live) rendered via `renderActionLine` as classic IRC `* username body *` — see `docs/33-circ.md` for the live-testing findings
 
-Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`
-Key internal types: `roomSubscription` (RTDB channel + cancel func + `RoomID`), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `roomReconnectedMsg`, `roomReconnectFailedMsg`, `roomReconnectRetryDueMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`
+Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`, `OpenRoomMsg`, `LeaveChatroomsMsg`
+Key internal types: `roomSubscription` (RTDB channel + cancel func + `RoomID`), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `roomReconnectedMsg`, `roomReconnectFailedMsg`, `roomReconnectRetryDueMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`; presence: `roomPresenceSubscription`, `roomPresenceAnnouncedMsg`, `roomHeartbeatTickMsg`, `roomUsersLoadedMsg`, `roomPresenceSubscribedMsg`, `roomPresenceReceivedMsg`, `roomPresenceStreamClosedMsg`
+Exported background-tab helpers: `IsRoomStreamMsg(msg) bool` (identifies the internal types above so `App` can route them regardless of active screen), `SetFocused(bool)`, `UnreadCount() int`, `HasLiveRoom() bool`
 - Room selected with arrow keys or Enter; Enter in the input pane sends via `SendRoomMessageMsg`
 - App handles `SendRoomMessageMsg` → `api.Client.SendRoomMessage()`
 
@@ -595,7 +607,7 @@ Color palettes and Lip Gloss style objects for three retro themes.
 `ColorGreen`, `ColorDimGreen`, `ColorCyan`, `ColorYellow`, `ColorRed`, `ColorBackground`, `ColorMuted`, `ColorWhite`
 
 **Style objects** (Lip Gloss; auto-update when `Set()` is called):  
-`Base`, `Title`, `Subtle`, `Highlight`, `Error`, `Border`, `ActiveBorder`, `StatusBar`, `Tab`, `ActiveTab`
+`Base`, `Title`, `Subtle`, `Highlight`, `MeHighlight`, `Error`, `Border`, `ActiveBorder`, `StatusBar`, `Tab`, `ActiveTab`
 
 **Functions:**
 
@@ -638,6 +650,7 @@ Permissions: `0600` (owner read/write only)
 | `autoPassword` | string | — | Pre-fill password (plain text; not recommended) |
 | `sshListenAddr` | string | — | Enable SSH server mode (e.g. `":2222"`) |
 | `sshHostKeyPath` | string | — | Path to SSH host private key |
+| `allowRemoteSsh` | bool | `false` | Permit `sshListenAddr` to bind a non-loopback address. SSH server mode is unauthenticated, so this is off by default |
 | `wanderLust` | bool | `false` | Wander mode toggle; `true` = on, `false` = off |
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
 
@@ -739,13 +752,18 @@ Other global keys:
 | Key | Action |
 |---|---|
 | `←` / `→` | Cycle tabs left / right (does not include Search, which is hidden — see above) |
-| `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail) |
+| `ctrl+←` / `ctrl+→` | Same as `←`/`→`, but reaches the handler even while a compose input is focused (Tabs layout only — Miller layout's `←`/`→` mean pane navigation instead, so this ctrl-twin is not offered there) |
+| `/` | Search — jumps to the Search screen with the query box focused. No-op while any screen's compose input is focused (so `/dice`, `/me`, etc. still type normally in CIRC/C-Mail); no ctrl-twin — a `ctrl+/` shortcut was tried and removed since the byte a physical ctrl+/ keystroke sends is inconsistent across terminals (0x1F on most, a literal NUL on e.g. Git Bash/MinTTY, itself ambiguous there with `ctrl+space`/`ctrl+2`/`ctrl+@`) |
 | `v` | Toggle dense / relaxed display |
-| `?` | Help modal |
+| `?` | Help modal (no ctrl-twin exists — `ctrl+?` is indistinguishable from `ctrl+backspace`/DEL in most terminals) |
 | `t` | Theme picker |
+| `ctrl+t` | Same as `t`, but reaches the handler even while a compose input is focused |
 | `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused |
 | `ctrl+o` | Same as `o`, but reaches the handler even while a compose input is focused — the only way to open links in CIRC/C-Mail, since their input is focused for the entire detail view, not just a transient compose sub-mode |
 | `q` / `ctrl+c` | Quit |
+| `ctrl+q` | Same as `q`, but reaches the handler even while a compose input is focused (`ctrl+c` already worked as a hard escape hatch; `ctrl+q` matches the bare-key mnemonic) |
+
+The `ctrl+`-prefixed rows above (`ctrl+q`, `ctrl+t`, `ctrl+←`/`ctrl+→`) exist specifically so CIRC/C-Mail's detail view — where the compose input holds focus for the screen's entire lifetime, not just a transient sub-mode — can still reach these global shortcuts; see `activeScreenHasFocusedInput()`'s exemption list in `app.go`.
 
 Timezone is set from the Settings screen's own field (`tab`/`shift+tab` to
 cycle), not a global shortcut.
@@ -853,7 +871,7 @@ fields.
 | `↑` | Scroll message history up |
 | `↓` | Scroll message history down |
 | `enter` | Send message (when input non-empty) |
-| `esc` | Return to list mode |
+| `esc` | Return to list mode — or, if this conversation was opened via `c` / a `dm_message` notification, leave C-Mail entirely and return to that origin screen |
 | `ctrl+o` | Open URLs/images found across the loaded conversation (plain `o` is captured by the compose input) |
 | all other | Forwarded to compose input (`j`/`k` type normally) |
 
@@ -862,6 +880,7 @@ fields.
 | Key | Action |
 |---|---|
 | `c` | Start or open C-Mail conversation with highlighted user (feed, post detail, notifications, read-only profile) — self-DM is a no-op |
+| `enter` on a `dm_message` notification | Same as `c` |
 
 ### CIRC
 
@@ -880,7 +899,7 @@ fields.
 | `↑` | Scroll message history up (reaching the top loads older history) |
 | `↓` | Scroll message history down |
 | `enter` | Send message (when input non-empty) |
-| `esc` | Return to list mode |
+| `esc` | Return to list mode — or, if this room was opened via a `chat_mention` notification, leave Chatrooms entirely and return to that origin screen |
 | `ctrl+o` | Open URLs/images found across the loaded room history (plain `o` is captured by the compose input) |
 | all other | Forwarded to compose input |
 
@@ -966,3 +985,13 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 | **Profile navigation depth** | Navigating from a Following/Followers tab to another user's profile is single-level; ESC returns to the original `profileReturn` destination, not the intermediate profile |
 | **Feed position — deep pagination** | When returning to the Feed tab, the selected post is restored by ID from the fresh first-page load. If the post was reached via pagination it will not be in page 1 and the feed falls back to the top. Fix options: re-fetch pages sequentially until found (expensive), or skip the tab-switch reload (stale data). Neither is warranted for typical usage. |
 | **Ambiguous-width character stripping** | Unicode EAW = "A" characters (kaomoji symbols, `©`, `®`, `™`, Greek letters, etc.) are stripped at two points: (1) `stripAmbiguousRunes` in `shared.go` strips them from post/reply content before display; (2) `filterAmbiguousKeyMsg` in `shared.go` intercepts `tea.KeyRunes` messages before they reach any `textarea` or `textinput` component (compose, topics, profile fields, C-Mail, chatrooms). Their column width is undefined and varies by terminal/font, causing border overflow and cursor misalignment. Wide (CJK), halfwidth, and zero-width characters are unaffected. |
+
+---
+
+## Code & Security Reviews
+
+Periodic full-repository audits, tracked as dated snapshots so successive reviews can be diffed against each other. Findings are actioned separately (see each report's Actionable Recommendations table); this doc's Deferred/Known Limitations table above tracks accepted long-term gaps.
+
+| Date | Commit | Report |
+|---|---|---|
+| 2026-07-24 | `8835173` | [`docs/reviews/2026-07-24-code-security-review.md`](reviews/2026-07-24-code-security-review.md) |

@@ -62,8 +62,30 @@ type ShowUserProfileMsg struct{ Username string }
 // conversation with that user. App guards against self-DMs.
 type StartConversationMsg struct{ Username string }
 
+// OpenRoomMsg is emitted by Notifications when the user presses Enter on a
+// chat_mention notification. RoomSlug identifies the target cIRC room; App
+// activates the Chatrooms screen and stashes the slug on ChatroomsModel so it
+// can auto-enter detail mode once the room list has (re)loaded. NotifID lets
+// App mark the notification read in the same batch.
+type OpenRoomMsg struct {
+	RoomSlug string
+	NotifID  string
+}
+
 // BackFromProfileMsg is emitted by ProfileModel in read-only mode when ESC is pressed.
 type BackFromProfileMsg struct{}
+
+// LeaveCMailMsg is emitted by CMailModel when ESC is pressed in detail mode
+// on a conversation that was reached via a deep link (canGoBack). App
+// returns to the screen the user deep-linked from instead of dropping to
+// C-Mail's own conversation list.
+type LeaveCMailMsg struct{}
+
+// LeaveChatroomsMsg is emitted by ChatroomsModel when ESC is pressed in
+// detail mode on a room that was reached via a deep link (canGoBack). App
+// returns to the screen the user deep-linked from instead of dropping to
+// Chatrooms' own room list.
+type LeaveChatroomsMsg struct{}
 
 // SaveSettingsMsg is emitted by SettingsModel when the user presses ctrl+s
 // with unsaved changes. App.handleSettings calls UpdateSettings and returns

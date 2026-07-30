@@ -1,6 +1,8 @@
 # Feature 20 — Follows
 
-Implements follow/unfollow on user profiles, follower/following/post count display, and follow state detection.
+Implements follow/unfollow on user profiles, follower/following count display, and follow state detection.
+
+> Post count (`postsCount`) was displayed here originally but was removed — the API field was deprecated and no longer returned reliable data (it's absent from the current API docs). See `docs/00-api-backlog.md`.
 
 ---
 
@@ -8,7 +10,8 @@ Implements follow/unfollow on user profiles, follower/following/post count displ
 
 | Capability | Status |
 |---|---|
-| Show follower / following / post counts on profile screen | Done |
+| Show follower / following counts on profile screen | Done |
+| Show post count on profile screen | **Removed** — `postsCount` was a deprecated, unreliable API field |
 | Follow another user (`f` key on read-only profile) | Done |
 | Unfollow a user (`f` key again when already following) | Done |
 | Detect follow state on profile load (first-page scan) | Done |
@@ -25,7 +28,7 @@ Implements follow/unfollow on user profiles, follower/following/post count displ
 | `POST` | `/v1/follows` | Follow a user by their user ID |
 | `DELETE` | `/v1/follows/:id` | Unfollow using the follow document ID |
 
-The user profile endpoints (`GET /v1/users/me`, `GET /v1/users/:username`) were already in use; this feature also maps the `followersCount`, `followingCount`, and `postsCount` fields that were previously ignored.
+The user profile endpoints (`GET /v1/users/me`, `GET /v1/users/:username`) were already in use; this feature also maps the `followersCount` and `followingCount` fields that were previously ignored (a `postsCount` field was mapped too but was later removed — see Files Changed).
 
 ---
 
@@ -33,7 +36,7 @@ The user profile endpoints (`GET /v1/users/me`, `GET /v1/users/:username`) were 
 
 ### Profile screen
 
-- Counts line displayed below the username in the format `N followers · N following · N posts`.
+- Counts line displayed below the username in the format `N followers · N following`.
 - When viewing another user's profile (`readOnly=true`):
   - Hint bar shows `f · follow` (or `f · unfollow` when already following).
   - Pressing `f` sends `FollowUserMsg` or `UnfollowUserMsg` to `App`.
@@ -54,7 +57,7 @@ This covers the majority of users. Users who follow more than 50 accounts may no
 
 | File | Change |
 |---|---|
-| `internal/model/types.go` | Added `FollowersCount`, `FollowingCount`, `PostsCount` to `User`; added `Follow` struct |
+| `internal/model/types.go` | Added `FollowersCount`, `FollowingCount` to `User` (originally also `PostsCount`, removed later — deprecated API field); added `Follow` struct |
 | `internal/api/interface.go` | Added `GetFollowing`, `Follow`, `Unfollow` to `Client` interface |
 | `internal/api/client.go` | Mapped count fields in `wireUser`; added `wireFollow`, `wireFollowToModel`; implemented three follow methods |
 | `internal/api/mock.go` | Stub implementations for `GetFollowing`, `Follow`, `Unfollow` |

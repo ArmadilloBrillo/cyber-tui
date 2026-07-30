@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
-	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
 // hintRows converts hints to modal row strings, skipping the "?" entry.
@@ -111,17 +110,32 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 	}
 	switch msg.String() {
 	case "left":
-		if a.active != screenPostDetail && a.focus == focusMenu {
+		// PostDetail used to be excluded here, forcing ctrl+left to leave it —
+		// now it cycles the same as everywhere else (tabIndexOf anchors on
+		// postDetailReturn, so this never lands back on the origin tab in one
+		// step; see activateScreen's escape hatch for how that's reached).
+		if a.focus == focusMenu {
 			var cmd tea.Cmd
 			a, cmd = navigateTabBy(a, -1)
 			return a, cmd, true
 		}
 	case "right":
-		if a.active != screenPostDetail && a.focus == focusMenu {
+		if a.focus == focusMenu {
 			var cmd tea.Cmd
 			a, cmd = navigateTabBy(a, +1)
 			return a, cmd, true
 		}
+	case "ctrl+left":
+		// Unlike plain "left", not gated on focus == focusMenu: this is the
+		// ctrl-twin that reaches tab-cycling from CMail/CIRC detail mode,
+		// where the compose input holds focus for the entire view.
+		var cmd tea.Cmd
+		a, cmd = navigateTabBy(a, -1)
+		return a, cmd, true
+	case "ctrl+right":
+		var cmd tea.Cmd
+		a, cmd = navigateTabBy(a, +1)
+		return a, cmd, true
 	}
 	return a, nil, false
 }
@@ -169,18 +183,33 @@ func (l TabsLayout) renderTabBar(a App) string {
 				badge = fmt.Sprintf(" (%d)", n)
 			}
 		}
-		isActive := a.active == t.s &&
-			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
-			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())
+		if t.s == screenChatrooms {
+			if n := a.chatrooms.UnreadCount(); n > 0 {
+				badge = fmt.Sprintf(" (%d)", n)
+			}
+		}
+		selected, detail := tabVisualState(a, t.s)
 		text, mnemonic := theme.TabText, theme.TabMnemonic
-		if isActive {
+		if selected {
 			text, mnemonic = theme.ActiveTabText, theme.ActiveTabMnemonic
+		}
+		marker := ""
+		if detail {
+			// A trailing chevron for "one level deep" — a Circ room,
+			// Guilds/Topics browse, a C-Mail conversation, or a PostDetail
+			// opened from this tab (see tabVisualState). Rendered via `text`
+			// below, so it inherits the active highlight when this tab is
+			// selected, or the ordinary dim/inactive style when it isn't —
+			// Circ/Guilds/Topics report detail even while backgrounded (their
+			// state is genuinely still live/persisted there), so the dim
+			// variant is what shows a room/browse left open on another tab.
+			marker = " ›"
 		}
 		before, ch, after := splitMnemonic(t.label, t.mnemonic)
 		// Each fragment is rendered independently (rather than wrapping the
 		// whole label in one .Padding style) so the active tab's background
 		// survives across the mnemonic's own ANSI reset — see TabText's doc.
-		tabs += text.Render("  "+before) + mnemonic.Render(ch) + text.Render(after+badge+"  ")
+		tabs += text.Render("  "+before) + mnemonic.Render(ch) + text.Render(after+badge+marker+"  ")
 	}
 	logo := lipgloss.NewStyle().
 		Background(theme.ColorGreen).
@@ -388,13 +417,15 @@ func (l TabsLayout) screenHints(a App) []hint {
 	case screenChatrooms:
 		if a.chatrooms.IsShowingDetail() {
 			// '?' (help) is unreachable while the compose input is focused
-			// here, same as plain 'o' — omit "more" and surface ctrl+o instead.
-			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"esc", "back"}}
+			// here, same as plain 'o' — omit "more" and surface the ctrl-twins
+			// that reach through instead (renderStatusBar already trims this
+			// list on narrow terminals, so listing all of them here is safe).
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"ctrl+q", "quit"}, {"ctrl+t", "theme"}, {"ctrl+←→", "tabs"}, {"esc", "back"}}
 		}
 		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	case screenCMail:
 		if a.cmail.IsShowingDetail() {
-			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"esc", "back"}}
+			return []hint{{"↑↓", "scroll"}, {"enter", "send"}, {"ctrl+o", "open"}, {"ctrl+q", "quit"}, {"ctrl+t", "theme"}, {"ctrl+←→", "tabs"}, {"esc", "back"}}
 		}
 		return []hint{{"↑↓/j/k", "navigate"}, {"enter", "open"}, more}
 	}
@@ -557,9 +588,7 @@ func (l TabsLayout) renderURLPicker(a App) string {
 	items := make([]string, len(a.urlPickerItems))
 	for i, u := range a.urlPickerItems {
 		display := u
-		if urlutil.IsImageURL(u) &&
-			a.graphicsProtocol != imgview.ProtocolNone &&
-			a.imageViewer != "browser" {
+		if a.canRenderImageInline(u) {
 			display = "[img] " + display
 		}
 		if len(display) > 60 {
@@ -585,5 +614,15 @@ func (l TabsLayout) renderImageModal(a App) string {
 	for i := range lines {
 		lines[i] = blankLine
 	}
-	return theme.ActiveBorder.Render(strings.Join(lines, "\n"))
+	content := strings.Join(lines, "\n")
+	if len(a.imageCarouselItems) > 1 {
+		// A plain text hint below the image, not overlaid on it — Kitty
+		// placements are an independent compositing layer that can hide text
+		// drawn into their own cells regardless of z-index, so cycling
+		// arrows drawn "on" the image were invisible in practice. This line
+		// renders through the normal bordered-box text path instead.
+		hint := theme.Subtle.Render(fmt.Sprintf("◂ %d/%d ▸", a.imageCarouselIndex+1, len(a.imageCarouselItems)))
+		content += "\n" + lipgloss.PlaceHorizontal(a.imageModalCols, lipgloss.Center, hint)
+	}
+	return theme.ActiveBorder.Render(content)
 }

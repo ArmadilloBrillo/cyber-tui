@@ -46,6 +46,15 @@ var (
 			Foreground(ColorYellow).
 			Bold(true)
 
+	// MeHighlight marks the current user's own name — their username as a
+	// message author, or a mention of it in someone else's message. White
+	// rather than the cyan used elsewhere for "this is you" (e.g. C-Mail),
+	// because cIRC already uses cyan for the room title, active border, and
+	// tab mnemonics; white stays unclaimed and distinct in that screen.
+	MeHighlight = lipgloss.NewStyle().
+			Foreground(ColorWhite).
+			Bold(true)
+
 	Error = lipgloss.NewStyle().
 		Foreground(ColorRed).
 		Bold(true)
@@ -184,6 +193,10 @@ func applyStyles() {
 
 	Highlight = lipgloss.NewStyle().
 		Foreground(ColorYellow).
+		Bold(true)
+
+	MeHighlight = lipgloss.NewStyle().
+		Foreground(ColorWhite).
 		Bold(true)
 
 	Error = lipgloss.NewStyle().

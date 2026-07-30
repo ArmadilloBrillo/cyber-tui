@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -129,7 +130,7 @@ func (t *apiTimestamp) UnmarshalJSON(b []byte) error {
 			return nil
 		}
 	}
-	log.Printf("api: apiTimestamp: unrecognized value, leaving empty: %s", b)
+	log.Printf("api: apiTimestamp: unrecognized value, leaving empty: %q", b)
 	*t = ""
 	return nil
 }
@@ -169,7 +170,6 @@ type wireUser struct {
 	LocationLongitude float64      `json:"locationLongitude"`
 	FollowersCount    int          `json:"followersCount"`
 	FollowingCount    int          `json:"followingCount"`
-	PostsCount        int          `json:"postsCount"`
 	GuildSlug         string       `json:"guildSlug"`
 	GuildID           string       `json:"guildId"`
 	GuildName         string       `json:"guildName"`
@@ -336,6 +336,9 @@ type wireNotificationMetadata struct {
 	PostSlug       string `json:"postSlug"`
 	PostContent    string `json:"postContent"`
 	ReplyContent   string `json:"replyContent"`
+	RoomSlug       string `json:"roomSlug"`
+	RoomName       string `json:"roomName"`
+	MessageContent string `json:"messageContent"`
 }
 
 type wireNotification struct {
@@ -403,6 +406,32 @@ type wireRoom struct {
 	Name          string `json:"name"`
 	LastMessageAt int64  `json:"lastMessageAt"` // epoch ms
 	SortOrder     int    `json:"sortOrder"`
+	OnlineCount   int    `json:"onlineCount"`
+}
+
+// wireRoomUser is a single entry from GET /v1/circ/:roomId/users.
+type wireRoomUser struct {
+	UserID      string `json:"userId"`
+	Username    string `json:"username"`
+	IsChatAdmin bool   `json:"isChatAdmin"`
+	LastSeen    int64  `json:"lastSeen"` // epoch ms
+}
+
+// wirePresenceResponse is returned by POST/DELETE /v1/circ/:roomId/presence.
+type wirePresenceResponse struct {
+	RoomID       string `json:"roomId"`
+	Ok           bool   `json:"ok"`
+	HeartbeatMs  int    `json:"heartbeatMs"`
+	StaleAfterMs int    `json:"staleAfterMs"`
+}
+
+// wireRTDBPresenceEntry is the Firebase shape for one user's entry in
+// /chat_presence/<roomId>/<userId>.
+type wireRTDBPresenceEntry struct {
+	Username    string  `json:"username"`
+	IsChatAdmin bool    `json:"isChatAdmin"`
+	Online      bool    `json:"online"`
+	LastSeen    float64 `json:"lastSeen"` // epoch ms as a Firebase number
 }
 
 // wireCircMessage is a single message from GET /v1/circ/:roomId.
@@ -446,6 +475,22 @@ type wireCMailMessage struct {
 type wireCMailStartResponse struct {
 	ConversationID string             `json:"conversationId"`
 	OtherUser      wireCMailOtherUser `json:"otherUser"`
+}
+
+// wireTypingResponse is returned by POST/DELETE /v1/cmail/:conversationId/typing.
+type wireTypingResponse struct {
+	ConversationID string `json:"conversationId"`
+	Ok             bool   `json:"ok"`
+	HeartbeatMs    int    `json:"heartbeatMs"`
+	StaleAfterMs   int    `json:"staleAfterMs"`
+}
+
+// wireRTDBTypingEntry is the Firebase shape for one user's entry in
+// /dm_presence/<conversationId>/<userId>.
+type wireRTDBTypingEntry struct {
+	Username  string  `json:"username"`
+	Typing    bool    `json:"typing"`
+	Timestamp float64 `json:"timestamp"` // epoch ms as a Firebase number
 }
 
 // wireRTDBMessage is the Firebase shape for a DM message in /dm_messages/<convId>/<msgId>.
@@ -546,9 +591,28 @@ func (c *HTTPClient) applyRefresh(idToken, rtdbToken, rtdbUrl string) {
 // NewHTTPClient creates a production HTTPClient with a 15-second timeout.
 func NewHTTPClient(baseURL string) *HTTPClient {
 	return &HTTPClient{
-		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		baseURL: baseURL,
+		httpClient: &http.Client{
+			Timeout:       15 * time.Second,
+			CheckRedirect: refuseInsecureRedirect,
+		},
 	}
+}
+
+// refuseInsecureRedirect stops the bearer-token-bearing Authorization header
+// from following a redirect to a non-https URL. validateBaseURL only checks
+// the configured apiBaseURL once at startup; without this, a same-host
+// scheme downgrade (https -> http) issued by the server itself would still
+// carry the token, since Go's default client only strips Authorization on a
+// cross-host redirect, not a same-host scheme change.
+func refuseInsecureRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("api: stopped after 10 redirects")
+	}
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("api: refusing redirect to non-https URL: %s", req.URL)
+	}
+	return nil
 }
 
 // NewHTTPClientForTesting creates an HTTPClient with a custom http.Client.
@@ -794,7 +858,6 @@ func wireUserToModel(w wireUser) model.User {
 		LocationLongitude: w.LocationLongitude,
 		FollowersCount:    w.FollowersCount,
 		FollowingCount:    w.FollowingCount,
-		PostsCount:        w.PostsCount,
 		GuildSlug:         w.GuildSlug,
 		GuildID:           w.GuildID,
 		GuildName:         w.GuildName,
@@ -899,6 +962,9 @@ func wireNotificationToModel(w wireNotification) model.Notification {
 		PostAuthorUsername:   w.Metadata.AuthorUsername,
 		PostContent:          w.Metadata.PostContent,
 		ReplyContent:         w.Metadata.ReplyContent,
+		RoomSlug:             w.Metadata.RoomSlug,
+		RoomName:             w.Metadata.RoomName,
+		MessageContent:       w.Metadata.MessageContent,
 	}
 }
 
@@ -1482,12 +1548,14 @@ func (c *HTTPClient) GetRooms() ([]model.Room, error) {
 	}
 	out := make([]model.Room, len(wire))
 	for i, w := range wire {
+		sanitize.Strings(&w)
 		out[i] = model.Room{
 			ID:            w.ID,
 			Slug:          w.Slug,
 			Name:          w.Name,
 			LastMessageAt: time.UnixMilli(w.LastMessageAt),
 			SortOrder:     w.SortOrder,
+			OnlineCount:   w.OnlineCount,
 		}
 	}
 	return out, nil
@@ -1510,16 +1578,22 @@ func (c *HTTPClient) GetRoomMessages(roomID string, limit int, before int64) ([]
 	}
 	out := make([]model.Message, len(wire))
 	for i, w := range wire {
-		out[i] = model.Message{
-			ID:          w.ID,
-			From:        model.User{ID: w.UserID, Username: w.Username},
-			Body:        w.Content,
-			CreatedAt:   time.UnixMilli(w.Timestamp),
-			IsChatAdmin: w.IsChatAdmin,
-			IsAction:    w.IsAction,
-		}
+		out[i] = wireCircMessageToModel(w)
 	}
 	return out, nil
+}
+
+// wireCircMessageToModel converts a REST cIRC chatroom message to the model type.
+func wireCircMessageToModel(w wireCircMessage) model.Message {
+	sanitize.Strings(&w)
+	return model.Message{
+		ID:          w.ID,
+		From:        model.User{ID: w.UserID, Username: w.Username},
+		Body:        w.Content,
+		CreatedAt:   time.UnixMilli(w.Timestamp),
+		IsChatAdmin: w.IsChatAdmin,
+		IsAction:    w.IsAction,
+	}
 }
 
 // SendRoomMessage sends a message to a chatroom via POST /v1/circ/:roomId.
@@ -1598,6 +1672,234 @@ func (c *HTTPClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 	return out, cancel, nil
 }
 
+// GetRoomUsers returns who's currently present in roomID via GET /v1/circ/:roomId/users.
+// The response is already staleness-filtered server-side.
+func (c *HTTPClient) GetRoomUsers(roomID string) ([]model.RoomUser, error) {
+	env, err := c.doRequest("GET", "/v1/circ/"+url.PathEscape(roomID)+"/users", nil)
+	if err != nil {
+		return nil, err
+	}
+	var wire []wireRoomUser
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]model.RoomUser, len(wire))
+	for i, w := range wire {
+		sanitize.Strings(&w)
+		out[i] = model.RoomUser{
+			UserID:      w.UserID,
+			Username:    w.Username,
+			IsChatAdmin: w.IsChatAdmin,
+			LastSeen:    time.UnixMilli(w.LastSeen),
+		}
+	}
+	return out, nil
+}
+
+// AnnouncePresence announces the caller's presence in roomID via POST
+// /v1/circ/:roomId/presence. Returns the heartbeat cadence and staleness
+// window (both ms) the caller should honor.
+func (c *HTTPClient) AnnouncePresence(roomID string) (heartbeatMs, staleAfterMs int, err error) {
+	env, err := c.doRequest("POST", "/v1/circ/"+url.PathEscape(roomID)+"/presence", nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	var data wirePresenceResponse
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return 0, 0, err
+	}
+	return data.HeartbeatMs, data.StaleAfterMs, nil
+}
+
+// LeaveRoomPresence removes the caller from roomID's presence list immediately
+// via DELETE /v1/circ/:roomId/presence.
+func (c *HTTPClient) LeaveRoomPresence(roomID string) error {
+	_, err := c.doRequest("DELETE", "/v1/circ/"+url.PathEscape(roomID)+"/presence", nil)
+	return err
+}
+
+// applyPresenceEvent merges one RTDB event into state, keyed by userId.
+// A "put" at "/" replaces the whole map (a genuine full-snapshot event, or a
+// full-tree deletion). A "patch" at "/" is Firebase's shape for a
+// multi-location update touching several top-level keys at once (e.g. one
+// user leaving, or several updating together) — only those listed keys are
+// merged in (a null value deletes that key), leaving every other entry in
+// state untouched. Conflating the two used to wipe the entire room's presence
+// on a single-user "patch" removal, with everyone else only trickling back as
+// their own next heartbeat re-added them. A "/<userId>" path replaces or
+// deletes that one entry directly, regardless of event type. Deeper nested
+// paths (e.g. a patch to just "/<userId>/lastSeen") are not specially handled
+// and are ignored — a documented limitation; in practice each presence write
+// replaces a user's whole entry.
+func applyPresenceEvent(state map[string]wireRTDBPresenceEntry, event string, d wireRTDBSSEData) {
+	empty := len(d.Data) == 0 || string(d.Data) == "null"
+	if d.Path == "/" {
+		if event != "put" {
+			if empty {
+				return
+			}
+			var patch map[string]json.RawMessage
+			if err := json.Unmarshal(d.Data, &patch); err != nil {
+				return
+			}
+			for k, raw := range patch {
+				if len(raw) == 0 || string(raw) == "null" {
+					delete(state, k)
+					continue
+				}
+				var v wireRTDBPresenceEntry
+				if err := json.Unmarshal(raw, &v); err != nil {
+					continue
+				}
+				sanitize.Strings(&v)
+				state[k] = v
+			}
+			return
+		}
+		for k := range state {
+			delete(state, k)
+		}
+		if empty {
+			return
+		}
+		var full map[string]wireRTDBPresenceEntry
+		if err := json.Unmarshal(d.Data, &full); err != nil {
+			return
+		}
+		for k, v := range full {
+			sanitize.Strings(&v)
+			state[k] = v
+		}
+		return
+	}
+	userID := strings.TrimPrefix(d.Path, "/")
+	if strings.ContainsRune(userID, '/') {
+		return // nested field patch — see doc comment above
+	}
+	if empty {
+		delete(state, userID)
+		return
+	}
+	var entry wireRTDBPresenceEntry
+	if err := json.Unmarshal(d.Data, &entry); err != nil {
+		return
+	}
+	sanitize.Strings(&entry)
+	state[userID] = entry
+}
+
+// filterFreshPresence converts state to the sorted-by-caller snapshot of
+// currently-online, non-stale users, per the docs' rule: online == true and
+// lastSeen newer than staleAfterMs.
+func filterFreshPresence(state map[string]wireRTDBPresenceEntry, staleAfterMs int) []model.RoomUser {
+	now := time.Now().UnixMilli()
+	out := make([]model.RoomUser, 0, len(state))
+	for userID, e := range state {
+		if !e.Online || now-int64(e.LastSeen) >= int64(staleAfterMs) {
+			continue
+		}
+		out = append(out, model.RoomUser{
+			UserID:      userID,
+			Username:    e.Username,
+			IsChatAdmin: e.IsChatAdmin,
+			LastSeen:    time.UnixMilli(int64(e.LastSeen)),
+		})
+	}
+	return out
+}
+
+// SubscribeRoomPresence opens a live RTDB SSE stream for roomID's presence
+// node. Unlike SubscribeRoom, presence entries mutate and expire in place, so
+// each receive is a full, filtered snapshot rather than a single incremental
+// event — the internal state map is re-filtered and re-sent both on every
+// RTDB event and on a periodic timer (an entry going stale produces no event
+// of its own). The channel is only ever sent the latest snapshot (older
+// pending ones are dropped) so a slow consumer never blocks the stream.
+//
+// initial seeds the merge state so a resubscribe (reconnect after a dropped
+// stream) doesn't render an empty panel until the first fresh snapshot
+// arrives — callers should pass the last known-good user list on reconnect,
+// or nil for a brand-new subscription. Seeded entries age out normally via
+// the existing staleAfterMs filter if they turn out to be gone.
+func (c *HTTPClient) SubscribeRoomPresence(ctx context.Context, roomID string, staleAfterMs int, initial []model.RoomUser) (<-chan []model.RoomUser, context.CancelFunc, error) {
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	sseEvents := r.Subscribe(ctx, "/chat_presence/"+roomID, nil)
+	out := make(chan []model.RoomUser, 1)
+	send := func(users []model.RoomUser) {
+		select {
+		case out <- users:
+		default:
+			select {
+			case <-out:
+			default:
+			}
+			select {
+			case out <- users:
+			case <-ctx.Done():
+			}
+		}
+	}
+	go func() {
+		defer close(out)
+		state := make(map[string]wireRTDBPresenceEntry, len(initial))
+		for _, u := range initial {
+			state[u.UserID] = wireRTDBPresenceEntry{
+				Username:    u.Username,
+				IsChatAdmin: u.IsChatAdmin,
+				Online:      true,
+				LastSeen:    float64(u.LastSeen.UnixMilli()),
+			}
+		}
+		if len(state) > 0 {
+			// Make the seeded (last known-good) list visible right away, rather
+			// than leaving the panel showing nothing until the first fresh
+			// event or ticker tick — that gap is what made a resubscribe look
+			// like a mass user drop.
+			send(filterFreshPresence(state, staleAfterMs))
+		}
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case ev, ok := <-sseEvents:
+				if !ok {
+					if c.isDebug() {
+						log.Printf("[chat_presence %s] stream channel closed", roomID)
+					}
+					return
+				}
+				if ev.Err != nil {
+					if c.isDebug() {
+						log.Printf("[chat_presence %s] stream error: %v", roomID, ev.Err)
+					}
+					return
+				}
+				if c.isDebug() {
+					log.Printf("[chat_presence %s] event=%q data=%s", roomID, ev.Event, ev.Data)
+				}
+				if ev.Event != "put" && ev.Event != "patch" {
+					continue
+				}
+				var d wireRTDBSSEData
+				if err := json.Unmarshal(ev.Data, &d); err != nil {
+					continue
+				}
+				applyPresenceEvent(state, ev.Event, d)
+				send(filterFreshPresence(state, staleAfterMs))
+			case <-ticker.C:
+				send(filterFreshPresence(state, staleAfterMs))
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
+}
+
 // --- Direct messages (C-Mail) ---
 
 // rtdbOrErr returns the RTDB client or an error if InitRTDB has not been called.
@@ -1610,6 +1912,7 @@ func (c *HTTPClient) rtdbOrErr() (*rtdb.Client, error) {
 
 // wireRTDBMessageToModel converts a Firebase DM message to the model type.
 func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
+	sanitize.Strings(&wm)
 	return model.Message{
 		ID:        id,
 		From:      model.User{ID: wm.SenderID, Username: wm.SenderUsername},
@@ -1621,6 +1924,7 @@ func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
 
 // wireRTDBCircMessageToModel converts a Firebase CIRC chatroom message to the model type.
 func wireRTDBCircMessageToModel(id string, wm wireRTDBCircMessage) model.Message {
+	sanitize.Strings(&wm)
 	return model.Message{
 		ID:          id,
 		From:        model.User{ID: wm.UserID, Username: wm.Username},
@@ -1644,6 +1948,7 @@ func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
 	}
 	out := make([]model.Conversation, len(wire))
 	for i, w := range wire {
+		sanitize.Strings(&w)
 		out[i] = model.Conversation{
 			ID:            w.ConversationID,
 			Participants:  []model.User{{ID: w.OtherUser.UserID, Username: w.OtherUser.Username}},
@@ -1672,15 +1977,21 @@ func (c *HTTPClient) GetMessages(conversationID string, limit int, before int64)
 	}
 	out := make([]model.Message, len(wire))
 	for i, w := range wire {
-		out[i] = model.Message{
-			ID:        w.ID,
-			From:      model.User{ID: w.SenderID, Username: w.SenderUsername},
-			Body:      w.Content,
-			CreatedAt: time.UnixMilli(w.Timestamp),
-			IsAction:  w.IsAction,
-		}
+		out[i] = wireCMailMessageToModel(w)
 	}
 	return out, nil
+}
+
+// wireCMailMessageToModel converts a REST C-Mail message to the model type.
+func wireCMailMessageToModel(w wireCMailMessage) model.Message {
+	sanitize.Strings(&w)
+	return model.Message{
+		ID:        w.ID,
+		From:      model.User{ID: w.SenderID, Username: w.SenderUsername},
+		Body:      w.Content,
+		CreatedAt: time.UnixMilli(w.Timestamp),
+		IsAction:  w.IsAction,
+	}
 }
 
 // SendMessage sends a C-Mail message via POST /v1/cmail/:id. Returns the
@@ -1768,6 +2079,168 @@ func (c *HTTPClient) SubscribeDMs(ctx context.Context, convID string) (<-chan mo
 			msgID := strings.TrimPrefix(d.Path, "/")
 			select {
 			case out <- wireRTDBMessageToModel(msgID, wm):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
+}
+
+// AnnounceTyping announces the caller is typing in conversationID via POST
+// /v1/cmail/:conversationId/typing. Returns the heartbeat cadence and
+// staleness window (both ms) the caller should honor.
+func (c *HTTPClient) AnnounceTyping(conversationID string) (heartbeatMs, staleAfterMs int, err error) {
+	env, err := c.doRequest("POST", "/v1/cmail/"+url.PathEscape(conversationID)+"/typing", nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	var data wireTypingResponse
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return 0, 0, err
+	}
+	return data.HeartbeatMs, data.StaleAfterMs, nil
+}
+
+// ClearTyping clears the caller's typing flag in conversationID immediately
+// via DELETE /v1/cmail/:conversationId/typing.
+func (c *HTTPClient) ClearTyping(conversationID string) error {
+	_, err := c.doRequest("DELETE", "/v1/cmail/"+url.PathEscape(conversationID)+"/typing", nil)
+	return err
+}
+
+// applyTypingEvent merges one RTDB event into state, keyed by userId. Mirrors
+// applyPresenceEvent's "put"-vs-"patch" full-replace vs multi-key-merge
+// handling at "/" (see that function's doc comment for why the two must be
+// told apart) and its "/<userId>" single-entry handling — kept as a separate
+// function since wireRTDBTypingEntry's shape (typing+timestamp) differs
+// enough from wireRTDBPresenceEntry (online+lastSeen) that sharing code would
+// cost more than the ~15 lines it'd save.
+func applyTypingEvent(state map[string]wireRTDBTypingEntry, event string, d wireRTDBSSEData) {
+	empty := len(d.Data) == 0 || string(d.Data) == "null"
+	if d.Path == "/" {
+		if event != "put" {
+			if empty {
+				return
+			}
+			var patch map[string]json.RawMessage
+			if err := json.Unmarshal(d.Data, &patch); err != nil {
+				return
+			}
+			for k, raw := range patch {
+				if len(raw) == 0 || string(raw) == "null" {
+					delete(state, k)
+					continue
+				}
+				var v wireRTDBTypingEntry
+				if err := json.Unmarshal(raw, &v); err != nil {
+					continue
+				}
+				sanitize.Strings(&v)
+				state[k] = v
+			}
+			return
+		}
+		for k := range state {
+			delete(state, k)
+		}
+		if empty {
+			return
+		}
+		var full map[string]wireRTDBTypingEntry
+		if err := json.Unmarshal(d.Data, &full); err != nil {
+			return
+		}
+		for k, v := range full {
+			sanitize.Strings(&v)
+			state[k] = v
+		}
+		return
+	}
+	userID := strings.TrimPrefix(d.Path, "/")
+	if strings.ContainsRune(userID, '/') {
+		return // nested field patch — see doc comment above
+	}
+	if empty {
+		delete(state, userID)
+		return
+	}
+	var entry wireRTDBTypingEntry
+	if err := json.Unmarshal(d.Data, &entry); err != nil {
+		return
+	}
+	sanitize.Strings(&entry)
+	state[userID] = entry
+}
+
+// filterFreshTyping converts state to the snapshot of users currently typing
+// and not yet stale: typing == true and timestamp newer than staleAfterMs.
+func filterFreshTyping(state map[string]wireRTDBTypingEntry, staleAfterMs int) []model.TypingUser {
+	now := time.Now().UnixMilli()
+	out := make([]model.TypingUser, 0, len(state))
+	for userID, e := range state {
+		if !e.Typing || now-int64(e.Timestamp) >= int64(staleAfterMs) {
+			continue
+		}
+		out = append(out, model.TypingUser{
+			UserID:    userID,
+			Username:  e.Username,
+			Timestamp: time.UnixMilli(int64(e.Timestamp)),
+		})
+	}
+	return out
+}
+
+// SubscribeDMTyping opens a live RTDB SSE stream for conversationID's typing
+// node. Unlike SubscribeDMs, typing entries mutate and expire in place, so
+// each receive is a full, filtered snapshot rather than a single incremental
+// event — the internal state map is re-filtered and re-sent both on every
+// RTDB event and on a periodic timer (an entry going stale produces no event
+// of its own), mirroring SubscribeRoomPresence.
+func (c *HTTPClient) SubscribeDMTyping(ctx context.Context, conversationID string, staleAfterMs int) (<-chan []model.TypingUser, context.CancelFunc, error) {
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	sseEvents := r.Subscribe(ctx, "/dm_presence/"+conversationID, nil)
+	out := make(chan []model.TypingUser, 1)
+	send := func(users []model.TypingUser) {
+		select {
+		case out <- users:
+		default:
+			select {
+			case <-out:
+			default:
+			}
+			select {
+			case out <- users:
+			case <-ctx.Done():
+			}
+		}
+	}
+	go func() {
+		defer close(out)
+		state := map[string]wireRTDBTypingEntry{}
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case ev, ok := <-sseEvents:
+				if !ok || ev.Err != nil {
+					return
+				}
+				if ev.Event != "put" && ev.Event != "patch" {
+					continue
+				}
+				var d wireRTDBSSEData
+				if err := json.Unmarshal(ev.Data, &d); err != nil {
+					continue
+				}
+				applyTypingEvent(state, ev.Event, d)
+				send(filterFreshTyping(state, staleAfterMs))
+			case <-ticker.C:
+				send(filterFreshTyping(state, staleAfterMs))
 			case <-ctx.Done():
 				return
 			}

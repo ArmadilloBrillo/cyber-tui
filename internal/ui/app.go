@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"math"
 	"math/rand"
 	neturl "net/url"
@@ -16,6 +17,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
@@ -121,6 +123,17 @@ type App struct {
 	urlPickerItems  []string
 	urlPickerCursor int
 
+	// imageCarousel state — populated when an image is opened from a picker
+	// containing more than one image, letting left/right cycle between them
+	// without closing the image modal. Nil imageCarouselItems means a plain
+	// single-image view (existing behavior, arrows never shown).
+	imageCarouselItems []string
+	imageCarouselIndex int
+	// imageCache holds decoded images already fetched during the current
+	// modal's lifetime, keyed by URL, so cycling back to one skips the
+	// network fetch. Cleared whenever the modal closes.
+	imageCache map[string]image.Image
+
 	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
 	// loc is the parsed *time.Location derived from timezone.
 	timezone string
@@ -150,6 +163,14 @@ type App struct {
 	// outermost level (blurred query, nothing left to peel back). Set whenever
 	// '/' switches into Search from somewhere else.
 	searchReturn screen
+
+	// cmailReturn is the screen to go back to when ESC is pressed in a
+	// deep-linked C-Mail conversation (see CMailModel.canGoBack).
+	cmailReturn screen
+
+	// chatroomsReturn is the screen to go back to when ESC is pressed in a
+	// deep-linked Chatrooms room (see ChatroomsModel.canGoBack).
+	chatroomsReturn screen
 
 	// pendingReplyID is set when navigating to PostDetail from a reply/thread_reply
 	// notification. After replies load, PostDetail scrolls to this reply, then it is cleared.
@@ -182,7 +203,8 @@ type App struct {
 	imageModalEncoded  string
 	imageModalCols     int
 	imageModalRows     int
-	imageNeedsCleanup  bool // true for one frame after modal closes, to delete Kitty placement
+	imageNeedsCleanup  bool // true after modal closes until a delete-placement frame reaches the terminal
+	imageFetchGen      int  // bumped on every fetch and on close; stale imageFetchedMsg results are dropped
 
 	// ephemeral marks an SSH-hosted session whose state must never be read from
 	// or written to the host operator's config file.
@@ -333,12 +355,6 @@ func (a App) Init() tea.Cmd {
 // handled first and always falls through to delegateUpdate so the active
 // screen can also react to it.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// imageNeedsCleanup is a one-render-cycle flag: it is set true by the
-	// keypress that closes the modal and cleared here at the very start of the
-	// next Update call. This guarantees the cleanup frame is rendered before
-	// the flag is cleared, with no goroutine race.
-	a.imageNeedsCleanup = false
-
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
 		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
@@ -351,11 +367,24 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.notifyText = ""
 		a.notifyGen++
 	}
-	// Any keypress closes the image modal. Consume the key so it doesn't
+	// Left/right cycle through a picker-opened image carousel without closing
+	// the modal. Any other keypress closes it — consume the key so it doesn't
 	// accidentally trigger another action while the modal is visible.
-	if _, ok := msg.(tea.KeyMsg); ok && a.imageModalOpen {
+	if km, ok := msg.(tea.KeyMsg); ok && a.imageModalOpen {
+		if len(a.imageCarouselItems) > 1 {
+			switch km.String() {
+			case "left":
+				return a.cycleImageCarousel(-1)
+			case "right":
+				return a.cycleImageCarousel(+1)
+			}
+		}
 		a.imageModalOpen = false
 		a.imageNeedsCleanup = (a.graphicsProtocol == imgview.ProtocolKitty)
+		a.imageCarouselItems = nil
+		a.imageCarouselIndex = 0
+		a.imageFetchGen++ // invalidate anything still in flight
+		a.imageCache = nil
 		return a, nil
 	}
 	if a2, cmd, ok := a.handleKeys(msg); ok {
@@ -505,15 +534,37 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		return model.(App), cmd, true
 	}
 	// When a screen has a focused text input, let it consume all keys.
-	// ctrl+c is kept as a hard escape hatch; ctrl+o reaches the open-link
-	// shortcut too, since plain 'o' is unreachable while chatting (CIRC/
-	// C-Mail's compose input is focused for the entire detail view, not just
-	// a transient sub-mode like Feed's reply box).
+	// ctrl+c is kept as a hard escape hatch; a handful of other global
+	// shortcuts get a ctrl-prefixed twin that reaches through too, since
+	// their bare key is unreachable while chatting (CIRC/C-Mail's compose
+	// input is focused for the entire detail view, not just a transient
+	// sub-mode like Feed's reply box): ctrl+o (open link), ctrl+q (quit),
+	// ctrl+t (theme picker), ctrl+left/right (cycle tabs). ctrl+/ (search)
+	// was tried and removed — the byte a physical ctrl+/ keystroke sends is
+	// inconsistent across terminals (0x1F on most, a literal NUL on e.g. Git
+	// Bash/MinTTY, indistinguishable there from ctrl+space/ctrl+2/ctrl+@), so
+	// there's no reliable encoding to match on.
 	if a.activeScreenHasFocusedInput() {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
 		}
-		if m.String() != "ctrl+o" {
+		// A backgrounded Circ room resumes detail mode (and its "always
+		// focused" compose input, see ChatroomsModel.InputFocused) the
+		// instant you tab back into it — so plain left/right otherwise gets
+		// captured into a box you never asked to type into, forcing
+		// ctrl+left/right for what was plain left/right on every other tab a
+		// moment ago. An empty compose box has nothing for left/right to do
+		// anyway, so let it fall through to tab-cycling in that case only;
+		// once there's text (typed just now, or a draft left over from
+		// before backgrounding), left/right goes back to normal cursor
+		// movement and ctrl+left/right remains the way out, same as today.
+		bareArrowEscapesEmptyCompose := (m.String() == "left" || m.String() == "right") &&
+			a.active == screenChatrooms && a.chatrooms.ComposeEmpty()
+		switch {
+		case m.String() == "ctrl+o", m.String() == "ctrl+q", m.String() == "ctrl+t",
+			m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
+			// fall through to the global switch below
+		default:
 			return a, nil, false // fall through to delegateUpdate
 		}
 	}
@@ -546,7 +597,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 	}
 	switch m.String() {
-	case "t":
+	case "t", "ctrl+t":
 		if a.active != screenLogin {
 			a.themePickerOpen = true
 			a.themePickerOrig = theme.CurrentName()
@@ -585,12 +636,12 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.searchReturn = a.active
 			}
 			a.cmail = a.cmail.CancelSubscription()
-			a.chatrooms = a.chatrooms.CancelSubscription()
+			a.chatrooms = a.chatrooms.SetFocused(false)
 			a.active = screenSearch
 			a.search = a.search.FocusQuery()
 			return a, nil, true
 		}
-	case "ctrl+c", "q":
+	case "ctrl+c", "q", "ctrl+q":
 		if a.active != screenLogin {
 			return a, tea.Quit, true
 		}
@@ -723,6 +774,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadRepliesCmd(msg.postID), true
 	case screens.BackToFeedMsg:
 		a.active = a.postDetailReturn
+		a.postDetail = a.postDetail.Close()
 		return a, nil, true
 	case screens.ShowUserProfileMsg:
 		if a.active != screenPostDetail {
@@ -750,7 +802,21 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case roomsLoadedMsg:
 		a.chatrooms = a.chatrooms.SetRooms(msg.rooms)
-		return a, nil, true
+		var cmd tea.Cmd
+		a.chatrooms, cmd = a.chatrooms.OpenPendingRoom()
+		return a, cmd, true
+	case screens.OpenRoomMsg:
+		// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
+		if a.polledUnreadCount > 0 {
+			a.polledUnreadCount--
+		}
+		a.chatroomsReturn = a.active
+		a.chatrooms = a.chatrooms.SetPendingRoomSlug(msg.RoomSlug)
+		// activateScreen resets canGoBack for ordinary tab/leader entry into
+		// Chatrooms, so it must be set true *after* that call, not before.
+		a, activateCmd := activateScreen(a, screenChatrooms)
+		a.chatrooms = a.chatrooms.SetCanGoBack(true)
+		return a, tea.Batch(a.markNotifReadCmd(msg.NotifID), activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
 	case screens.RoomOpenedMsg:
@@ -759,8 +825,21 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
 	case roomCommandReplyMsg:
-		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, msg.reply)
+		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, sanitize.Strip(msg.reply))
 		return a, nil, true
+	case screens.LeaveChatroomsMsg:
+		a.active = a.chatroomsReturn
+		return a, nil, true
+	default:
+		// Keep the open room's RTDB subscription (and its reconnect/heartbeat
+		// chains) alive while another tab is active — see SetFocused and
+		// IsRoomStreamMsg. When Chatrooms *is* active, delegateUpdate already
+		// routes these the normal way, so this only fires while backgrounded.
+		if a.active != screenChatrooms && screens.IsRoomStreamMsg(msg) {
+			var cmd tea.Cmd
+			a.chatrooms, cmd = a.chatrooms.Update(msg)
+			return a, cmd, true
+		}
 	}
 	return a, nil, false
 }
@@ -781,6 +860,8 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		if msg.Username == "" || msg.Username == a.currentUser.Username {
 			return a, nil, true
 		}
+		a.cmailReturn = a.active
+		a.cmail = a.cmail.SetCanGoBack(true)
 		return a, a.startConversationCmd(msg.Username), true
 	case conversationStartedMsg:
 		a.active = screenCMail
@@ -795,7 +876,10 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
 	case cmailCommandReplyMsg:
-		a.cmail = a.cmail.AppendSystemMessage(msg.convID, msg.reply)
+		a.cmail = a.cmail.AppendSystemMessage(msg.convID, sanitize.Strip(msg.reply))
+		return a, nil, true
+	case screens.LeaveCMailMsg:
+		a.active = a.cmailReturn
 		return a, nil, true
 	}
 	return a, nil, false
@@ -1714,16 +1798,6 @@ func friendlyErr(err error) string {
 	return err.Error()
 }
 
-// tabIndex returns the index of the currently active screen within menuTabs.
-func (a App) tabIndex() int { return tabIndexOf(a) }
-
-// navigateTab moves the active tab by delta (-1 or +1), wrapping at the ends.
-func (a *App) navigateTab(delta int) tea.Cmd {
-	var cmd tea.Cmd
-	*a, cmd = navigateTabBy(*a, delta)
-	return cmd
-}
-
 func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	*a, cmd = a.layout.DelegateUpdate(msg, *a)
@@ -1865,12 +1939,23 @@ func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 	if a.ephemeral {
 		return a.notify(notifyInfo, "Opening links is disabled in SSH sessions")
 	}
-	if urlutil.IsImageURL(rawURL) &&
-		a.graphicsProtocol != imgview.ProtocolNone &&
-		a.imageViewer != "browser" {
+	if a.canRenderImageInline(rawURL) {
 		return a.openImageInTerminal(rawURL)
 	}
 	return a, openExternalURL(rawURL)
+}
+
+// canRenderImageInline reports whether u should be displayed in the inline
+// terminal image viewer rather than the OS browser: it must look like an
+// image, the terminal must support a graphics protocol, the user's image
+// viewer setting must not be "browser", and the session must not be an
+// ephemeral SSH-hosted one (which must never have the host fetch a
+// remote-chosen URL — see the SSRF guard in routeURL).
+func (a App) canRenderImageInline(u string) bool {
+	return !a.ephemeral &&
+		urlutil.IsImageURL(u) &&
+		a.graphicsProtocol != imgview.ProtocolNone &&
+		a.imageViewer != "browser"
 }
 
 // openExternalURL opens u in the OS default browser as a fire-and-forget command.
@@ -1886,41 +1971,82 @@ func openExternalURL(u string) tea.Cmd {
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
 	displayCols := a.width * 4 / 5
+	displayRows := a.height*4/5 - 2 // reserve 2 rows for the modal border
+	if displayRows < 1 {
+		displayRows = 1
+	}
+	a.imageFetchGen++
+	gen := a.imageFetchGen
+	cached, hit := a.imageCache[rawURL]
 	return a, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		img, err := imgview.Fetch(ctx, rawURL)
-		if err != nil {
-			return imageFetchedMsg{rawURL: rawURL, err: err}
+		img := cached
+		if !hit {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			var err error
+			img, err = imgview.Fetch(ctx, rawURL)
+			if err != nil {
+				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+			}
 		}
 		switch proto {
 		case imgview.ProtocolKitty:
-			encoded, cols, rows := imgview.EncodeKitty(img, displayCols)
-			return imageFetchedMsg{rawURL: rawURL, encoded: encoded, cols: cols, rows: rows}
+			encoded, cols, rows := imgview.EncodeKitty(img, displayCols, displayRows)
+			return imageFetchedMsg{rawURL: rawURL, gen: gen, decoded: img, encoded: encoded, cols: cols, rows: rows}
 		case imgview.ProtocolITerm2:
-			encoded, cols, rows, err := imgview.EncodeITerm2(img, displayCols)
-			return imageFetchedMsg{rawURL: rawURL, encoded: encoded, cols: cols, rows: rows, err: err}
+			encoded, cols, rows, err := imgview.EncodeITerm2(img, displayCols, displayRows)
+			return imageFetchedMsg{rawURL: rawURL, gen: gen, decoded: img, encoded: encoded, cols: cols, rows: rows, err: err}
 		default:
-			return imageFetchedMsg{rawURL: rawURL, err: fmt.Errorf("no graphics protocol")}
+			return imageFetchedMsg{rawURL: rawURL, gen: gen, err: fmt.Errorf("no graphics protocol")}
 		}
 	}
 }
 
 // handleImageViewer processes image fetch results. On success it opens the
-// inline modal overlay; on failure it silently falls back to the browser.
+// inline modal overlay; on failure it falls back to the browser, unless a
+// carousel is already showing an image, in which case it just notifies and
+// leaves the current image displayed rather than surprising the user with a
+// browser tab mid-cycle.
 func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case imageFetchedMsg:
+		if m.gen != a.imageFetchGen {
+			return a, nil, true // superseded by a later cycle or a close
+		}
 		if m.err != nil {
+			if a.imageModalOpen {
+				a2, cmd := a.notify(notifyInfo, "couldn't load image")
+				return a2, cmd, true
+			}
 			return a, openExternalURL(m.rawURL), true
 		}
 		a.imageModalEncoded = m.encoded
 		a.imageModalCols = m.cols
 		a.imageModalRows = m.rows
 		a.imageModalOpen = true
+		a.imageNeedsCleanup = false
+		if a.imageCache == nil {
+			a.imageCache = make(map[string]image.Image)
+		}
+		a.imageCache[m.rawURL] = m.decoded
+		if a.graphicsProtocol == imgview.ProtocolITerm2 && len(a.imageCarouselItems) > 1 {
+			// iTerm2/WezTerm has no Kitty-style delete-all self-heal; force a
+			// full repaint so a cycled-to smaller image can't leave stray
+			// pixels from the previous one in rows the new frame skips.
+			return a, tea.ClearScreen, true
+		}
 		return a, nil, true
 	}
 	return a, nil, false
+}
+
+// cycleImageCarousel moves to the next/prev image in imageCarouselItems
+// (wrapping around) and starts fetching it. The currently displayed image
+// stays on screen until the new one arrives.
+func (a App) cycleImageCarousel(delta int) (App, tea.Cmd) {
+	n := len(a.imageCarouselItems)
+	a.imageCarouselIndex = (a.imageCarouselIndex + delta + n) % n
+	return a.openImageInTerminal(a.imageCarouselItems[a.imageCarouselIndex])
 }
 
 // handleURLPickerKey processes keyboard input while the URL picker overlay is open.
@@ -1933,6 +2059,25 @@ func (a App) handleURLPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.urlPickerCursor = (a.urlPickerCursor + 1) % n
 	case "enter":
 		u := a.urlPickerItems[a.urlPickerCursor]
+		if a.canRenderImageInline(u) {
+			var images []string
+			idx := 0
+			for _, item := range a.urlPickerItems {
+				if a.canRenderImageInline(item) {
+					if item == u {
+						idx = len(images)
+					}
+					images = append(images, item)
+				}
+			}
+			a.urlPickerOpen = false
+			a.urlPickerItems = nil
+			if len(images) > 1 {
+				a.imageCarouselItems = images
+				a.imageCarouselIndex = idx
+			}
+			return a.openImageInTerminal(u)
+		}
 		a.urlPickerOpen = false
 		a.urlPickerItems = nil
 		return a.routeURL(u)
@@ -2110,6 +2255,8 @@ type notifPostLoadErrMsg struct{ err error }
 // is retained so a failed decode can fall back to opening the browser.
 type imageFetchedMsg struct {
 	rawURL  string
+	gen     int
+	decoded image.Image
 	encoded string
 	cols    int
 	rows    int
@@ -2638,11 +2785,13 @@ func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
 func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case notifsLoadedMsg:
+		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
 		a.notifications = a.notifications.SetNotifs(msg.notifs, msg.cursor)
-		return a, nil, true
+		return a, cmd, true
 	case notifsPageMsg:
+		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
 		a.notifications = a.notifications.AppendNotifs(msg.notifs, msg.cursor)
-		return a, nil, true
+		return a, cmd, true
 	case screens.RefreshNotifsMsg:
 		return a, a.loadNotifsCmd(), true
 	case screens.LoadMoreNotifsMsg:
@@ -2701,6 +2850,27 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	}
 	return a, nil, false
+}
+
+// suppressActiveRoomMentions marks read (locally + via API) any unread
+// chat_mention notifications for the cIRC room the user currently has open,
+// so being mentioned in a room you're already reading doesn't also notify.
+func (a App) suppressActiveRoomMentions(notifs []model.Notification) (App, tea.Cmd) {
+	roomSlug := a.chatrooms.ActiveRoomSlug()
+	if a.active != screenChatrooms || roomSlug == "" {
+		return a, nil
+	}
+	var cmds []tea.Cmd
+	for i, n := range notifs {
+		if n.Type == "chat_mention" && !n.Read && n.RoomSlug == roomSlug {
+			notifs[i].Read = true
+			if a.polledUnreadCount > 0 {
+				a.polledUnreadCount--
+			}
+			cmds = append(cmds, a.markNotifReadCmd(n.ID))
+		}
+	}
+	return a, tea.Batch(cmds...)
 }
 
 func (a *App) loadNotifsCmd() tea.Cmd {

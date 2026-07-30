@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
+	"net"
 	"net/url"
 	"os"
 
@@ -59,6 +61,10 @@ func main() {
 
 	// SSH server mode (experimental)
 	if cfg.SSHListenAddr != "" {
+		if err := validateSSHAddr(cfg.SSHListenAddr, cfg.AllowRemoteSSH); err != nil {
+			fmt.Fprintf(os.Stderr, "config: %v\n", err)
+			os.Exit(1)
+		}
 		keyPath := cfg.SSHHostKeyPath
 		if keyPath == "" {
 			keyPath = "./ssh_host_key"
@@ -83,10 +89,38 @@ func main() {
 	} else if cfg.Email != "" {
 		app = app.WithSavedEmail(cfg.Email)
 	}
-	p := tea.NewProgram(
-		app,
-		tea.WithAltScreen(),
-	)
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	// CYBERSPACE_DEBUG_KEYS logs every raw tea.KeyMsg (key + KeyType + runes) to
+	// cyber-tui-keys.log, to diagnose terminal-specific keybinding quirks (e.g.
+	// a terminal not sending the expected byte for a given ctrl-combo) without
+	// having to instrument app logic — see docs/00-project-reference.md.
+	if os.Getenv("CYBERSPACE_DEBUG_KEYS") != "" {
+		logFile, err := tea.LogToFile("cyber-tui-keys.log", "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "CYBERSPACE_DEBUG_KEYS: %v\n", err)
+		} else {
+			defer logFile.Close()
+			opts = append(opts, tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+				if km, ok := msg.(tea.KeyMsg); ok {
+					log.Printf("key: %q type=%v runes=%v alt=%v", km.String(), km.Type, km.Runes, km.Alt)
+				}
+				return msg // pure observer — never alters the message
+			}))
+		}
+	}
+	// cfg.Debug ("debug": true in ~/.cyber-tui.json) enables verbose RTDB
+	// output (api.HTTPClient.isDebug) — redirect the standard log package to
+	// a file for the run so that output, wherever it's logged from, never
+	// hits the terminal and corrupts the alt-screen display.
+	if cfg.Debug {
+		logFile, err := tea.LogToFile("cyber-tui-debug.log", "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "debug: %v\n", err)
+		} else {
+			defer logFile.Close()
+		}
+	}
+	p := tea.NewProgram(app, opts...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -116,5 +150,27 @@ func validateBaseURL(raw string, allowInsecure bool) error {
 			"Use https, or set allowInsecureApi: true for a non-loopback dev server", raw)
 	default:
 		return fmt.Errorf("apiBaseURL %q must use http or https", raw)
+	}
+}
+
+// validateSSHAddr rejects a non-loopback SSH listen address unless
+// allowRemote is set. SSH server mode performs no authentication, so an
+// address like ":2222" (all interfaces) would otherwise expose a full,
+// unauthenticated session to anyone who can reach it from a single
+// misconfigured field.
+func validateSSHAddr(addr string, allowRemote bool) error {
+	if addr == "" || allowRemote {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid sshListenAddr %q: %w", addr, err)
+	}
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return nil
+	default:
+		return fmt.Errorf("sshListenAddr %q binds a non-loopback address; SSH server mode is unauthenticated. "+
+			"Use a loopback address, or set allowRemoteSsh: true to expose it intentionally", addr)
 	}
 }

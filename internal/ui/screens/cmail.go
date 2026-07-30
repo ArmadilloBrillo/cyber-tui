@@ -26,15 +26,35 @@ const (
 
 // Rows consumed by the detail view's header and input box (outside the history viewport).
 const (
-	cmailDetailHeaderRows = 1 // "@otheruser" header
+	cmailDetailHeaderRows = 2 // "@otheruser" header + divider rule
 	cmailInputRows        = 3 // bordered textinput: 1 content + 2 border rows
 	cmailDetailChrome     = cmailDetailHeaderRows + cmailInputRows
+)
+
+// Typing-indicator cadence. dmTypingDefaultStaleAfterMs is used for the read
+// subscription (showing the other participant typing) since we open it
+// before ever announcing our own typing — our own re-announce heartbeat
+// instead uses whatever AnnounceTyping's response returns, never hard-coded.
+const (
+	dmTypingDefaultStaleAfterMs = 9000
+	dmTypingIdleThreshold       = 2500 * time.Millisecond
+	dmTypingIdleCheckInterval   = 500 * time.Millisecond
+	dmTypingAnimInterval        = 500 * time.Millisecond // one dot per tick; 2s full "" → "." → ".." → "..." cycle
 )
 
 // dmSubscription holds the live RTDB channel and its cancellation function.
 type dmSubscription struct {
 	ConvID string
 	C      <-chan model.Message
+	cancel context.CancelFunc
+}
+
+// dmTypingSubscription holds the live typing-presence RTDB channel and its
+// cancellation function. Each receive is a full, filtered snapshot of who's
+// currently typing, not a single incremental event (see SubscribeDMTyping).
+type dmTypingSubscription struct {
+	ConvID string
+	C      <-chan []model.TypingUser
 	cancel context.CancelFunc
 }
 
@@ -65,6 +85,23 @@ type cmailOlderMsgsLoadedMsg struct {
 }
 type cmailErrMsg struct{ err error }
 
+// Typing message types — unexported, handled entirely within CMailModel.
+// Mirror the message-stream lifecycle types above.
+type typingAnnouncedMsg struct {
+	convID       string
+	heartbeatMs  int
+	staleAfterMs int
+}
+type typingHeartbeatTickMsg struct{ convID string }
+type typingIdleCheckMsg struct{ convID string }
+type typingAnimTickMsg struct{ convID string }
+type dmTypingSubscribedMsg struct {
+	convID string
+	sub    *dmTypingSubscription
+}
+type dmTypingReceivedMsg struct{ users []model.TypingUser }
+type dmTypingStreamClosedMsg struct{ convID string }
+
 // CMailReconnectedMsg is emitted after the live RTDB stream is successfully
 // re-established following an idToken expiry. App uses it to show a toast.
 type CMailReconnectedMsg struct{}
@@ -77,6 +114,18 @@ func waitForDM(sub *dmSubscription) tea.Cmd {
 			return dmStreamClosedMsg{convID: sub.ConvID}
 		}
 		return dmReceivedMsg{msg: msg}
+	}
+}
+
+// waitForDMTyping blocks on the typing-presence subscription channel and
+// returns the next snapshot as a tea.Cmd.
+func waitForDMTyping(sub *dmTypingSubscription) tea.Cmd {
+	return func() tea.Msg {
+		users, ok := <-sub.C
+		if !ok {
+			return dmTypingStreamClosedMsg{convID: sub.ConvID}
+		}
+		return dmTypingReceivedMsg{users: users}
 	}
 }
 
@@ -100,6 +149,14 @@ type CMailModel struct {
 	loc          *time.Location // timezone for timestamp display; nil = UTC
 	timeDisplayFormat string    // "datetime", "relative", "unix", or "swatch"
 
+	// canGoBack is true when the active conversation was opened via a
+	// deep link (e.g. 'c' on a post, or a chat_mention/dm_message
+	// notification) rather than by switching to this tab normally. When
+	// true, ESC in detail mode leaves C-Mail entirely instead of dropping
+	// to the conversation list. Reset to false by activateScreen whenever
+	// C-Mail is entered through ordinary tab navigation.
+	canGoBack bool
+
 	// DM subscription state — managed entirely within CMailModel.
 	client       api.Client
 	dmSub        *dmSubscription
@@ -116,6 +173,15 @@ type CMailModel struct {
 	// History pagination state for the active conversation, reset on open.
 	historyExhausted bool // true once an older-page fetch returns zero messages
 	loadingHistory   bool // guards re-firing while an older-page fetch is in flight
+
+	// Typing-indicator state: the read side (subscription to the other
+	// participant's typing status) and the write side (our own announce).
+	typingSub         *dmTypingSubscription
+	typingUsers       []model.TypingUser // latest fresh snapshot; used to render "is typing..."
+	announcingTyping  bool               // true from the first keystroke's POST until send/idle-clear
+	lastKeystrokeAt   time.Time          // updated on every keystroke; idle-check compares against this
+	typingHeartbeatMs int                // from AnnounceTyping's response; drives our own re-announce cadence
+	typingAnimFrame   int                // cycles the indicator's animated dot count; free-runs while a conversation is open
 }
 
 // SendCMailMsg is emitted when the user sends a C-Mail message.
@@ -142,12 +208,16 @@ func NewCMailModel(currentUser string, client api.Client) CMailModel {
 	}
 }
 
-// cancelDMSub stops any active RTDB subscription and any in-flight reconnect
-// retry sequence, and clears subscription state.
+// cancelDMSub stops any active RTDB subscription (message and typing) and
+// any in-flight reconnect retry sequence, and clears subscription state.
 func (m CMailModel) cancelDMSub() CMailModel {
 	if m.dmSub != nil {
 		m.dmSub.cancel()
 		m.dmSub = nil
+	}
+	if m.typingSub != nil {
+		m.typingSub.cancel()
+		m.typingSub = nil
 	}
 	if m.reconnectCancel != nil {
 		m.reconnectCancel()
@@ -157,6 +227,10 @@ func (m CMailModel) cancelDMSub() CMailModel {
 	m.reconnectFailed = false
 	m.reconnectAttempt = 0
 	m.activeConvID = ""
+	m.typingUsers = nil
+	m.announcingTyping = false
+	m.typingHeartbeatMs = 0
+	m.typingAnimFrame = 0
 	return m
 }
 
@@ -176,6 +250,92 @@ func (m CMailModel) openDMSubscriptionCmd(convID string) tea.Cmd {
 			return cmailErrMsg{err}
 		}
 		return dmSubscribedMsg{convID: convID, sub: &dmSubscription{ConvID: convID, C: ch, cancel: cancel}}
+	}
+}
+
+// announceTypingCmd announces that the caller is typing in convID.
+func (m CMailModel) announceTypingCmd(convID string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		heartbeatMs, staleAfterMs, err := client.AnnounceTyping(convID)
+		if err != nil {
+			return nil // typing is supplementary; a failed announce just means no indicator shown to the peer
+		}
+		return typingAnnouncedMsg{convID: convID, heartbeatMs: heartbeatMs, staleAfterMs: staleAfterMs}
+	}
+}
+
+// sendTypingHeartbeatCmd re-announces typing for convID as a best-effort
+// background heartbeat; the result is discarded (failures fail silently,
+// matching typing's supplementary status).
+func (m CMailModel) sendTypingHeartbeatCmd(convID string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client != nil {
+			_, _, _ = client.AnnounceTyping(convID)
+		}
+		return nil
+	}
+}
+
+// scheduleTypingHeartbeatCmd self-reschedules a heartbeat tick every
+// heartbeatMs, the same self-rescheduling tea.Tick shape as chatrooms.go's
+// scheduleHeartbeatCmd.
+func scheduleTypingHeartbeatCmd(convID string, heartbeatMs int) tea.Cmd {
+	return tea.Tick(time.Duration(heartbeatMs)*time.Millisecond, func(time.Time) tea.Msg {
+		return typingHeartbeatTickMsg{convID: convID}
+	})
+}
+
+// scheduleTypingIdleCheckCmd waits dmTypingIdleCheckInterval, then emits a
+// typingIdleCheckMsg so Update can decide whether the input has gone idle
+// long enough (dmTypingIdleThreshold) to clear the typing flag.
+func scheduleTypingIdleCheckCmd(convID string) tea.Cmd {
+	return tea.Tick(dmTypingIdleCheckInterval, func(time.Time) tea.Msg {
+		return typingIdleCheckMsg{convID: convID}
+	})
+}
+
+// scheduleTypingAnimCmd self-reschedules the indicator's dot-animation tick
+// every dmTypingAnimInterval. Free-runs for as long as a conversation is
+// open, independent of whether anyone is actually typing — same always-on
+// shape as this screen's textinput.Blink cursor animation.
+func scheduleTypingAnimCmd(convID string) tea.Cmd {
+	return tea.Tick(dmTypingAnimInterval, func(time.Time) tea.Msg {
+		return typingAnimTickMsg{convID: convID}
+	})
+}
+
+// clearTypingCmd sends a best-effort explicit clear; the result is discarded
+// (the peer's view corrects itself via staleAfterMs expiry even if this
+// fails or is never sent).
+func clearTypingCmd(client api.Client, convID string) tea.Cmd {
+	return func() tea.Msg {
+		if client != nil {
+			_ = client.ClearTyping(convID)
+		}
+		return nil
+	}
+}
+
+// openTypingSubscriptionCmd opens the dm_presence read stream using the
+// fixed, documented staleAfterMs (dmTypingDefaultStaleAfterMs) rather than a
+// server-negotiated value — this subscribes before the caller necessarily
+// calls AnnounceTyping themselves (they may just be reading).
+func (m CMailModel) openTypingSubscriptionCmd(convID string) tea.Cmd {
+	client := m.client
+	return func() tea.Msg {
+		if client == nil {
+			return nil
+		}
+		ch, cancel, err := client.SubscribeDMTyping(context.Background(), convID, dmTypingDefaultStaleAfterMs)
+		if err != nil {
+			return nil
+		}
+		return dmTypingSubscribedMsg{convID: convID, sub: &dmTypingSubscription{ConvID: convID, C: ch, cancel: cancel}}
 	}
 }
 
@@ -256,6 +416,24 @@ func (m CMailModel) SetConversations(convs []model.Conversation) CMailModel {
 	return m
 }
 
+// SetCanGoBack marks whether the active conversation was reached via a deep
+// link, which determines whether ESC in detail mode leaves C-Mail entirely
+// (see canGoBack field doc).
+func (m CMailModel) SetCanGoBack(v bool) CMailModel {
+	m.canGoBack = v
+	return m
+}
+
+// ResetToList clears any deep-link flag and drops back to the conversation
+// list, for ordinary tab navigation into C-Mail that may still have a
+// deep-linked conversation open (SetCanGoBack(false) alone left mode stuck
+// on detail).
+func (m CMailModel) ResetToList() CMailModel {
+	m.canGoBack = false
+	m.mode = cmailModeList
+	return m
+}
+
 // SetActiveConversation opens a specific conversation (used by external callers).
 // Cancels any existing DM subscription and sets activeConvID so that the
 // dmSubscribedMsg / cmailMsgsLoadedMsg handlers accept the new conversation's results.
@@ -294,7 +472,12 @@ func (m CMailModel) TotalUnread() int {
 // ConvOpenCmds returns the batch command to load message history and open the
 // live RTDB subscription for convID. Call after SetActiveConversation.
 func (m CMailModel) ConvOpenCmds(convID string) tea.Cmd {
-	return tea.Batch(m.loadConvMessagesCmd(convID), m.openDMSubscriptionCmd(convID))
+	return tea.Batch(
+		m.loadConvMessagesCmd(convID),
+		m.openDMSubscriptionCmd(convID),
+		m.openTypingSubscriptionCmd(convID),
+		scheduleTypingAnimCmd(convID),
+	)
 }
 
 // InputFocused returns true in detail mode to prevent tab-navigation key capture.
@@ -348,7 +531,14 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 				m.viewport.SetContent(m.renderMessages())
 			}
 		}
-		m.input.Width = msg.Width - 4
+		// See the matching comment in chatrooms.go: textinput.View() renders
+		// 3 columns wider than Width the instant there's any typed content
+		// (Prompt's width plus the phantom end-of-line cursor glyph, neither
+		// subtracted from its own padding math, unlike the empty-placeholder
+		// render). Compensating here keeps the box from silently growing
+		// wider than the header above it and pushing its right border
+		// off-screen as soon as the user starts typing.
+		m.input.Width = msg.Width - 4 - lipgloss.Width(m.input.Prompt) - 1
 
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
@@ -436,6 +626,69 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		}
 		return m, nil
 
+	// --- Typing indicator lifecycle ---
+
+	case typingAnnouncedMsg:
+		if msg.convID != m.activeConvID {
+			return m, nil // stale — left the conversation before this returned
+		}
+		m.typingHeartbeatMs = msg.heartbeatMs
+		return m, scheduleTypingHeartbeatCmd(msg.convID, msg.heartbeatMs)
+
+	case typingHeartbeatTickMsg:
+		if msg.convID != m.activeConvID || !m.announcingTyping {
+			return m, nil // left the conversation or already stopped; let the tick chain die out
+		}
+		return m, tea.Batch(
+			m.sendTypingHeartbeatCmd(msg.convID),
+			scheduleTypingHeartbeatCmd(msg.convID, m.typingHeartbeatMs),
+		)
+
+	case typingIdleCheckMsg:
+		if msg.convID != m.activeConvID || !m.announcingTyping {
+			return m, nil // enter already cleared it, or the conversation changed
+		}
+		if time.Since(m.lastKeystrokeAt) >= dmTypingIdleThreshold {
+			m.announcingTyping = false
+			return m, clearTypingCmd(m.client, msg.convID)
+		}
+		return m, scheduleTypingIdleCheckCmd(msg.convID)
+
+	case typingAnimTickMsg:
+		if msg.convID != m.activeConvID {
+			return m, nil // conversation closed; let the tick chain die out
+		}
+		m.typingAnimFrame++
+		return m, scheduleTypingAnimCmd(msg.convID)
+
+	case dmTypingSubscribedMsg:
+		if msg.convID != m.activeConvID {
+			msg.sub.cancel()
+			return m, nil
+		}
+		m.typingSub = msg.sub
+		return m, waitForDMTyping(m.typingSub)
+
+	case dmTypingReceivedMsg:
+		m.typingUsers = msg.users
+		if m.typingSub != nil {
+			return m, waitForDMTyping(m.typingSub)
+		}
+		return m, nil
+
+	case dmTypingStreamClosedMsg:
+		if msg.convID != m.activeConvID {
+			return m, nil // stale event from an already-abandoned subscription
+		}
+		m.typingSub = nil
+		if m.mode != cmailModeDetail || m.activeConv == nil {
+			return m, nil
+		}
+		// ponytail: simplest reconnect for a supplementary stream — immediate
+		// retry, no backoff/attempt cap, no UI indicator, matching CIRC's
+		// roomPresenceStreamClosedMsg precedent.
+		return m, m.openTypingSubscriptionCmd(msg.convID)
+
 	// --- Keyboard ---
 
 	case tea.KeyMsg:
@@ -481,6 +734,8 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 					return m, tea.Batch(
 						m.loadConvMessagesCmd(conv.ID),
 						m.openDMSubscriptionCmd(conv.ID),
+						m.openTypingSubscriptionCmd(conv.ID),
+						scheduleTypingAnimCmd(conv.ID),
 						func() tea.Msg { return CMailConvSelectedMsg{ConversationID: convID} },
 					)
 				}
@@ -490,6 +745,15 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		case cmailModeDetail:
 			switch msg.String() {
 			case "esc":
+				var clearCmd tea.Cmd
+				if m.announcingTyping && m.activeConv != nil {
+					clearCmd = clearTypingCmd(m.client, m.activeConv.ID)
+				}
+				if m.canGoBack {
+					m = m.cancelDMSub()
+					m.canGoBack = false
+					return m, tea.Batch(clearCmd, func() tea.Msg { return LeaveCMailMsg{} })
+				}
 				m = m.cancelDMSub()
 				m.mode = cmailModeList
 				m.activeConv = nil
@@ -497,12 +761,13 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 				if m.ready {
 					m.listVP.SetContent(m.renderConvCards())
 				}
-				return m, nil
+				return m, clearCmd
 			case "enter":
 				if m.activeConv != nil {
 					val := m.input.Value()
 					if val != "" {
 						m.input.Reset()
+						m.announcingTyping = false // server auto-clears typing on send; no DELETE needed
 						convID := m.activeConv.ID
 						return m, func() tea.Msg {
 							return SendCMailMsg{ConversationID: convID, Body: val}
@@ -535,15 +800,42 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 			}
 			msg = km
 		}
+		oldVal := m.input.Value()
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
-		return m, cmd
+		var typingCmd tea.Cmd
+		if newVal := m.input.Value(); newVal != oldVal && m.activeConv != nil {
+			m, typingCmd = m.handleTypingInputChanged(newVal)
+		}
+		return m, tea.Batch(cmd, typingCmd)
 	}
 
 	// In list mode pass non-key messages (e.g. mouse scroll) to the list viewport.
 	var vpCmd tea.Cmd
 	m.listVP, vpCmd = m.listVP.Update(msg)
 	return m, vpCmd
+}
+
+// handleTypingInputChanged reacts to a compose-input value change: announces
+// typing (once) on the transition from empty/idle to non-empty, clears
+// immediately when backspaced to empty, and otherwise just bumps
+// lastKeystrokeAt so the already-running heartbeat/idle-check chains observe
+// continued activity without spawning duplicate chains.
+func (m CMailModel) handleTypingInputChanged(newVal string) (CMailModel, tea.Cmd) {
+	convID := m.activeConv.ID
+	if newVal == "" {
+		if m.announcingTyping {
+			m.announcingTyping = false
+			return m, clearTypingCmd(m.client, convID)
+		}
+		return m, nil
+	}
+	m.lastKeystrokeAt = time.Now()
+	if m.announcingTyping {
+		return m, nil // heartbeat/idle-check chains already alive
+	}
+	m.announcingTyping = true
+	return m, tea.Batch(m.announceTypingCmd(convID), scheduleTypingIdleCheckCmd(convID))
 }
 
 func (m CMailModel) otherParticipant(conv model.Conversation) string {
@@ -739,6 +1031,24 @@ func (m CMailModel) PrependMessages(convID string, msgs []model.Message) CMailMo
 	return m
 }
 
+// typingIndicator returns " is typing" plus an animated 0-3 dot count if the
+// other participant currently has a fresh entry in m.typingUsers, else "".
+// The username itself is left out — it's appended right after the header's
+// own "@other" title, so together they read as one sentence.
+func (m CMailModel) typingIndicator() string {
+	if m.activeConv == nil {
+		return ""
+	}
+	other := m.otherParticipant(*m.activeConv)
+	for _, u := range m.typingUsers {
+		if u.Username == other {
+			dots := strings.Repeat(".", m.typingAnimFrame%4)
+			return theme.Subtle.Render(" is typing" + dots)
+		}
+	}
+	return ""
+}
+
 func (m CMailModel) View() string {
 	switch m.mode {
 	case cmailModeDetail:
@@ -759,8 +1069,35 @@ func (m CMailModel) View() string {
 		case m.reconnectFailed:
 			header += theme.Error.Render("  (live updates lost)")
 		}
-		inputBox := theme.ActiveBorder.Render(m.input.View())
-		return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), inputBox)
+		header += m.typingIndicator()
+		// textinput.View()'s empty-input placeholder path (placeholderView(),
+		// internal) totals its render at exactly Width, unlike the
+		// typed-content path — Width+len(Prompt)+1 (the whole reason
+		// input.Width is pre-reduced by that amount; see the matching
+		// comment on input.Width above). Hand-building this state, mirroring
+		// the same fix in chatrooms.go, guarantees the same total without
+		// needing to separately verify a second internal quirk.
+		var inputContent string
+		if m.input.Value() == "" {
+			promptView := m.input.PromptStyle.Render(m.input.Prompt)
+			cur := m.input.Cursor
+			placeholder := []rune(m.input.Placeholder)
+			cur.TextStyle = m.input.PlaceholderStyle
+			var rest string
+			if len(placeholder) > 0 {
+				cur.SetChar(string(placeholder[0]))
+				rest = m.input.PlaceholderStyle.Inline(true).Render(string(placeholder[1:]))
+			} else {
+				cur.SetChar(" ")
+			}
+			pad := max(0, m.input.Width-lipgloss.Width(rest))
+			inputContent = promptView + cur.View() + rest + strings.Repeat(" ", pad)
+		} else {
+			inputContent = m.input.View()
+		}
+		inputBox := theme.ActiveBorder.Render(inputContent)
+		divider := theme.Subtle.Render(strings.Repeat("─", max(m.width, 0)))
+		return lipgloss.JoinVertical(lipgloss.Left, header, divider, m.viewport.View(), inputBox)
 	default: // cmailModeList
 		if !m.ready {
 			return theme.Subtle.Render("loading c-mail…")

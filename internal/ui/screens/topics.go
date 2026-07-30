@@ -354,6 +354,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 		case "esc":
 			if m.view == viewTopicPosts {
 				m.view = viewTopicList
+				m.activeTopic = ""
 				m = m.refreshContent()
 				m.viewport.GotoTop()
 			}

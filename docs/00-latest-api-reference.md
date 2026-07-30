@@ -876,6 +876,40 @@ POST /v1/cmail/:conversationId/read
 
 Resets your unread count for the conversation to `0`.
 
+### Typing Indicator
+
+```
+POST /v1/cmail/:conversationId/typing
+```
+
+Tells the other participant you're composing a message — they see the same "…is typing" the website shows. No body; your username is set from your authenticated account.
+
+```json
+{ "data": { "conversationId": "...", "ok": true, "heartbeatMs": 3000, "staleAfterMs": 9000 } }
+```
+
+The flag is deliberately short-lived. Refresh it every `heartbeatMs` while the user is still typing; if you stop refreshing, it clears itself after `staleAfterMs`. That's what keeps a client that quits or crashes mid-sentence from leaving "…is typing" stuck on the other person's screen forever. Read both values off the response rather than hard-coding them.
+
+Sending a message clears your flag automatically, so you don't need to clear it before `POST /v1/cmail/:conversationId`.
+
+```
+DELETE /v1/cmail/:conversationId/typing
+```
+
+Clears the flag immediately — call it when the input goes idle (the website uses ~2.5 s) or the user closes the conversation, rather than waiting for it to age out. Returns `{ "data": { "conversationId": "...", "ok": true } }`.
+
+```
+GET /v1/cmail/:conversationId/typing
+```
+
+Whether the *other* participant is typing right now:
+
+```json
+{ "data": { "conversationId": "...", "userId": "...", "typing": true, "username": "alice", "since": 1719700000000, "staleAfterMs": 9000 } }
+```
+
+This is a polling convenience — for a live indicator, subscribe to the presence node directly (below) instead of hammering this endpoint.
+
 ### Reading in real time
 
 New messages are delivered by subscribing to the conversation in Realtime Database directly, using the `idToken` you already have.
@@ -917,6 +951,8 @@ A `data` of `null` means that path was deleted. Merge events into your local vie
 
 **Stay within bounds (or get denied):**
 
+For a live typing indicator, subscribe to `dm_presence/<conversationId>.json?auth=<idToken>` the same way. Entries look like `{ "<userId>": { "username": "...", "typing": true, "timestamp": 1719700000000 } }`. Apply the same rule the endpoint does — treat someone as typing only if `typing` is `true` **and** `timestamp` is newer than `staleAfterMs` — and re-check on a timer, since a flag going stale produces no event. Publishing your own still goes through `POST /v1/cmail/:conversationId/typing`.
+
 - You can only read conversations you're a participant in, and your own `user_conversations/<yourUid>` — nothing above those. The database rejects anything broader, so don't try to read the whole tree.
 - **Always** include `orderBy="timestamp"` and a `limitToLast` of **100 or fewer**. Page older history with `&endBefore=<timestamp>`. Unbounded reads pull the entire conversation and may be rejected.
 - Keep one stream open per conversation; don't reconnect in a loop.
@@ -933,7 +969,7 @@ A room is addressed by its `roomId` (its slug, e.g. `general`). Messages are pla
 GET /v1/circ
 ```
 
-Returns the rooms available to you, sorted by `sortOrder` then most-recently-active first. Each entry: `id`, `slug`, `name`, `lastMessageAt` (ms epoch), `sortOrder`.
+Returns the rooms available to you, sorted by `sortOrder` then most-recently-active first. Each entry: `id`, `slug`, `name`, `lastMessageAt` (ms epoch), `sortOrder`, `onlineCount` (how many people are in the room right now — see [Who's in a room](#whos-in-a-room)).
 
 ### Read a Room
 
@@ -965,6 +1001,40 @@ POST /v1/circ/:roomId/read
 
 Marks the room as viewed for you (drives the "new messages" indicator). Returns `{ "data": { "roomId": "...", "ok": true } }`.
 
+### Who's in a room
+
+```
+GET /v1/circ/:roomId/users
+```
+
+Returns the people currently in the room, sorted by username. Each entry: `userId`, `username`, `isChatAdmin`, `lastSeen` (ms epoch). Returns `403` if the room isn't available to you.
+
+Presence is heartbeat-based: someone counts as present while they keep announcing themselves. Stop hearing from a client and it drops off the list on its own, so a crashed or force-quit client clears itself without any cleanup call.
+
+### Announce Your Presence
+
+```
+POST /v1/circ/:roomId/presence
+```
+
+Call this when you enter a room, then repeat it every `heartbeatMs` for as long as you stay. This is what puts you in the room's user list — including for people on the website, who see you alongside everyone else. Skip it and you can still read and send, you're just invisible.
+
+No body. `username` and `isChatAdmin` are set from your authenticated account, so you can only ever publish your own presence. Returns:
+
+```json
+{ "data": { "roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000 } }
+```
+
+Read the cadence off the response rather than hard-coding it: send a heartbeat every `heartbeatMs`, and you drop out of the room once `staleAfterMs` passes with no heartbeat. Returns `403` if the room isn't available to you.
+
+### Leave a Room
+
+```
+DELETE /v1/circ/:roomId/presence
+```
+
+Removes you from the room's user list immediately. Optional but polite — call it when the user leaves the room or quits your client. Without it you stay listed until `staleAfterMs` elapses. Returns `{ "data": { "roomId": "...", "ok": true } }`.
+
 ### Reading a room in real time
 
 New messages are delivered by subscribing to the room in Realtime Database directly — the same mechanism [C-Mail uses](#reading-in-real-time), using the `idToken` you already have. Connect to the `rtdbUrl` returned from `/v1/auth/login` and `/v1/auth/refresh` and open a Server-Sent Events stream:
@@ -975,6 +1045,8 @@ Accept: text/event-stream
 ```
 
 The first event is a `put` with the whole window; each new message is another `put`/`patch`. A `data` of `null` means that path was deleted. Merge events into your local view by `path`.
+
+To keep the room's user list live without polling `GET /v1/circ/:roomId/users`, open a second stream on `chat_presence/<roomId>.json?auth=<idToken>`. Entries look like `{ "<userId>": { "username": "...", "isChatAdmin": false, "online": true, "lastSeen": 1719700000000 } }`. Apply the same rule the endpoint does: show an entry only if `online` is `true` and `lastSeen` is newer than `staleAfterMs` — and re-evaluate on a timer, not just on events, since an entry going stale produces no event. Publishing your own presence still goes through `POST /v1/circ/:roomId/presence`.
 
 **Stay within bounds (or get denied):**
 
@@ -1113,8 +1185,10 @@ All responses follow this structure:
 | C-Mail message | 15 | 300 |
 | Start C-Mail conversation | 5 | 50 |
 | Mark C-Mail read | 60 | — |
+| C-Mail typing on/off | 45 | — |
 | cIRC message | 15 | 300 |
 | Mark cIRC room read | 60 | — |
+| cIRC presence heartbeat / leave | 30 | — |
 
 C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour).
 
@@ -1141,8 +1215,10 @@ C-Mail messaging also has an hourly cap (150/hour); starting conversations is ca
 | Watch status / list watched | 30 |
 | List C-Mail conversations | 30 |
 | Read a C-Mail conversation | 45 |
+| Check C-Mail typing | 60 |
 | List cIRC rooms | 30 |
 | Read a cIRC room | 45 |
+| List who's in a cIRC room | 60 |
 | Search | 30 |
 
 Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for daily, 60 seconds for per-minute).

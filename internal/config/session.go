@@ -49,6 +49,12 @@ type Config struct {
 	SSHListenAddr string `json:"sshListenAddr,omitempty"`
 	// SSHHostKeyPath is the path to the SSH host key file (default: ./ssh_host_key).
 	SSHHostKeyPath string `json:"sshHostKeyPath,omitempty"`
+	// AllowRemoteSSH permits sshListenAddr to bind a non-loopback address.
+	// SSH server mode performs no authentication, so binding beyond loopback
+	// exposes a full unauthenticated session to anyone who can reach it.
+	// Off by default so a non-loopback sshListenAddr requires two deliberate
+	// config choices instead of one.
+	AllowRemoteSSH bool `json:"allowRemoteSsh,omitempty"`
 
 	// WanderLust controls the wander mode easter egg, which silently updates
 	// the profile location to a random position twice per day.
@@ -194,15 +200,3 @@ func ShouldWanderNow(cfg Config) bool {
 		time.Since(cfg.LastWandered) >= WanderInterval
 }
 
-// Clear removes the config file. Returns nil if the file does not exist.
-func Clear() error {
-	path, err := DefaultPath()
-	if err != nil {
-		return err
-	}
-	err = os.Remove(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
-}

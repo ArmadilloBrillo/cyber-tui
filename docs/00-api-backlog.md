@@ -15,6 +15,8 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `/v1/notifications` | GET | **Open (by design?)** | Notifications can point to posts that have since been deleted, and the notification object exposes no "target deleted/unavailable" flag — opening one is the only way to discover the target is gone (`GET /v1/posts/:id` → 404). The client now handles this gracefully (friendly "This post has been deleted" banner, non-blocking). A `targetDeleted` field (or server-side filtering of dead-target notifications) would let the client mark/skip them up front. | 2026-06-03 |
 | Rate limits (spec) | — | **Resolved** | The v0.4.1 inline-vs-table contradiction is gone in v0.5.0: the consolidated Rate Limits table now matches the inline per-endpoint limits (Entries 15/day, Replies 15/day, Notes 30/day, Bookmarks 75/day, Profile/Settings 15/day). Read limits were also raised (most list endpoints 30→45/min; profile/follows/topics/bookmarks/notes 20→30/min). Resolved 2026-06-04. | 2026-05-29 |
 | `/v1/search` | GET | **Open** | `createdAt` is inconsistent across hit types, and doesn't match the RFC3339 string every other user/post/reply-returning endpoint uses. Confirmed live: a numeric epoch (assumed ms) on user hits, and a raw Firestore Timestamp object (`{"_seconds":N,"_nanoseconds":N}`) on post hits — apparently un-normalized before being sent to the client. Not documented in the API spec. Client-side workaround: `apiTimestamp` (`internal/api/client.go`) accepts string, number, or object for `wireUser`/`wirePost`/`wireReply`'s date fields, and degrades to an empty timestamp rather than failing the whole response for any other shape. | 2026-07-23 |
+| `/v1/notifications?type=...` | GET | **Open** | The `type` query param (comma-separated notification-type filter) returns `500 INTERNAL_ERROR` for every value tested live — single types (`type=reply`, `type=chat_mention`, `type=dm_message`) and comma-separated combinations (`type=dm_message,chat_mention`) all fail server-side. Confirmed via `apifetch`. The client's `types []string` param plumbing (`GetNotifications`) is left in place unaffected for when the server bug is fixed; no UI currently sends a non-nil filter, so there's no live-facing regression today. | 2026-07-24 |
+| `/v1/users/me`, `/v1/users/:username` | GET | **Resolved (client-side removal)** | `postsCount` was deprecated and no longer returned reliable data; the field is also absent from the current API docs snapshot (`followersCount`/`followingCount` still present). Removed the `posts` segment from the profile counts line and the `PostsCount` field from `model.User`/`wireUser`. | 2026-07-29 |
 
 ---
 
@@ -102,13 +104,17 @@ cIRC REST API is now fully documented. A room is addressed by its `roomId` (slug
 | `POST /v1/circ/:roomId` | POST | Send a message to a room (supports slash commands) | **Done** — feature 33 |
 | `POST /v1/circ/:roomId/read` | POST | Mark room as read (drives "new messages" indicator) | **Done** — feature 33 |
 | RTDB `chat_messages/<roomId>` | SSE | Subscribe to real-time new messages | **Done** — feature 33 |
+| `GET /v1/circ/:roomId/users` | GET | List who's currently in a room | **Done** — cIRC presence |
+| `POST`/`DELETE /v1/circ/:roomId/presence` | POST/DELETE | Announce/heartbeat and leave presence | **Done** — cIRC presence |
+| RTDB `chat_presence/<roomId>` | SSE | Subscribe to real-time presence changes | **Done** — cIRC presence |
 
 Notes:
-- Each room message includes `isChatAdmin` flag — parsed into `model.Message.IsChatAdmin` and shown as a `[admin]` badge in the TUI.
-- Rate limits: 15 sends/min, 300/day, 150/hour; 60 mark-read/min.
+- Each room message includes `isChatAdmin` flag — parsed into `model.Message.IsChatAdmin`. No longer shown as a `[admin]` badge on the message line; admin status now lives only in the online-users side panel (see `docs/33-circ.md`).
+- Rate limits: 15 sends/min, 300/day, 150/hour; 60 mark-read/min; 60 list-users/min; 30 presence heartbeat-or-leave/min.
 - 403 if room isn't available to you.
-- Online-users list: API has no such endpoint — deferred.
+- Online-users list: implemented (cIRC presence) — `GET .../users` for the initial list, `chat_presence` RTDB stream for live updates, `POST`/`DELETE .../presence` for announce/heartbeat/leave. Room-list cards also show `onlineCount` from `GET /v1/circ`.
 - Slash command rendering: server expands `/me`, `/poke`, `/dice` etc. server-side; no client-side preview yet.
+- **Fixed: a single user leaving a room used to wipe the entire presence sidebar.** Confirmed via the `cfg.Debug` raw-event logging: Firebase frames a single user's removal from `chat_presence/<roomId>` as a **`patch`** event at path `/` with just that one key set to `null` (a multi-location update — "touch only these keys"), not a full-snapshot replace. `applyPresenceEvent` (and the identical `applyTypingEvent` for C-Mail's typing indicator) treated *any* event at path `/` — `put` or `patch` — as a full wipe-and-replace, so one person leaving cleared every other online user out of the local state; everyone else then only reappeared as their own next individual heartbeat re-added them — the exact "whole sidebar disappears, then trickles back in" symptom reported. Fixed by distinguishing `put` (genuine full snapshot — replace) from `patch` (merge only the listed keys, `null` deletes that key) at path `/`; the (also unconfirmed at the time) `@mention`-correlation was coincidental — the real trigger is simply anyone leaving the room. See `TestHTTPSubscribeRoomPresence_RootPatchMergesInsteadOfReplacing`/`TestHTTPSubscribeDMTyping_RootPatchMergesInsteadOfReplacing` in `client_test.go`. The temporary `cyber-tui-debug.log` raw-event logging (`internal/api/client.go`'s `SubscribeRoomPresence`, wired in `main.go`) is left in place behind `cfg.Debug` since it proved useful and costs nothing when off.
 
 ### Search (new in v0.7)
 
@@ -150,7 +156,9 @@ Notes:
 
 | Area | Description | Priority |
 |---|---|---|
-| `type` filter on `GET /v1/notifications` | `?type=reply,reply_mention` — comma-separated list of notification types to fetch. API param is wired (`GetNotifications(..., types []string)`); pass `nil` for all types. UI filter control (multi-select / cycling) is deferred. | Low — UI deferred |
+| `type` filter on `GET /v1/notifications` | `?type=reply,reply_mention` — comma-separated list of notification types to fetch. API param is wired client-side (`GetNotifications(..., types []string)`) but the server returns `500 INTERNAL_ERROR` for any value (confirmed 2026-07-24, see Known API Issues above) — a UI filter control cannot be built until the server bug is fixed. | Blocked — server bug, not UI-deferred |
+| `chat_mention` / `dm_message` navigation and context | `chat_mention` now carries `metadata.roomSlug`/`roomName`/`messageContent` (confirmed live 2026-07-24) — captured as `Notification.RoomSlug`/`RoomName`/`MessageContent`, shown as an inline `#room` summary + message preview, and `enter` jumps straight to the room (`OpenRoomMsg`). `dm_message` reuses the existing `StartConversationMsg` conversation-open flow on `enter` (same as the `c` key) rather than adding new metadata fields, since no live `dm_message` example has been observed to confirm its metadata shape. | **Done** — see `docs/15-notifications.md` |
+| `dm_message` content preview | No confirmed metadata field carries message content/conversation ID for `dm_message` (unlike `chat_mention`'s `messageContent`). If a future live sighting reveals one, add a `docs/15-notifications.md`-style inline preview matching `post_mention`/`reply_mention`/`chat_mention`. | Low — blocked on live confirmation |
 
 ### Replies
 

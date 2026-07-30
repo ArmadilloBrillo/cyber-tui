@@ -65,27 +65,6 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
-func TestClear(t *testing.T) {
-	home := withTempHome(t)
-
-	if err := config.Save(config.Config{RefreshToken: "tok"}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	if err := config.Clear(); err != nil {
-		t.Fatalf("Clear: %v", err)
-	}
-
-	path := filepath.Join(home, ".cyber-tui.json")
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("expected file to be removed after Clear")
-	}
-
-	// Second Clear must be a no-op (no error).
-	if err := config.Clear(); err != nil {
-		t.Fatalf("second Clear returned error: %v", err)
-	}
-}
 
 // --- Wander mode ---
 
