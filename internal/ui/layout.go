@@ -107,18 +107,20 @@ func visibleTabs() []navTab {
 // MillerLayout call this so the two layouts can never disagree about which
 // state a tab is in.
 //
-// detail is reported even while t isn't selected for Circ/Guilds/Topics,
-// since their detail state is genuinely still live in the background: Circ's
-// open room keeps its RTDB subscription streaming regardless of the active
-// tab (see IsRoomStreamMsg in app.go), and Guilds/Topics' browse state is
-// simply never reset by activateScreen on tab-away. C-Mail and PostDetail are
-// selected-only instead: CMailModel.CancelSubscription (tab-away) tears the
-// conversation's subscription down immediately but doesn't reset m.mode, so
-// it lingers as cmailModeDetail — stale, not live — until the next
-// ResetToList(); surfacing that in the background would claim a conversation
-// is still open when it's already been torn down (C-Mail's actual "something
-// happened" signal is the aggregate unread badge, not a left-open
-// conversation). PostDetail has no background resumption at all.
+// detail is reported even while t isn't selected for Circ/Guilds/Topics/
+// PostDetail, since their detail state is genuinely still live/persisted in
+// the background: Circ's open room keeps its RTDB subscription streaming
+// regardless of the active tab (see IsRoomStreamMsg in app.go), Guilds/
+// Topics' browse state is simply never reset by activateScreen on tab-away,
+// and a post opened via t stays open (PostDetailModel.HasPost) until closed
+// via Esc or re-navigating to t from PostDetail itself (activateScreen's
+// escape hatch). C-Mail alone is selected-only:
+// CMailModel.CancelSubscription (tab-away) tears the conversation's
+// subscription down immediately but doesn't reset m.mode, so it lingers as
+// cmailModeDetail — stale, not live — until the next ResetToList();
+// surfacing that in the background would claim a conversation is still open
+// when it's already been torn down (C-Mail's actual "something happened"
+// signal is the aggregate unread badge, not a left-open conversation).
 func tabVisualState(a App, t screen) (selected, detail bool) {
 	selected = a.active == t || (a.active == screenPostDetail && a.postDetailReturn == t)
 
@@ -132,7 +134,7 @@ func tabVisualState(a App, t screen) (selected, detail bool) {
 	case screenCMail:
 		detail = selected && a.cmail.IsShowingDetail()
 	}
-	if selected && a.active == screenPostDetail {
+	if a.postDetail.HasPost() && a.postDetailReturn == t {
 		detail = true
 	}
 	return selected, detail
@@ -220,9 +222,17 @@ func themeIndex(name string) int {
 // 0. a.active won't normally be a hidden screen (Search) here, since
 // navigateTabBy — the only caller — is a no-op while Search is active; if it
 // ever is, this defaults to 0 (Feed) same as any other not-found screen.
+// screenPostDetail isn't itself a tab either, so it resolves to
+// postDetailReturn instead — otherwise cycling away from PostDetail would
+// always be anchored to Feed's position rather than wherever the post was
+// actually opened from.
 func tabIndexOf(a App) int {
+	active := a.active
+	if active == screenPostDetail {
+		active = a.postDetailReturn
+	}
 	for i, t := range visibleTabs() {
-		if t.s == a.active {
+		if t.s == active {
 			return i
 		}
 	}
@@ -296,6 +306,20 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 		a.chatrooms = a.chatrooms.SetFocused(false)
 	}
 	prev := a.active
+	// A post left open (see PostDetailModel.HasPost) resumes automatically
+	// when navigation lands back on the tab it was opened from — mirrors
+	// Circ's background-room persistence. Re-navigating to that same tab
+	// *from PostDetail itself* (prev == screenPostDetail) is instead the
+	// explicit "close and show the list" escape hatch, matching Circ/C-Mail's
+	// re-press-the-tab-key convention. Cycling can never land exactly back on
+	// the origin tab in one step (see tabIndexOf), so it only ever hits the
+	// resume branch, never the close one.
+	if prev == screenPostDetail && s == a.postDetailReturn {
+		a.postDetail = a.postDetail.Close()
+	} else if prev != screenPostDetail && s == a.postDetailReturn && a.postDetail.HasPost() {
+		a.active = screenPostDetail
+		return a, nil
+	}
 	a.active = s
 	if a.active == screenSearch && prev != screenSearch {
 		a.searchReturn = prev

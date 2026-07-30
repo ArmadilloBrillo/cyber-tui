@@ -234,6 +234,7 @@ func TestTabVisualState_PostDetail_CreditsOriginTab(t *testing.T) {
 		a := loggedInApp()
 		a.active = screenPostDetail
 		a.postDetailReturn = origin
+		a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1"})
 
 		selected, detail := tabVisualState(a, origin)
 		if !selected || !detail {
@@ -249,6 +250,23 @@ func TestTabVisualState_PostDetail_CreditsOriginTab(t *testing.T) {
 		if selected || detail {
 			t.Errorf("origin %v, other tab %v: selected=%v detail=%v, want false,false", origin, other, selected, detail)
 		}
+	}
+}
+
+func TestTabVisualState_PostDetail_PersistsWhenBackgrounded(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetailReturn = screenBookmarks
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1"})
+
+	a.active = screenFeed // background PostDetail
+
+	selected, detail := tabVisualState(a, screenBookmarks)
+	if selected {
+		t.Error("expected Bookmarks to not be selected after switching to Feed")
+	}
+	if !detail {
+		t.Error("expected Bookmarks to still report detail=true — the post stays open in the background")
 	}
 }
 

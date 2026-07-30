@@ -110,13 +110,17 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 	}
 	switch msg.String() {
 	case "left":
-		if a.active != screenPostDetail && a.focus == focusMenu {
+		// PostDetail used to be excluded here, forcing ctrl+left to leave it —
+		// now it cycles the same as everywhere else (tabIndexOf anchors on
+		// postDetailReturn, so this never lands back on the origin tab in one
+		// step; see activateScreen's escape hatch for how that's reached).
+		if a.focus == focusMenu {
 			var cmd tea.Cmd
 			a, cmd = navigateTabBy(a, -1)
 			return a, cmd, true
 		}
 	case "right":
-		if a.active != screenPostDetail && a.focus == focusMenu {
+		if a.focus == focusMenu {
 			var cmd tea.Cmd
 			a, cmd = navigateTabBy(a, +1)
 			return a, cmd, true
