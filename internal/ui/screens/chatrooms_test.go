@@ -199,6 +199,85 @@ func TestHeartbeatTick_ActiveRoomReschedules(t *testing.T) {
 	}
 }
 
+// --- background room / unread badge (staying "in" a room while another tab is active) ---
+
+func TestRoomReceived_BumpsUnreadWhileUnfocused(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetFocused(false)
+
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{Body: "hey"}})
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{Body: "hey again"}})
+
+	if m.UnreadCount() != 2 {
+		t.Errorf("UnreadCount() = %d, want 2", m.UnreadCount())
+	}
+}
+
+func TestRoomReceived_DoesNotBumpUnreadWhileFocused(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetFocused(true)
+
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{Body: "hey"}})
+
+	if m.UnreadCount() != 0 {
+		t.Errorf("UnreadCount() = %d, want 0 (actively viewing the room)", m.UnreadCount())
+	}
+}
+
+func TestSetFocused_ClearsUnreadOnReturn(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetFocused(false)
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{Body: "hey"}})
+	if m.UnreadCount() != 1 {
+		t.Fatalf("setup: expected unreadCount 1, got %d", m.UnreadCount())
+	}
+
+	m = m.SetFocused(true)
+	if m.UnreadCount() != 0 {
+		t.Errorf("UnreadCount() = %d, want 0 after refocusing the tab", m.UnreadCount())
+	}
+}
+
+func TestHasLiveRoom(t *testing.T) {
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	if m.HasLiveRoom() {
+		t.Error("expected no live room before any room is opened")
+	}
+
+	m = chatroomsInRoom(api.NewMockClient(), "zion")
+	if !m.HasLiveRoom() {
+		t.Error("expected HasLiveRoom() once a room is open in detail mode")
+	}
+}
+
+func TestIsRoomStreamMsg(t *testing.T) {
+	streamMsgs := []tea.Msg{
+		roomReceivedMsg{},
+		roomStreamClosedMsg{},
+		roomPresenceReceivedMsg{},
+		roomHeartbeatTickMsg{},
+	}
+	for _, msg := range streamMsgs {
+		if !IsRoomStreamMsg(msg) {
+			t.Errorf("IsRoomStreamMsg(%T) = false, want true", msg)
+		}
+	}
+	if IsRoomStreamMsg(tea.KeyMsg{Type: tea.KeyEnter}) {
+		t.Error("IsRoomStreamMsg(tea.KeyMsg) = true, want false — key input must not be routed to a backgrounded room")
+	}
+}
+
+func TestRoomReceived_KeepsStreamingWhileUnfocused(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.sub = &roomSubscription{RoomID: "zion", cancel: func() {}}
+	m = m.SetFocused(false)
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{Body: "hey"}})
+	if cmd == nil {
+		t.Error("expected waitForRoomMsg to be re-issued so the stream keeps running in the background")
+	}
+}
+
 func TestRoomUsersLoaded_SortsAndStores(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 

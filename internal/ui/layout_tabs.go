@@ -179,6 +179,11 @@ func (l TabsLayout) renderTabBar(a App) string {
 				badge = fmt.Sprintf(" (%d)", n)
 			}
 		}
+		if t.s == screenChatrooms {
+			if n := a.chatrooms.UnreadCount(); n > 0 {
+				badge = fmt.Sprintf(" (%d)", n)
+			}
+		}
 		isActive := a.active == t.s &&
 			!(t.s == screenCMail && a.cmail.IsShowingDetail()) &&
 			!(t.s == screenChatrooms && a.chatrooms.IsShowingDetail())

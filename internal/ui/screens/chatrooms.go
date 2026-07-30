@@ -132,6 +132,26 @@ type roomPresenceReconnectRetryDueMsg struct {
 // re-established following an idToken expiry. App uses it to show a toast.
 type RoomReconnectedMsg struct{}
 
+// IsRoomStreamMsg reports whether msg belongs to CIRC's message/presence
+// subscription lifecycle (the unexported room*Msg/circ*Msg types above). App
+// uses this to keep routing these messages to ChatroomsModel.Update even when
+// Chatrooms isn't the active screen, so the self-rescheduling
+// waitForRoomMsg/heartbeat/reconnect tea.Cmd chains for the room the user had
+// open don't die just because they switched tabs.
+func IsRoomStreamMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case roomSubscribedMsg, roomReceivedMsg, roomStreamClosedMsg,
+		roomReconnectFailedMsg, roomReconnectRetryDueMsg, roomReconnectedMsg,
+		circMsgsLoadedMsg, circOlderMsgsLoadedMsg, circErrMsg,
+		roomPresenceAnnouncedMsg, roomHeartbeatTickMsg, roomUsersLoadedMsg,
+		roomPresenceSubscribedMsg, roomPresenceReceivedMsg, roomPresenceStreamClosedMsg,
+		roomPresenceReconnectFailedMsg, roomPresenceReconnectRetryDueMsg, roomPresenceReconnectedMsg:
+		return true
+	default:
+		return false
+	}
+}
+
 // waitForRoomMsg blocks on the subscription channel and returns the next message as a tea.Cmd.
 func waitForRoomMsg(sub *roomSubscription) tea.Cmd {
 	return func() tea.Msg {
@@ -220,6 +240,13 @@ type ChatroomsModel struct {
 	// mentionCycle tracks an in-progress Tab-completion of an @-mention; nil
 	// when not cycling. See mentionCycle's doc comment.
 	mentionCycle *mentionCycle
+
+	// focused is true while the Chatrooms tab is the one on screen. The RTDB
+	// subscription for an open room stays alive regardless (see
+	// IsRoomStreamMsg), so this only gates whether incoming messages bump
+	// unreadCount for the tab-bar badge.
+	focused     bool
+	unreadCount int
 }
 
 // SendRoomMessageMsg is emitted when the user sends a chatroom message.
@@ -279,9 +306,33 @@ func (m ChatroomsModel) cancelRoomSub() ChatroomsModel {
 	return m
 }
 
-// CancelSubscription is called by App when navigating away from the CIRC screen.
+// CancelSubscription is called by App when the CIRC room the user had open is
+// being torn down for real (leaving the room via ESC, or logout) — not on an
+// ordinary tab switch, which now leaves the subscription running in the
+// background (see SetFocused).
 func (m ChatroomsModel) CancelSubscription() ChatroomsModel {
 	return m.cancelRoomSub()
+}
+
+// SetFocused marks whether the Chatrooms tab is the one currently on screen.
+// Becoming focused clears unreadCount for the tab-bar badge.
+func (m ChatroomsModel) SetFocused(focused bool) ChatroomsModel {
+	m.focused = focused
+	if focused {
+		m.unreadCount = 0
+	}
+	return m
+}
+
+// UnreadCount returns the number of messages received in the open room since
+// the tab was last focused, for the tab-bar badge.
+func (m ChatroomsModel) UnreadCount() int { return m.unreadCount }
+
+// HasLiveRoom reports whether a room is currently open in detail view — used
+// by activateScreen to decide whether re-entering the tab should resume that
+// room instead of dropping back to the room list.
+func (m ChatroomsModel) HasLiveRoom() bool {
+	return m.mode == chatroomModeDetail && m.activeRoom != nil
 }
 
 func (m ChatroomsModel) openRoomSubscriptionCmd(roomID string) tea.Cmd {
@@ -738,6 +789,9 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 
 	case roomReceivedMsg:
 		m = m.AppendMessage(msg.msg)
+		if !m.focused {
+			m.unreadCount++
+		}
 		if m.sub != nil {
 			return m, waitForRoomMsg(m.sub)
 		}

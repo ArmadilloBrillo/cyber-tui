@@ -1469,6 +1469,43 @@ func TestHandleChatrooms_NormalTabEntry_EscStillDropsToList(t *testing.T) {
 	}
 }
 
+// --- Chatrooms room stays open across a tab switch ---
+//
+// Previously activateScreen cancelled the CIRC subscription and dropped to
+// the room list on every tab-away, so a room went silent the moment you
+// checked another tab. Now the subscription (and its reconnect/heartbeat
+// chains, via screens.IsRoomStreamMsg routing in handleChatrooms) stays alive
+// in the background for the one room the user had open, and switching back
+// resumes it instead of bouncing to the list.
+
+func TestActivateScreen_ChatroomsRoomSurvivesTabSwitch(t *testing.T) {
+	a := loggedInApp()
+	a, _ = activateScreen(a, screenChatrooms)
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+	if !a.chatrooms.IsShowingDetail() {
+		t.Fatal("setup: expected entering a room via enter to reach detail mode")
+	}
+
+	a, _ = activateScreen(a, screenFeed) // switch away to another tab
+	if !a.chatrooms.IsShowingDetail() {
+		t.Error("expected the open room to stay open while another tab is active")
+	}
+	if a.chatrooms.ActiveRoomSlug() != "zion" {
+		t.Errorf("ActiveRoomSlug() = %q, want %q after switching away", a.chatrooms.ActiveRoomSlug(), "zion")
+	}
+
+	a, _ = activateScreen(a, screenChatrooms) // switch back
+	if !a.chatrooms.IsShowingDetail() {
+		t.Error("expected switching back to Chatrooms to resume the still-open room, not the room list")
+	}
+	if a.chatrooms.ActiveRoomSlug() != "zion" {
+		t.Errorf("ActiveRoomSlug() = %q, want %q after switching back", a.chatrooms.ActiveRoomSlug(), "zion")
+	}
+}
+
 // --- Kitty image-modal cleanup survives a fast follow-up keystroke ---
 //
 // Reported behavior: typing while an image loads could leave the Kitty image
