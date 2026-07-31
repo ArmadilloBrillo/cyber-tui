@@ -72,6 +72,7 @@ const tabItemLines = 3
 type tabScrollMeta struct {
 	cursor    string
 	loaded    bool
+	loading   bool // true while a next-page fetch is in flight
 	exhausted bool
 	top       int // first visible item index (scroll offset)
 }
@@ -228,6 +229,7 @@ func (m ProfileModel) AppendUserPosts(posts []model.Post, cursor string) Profile
 	m.posts = append(m.posts, posts...)
 	m.tabMeta[tabPosts].cursor = cursor
 	m.tabMeta[tabPosts].exhausted = cursor == ""
+	m.tabMeta[tabPosts].loading = false
 	return m
 }
 
@@ -245,6 +247,7 @@ func (m ProfileModel) AppendUserReplies(replies []model.Reply, cursor string) Pr
 	m.replies = append(m.replies, replies...)
 	m.tabMeta[tabReplies].cursor = cursor
 	m.tabMeta[tabReplies].exhausted = cursor == ""
+	m.tabMeta[tabReplies].loading = false
 	return m
 }
 
@@ -262,6 +265,7 @@ func (m ProfileModel) AppendUserFollowing(follows []model.Follow, cursor string)
 	m.following = append(m.following, follows...)
 	m.tabMeta[tabFollowing].cursor = cursor
 	m.tabMeta[tabFollowing].exhausted = cursor == ""
+	m.tabMeta[tabFollowing].loading = false
 	return m
 }
 
@@ -279,6 +283,7 @@ func (m ProfileModel) AppendUserFollowers(follows []model.Follow, cursor string)
 	m.followers = append(m.followers, follows...)
 	m.tabMeta[tabFollowers].cursor = cursor
 	m.tabMeta[tabFollowers].exhausted = cursor == ""
+	m.tabMeta[tabFollowers].loading = false
 	return m
 }
 
@@ -472,7 +477,7 @@ func (m ProfileModel) moveTabSelection(delta int) (ProfileModel, tea.Cmd) {
 	// Check for pagination near the bottom of the list.
 	var pageCmd tea.Cmd
 	if m.tabSelected >= n-3 {
-		pageCmd = m.loadMoreCmd()
+		m, pageCmd = m.loadMoreCmd()
 	}
 	return m, pageCmd
 }
@@ -486,28 +491,35 @@ func (m ProfileModel) setScrollTopForActiveTab(top int) ProfileModel {
 	return m
 }
 
-// loadMoreCmd returns a pagination command if the active tab has more pages.
-func (m ProfileModel) loadMoreCmd() tea.Cmd {
+// loadMoreCmd returns a pagination command if the active tab has more pages
+// and no fetch for it is already in flight.
+func (m ProfileModel) loadMoreCmd() (ProfileModel, tea.Cmd) {
 	meta := m.tabMeta[m.activeTab]
-	if meta.exhausted || meta.cursor == "" {
-		return nil
+	if meta.loading || meta.exhausted || meta.cursor == "" {
+		return m, nil
 	}
 	cursor := meta.cursor
+
+	var cmd tea.Cmd
 	switch m.activeTab {
 	case tabPosts:
 		username := m.user.Username
-		return func() tea.Msg { return LoadMoreUserPostsMsg{Username: username, Cursor: cursor} }
+		cmd = func() tea.Msg { return LoadMoreUserPostsMsg{Username: username, Cursor: cursor} }
 	case tabReplies:
 		username := m.user.Username
-		return func() tea.Msg { return LoadMoreUserRepliesMsg{Username: username, Cursor: cursor} }
+		cmd = func() tea.Msg { return LoadMoreUserRepliesMsg{Username: username, Cursor: cursor} }
 	case tabFollowing:
 		userID := m.user.ID
-		return func() tea.Msg { return LoadMoreUserFollowingMsg{UserID: userID, Cursor: cursor} }
+		cmd = func() tea.Msg { return LoadMoreUserFollowingMsg{UserID: userID, Cursor: cursor} }
 	case tabFollowers:
 		userID := m.user.ID
-		return func() tea.Msg { return LoadMoreUserFollowersMsg{UserID: userID, Cursor: cursor} }
+		cmd = func() tea.Msg { return LoadMoreUserFollowersMsg{UserID: userID, Cursor: cursor} }
+	default:
+		return m, nil
 	}
-	return nil
+
+	m.tabMeta[m.activeTab].loading = true
+	return m, cmd
 }
 
 // handleTabEnter activates the selected item in a list tab.

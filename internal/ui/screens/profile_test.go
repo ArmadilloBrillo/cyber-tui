@@ -382,3 +382,47 @@ func TestProfile_FilterNSFW_Off_ShowsAll(t *testing.T) {
 		t.Errorf("expected pp2 (nsfw), got %s", sp.Post.ID)
 	}
 }
+
+// --- pagination in-flight guard ---
+
+// TestProfile_LoadMore_SkipsWhileInFlight reproduces repeated down-presses
+// near the bottom of a list tab (arrow-repeat / held key). Without an
+// in-flight guard, each press re-dispatches a LoadMore*Msg carrying the same
+// stale cursor before the first request's response lands, causing the
+// eventual responses to be appended more than once (duplicate items).
+func TestProfile_LoadMore_SkipsWhileInFlight(t *testing.T) {
+	posts := []model.Post{
+		{ID: "pp1", AuthorUsername: "ragnar", Content: "one"},
+		{ID: "pp2", AuthorUsername: "ragnar", Content: "two"},
+		{ID: "pp3", AuthorUsername: "ragnar", Content: "three"},
+		{ID: "pp4", AuthorUsername: "ragnar", Content: "four"},
+		{ID: "pp5", AuthorUsername: "ragnar", Content: "five"},
+		{ID: "pp6", AuthorUsername: "ragnar", Content: "six"},
+	}
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetUserPosts(posts, "next-cursor") // non-empty cursor: more pages available
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	// Move to the last 3 items (n-3) to enter pagination range, then keep
+	// pressing down as if the key were held/repeated.
+	var cmds []tea.Cmd
+	for i := 0; i < 5; i++ {
+		var cmd tea.Cmd
+		m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		cmds = append(cmds, cmd)
+	}
+
+	fired := 0
+	for _, cmd := range cmds {
+		if cmd == nil {
+			continue
+		}
+		if _, ok := cmd().(screens.LoadMoreUserPostsMsg); ok {
+			fired++
+		}
+	}
+	if fired != 1 {
+		t.Errorf("expected exactly 1 LoadMoreUserPostsMsg while a fetch is in flight, got %d", fired)
+	}
+}
