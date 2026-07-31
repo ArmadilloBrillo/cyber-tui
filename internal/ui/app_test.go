@@ -376,6 +376,19 @@ func setupChatroomsDetailWithURL(a App) App {
 	return a
 }
 
+// setupCMailDetail opens a conversation in detail mode, so InputFocused()
+// is true — mirrors setupChatroomsDetailWithURL above.
+func setupCMailDetail(a App) App {
+	a.active = screenCMail
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "trinity"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	return a
+}
+
 func TestHandleKeys_CtrlO_ReachesOpenLink_WhileChatroomsInputFocused(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
 	if !a.chatrooms.InputFocused() {
@@ -539,6 +552,51 @@ func TestHandleKeys_Left_NotConsumed_WhileChatroomsInputFocusedAndComposeHasText
 	cm, _ := a.chatrooms.Update(keyMsg("h")) // types into the compose box, not a nav key
 	a.chatrooms = cm
 	if a.chatrooms.ComposeEmpty() {
+		t.Fatal("setup: expected a non-empty compose box")
+	}
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if consumed {
+		t.Error("expected plain left arrow to NOT be consumed while there's text in the compose box — it must move the cursor instead")
+	}
+}
+
+// C-Mail's compose input is focused for the entire detail view exactly like
+// Chatrooms', and now gets the same background-resume treatment (see
+// TestActivateScreen_CMailConvSurvivesTabSwitch), so it needs the same
+// bare-arrow-escapes-empty-compose behavior.
+
+func TestHandleKeys_Left_CyclesTabs_WhileCMailInputFocusedAndComposeEmpty(t *testing.T) {
+	a := setupCMailDetail(loggedInApp())
+	if !a.cmail.ComposeEmpty() {
+		t.Fatal("setup: expected an empty compose box")
+	}
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if !consumed {
+		t.Error("expected plain left arrow to be consumed (tab-cycle) while the compose box is empty")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected plain left arrow to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_Right_CyclesTabs_WhileCMailInputFocusedAndComposeEmpty(t *testing.T) {
+	a := setupCMailDetail(loggedInApp())
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyRight})
+	if !consumed {
+		t.Error("expected plain right arrow to be consumed (tab-cycle) while the compose box is empty")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected plain right arrow to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_Left_NotConsumed_WhileCMailInputFocusedAndComposeHasText(t *testing.T) {
+	a := setupCMailDetail(loggedInApp())
+	cm, _ := a.cmail.Update(keyMsg("h")) // types into the compose box, not a nav key
+	a.cmail = cm
+	if a.cmail.ComposeEmpty() {
 		t.Fatal("setup: expected a non-empty compose box")
 	}
 	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
@@ -1663,6 +1721,40 @@ func TestActivateScreen_ChatroomsRoomSurvivesTabSwitch(t *testing.T) {
 	}
 	if a.chatrooms.ActiveRoomSlug() != "zion" {
 		t.Errorf("ActiveRoomSlug() = %q, want %q after switching back", a.chatrooms.ActiveRoomSlug(), "zion")
+	}
+}
+
+// TestActivateScreen_CMailConvSurvivesTabSwitch mirrors
+// TestActivateScreen_ChatroomsRoomSurvivesTabSwitch above — C-Mail's open
+// conversation now stays live in the background the same way, via
+// CMailModel.SetFocused and screens.IsDMStreamMsg routing in handleCMail.
+func TestActivateScreen_CMailConvSurvivesTabSwitch(t *testing.T) {
+	a := loggedInApp()
+	a, _ = activateScreen(a, screenCMail)
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "trinity"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	if !a.cmail.IsShowingDetail() {
+		t.Fatal("setup: expected entering a conversation via enter to reach detail mode")
+	}
+
+	a, _ = activateScreen(a, screenFeed) // switch away to another tab
+	if !a.cmail.IsShowingDetail() {
+		t.Error("expected the open conversation to stay open while another tab is active")
+	}
+	if !strings.Contains(a.cmail.View(), "trinity") {
+		t.Error("expected the same conversation (trinity) still shown after switching away")
+	}
+
+	a, _ = activateScreen(a, screenCMail) // switch back
+	if !a.cmail.IsShowingDetail() {
+		t.Error("expected switching back to C-Mail to resume the still-open conversation, not the conversation list")
+	}
+	if !strings.Contains(a.cmail.View(), "trinity") {
+		t.Error("expected the same conversation (trinity) still shown after switching back")
 	}
 }
 

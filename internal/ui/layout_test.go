@@ -208,7 +208,7 @@ func TestTabVisualState_TopicsBrowsing_ClearsOnEsc(t *testing.T) {
 	}
 }
 
-func TestTabVisualState_CMailDetail_DoesNotPersistWhenBackgrounded(t *testing.T) {
+func TestTabVisualState_CMailDetail_PersistsWhenBackgrounded(t *testing.T) {
 	a := loggedInApp()
 	a.cmail = a.cmail.SetConversations([]model.Conversation{
 		{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
@@ -218,14 +218,14 @@ func TestTabVisualState_CMailDetail_DoesNotPersistWhenBackgrounded(t *testing.T)
 	a.cmail = cm
 	a.active = screenCMail
 
-	a.active = screenFeed // background C-Mail — mode is still cmailModeDetail here, stale
+	a.active = screenFeed // background C-Mail — its RTDB subscription stays live now
 
 	selected, detail := tabVisualState(a, screenCMail)
 	if selected {
 		t.Error("expected C-Mail to not be selected after switching to Feed")
 	}
-	if detail {
-		t.Error("expected C-Mail to report detail=false while backgrounded — its subscription was already torn down, so this would misrepresent a closed conversation as still open")
+	if !detail {
+		t.Error("expected C-Mail to report detail=true while backgrounded — the conversation genuinely stays open now (mirrors Chatrooms)")
 	}
 }
 
@@ -328,7 +328,7 @@ func TestRenderTabBar_ShowsDetailMarkerWhenBackgrounded(t *testing.T) {
 	}
 }
 
-func TestRenderTabBar_NoDetailMarkerForBackgroundedCMail(t *testing.T) {
+func TestRenderTabBar_ShowsDetailMarkerForBackgroundedCMail(t *testing.T) {
 	a := loggedInApp()
 	a.width = 100
 	a.cmail = a.cmail.SetConversations([]model.Conversation{
@@ -337,11 +337,11 @@ func TestRenderTabBar_NoDetailMarkerForBackgroundedCMail(t *testing.T) {
 	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	a.cmail = cm
-	a.active = screenFeed // background C-Mail
+	a.active = screenFeed // background C-Mail — the conversation stays open now
 
 	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
-	if strings.Contains(out, "›") {
-		t.Errorf("expected no detail marker for backgrounded C-Mail (its conversation was already torn down), got: %q", out)
+	if !strings.Contains(out, "›") {
+		t.Errorf("expected a detail marker for backgrounded C-Mail (its conversation genuinely stays open now), got: %q", out)
 	}
 }
 
