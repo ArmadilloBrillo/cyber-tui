@@ -106,6 +106,100 @@ func cmailInConversation(client api.Client, convID string) CMailModel {
 	return m
 }
 
+// --- background-tab persistence ---
+
+func TestDMReceived_BumpsUnreadWhileUnfocused(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversations([]model.Conversation{{ID: "c1"}})
+	m = m.SetFocused(false)
+
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey again"}})
+
+	if got := m.TotalUnread(); got != 2 {
+		t.Errorf("TotalUnread() = %d, want 2", got)
+	}
+}
+
+func TestDMReceived_DoesNotBumpUnreadWhileFocused(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversations([]model.Conversation{{ID: "c1"}})
+	m = m.SetFocused(true)
+
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
+
+	if got := m.TotalUnread(); got != 0 {
+		t.Errorf("TotalUnread() = %d, want 0 (actively viewing the conversation)", got)
+	}
+}
+
+func TestSetFocusedCMail_ClearsUnreadOnReturn(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversations([]model.Conversation{{ID: "c1"}})
+	m = m.SetFocused(false)
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
+	if got := m.TotalUnread(); got != 1 {
+		t.Fatalf("setup: expected TotalUnread 1, got %d", got)
+	}
+
+	m = m.SetFocused(true)
+	if got := m.TotalUnread(); got != 0 {
+		t.Errorf("TotalUnread() = %d, want 0 after refocusing the tab", got)
+	}
+}
+
+func TestHasLiveConv(t *testing.T) {
+	m := NewCMailModel("neo", api.NewMockClient())
+	if m.HasLiveConv() {
+		t.Error("expected no live conversation before any conversation is opened")
+	}
+
+	m = cmailInConversation(api.NewMockClient(), "c1")
+	if !m.HasLiveConv() {
+		t.Error("expected HasLiveConv() once a conversation is open in detail mode")
+	}
+}
+
+func TestIsDMStreamMsg(t *testing.T) {
+	streamMsgs := []tea.Msg{
+		dmReceivedMsg{},
+		dmStreamClosedMsg{},
+		typingHeartbeatTickMsg{},
+		dmTypingReceivedMsg{},
+	}
+	for _, msg := range streamMsgs {
+		if !IsDMStreamMsg(msg) {
+			t.Errorf("IsDMStreamMsg(%T) = false, want true", msg)
+		}
+	}
+	if IsDMStreamMsg(tea.KeyMsg{Type: tea.KeyEnter}) {
+		t.Error("IsDMStreamMsg(tea.KeyMsg) = true, want false — key input must not be routed to a backgrounded conversation")
+	}
+}
+
+func TestDMReceived_KeepsStreamingWhileUnfocused(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.dmSub = &dmSubscription{ConvID: "c1", C: make(chan model.Message)}
+	m = m.SetFocused(false)
+
+	_, cmd := m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
+	if cmd == nil {
+		t.Error("expected waitForDM to be re-issued so the stream keeps running in the background")
+	}
+}
+
+func TestComposeEmptyCMail(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	if !m.ComposeEmpty() {
+		t.Error("expected ComposeEmpty() true on a freshly opened conversation")
+	}
+
+	m.input.SetValue("hi")
+	if m.ComposeEmpty() {
+		t.Error("expected ComposeEmpty() false once text has been typed")
+	}
+}
+
 func TestTypingAnnounced_StoresCadenceAndSchedulesHeartbeat(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
 

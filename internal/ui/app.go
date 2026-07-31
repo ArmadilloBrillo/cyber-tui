@@ -548,18 +548,20 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
 		}
-		// A backgrounded Circ room resumes detail mode (and its "always
-		// focused" compose input, see ChatroomsModel.InputFocused) the
-		// instant you tab back into it — so plain left/right otherwise gets
-		// captured into a box you never asked to type into, forcing
-		// ctrl+left/right for what was plain left/right on every other tab a
-		// moment ago. An empty compose box has nothing for left/right to do
-		// anyway, so let it fall through to tab-cycling in that case only;
-		// once there's text (typed just now, or a draft left over from
-		// before backgrounding), left/right goes back to normal cursor
-		// movement and ctrl+left/right remains the way out, same as today.
+		// A backgrounded Circ room or C-Mail conversation resumes detail mode
+		// (and its "always focused" compose input, see
+		// ChatroomsModel.InputFocused / CMailModel.InputFocused) the instant
+		// you tab back into it — so plain left/right otherwise gets captured
+		// into a box you never asked to type into, forcing ctrl+left/right
+		// for what was plain left/right on every other tab a moment ago. An
+		// empty compose box has nothing for left/right to do anyway, so let
+		// it fall through to tab-cycling in that case only; once there's
+		// text (typed just now, or a draft left over from before
+		// backgrounding), left/right goes back to normal cursor movement and
+		// ctrl+left/right remains the way out, same as today.
 		bareArrowEscapesEmptyCompose := (m.String() == "left" || m.String() == "right") &&
-			a.active == screenChatrooms && a.chatrooms.ComposeEmpty()
+			((a.active == screenChatrooms && a.chatrooms.ComposeEmpty()) ||
+				(a.active == screenCMail && a.cmail.ComposeEmpty()))
 		switch {
 		case m.String() == "ctrl+o", m.String() == "ctrl+q", m.String() == "ctrl+t",
 			m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
@@ -635,7 +637,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			if a.active != screenSearch {
 				a.searchReturn = a.active
 			}
-			a.cmail = a.cmail.CancelSubscription()
+			a.cmail = a.cmail.SetFocused(false)
 			a.chatrooms = a.chatrooms.SetFocused(false)
 			a.active = screenSearch
 			a.search = a.search.FocusQuery()
@@ -881,6 +883,17 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.LeaveCMailMsg:
 		a.active = a.cmailReturn
 		return a, nil, true
+	default:
+		// Keep the open conversation's RTDB subscription (and its typing/
+		// reconnect chains) alive while another tab is active — see
+		// SetFocused and IsDMStreamMsg. When C-Mail *is* active,
+		// delegateUpdate already routes these the normal way, so this only
+		// fires while backgrounded.
+		if a.active != screenCMail && screens.IsDMStreamMsg(msg) {
+			var cmd tea.Cmd
+			a.cmail, cmd = a.cmail.Update(msg)
+			return a, cmd, true
+		}
 	}
 	return a, nil, false
 }

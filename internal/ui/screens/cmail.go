@@ -129,6 +129,26 @@ func waitForDMTyping(sub *dmTypingSubscription) tea.Cmd {
 	}
 }
 
+// IsDMStreamMsg reports whether msg belongs to C-Mail's message/typing
+// subscription lifecycle. App uses this to keep routing these messages to
+// CMailModel.Update even when C-Mail isn't the active screen, so the
+// self-rescheduling waitForDM/heartbeat/idle-check/reconnect tea.Cmd chains
+// for the conversation the user had open don't die just because they
+// switched tabs.
+func IsDMStreamMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case dmSubscribedMsg, dmReceivedMsg, dmStreamClosedMsg,
+		dmReconnectedMsg, dmReconnectFailedMsg, dmReconnectRetryDueMsg,
+		cmailMsgsLoadedMsg, cmailOlderMsgsLoadedMsg, cmailErrMsg,
+		typingAnnouncedMsg, typingHeartbeatTickMsg, typingIdleCheckMsg,
+		typingAnimTickMsg, dmTypingSubscribedMsg, dmTypingReceivedMsg,
+		dmTypingStreamClosedMsg:
+		return true
+	default:
+		return false
+	}
+}
+
 // CMailModel is the screen model for C-Mail (private 1-on-1 conversations).
 // It operates in two modes: a full-width conversation list (list mode) and a
 // full-width message history with compose input (detail mode).
@@ -161,6 +181,12 @@ type CMailModel struct {
 	client       api.Client
 	dmSub        *dmSubscription
 	activeConvID string
+
+	// focused is true while the C-Mail tab is the one on screen. The RTDB
+	// subscription for an open conversation stays alive regardless (see
+	// IsDMStreamMsg), so this only gates whether an incoming message bumps
+	// that conversation's UnreadCount for the tab-bar badge (TotalUnread()).
+	focused bool
 
 	// Reconnect-retry state, active only between a stream closing and either
 	// a successful reconnect or exhausting maxReconnectAttempts.
@@ -469,6 +495,59 @@ func (m CMailModel) TotalUnread() int {
 	return total
 }
 
+// SetFocused marks whether the C-Mail tab is the one currently on screen.
+// Becoming focused clears the currently-open conversation's local unread
+// count (mirroring ChatroomsModel.SetFocused), so TotalUnread() doesn't keep
+// counting messages the user is now actively viewing.
+func (m CMailModel) SetFocused(focused bool) CMailModel {
+	m.focused = focused
+	if focused {
+		m = m.zeroActiveConvUnread()
+	}
+	return m
+}
+
+// zeroActiveConvUnread clears UnreadCount on the m.conversations entry
+// matching the currently open conversation, if any.
+func (m CMailModel) zeroActiveConvUnread() CMailModel {
+	for i := range m.conversations {
+		if m.conversations[i].ID == m.activeConvID {
+			m.conversations[i].UnreadCount = 0
+			break
+		}
+	}
+	return m
+}
+
+// bumpActiveConvUnread increments UnreadCount on the m.conversations entry
+// matching the currently open conversation, mirroring ChatroomsModel's
+// `if !m.focused { m.unreadCount++ }` — except here the target is the
+// existing per-conversation UnreadCount TotalUnread() already sums, not a
+// separate counter, so the tab-bar badge reflects it immediately instead of
+// waiting for the next 60s poll.
+func (m CMailModel) bumpActiveConvUnread() CMailModel {
+	for i := range m.conversations {
+		if m.conversations[i].ID == m.activeConvID {
+			m.conversations[i].UnreadCount++
+			break
+		}
+	}
+	return m
+}
+
+// HasLiveConv reports whether a conversation is currently open in detail
+// mode with its subscription state intact — used by activateScreen to
+// decide whether re-entering the C-Mail tab should resume in place instead
+// of resetting to the conversation list.
+func (m CMailModel) HasLiveConv() bool {
+	return m.mode == cmailModeDetail && m.activeConv != nil
+}
+
+// ComposeEmpty reports whether the compose input has no typed text — used by
+// App to let plain left/right fall through to tab-cycling instead of being
+// captured as cursor movement (see handleKeys' focused-input gate in app.go).
+func (m CMailModel) ComposeEmpty() bool { return m.input.Value() == "" }
+
 // ConvOpenCmds returns the batch command to load message history and open the
 // live RTDB subscription for convID. Call after SetActiveConversation.
 func (m CMailModel) ConvOpenCmds(convID string) tea.Cmd {
@@ -566,6 +645,9 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 
 	case dmReceivedMsg:
 		m = m.AppendMessage(msg.msg)
+		if !m.focused {
+			m = m.bumpActiveConvUnread()
+		}
 		if m.dmSub != nil {
 			return m, waitForDM(m.dmSub)
 		}
