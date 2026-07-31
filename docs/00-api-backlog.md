@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.7) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.8) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -17,7 +17,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `/v1/search` | GET | **Open** | `createdAt` is inconsistent across hit types, and doesn't match the RFC3339 string every other user/post/reply-returning endpoint uses. Confirmed live: a numeric epoch (assumed ms) on user hits, and a raw Firestore Timestamp object (`{"_seconds":N,"_nanoseconds":N}`) on post hits — apparently un-normalized before being sent to the client. Not documented in the API spec. Client-side workaround: `apiTimestamp` (`internal/api/client.go`) accepts string, number, or object for `wireUser`/`wirePost`/`wireReply`'s date fields, and degrades to an empty timestamp rather than failing the whole response for any other shape. | 2026-07-23 |
 | `/v1/notifications?type=...` | GET | **Open** | The `type` query param (comma-separated notification-type filter) returns `500 INTERNAL_ERROR` for every value tested live — single types (`type=reply`, `type=chat_mention`, `type=dm_message`) and comma-separated combinations (`type=dm_message,chat_mention`) all fail server-side. Confirmed via `apifetch`. The client's `types []string` param plumbing (`GetNotifications`) is left in place unaffected for when the server bug is fixed; no UI currently sends a non-nil filter, so there's no live-facing regression today. | 2026-07-24 |
 | `/v1/users/me`, `/v1/users/:username` | GET | **Resolved (client-side removal)** | `postsCount` was deprecated and no longer returned reliable data; the field is also absent from the current API docs snapshot (`followersCount`/`followingCount` still present). Removed the `posts` segment from the profile counts line and the `PostsCount` field from `model.User`/`wireUser`. | 2026-07-29 |
-| `/docs.md` | GET | **Open** | The live docs endpoint reports the wrong API version — server is actually running v0.7.2 (per which this client's `v0.7.2` release was tagged), but `docs.md` doesn't reflect that yet. `docs/00-latest-api-reference.md` is left un-refreshed against it for now since re-fetching wouldn't surface anything new until the server-side docs catch up; re-check next time API work is needed. | 2026-07-30 |
+| `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8 live. `docs/00-latest-api-reference.md` re-fetched and diffed — new surface (flagging, cIRC message delete, message attachments/styles/mute commands, `EMAIL_NOT_VERIFIED`) added to Unimplemented API Features below. | 2026-07-31 |
 
 ---
 
@@ -134,7 +134,39 @@ Notes:
 
 Both cIRC and C-Mail support IRC-style slash commands expanded server-side: `/me`, `/poke`, `/hug`, `/hi5`, `/slap` (with optional `[@user]`), `/dice <notation>`, `/8ball <question>`, `/fortune`, `/help`. Malformed commands return 400. `/help` posts nothing; its `{ data: { reply } }` is captured by `SendRoomMessage`/`SendMessage` (**Done**) and shown as a local system notice — see `docs/33-circ.md` / `docs/08-cmail.md`.
 
-`/me` and the other emotes set an undocumented `isAction` field (with `content` stripped of the username), discovered by live-testing against CIRC — not in the official docs. `model.Message.IsAction` (**Done**) renders these as classic IRC `* username body *` lines. See the callout in `docs/00-latest-api-reference.md`'s Commands section.
+`/me` and the other emotes set an `isAction` field (with `content` stripped of the username). Previously observed only via live-testing; as of v0.8 this is officially documented under [Message fields](#message-fields) in `docs/00-latest-api-reference.md`, along with `isDice`, `isEightball`/`eightballAnswer`, `isFortune`/`fortuneText`. `model.Message.IsAction` (**Done**) renders these as classic IRC `* username body *` lines.
+
+### Flagging / Reporting (new in v0.8)
+
+`POST /v1/posts/:id/flag`, `POST /v1/replies/:id/flag`, `POST /v1/circ/:roomId/messages/:messageId/flag` — report content for review. Idempotent (200 + `alreadyFlagged` on repeat), optional `reason` (max 500 chars), can't flag your own content, no way to withdraw. Shared rate limit: 5/min, 20/hour, 50/day.
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/posts/:id/flag` | POST | Report a post | Not implemented |
+| `/v1/replies/:id/flag` | POST | Report a reply | Not implemented |
+| `/v1/circ/:roomId/messages/:messageId/flag` | POST | Report a cIRC message | Not implemented |
+
+### cIRC message delete (new in v0.8)
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/circ/:roomId/messages/:messageId` | DELETE | Soft-delete own cIRC message (`content` → `[DELETED]`, attachments stripped); arrives to other clients as an RTDB `patch`, not a new message | Not implemented |
+
+### Message attachments & styles (new in v0.8)
+
+cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAttachment` (`/song ... — supporter-only`), `style` (chainable text styles via `/blink`, `/l33t`, `/comic`, `/cursive`, `/times`, `/rainbow`, `/flip`, `/quiet`, `/slow`, `/glitch`, `/spoiler`, `/wave`), and ASCII art (`/art`, cIRC-only, base64-encoded `content` when `style: "art"`). `/mute`/`/unmute`/`/muted`/`/unmuteall` manage a per-room, client-side-enforced mute list (also stored in `mutedUsersByRoom` under Settings — currently intentionally omitted from the TUI per the Settings row below). None of this is implemented client-side yet; `content` can now legitimately be empty when an attachment is the whole message.
+
+| Area | Description | Priority |
+|---|---|---|
+| `gifUrl`, `audioAttachment`, `style`, chained styles | Render/decode in message view; `style: "art"` needs base64 decode | Not implemented |
+| `/mute` family + `mutedUsersByRoom` | Client-side message filtering by muted user | Not implemented |
+| Empty `content` with attachment-only messages | Message rendering must not assume non-empty `content` | Not implemented |
+
+### Auth (new in v0.8)
+
+| Error | Description | Priority |
+|---|---|---|
+| `403 EMAIL_NOT_VERIFIED` | New error code — account access now gated on email verification instead of supporter/API-access-grant. Client should surface a clear message pointing at `/v1/auth/resend-verification` (web-only flow) rather than a generic auth failure. | Not implemented |
 
 ### Thread Watching (new in v0.5.1)
 
