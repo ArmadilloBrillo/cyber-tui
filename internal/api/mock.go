@@ -248,6 +248,14 @@ func (m *MockClient) DeleteReply(replyID string) error {
 	return nil // no-op: in-memory replies are rebuilt on each GetPostReplies call
 }
 
+func (m *MockClient) FlagPost(postID, reason string) (string, bool, error) {
+	return "flag-mock-" + postID, false, nil
+}
+
+func (m *MockClient) FlagReply(replyID, reason string) (string, bool, error) {
+	return "flag-mock-" + replyID, false, nil
+}
+
 func (m *MockClient) GetPost(postID string) (model.Post, error) {
 	posts, _, _ := m.GetFeed("")
 	for _, p := range posts {

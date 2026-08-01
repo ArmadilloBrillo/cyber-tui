@@ -142,9 +142,9 @@ Both cIRC and C-Mail support IRC-style slash commands expanded server-side: `/me
 
 | Endpoint | Method | Description | Priority |
 |---|---|---|---|
-| `/v1/posts/:id/flag` | POST | Report a post | Not implemented |
-| `/v1/replies/:id/flag` | POST | Report a reply | Not implemented |
-| `/v1/circ/:roomId/messages/:messageId/flag` | POST | Report a cIRC message | Not implemented |
+| `/v1/posts/:id/flag` | POST | Report a post | **Done** — `!` key in Feed and Post Detail; see `docs/35-flagging.md` |
+| `/v1/replies/:id/flag` | POST | Report a reply | **Done** — `!` key in Post Detail; see `docs/35-flagging.md` |
+| `/v1/circ/:roomId/messages/:messageId/flag` | POST | Report a cIRC message | Deferred — needs per-message navigation in cIRC first |
 
 ### cIRC message delete (new in v0.8)
 

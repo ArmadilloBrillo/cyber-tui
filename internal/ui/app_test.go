@@ -643,6 +643,70 @@ func TestHandleKeys_Slash_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
 	}
 }
 
+// --- Flag/report overlay: same input-focus bug class as chatrooms/cmail ---
+
+// setupFeedFlagPromptOpen opens the flag/report overlay on someone else's
+// post via FeedModel's own Update, mirroring setupChatroomsDetailWithURL
+// above (ComposeActive() must report true afterwards, or handleKeys will
+// treat later keys as global shortcuts instead of reason-box input).
+func setupFeedFlagPromptOpen(a App) App {
+	a.active = screenFeed
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "bob", Content: "not mine"},
+	}, "")
+	a.feed = a.feed.SetCurrentUsername("alice")
+	m, _ := a.feed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	a.feed = m
+	return a
+}
+
+func TestHandleKeys_Q_NotConsumed_WhileFeedFlagPromptOpen(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	if !a.feed.ComposeActive() {
+		t.Fatal("setup: expected flag prompt open (ComposeActive true) after '!'")
+	}
+	_, _, consumed := a.handleKeys(keyMsg("q"))
+	if consumed {
+		t.Error("expected plain 'q' to NOT be consumed while the flag/report reason box is focused — it must still type into the reason field")
+	}
+}
+
+func TestHandleKeys_Digit_NotConsumed_WhileFeedFlagPromptOpen(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	_, _, consumed := a.handleKeys(keyMsg("1"))
+	if consumed {
+		t.Error("expected digit '1' to NOT be consumed while the flag/report reason box is focused — it must still type into the reason field")
+	}
+}
+
+func TestHandleKeys_CtrlQ_QuitsWhileFeedFlagPromptOpen(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	_, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if !consumed {
+		t.Error("expected ctrl+q to be consumed even while the flag/report reason box is focused")
+	}
+	if cmd == nil {
+		t.Error("expected ctrl+q to fire a quit command")
+	}
+}
+
+func TestHandleKeys_Digit_NotConsumed_WhileFeedConfirmingDelete(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine"},
+	}, "")
+	a.feed = a.feed.SetCurrentUsername("alice")
+	m, _ := a.feed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	a.feed = m
+	if !a.feed.ComposeActive() {
+		t.Fatal("setup: expected delete-confirm overlay open (ComposeActive true) after 'd'")
+	}
+	_, _, consumed := a.handleKeys(keyMsg("1"))
+	if consumed {
+		t.Error("expected digit '1' to NOT be consumed while the delete-confirm overlay is open")
+	}
+}
+
 // --- Search reply deep-link ---
 
 // resolveMsgs runs cmd and flattens a tea.BatchMsg into its individual resolved messages.
@@ -1292,6 +1356,34 @@ func TestFriendlyErr_404IsSoftened(t *testing.T) {
 	}
 	if got := friendlyErr(errors.New("boom")); got != "boom" {
 		t.Errorf("friendlyErr(non-api) = %q, want raw text", got)
+	}
+}
+
+// flagErrorMsg softens the documented self-report 403 into a friendly banner;
+// anything else falls through to the normal actionErrMsg handling.
+func TestFlagErrorMsg_403IsSoftened(t *testing.T) {
+	got := flagErrorMsg(&api.APIError{Code: "FORBIDDEN", Status: 403, Message: "cannot flag own content"})
+	msg, ok := got.(notifyMsg)
+	if !ok {
+		t.Fatalf("flagErrorMsg(403) = %T, want notifyMsg", got)
+	}
+	if msg.level != notifyError {
+		t.Errorf("level = %v, want notifyError", msg.level)
+	}
+	if msg.text != "you can't report your own content" {
+		t.Errorf("text = %q, want friendly self-report message", msg.text)
+	}
+}
+
+func TestFlagErrorMsg_OtherErrorsFallThrough(t *testing.T) {
+	err := &api.APIError{Code: "RATE_LIMITED", Status: 429, Message: "too many requests"}
+	got := flagErrorMsg(err)
+	ae, ok := got.(actionErrMsg)
+	if !ok {
+		t.Fatalf("flagErrorMsg(429) = %T, want actionErrMsg", got)
+	}
+	if ae.err != err {
+		t.Errorf("actionErrMsg.err = %v, want the original error", ae.err)
 	}
 }
 

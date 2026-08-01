@@ -127,6 +127,10 @@ type PostDetailModel struct {
 	confirming      pdConfirmKind // pending delete confirmation
 	maxThreadDepth  int           // max visual nesting depth; 0 treated as 3
 
+	flagPrompt        FlagPrompt // active while reporting the selected post or reply
+	flagTargetPostID  string     // set when flagging the post itself
+	flagTargetReplyID string     // set when flagging a reply (flagTargetPostID also set, as the reply's parent)
+
 	bookmarkedPostIDs  map[string]struct{}
 	bookmarkedReplyIDs map[string]struct{}
 	watchedPostIDs     map[string]struct{}
@@ -134,7 +138,8 @@ type PostDetailModel struct {
 
 func NewPostDetailModel() PostDetailModel {
 	return PostDetailModel{
-		compose: NewComposeModel(0),
+		compose:    NewComposeModel(0),
+		flagPrompt: NewFlagPrompt(),
 	}
 }
 
@@ -178,6 +183,8 @@ func (m PostDetailModel) Close() PostDetailModel {
 	m.err = nil
 	m.compose = m.compose.Close()
 	m.confirming = pdConfirmNone
+	m.flagPrompt = NewFlagPrompt()
+	m.flagTargetPostID, m.flagTargetReplyID = "", ""
 	return m
 }
 
@@ -240,8 +247,13 @@ func (m PostDetailModel) SelectedReplyID() string {
 // Ready reports whether the viewport has been initialised (i.e. a WindowSizeMsg was received).
 func (m PostDetailModel) Ready() bool { return m.ready }
 
-// ComposeActive reports whether the compose box is currently open.
-func (m PostDetailModel) ComposeActive() bool { return m.compose.IsActive() }
+// ComposeActive reports whether the compose box, the flag/report overlay, or
+// the delete-confirmation overlay is open. Every screen-owned overlay that
+// intercepts keys first in Update must be OR'd in here — app.go's global
+// shortcuts fire instead of reaching Update whenever this returns false.
+func (m PostDetailModel) ComposeActive() bool {
+	return m.compose.IsActive() || m.flagPrompt.Active() || m.confirming != pdConfirmNone
+}
 
 func (m PostDetailModel) SetError(err error) PostDetailModel {
 	m.err = err
@@ -337,6 +349,9 @@ func (m PostDetailModel) viewportHeight() int {
 	}
 	if m.confirming != pdConfirmNone {
 		h -= confirmBoxHeight
+	}
+	if m.flagPrompt.Active() {
+		h -= m.flagPrompt.Height()
 	}
 	if h < 1 {
 		h = 1
@@ -455,7 +470,33 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case FlagSubmitMsg:
+		postID, replyID := m.flagTargetPostID, m.flagTargetReplyID
+		m.flagTargetPostID, m.flagTargetReplyID = "", ""
+		if m.ready {
+			m.viewport.Height = m.viewportHeight()
+		}
+		if replyID != "" {
+			return m, func() tea.Msg {
+				return FlagReplyMsg{ReplyID: replyID, PostID: postID, Reason: msg.Reason}
+			}
+		}
+		return m, func() tea.Msg { return FlagPostMsg{PostID: postID, Reason: msg.Reason} }
+
+	case FlagCancelMsg:
+		m.flagTargetPostID, m.flagTargetReplyID = "", ""
+		if m.ready {
+			m.viewport.Height = m.viewportHeight()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
+		// Flag overlay intercepts all keys while active.
+		if m.flagPrompt.Active() {
+			var cmd tea.Cmd
+			m.flagPrompt, cmd = m.flagPrompt.Update(msg)
+			return m, cmd
+		}
 		// Confirmation overlay intercepts all keys while active.
 		if m.confirming != pdConfirmNone {
 			switch msg.String() {
@@ -509,6 +550,27 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				if m.flatTree[m.selectedReply].Reply.AuthorUsername == m.currentUsername {
 					m.confirming = pdConfirmDeleteReply
 					m.viewport.Height = m.viewportHeight()
+				}
+			}
+			return m, nil
+		case "!":
+			if m.selectedReply == -1 {
+				if m.post.ID != "" && m.post.AuthorUsername != m.currentUsername {
+					m.flagTargetPostID = m.post.ID
+					var cmd tea.Cmd
+					m.flagPrompt, cmd = m.flagPrompt.Open(FlagKindPost)
+					m.viewport.Height = m.viewportHeight()
+					return m, cmd
+				}
+			} else if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
+				reply := m.flatTree[m.selectedReply].Reply
+				if reply.AuthorUsername != m.currentUsername {
+					m.flagTargetPostID = m.post.ID
+					m.flagTargetReplyID = reply.ID
+					var cmd tea.Cmd
+					m.flagPrompt, cmd = m.flagPrompt.Open(FlagKindReply)
+					m.viewport.Height = m.viewportHeight()
+					return m, cmd
 				}
 			}
 			return m, nil
@@ -808,6 +870,13 @@ func (m PostDetailModel) View() string {
 		return lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
 			promptView,
+		)
+	}
+
+	if m.flagPrompt.Active() {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			m.flagPrompt.View(m.width),
 		)
 	}
 

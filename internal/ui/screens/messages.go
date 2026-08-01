@@ -143,6 +143,21 @@ type DeleteReplyMsg struct {
 	PostID  string
 }
 
+// FlagPostMsg is emitted by FeedModel or PostDetailModel when the user
+// confirms reporting a post. Reason is optional (max 500 chars).
+type FlagPostMsg struct {
+	PostID string
+	Reason string
+}
+
+// FlagReplyMsg is emitted by PostDetailModel when the user confirms
+// reporting a reply. Reason is optional (max 500 chars).
+type FlagReplyMsg struct {
+	ReplyID string
+	PostID  string
+	Reason  string
+}
+
 // ShowProfilePostMsg is emitted by ProfileModel when the user opens a post from
 // the Posts sub-tab. Handled by App in handleProfile (sets return to screenProfile).
 type ShowProfilePostMsg struct{ Post model.Post }

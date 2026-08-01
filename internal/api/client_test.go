@@ -1951,6 +1951,77 @@ func TestHTTPCreateBookmark_Reply(t *testing.T) {
 	}
 }
 
+func TestHTTPFlagPost_SendsReasonAndParsesResponse(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"postId": "p1", "flagId": "flag-1", "flagged": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	flagID, alreadyFlagged, err := c.FlagPost("p1", "spam")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/posts/p1/flag" {
+		t.Errorf("path = %q, want /v1/posts/p1/flag", gotPath)
+	}
+	if gotBody["reason"] != "spam" {
+		t.Errorf("reason = %v, want spam", gotBody["reason"])
+	}
+	if flagID != "flag-1" {
+		t.Errorf("flagID = %q, want flag-1", flagID)
+	}
+	if alreadyFlagged {
+		t.Error("alreadyFlagged = true, want false")
+	}
+}
+
+func TestHTTPFlagPost_AlreadyFlagged(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{"postId": "p1", "flagged": true, "alreadyFlagged": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	_, alreadyFlagged, err := c.FlagPost("p1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !alreadyFlagged {
+		t.Error("alreadyFlagged = false, want true")
+	}
+}
+
+func TestHTTPFlagReply_SendsReasonAndParsesResponse(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"replyId": "r5", "flagId": "flag-2", "flagged": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	flagID, alreadyFlagged, err := c.FlagReply("r5", "harassment")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/replies/r5/flag" {
+		t.Errorf("path = %q, want /v1/replies/r5/flag", gotPath)
+	}
+	if gotBody["reason"] != "harassment" {
+		t.Errorf("reason = %v, want harassment", gotBody["reason"])
+	}
+	if flagID != "flag-2" {
+		t.Errorf("flagID = %q, want flag-2", flagID)
+	}
+	if alreadyFlagged {
+		t.Error("alreadyFlagged = true, want false")
+	}
+}
+
 func TestHTTPDeleteBookmark_Success(t *testing.T) {
 	var gotPath string
 	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -153,6 +153,13 @@ type Client interface {
 	// DeleteReply soft-deletes a reply owned by the authenticated user.
 	DeleteReply(replyID string) error
 
+	// FlagPost reports a post for review. reason is optional (max 500 chars).
+	// Idempotent: reporting the same post again returns alreadyFlagged=true
+	// instead of an error. Returns 403 if the post is the caller's own.
+	FlagPost(postID, reason string) (flagID string, alreadyFlagged bool, err error)
+	// FlagReply reports a reply for review. Same semantics as FlagPost.
+	FlagReply(replyID, reason string) (flagID string, alreadyFlagged bool, err error)
+
 	// User posts/replies — cursor-paginated history for any user.
 	GetUserPosts(username, cursor string) ([]model.Post, string, error)
 	GetUserReplies(username, cursor string) ([]model.Reply, string, error)

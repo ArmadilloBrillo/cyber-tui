@@ -303,6 +303,15 @@ type createBookmarkResponseData struct {
 	BookmarkID string `json:"bookmarkId"`
 }
 
+type flagRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type flagResponseData struct {
+	FlagID         string `json:"flagId"`
+	AlreadyFlagged bool   `json:"alreadyFlagged"`
+}
+
 type createPostRequest struct {
 	Content  string   `json:"content"`
 	Title    string   `json:"title,omitempty"`
@@ -1167,6 +1176,30 @@ func (c *HTTPClient) DeletePost(postID string) error {
 func (c *HTTPClient) DeleteReply(replyID string) error {
 	_, err := c.doRequest("DELETE", "/v1/replies/"+url.PathEscape(replyID), nil)
 	return err
+}
+
+func (c *HTTPClient) FlagPost(postID, reason string) (string, bool, error) {
+	env, err := c.doJSON("POST", "/v1/posts/"+url.PathEscape(postID)+"/flag", flagRequest{Reason: reason})
+	if err != nil {
+		return "", false, err
+	}
+	var data flagResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", false, err
+	}
+	return data.FlagID, data.AlreadyFlagged, nil
+}
+
+func (c *HTTPClient) FlagReply(replyID, reason string) (string, bool, error) {
+	env, err := c.doJSON("POST", "/v1/replies/"+url.PathEscape(replyID)+"/flag", flagRequest{Reason: reason})
+	if err != nil {
+		return "", false, err
+	}
+	var data flagResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", false, err
+	}
+	return data.FlagID, data.AlreadyFlagged, nil
 }
 
 func (c *HTTPClient) GetReply(replyID string) (model.Reply, error) {
