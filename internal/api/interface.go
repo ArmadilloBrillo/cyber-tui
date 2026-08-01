@@ -67,8 +67,16 @@ type Client interface {
 	SendRoomMessage(roomID, body string) (string, error)
 	// MarkRoomRead resets the "new messages" indicator for the caller.
 	MarkRoomRead(roomID string) error
+	// FlagRoomMessage reports a chatroom message for review. Same semantics as FlagPost.
+	FlagRoomMessage(roomID, messageID, reason string) (flagID string, alreadyFlagged bool, err error)
+	// DeleteRoomMessage soft-deletes a message owned by the authenticated user.
+	// Returns 409 if it's already deleted, 403 if it isn't the caller's own.
+	DeleteRoomMessage(roomID, messageID string) error
 	// SubscribeRoom opens a live RTDB SSE stream for the given chatroom.
-	// Returns a channel of incoming messages and a cancel function.
+	// Returns a channel of incoming messages and a cancel function. A delete
+	// (by the caller or another client) arrives as a partial update rather
+	// than a new message: only ID and Deleted are set on that model.Message —
+	// callers must merge it onto the existing message by ID, not append it.
 	SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error)
 	// GetRoomUsers returns who's currently present in roomID (server-side
 	// staleness-filtered already; no client-side filtering needed).

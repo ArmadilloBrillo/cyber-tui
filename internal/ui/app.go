@@ -833,6 +833,13 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, tea.Batch(a.markNotifReadCmd(msg.NotifID), activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
+	case screens.FlagMessageMsg:
+		return a, a.flagRoomMessageCmd(msg.RoomID, msg.MessageID, msg.Reason), true
+	case screens.DeleteRoomMessageMsg:
+		return a, a.deleteRoomMessageCmd(msg.RoomID, msg.MessageID), true
+	case roomMessageDeletedMsg:
+		a.chatrooms = a.chatrooms.ApplyMessageDeleted(msg.messageID)
+		return a, nil, true
 	case screens.RoomOpenedMsg:
 		return a, a.markRoomReadCmd(msg.RoomID), true
 	case screens.RoomReconnectedMsg:
@@ -2235,6 +2242,7 @@ type roomCommandReplyMsg struct {
 	roomID string
 	reply  string
 }
+type roomMessageDeletedMsg struct{ messageID string }
 type cmailCommandReplyMsg struct {
 	convID string
 	reply  string
@@ -3360,6 +3368,25 @@ func (a *App) flagReplyCmd(replyID, reason string) tea.Cmd {
 			return flagErrorMsg(err)
 		}
 		return notifyMsg{level: notifyInfo, text: flagResultText(alreadyFlagged)}
+	}
+}
+
+func (a *App) flagRoomMessageCmd(roomID, messageID, reason string) tea.Cmd {
+	return func() tea.Msg {
+		_, alreadyFlagged, err := a.client.FlagRoomMessage(roomID, messageID, reason)
+		if err != nil {
+			return flagErrorMsg(err)
+		}
+		return notifyMsg{level: notifyInfo, text: flagResultText(alreadyFlagged)}
+	}
+}
+
+func (a *App) deleteRoomMessageCmd(roomID, messageID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.DeleteRoomMessage(roomID, messageID); err != nil {
+			return actionErrMsg{err}
+		}
+		return roomMessageDeletedMsg{messageID: messageID}
 	}
 }
 

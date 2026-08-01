@@ -1,6 +1,7 @@
 package screens_test
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -56,6 +57,14 @@ func TestFlagPrompt_NoAtConfirm_ReturnsToEditing(t *testing.T) {
 	m, _ = typeKey(m, "x")
 	if !m.Active() {
 		t.Error("expected prompt to still be active while editing")
+	}
+}
+
+func TestFlagPrompt_FlagKindMessage_ShowsMessageWording(t *testing.T) {
+	m := screens.NewFlagPrompt()
+	m, _ = m.Open(screens.FlagKindMessage)
+	if !strings.Contains(m.View(80), "Report this message") {
+		t.Errorf("View() = %q, want it to mention 'Report this message'", m.View(80))
 	}
 }
 

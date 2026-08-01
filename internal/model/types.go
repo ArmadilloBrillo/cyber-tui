@@ -124,6 +124,7 @@ type Message struct {
 	IsSystem    bool // local-only notice (e.g. a /help reply); never sent to or stored by the server
 	IsAction    bool // true for /me and other emote-style commands (undocumented API field);
 	// Body is just the action text with no username baked in — render as "* username body *"
+	Deleted bool // CIRC only: message was soft-deleted by its author; Body is "[DELETED]", render as a tombstone
 }
 
 type Conversation struct {

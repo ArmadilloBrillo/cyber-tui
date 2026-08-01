@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/markdown"
@@ -210,6 +211,11 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
 		tsWidth := lipgloss.Width(ts)
 
+		if msg.Deleted {
+			sb.WriteString(renderDeletedTombstone(msg.From.Username, ts, viewportWidth))
+			continue
+		}
+
 		if msg.IsAction {
 			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser))
 			continue
@@ -244,6 +250,64 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 		}
 	}
 	return sb.String()
+}
+
+// renderDeletedTombstone renders a soft-deleted cIRC message: the author and
+// original timestamp stay (per the API), but the body is replaced with a
+// muted "[DELETED]" marker — no markdown, no attachments, no text style.
+func renderDeletedTombstone(username, ts string, viewportWidth int) string {
+	const tsGap = 2 // minimum space between the body and the timestamp
+	const plainBody = "[DELETED]"
+	tsWidth := lipgloss.Width(ts)
+	prefix := "<" + theme.Subtle.Render(username) + ">  "
+	rawPrefixWidth := len(username) + 4
+	// Match renderCircMessages' layout exactly: reserve an elastic body field
+	// of bodyFieldWidth (not the [DELETED] marker's own short width), so the
+	// timestamp lands at the same right-aligned column as every other line.
+	bodyFieldWidth := max(viewportWidth-rawPrefixWidth-tsWidth-tsGap, len(plainBody))
+	pad := max(bodyFieldWidth-len(plainBody), 0) + tsGap
+	return prefix + theme.Subtle.Render(plainBody) + strings.Repeat(" ", pad) + theme.Subtle.Render(ts) + "\n"
+}
+
+// renderCircMessagesWithSelection renders msgs exactly like renderCircMessages
+// (byte-identical when selectedID == ""), additionally returning each
+// message's start-line offset and rendered line-height (1:1 with msgs, so
+// indices stay aligned even though system notices are never selectable), and
+// highlighting the message whose ID matches selectedID with theme.SelectedRow.
+//
+// The highlight can't simply wrap the normally-styled block: theme.Highlight/
+// theme.MeHighlight/markdown.RenderInline already emit their own ANSI reset
+// codes, which would terminate an outer background style mid-line. Instead,
+// the selected message's block is stripped back to plain text (ansi.Strip)
+// and only that plain text is wrapped in theme.SelectedRow — the same
+// approach settings.go uses for its selected-row highlight.
+func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string) (content string, offsets []int, heights []int) {
+	offsets = make([]int, len(msgs))
+	heights = make([]int, len(msgs))
+	var sb strings.Builder
+	var lineCount int
+	for i, msg := range msgs {
+		rendered := renderCircMessages([]model.Message{msg}, loc, timeDisplayFormat, viewportWidth, currentUser)
+		if selectedID != "" && msg.ID == selectedID {
+			plain := strings.TrimSuffix(ansi.Strip(rendered), "\n")
+			rendered = theme.SelectedRow.Width(viewportWidth).Render(plain) + "\n"
+		}
+		offsets[i] = lineCount
+		// Not lipgloss.Height: it's strings.Count(s, "\n")+1, which treats
+		// rendered's own trailing "\n" as a phantom extra line. That's right
+		// for a whole-content string measured once, but wrong per-message
+		// here — concatenating N such strings and re-splitting on "\n" (as
+		// the viewport does) yields N real lines + 1 trailing empty line
+		// total, not N*(realLines+1). Summing the inflated per-message
+		// heights desyncs these offsets from the viewport's actual line
+		// count, which silently breaks scrolling (millerPageNav computes a
+		// YOffset the viewport's own maxYOffset() clamps right back down).
+		h := strings.Count(rendered, "\n")
+		heights[i] = h
+		lineCount += h
+		sb.WriteString(rendered)
+	}
+	return sb.String(), offsets, heights
 }
 
 // renderActionLine renders a /me-style action message in classic IRC form:

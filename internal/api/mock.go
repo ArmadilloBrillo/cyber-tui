@@ -444,6 +444,14 @@ func (m *MockClient) MarkRoomRead(roomID string) error {
 	return nil
 }
 
+func (m *MockClient) FlagRoomMessage(roomID, messageID, reason string) (string, bool, error) {
+	return "flag-mock-" + messageID, false, nil
+}
+
+func (m *MockClient) DeleteRoomMessage(roomID, messageID string) error {
+	return nil
+}
+
 // SubscribeRoom returns a channel that delivers one fake incoming message after
 // 2 seconds (to exercise the live-stream UI path), then closes.
 func (m *MockClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error) {
@@ -454,8 +462,13 @@ func (m *MockClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 		select {
 		case <-time.After(2 * time.Second):
 			select {
+			// A fresh, unique ID each delivery: the app reconnects and
+			// re-subscribes whenever this mock channel closes (below), which
+			// would otherwise repeatedly deliver messages sharing one
+			// hardcoded ID — harmless for rendering, but breaks anything
+			// keyed by message ID (selection, flag/delete).
 			case ch <- model.Message{
-				ID:        "mock-room-live-1",
+				ID:        fmt.Sprintf("mock-room-live-%d", time.Now().UnixNano()),
 				From:      mockUsers[1],
 				Body:      "incoming mock room message",
 				CreatedAt: time.Now(),

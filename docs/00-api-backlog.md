@@ -144,13 +144,13 @@ Both cIRC and C-Mail support IRC-style slash commands expanded server-side: `/me
 |---|---|---|---|
 | `/v1/posts/:id/flag` | POST | Report a post | **Done** — `!` key in Feed and Post Detail; see `docs/35-flagging.md` |
 | `/v1/replies/:id/flag` | POST | Report a reply | **Done** — `!` key in Post Detail; see `docs/35-flagging.md` |
-| `/v1/circ/:roomId/messages/:messageId/flag` | POST | Report a cIRC message | Deferred — needs per-message navigation in cIRC first |
+| `/v1/circ/:roomId/messages/:messageId/flag` | POST | Report a cIRC message | **Done** — `!` while browsing messages (`up`/`down`); see `docs/36-circ-message-flagging.md` |
 
 ### cIRC message delete (new in v0.8)
 
 | Endpoint | Method | Description | Priority |
 |---|---|---|---|
-| `/v1/circ/:roomId/messages/:messageId` | DELETE | Soft-delete own cIRC message (`content` → `[DELETED]`, attachments stripped); arrives to other clients as an RTDB `patch`, not a new message | Not implemented |
+| `/v1/circ/:roomId/messages/:messageId` | DELETE | Soft-delete own cIRC message (`content` → `[DELETED]`, attachments stripped); arrives to other clients as an RTDB `patch`, not a new message | **Done** — `d` while browsing messages (own messages only), with live propagation to other clients via the now-handled RTDB `patch` event; see `docs/36-circ-message-flagging.md` |
 
 ### Message attachments & styles (new in v0.8)
 

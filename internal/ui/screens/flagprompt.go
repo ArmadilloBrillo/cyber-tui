@@ -17,6 +17,7 @@ type FlagKind int
 const (
 	FlagKindPost FlagKind = iota
 	FlagKindReply
+	FlagKindMessage
 )
 
 // FlagSubmitMsg is emitted once the user confirms a report.
@@ -101,10 +102,14 @@ func (m FlagPrompt) Update(msg tea.KeyMsg) (FlagPrompt, tea.Cmd) {
 }
 
 func (m FlagPrompt) label() string {
-	if m.kind == FlagKindReply {
+	switch m.kind {
+	case FlagKindReply:
 		return "reply"
+	case FlagKindMessage:
+		return "message"
+	default:
+		return "post"
 	}
-	return "post"
 }
 
 // View renders the overlay box at the given width (matching the viewport it

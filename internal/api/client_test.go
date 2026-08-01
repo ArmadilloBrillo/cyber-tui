@@ -830,6 +830,96 @@ func TestHTTPSubscribeRoom_SanitizesControlChars(t *testing.T) {
 	}
 }
 
+// TestHTTPSubscribeRoom_PatchDeleteDeliversMergeSignal covers a delete
+// arriving as a partial "patch" event ({"content":"[DELETED]","deleted":true},
+// no sender/timestamp/etc.) — the delivered model.Message must carry only
+// {ID, Deleted}, never zeroed-out sender/body fields a caller could
+// mistake for a real (if empty) message.
+func TestHTTPSubscribeRoom_PatchDeleteDeliversMergeSignal(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "patch", `{"path":"/msg1","data":{"content":"[DELETED]","deleted":true}}`)
+	}))
+
+	ch, cancel, err := c.SubscribeRoom(context.Background(), "zion")
+	if err != nil {
+		t.Fatalf("SubscribeRoom error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if msg.ID != "msg1" {
+			t.Errorf("ID = %q, want msg1", msg.ID)
+		}
+		if !msg.Deleted {
+			t.Error("Deleted = false, want true")
+		}
+		if msg.From.Username != "" || msg.Body != "" {
+			t.Errorf("expected only {ID, Deleted} set, got From=%+v Body=%q", msg.From, msg.Body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+}
+
+// TestHTTPSubscribeRoom_PatchWithoutDeletedIgnored guards the defensive
+// branch for a patch event that isn't a delete (not documented as occurring
+// today, but nothing should crash or misdeliver if the server ever sends
+// one) — it must be skipped, not delivered as a zeroed-out message.
+func TestHTTPSubscribeRoom_PatchWithoutDeletedIgnored(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "patch", `{"path":"/msg1","data":{"isChatAdmin":true}}`)
+		writeSSEEvent(w, "put", `{"path":"/msg2","data":{"userId":"u2","username":"molly","content":"hi","timestamp":1700000001000}}`)
+	}))
+
+	ch, cancel, err := c.SubscribeRoom(context.Background(), "zion")
+	if err != nil {
+		t.Fatalf("SubscribeRoom error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if msg.ID != "msg2" {
+			t.Errorf("expected the non-delete patch to be skipped and msg2 delivered instead, got ID=%q", msg.ID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+}
+
+// TestHTTPDeleteRoomMessage_Success mirrors the other simple DELETE-verb
+// action tests (e.g. TestHTTPDeleteBookmark_Success).
+func TestHTTPDeleteRoomMessage_Success(t *testing.T) {
+	var gotMethod, gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		writeOK(t, w, map[string]any{"roomId": "zion", "messageId": "m1", "deleted": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.DeleteRoomMessage("zion", "m1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/v1/circ/zion/messages/m1" {
+		t.Errorf("path = %q, want /v1/circ/zion/messages/m1", gotPath)
+	}
+}
+
 // --- C-Mail REST tests ---
 
 func TestHTTPGetConversations_ParsesList(t *testing.T) {
@@ -2019,6 +2109,49 @@ func TestHTTPFlagReply_SendsReasonAndParsesResponse(t *testing.T) {
 	}
 	if alreadyFlagged {
 		t.Error("alreadyFlagged = true, want false")
+	}
+}
+
+func TestHTTPFlagRoomMessage_SendsReasonAndParsesResponse(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"roomId": "general", "messageId": "m1", "flagId": "flag-3", "flagged": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	flagID, alreadyFlagged, err := c.FlagRoomMessage("general", "m1", "spam")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/circ/general/messages/m1/flag" {
+		t.Errorf("path = %q, want /v1/circ/general/messages/m1/flag", gotPath)
+	}
+	if gotBody["reason"] != "spam" {
+		t.Errorf("reason = %v, want spam", gotBody["reason"])
+	}
+	if flagID != "flag-3" {
+		t.Errorf("flagID = %q, want flag-3", flagID)
+	}
+	if alreadyFlagged {
+		t.Error("alreadyFlagged = true, want false")
+	}
+}
+
+func TestHTTPFlagRoomMessage_AlreadyFlagged(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{"roomId": "general", "messageId": "m1", "flagged": true, "alreadyFlagged": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	_, alreadyFlagged, err := c.FlagRoomMessage("general", "m1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !alreadyFlagged {
+		t.Error("alreadyFlagged = false, want true")
 	}
 }
 
