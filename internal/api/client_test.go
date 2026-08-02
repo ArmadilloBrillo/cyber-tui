@@ -715,6 +715,38 @@ func TestHTTPSubscribeDMs_SanitizesControlChars(t *testing.T) {
 	}
 }
 
+// TestHTTPSubscribeDMs_ParsesAttachmentsAndStyle confirms the RTDB DM wire
+// struct decodes imageUrl/gifUrl/audioAttachment/style the same as the REST path.
+func TestHTTPSubscribeDMs_ParsesAttachmentsAndStyle(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/msg1","data":{"senderId":"u2","senderUsername":"molly","content":"hi","timestamp":1700000001000,`+
+			`"gifUrl":"https://cyberspace.online/a.gif","style":["wave","rainbow"]}}`)
+	}))
+
+	ch, cancel, err := c.SubscribeDMs(context.Background(), "conv1")
+	if err != nil {
+		t.Fatalf("SubscribeDMs error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if msg.GifUrl != "https://cyberspace.online/a.gif" {
+			t.Errorf("msg.GifUrl = %q", msg.GifUrl)
+		}
+		if len(msg.Style) != 2 || msg.Style[0] != "wave" || msg.Style[1] != "rainbow" {
+			t.Errorf("msg.Style = %v, want [wave rainbow]", msg.Style)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+}
+
 // TestHTTPSubscribeDMs_CancelClosesChannel verifies that calling cancel stops the stream.
 func TestHTTPSubscribeDMs_CancelClosesChannel(t *testing.T) {
 	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -824,6 +856,38 @@ func TestHTTPSubscribeRoom_SanitizesControlChars(t *testing.T) {
 		}
 		if strings.ContainsRune(msg.Body, 0x1b) {
 			t.Errorf("msg.Body contains unstripped ESC: %q", msg.Body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+}
+
+// TestHTTPSubscribeRoom_ParsesAttachmentsAndStyle confirms the RTDB cIRC wire
+// struct decodes imageUrl/gifUrl/audioAttachment/style the same as the REST path.
+func TestHTTPSubscribeRoom_ParsesAttachmentsAndStyle(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/msg1","data":{"userId":"u2","username":"molly","content":"hi","timestamp":1700000001000,`+
+			`"imageUrl":"https://cyberspace.online/img.png","style":"l33t"}}`)
+	}))
+
+	ch, cancel, err := c.SubscribeRoom(context.Background(), "zion")
+	if err != nil {
+		t.Fatalf("SubscribeRoom error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if msg.ImageUrl != "https://cyberspace.online/img.png" {
+			t.Errorf("msg.ImageUrl = %q", msg.ImageUrl)
+		}
+		if len(msg.Style) != 1 || msg.Style[0] != "l33t" {
+			t.Errorf("msg.Style = %v, want [l33t]", msg.Style)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for message")
@@ -1071,6 +1135,70 @@ func TestHTTPGetRoomMessages_ParsesIsAction(t *testing.T) {
 	}
 }
 
+// TestHTTPGetRoomMessages_ParsesAttachmentsAndStyle covers imageUrl, gifUrl,
+// audioAttachment, and both the single-string and array shapes of style.
+func TestHTTPGetRoomMessages_ParsesAttachmentsAndStyle(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "case", "content": "hi", "timestamp": 1700000001000,
+				"imageUrl": "https://cyberspace.online/img.png", "style": "blink"},
+			{"id": "m2", "userId": "u2", "username": "molly", "content": "hey", "timestamp": 1700000002000,
+				"gifUrl": "https://cyberspace.online/a.gif", "style": []string{"comic", "rainbow"}},
+			{"id": "m3", "userId": "u3", "username": "case", "content": "tune", "timestamp": 1700000003000,
+				"audioAttachment": map[string]any{"src": "https://cyberspace.online/song.mp3", "artist": "case", "title": "run", "genre": "synthwave"}},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("len(msgs) = %d, want 3", len(msgs))
+	}
+	if msgs[0].ImageUrl != "https://cyberspace.online/img.png" {
+		t.Errorf("msgs[0].ImageUrl = %q", msgs[0].ImageUrl)
+	}
+	if len(msgs[0].Style) != 1 || msgs[0].Style[0] != "blink" {
+		t.Errorf("msgs[0].Style = %v, want [blink]", msgs[0].Style)
+	}
+	if msgs[1].GifUrl != "https://cyberspace.online/a.gif" {
+		t.Errorf("msgs[1].GifUrl = %q", msgs[1].GifUrl)
+	}
+	if len(msgs[1].Style) != 2 || msgs[1].Style[0] != "comic" || msgs[1].Style[1] != "rainbow" {
+		t.Errorf("msgs[1].Style = %v, want [comic rainbow]", msgs[1].Style)
+	}
+	if msgs[2].AudioAttachment == nil {
+		t.Fatal("msgs[2].AudioAttachment is nil")
+	}
+	if msgs[2].AudioAttachment.Type != "audio" || msgs[2].AudioAttachment.Src != "https://cyberspace.online/song.mp3" ||
+		msgs[2].AudioAttachment.Artist != "case" || msgs[2].AudioAttachment.Title != "run" || msgs[2].AudioAttachment.Genre != "synthwave" {
+		t.Errorf("msgs[2].AudioAttachment = %+v", msgs[2].AudioAttachment)
+	}
+}
+
+// TestHTTPGetRoomMessages_DecodesArtBody covers the style:"art" special case
+// where content is base64-encoded ASCII art, plus the malformed-base64 fallback.
+func TestHTTPGetRoomMessages_DecodesArtBody(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "case", "content": "aGVsbG8=", "timestamp": 1700000001000, "style": "art"},
+			{"id": "m2", "userId": "u1", "username": "case", "content": "not-base64!!", "timestamp": 1700000002000, "style": "art"},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msgs[0].Body != "hello" {
+		t.Errorf("msgs[0].Body = %q, want decoded %q", msgs[0].Body, "hello")
+	}
+	if msgs[1].Body != "not-base64!!" {
+		t.Errorf("msgs[1].Body = %q, want raw fallback %q", msgs[1].Body, "not-base64!!")
+	}
+}
+
 // TestHTTPGetRoomMessages_SanitizesControlChars guards against a regression
 // of the 2026-07-24 review's sanitize-bypass finding for cIRC room history.
 func TestHTTPGetRoomMessages_SanitizesControlChars(t *testing.T) {
@@ -1159,6 +1287,33 @@ func TestHTTPGetMessages_ParsesIsAction(t *testing.T) {
 	}
 	if !msgs[0].IsAction || msgs[0].Body != "waves" {
 		t.Errorf("msgs[0] = %+v, want IsAction=true Body=waves", msgs[0])
+	}
+}
+
+// TestHTTPGetMessages_ParsesAttachmentsAndStyle covers imageUrl, gifUrl,
+// audioAttachment, and style on C-Mail messages.
+func TestHTTPGetMessages_ParsesAttachmentsAndStyle(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "senderId": "u1", "senderUsername": "case", "content": "hi", "timestamp": 1700000001000,
+				"imageUrl": "https://cyberspace.online/img.png", "gifUrl": "https://cyberspace.online/a.gif",
+				"style": []string{"quiet"},
+				"audioAttachment": map[string]any{"src": "https://cyberspace.online/song.mp3", "artist": "case"}},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetMessages("c1", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msgs[0].ImageUrl != "https://cyberspace.online/img.png" || msgs[0].GifUrl != "https://cyberspace.online/a.gif" {
+		t.Errorf("msgs[0] ImageUrl/GifUrl = %q/%q", msgs[0].ImageUrl, msgs[0].GifUrl)
+	}
+	if len(msgs[0].Style) != 1 || msgs[0].Style[0] != "quiet" {
+		t.Errorf("msgs[0].Style = %v, want [quiet]", msgs[0].Style)
+	}
+	if msgs[0].AudioAttachment == nil || msgs[0].AudioAttachment.Src != "https://cyberspace.online/song.mp3" {
+		t.Errorf("msgs[0].AudioAttachment = %+v", msgs[0].AudioAttachment)
 	}
 }
 

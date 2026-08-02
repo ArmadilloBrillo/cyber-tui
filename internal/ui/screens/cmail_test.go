@@ -474,3 +474,35 @@ func TestTypingIndicator_DotsCycleThroughZeroOneTwoThree(t *testing.T) {
 		}
 	}
 }
+
+// --- style animation ticker (coarse-scoped, see maybeStartStyleAnim) ---
+
+func TestCMailUpdate_StartsStyleAnimTickerWhenAnimatedMessageArrives(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m, cmd := m.Update(dmReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"blink"}}})
+
+	if !m.styleAnimRunning {
+		t.Error("expected styleAnimRunning = true after an animated-style message arrived")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd to start the animation ticker")
+	}
+}
+
+func TestCMailUpdate_StyleAnimTick_AdvancesFrameAndRearms(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})
+	if !m.styleAnimRunning {
+		t.Fatal("setup: expected styleAnimRunning = true")
+	}
+
+	m, cmd := m.Update(styleAnimTickMsg{})
+
+	if m.styleAnimFrame != 1 {
+		t.Errorf("styleAnimFrame = %d, want 1", m.styleAnimFrame)
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd to rearm the ticker")
+	}
+}

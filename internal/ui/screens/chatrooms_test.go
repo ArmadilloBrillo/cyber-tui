@@ -916,3 +916,141 @@ func TestMentionGhostText_CursorOverlayUsesGhostColor(t *testing.T) {
 		t.Errorf("expected the cursor-overlaid character styled in ghost color (%q) somewhere in the view, got:\n%s", wantChar, view)
 	}
 }
+
+// --- style animation ticker (coarse-scoped, see maybeStartStyleAnim) ---
+
+func TestUpdate_StartsStyleAnimTickerWhenAnimatedMessageArrives(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	m, cmd := m.Update(roomReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})
+
+	if !m.styleAnimRunning {
+		t.Error("expected styleAnimRunning = true after an animated-style message arrived")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd to start the animation ticker")
+	}
+}
+
+func TestUpdate_NoStyleAnimTickerForPlainMessage(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "m1", Body: "hi"}})
+
+	if m.styleAnimRunning {
+		t.Error("expected styleAnimRunning = false for a message with no animated style")
+	}
+}
+
+func TestUpdate_StyleAnimTick_AdvancesFrameAndRearms(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"glitch"}}})
+	if !m.styleAnimRunning {
+		t.Fatal("setup: expected styleAnimRunning = true")
+	}
+
+	m, cmd := m.Update(styleAnimTickMsg{})
+
+	if m.styleAnimFrame != 1 {
+		t.Errorf("styleAnimFrame = %d, want 1", m.styleAnimFrame)
+	}
+	if !m.styleAnimRunning {
+		t.Error("expected styleAnimRunning to stay true (rearmed) while the glitch message is still loaded")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd to rearm the ticker")
+	}
+}
+
+// --- spoiler reveal (see updateBrowsingKey's "enter" case) ---
+
+func TestBrowsing_Enter_TogglesSpoilerReveal(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "the ending is a twist", Style: []string{"spoiler"}, CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+	renderedWithReveal := func(m ChatroomsModel) string {
+		content, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame)
+		return content
+	}
+	if strings.Contains(renderedWithReveal(m), "the ending is a twist") {
+		t.Fatal("setup: expected spoiler body to start masked")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.revealed["m1"] {
+		t.Error("expected revealed[m1] = true after enter")
+	}
+	if !strings.Contains(renderedWithReveal(m), "the ending is a twist") {
+		t.Errorf("expected spoiler body revealed after enter, got: %q", renderedWithReveal(m))
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.revealed["m1"] {
+		t.Error("expected revealed[m1] = false after a second enter (toggle back off)")
+	}
+	if strings.Contains(renderedWithReveal(m), "the ending is a twist") {
+		t.Error("expected spoiler body masked again after toggling off")
+	}
+}
+
+func TestBrowsing_Enter_NoOpForNonSpoilerMessage(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.revealed["m1"] {
+		t.Error("expected enter on a non-spoiler message to be a no-op")
+	}
+}
+
+// TestBrowsing_Enter_TogglesL33tReveal confirms l33t-styled messages use the
+// same reveal toggle as spoiler: substituted text by default, enter reveals
+// the original unsubstituted text, a second enter re-obscures it.
+func TestBrowsing_Enter_TogglesL33tReveal(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "elite", Style: []string{"l33t"}, CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	renderedWithReveal := func(m ChatroomsModel) string {
+		content, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame)
+		return content
+	}
+	if !strings.Contains(renderedWithReveal(m), "3l173") {
+		t.Fatalf("setup: expected l33t-substituted text before reveal, got: %q", renderedWithReveal(m))
+	}
+	if strings.Contains(renderedWithReveal(m), "elite") {
+		t.Fatal("setup: did not expect original text visible before reveal")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.revealed["m1"] {
+		t.Error("expected revealed[m1] = true after enter")
+	}
+	if !strings.Contains(renderedWithReveal(m), "elite") {
+		t.Errorf("expected original text revealed after enter, got: %q", renderedWithReveal(m))
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.revealed["m1"] {
+		t.Error("expected revealed[m1] = false after a second enter (toggle back off)")
+	}
+	if !strings.Contains(renderedWithReveal(m), "3l173") {
+		t.Error("expected l33t-substituted text again after toggling off")
+	}
+}

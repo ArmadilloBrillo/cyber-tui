@@ -3,6 +3,7 @@ package screens
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -253,6 +254,21 @@ type ChatroomsModel struct {
 	flagPrompt          FlagPrompt
 	flagTargetMsgID     string // message ID being flagged, set right before flagPrompt.Open()
 	confirmingDeleteMsg bool   // true while the y/n delete-confirm overlay for the selected message is showing
+
+	// revealed tracks which spoiler- or l33t-styled messages (keyed by ID)
+	// the user has toggled to their original text via the browsing-mode
+	// reveal key (enter). Unset/false means still obscured (spoiler: masked;
+	// l33t: substituted). Only cIRC has this today — see chatstyle.go's
+	// maskSpoilerBody doc comment.
+	revealed map[string]bool
+
+	// styleAnimFrame/styleAnimRunning drive the slow/wave/glitch animated
+	// styles: frame increments on every styleAnimTickMsg, and running guards
+	// against stacking multiple concurrent tickers. Coarse-scoped — see the
+	// plan's Trade-offs section: the ticker runs whenever any animated-style
+	// message is loaded in the room, not only while one is visible on screen.
+	styleAnimFrame   int
+	styleAnimRunning bool
 
 	// focused is true while the Chatrooms tab is the one on screen. The RTDB
 	// subscription for an open room stays alive regardless (see
@@ -567,7 +583,7 @@ func (m ChatroomsModel) GetFocusedURLs() []string {
 	}
 	var urls []string
 	for _, msg := range m.messages {
-		urls = append(urls, extractURLs(msg.Body)...)
+		urls = append(urls, messageURLs(msg)...)
 	}
 	return dedupeURLs(urls)
 }
@@ -781,8 +797,50 @@ func (m ChatroomsModel) SetLocation(loc *time.Location) ChatroomsModel {
 
 func (m ChatroomsModel) Init() tea.Cmd { return textinput.Blink }
 
+// Update processes msg via updateInner, then (re)arms the style-animation
+// ticker (see maybeStartStyleAnim) if a loaded message needs one. Wrapping
+// the whole switch this way — rather than threading a tea.Cmd return through
+// refreshMessages and its many call sites, several of which are public
+// mutators also called directly from app.go outside of Update (e.g.
+// AppendSystemMessage/ApplyMessageDeleted) — keeps the coarse-scoped
+// animation check to a single choke point instead of a cascading signature
+// change.
 func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
+	m, cmd := m.updateInner(msg)
+	var tickCmd tea.Cmd
+	m, tickCmd = m.maybeStartStyleAnim()
+	if tickCmd != nil {
+		cmd = tea.Batch(cmd, tickCmd)
+	}
+	return m, cmd
+}
+
+// maybeStartStyleAnim starts the slow/wave/glitch animation ticker if any
+// currently loaded message needs one and it isn't already running. Coarse-
+// scoped: it checks every loaded message in the room, not just ones visible
+// in the viewport — see the plan's Trade-offs section for the rationale and
+// upgrade path. Returns a nil tea.Cmd when no start is needed.
+func (m ChatroomsModel) maybeStartStyleAnim() (ChatroomsModel, tea.Cmd) {
+	if m.styleAnimRunning || m.mode != chatroomModeDetail {
+		return m, nil
+	}
+	for _, msg := range m.messages {
+		if hasAnimatedStyle(msg.Style) {
+			m.styleAnimRunning = true
+			return m, styleAnimTickCmd()
+		}
+	}
+	return m, nil
+}
+
+func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case styleAnimTickMsg:
+		m.styleAnimFrame++
+		m.styleAnimRunning = false
+		m = m.refreshMessages()
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -1266,7 +1324,8 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 		return m
 	}
 	content, offsets, heights := renderCircMessagesWithSelection(
-		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID)
+		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID,
+		m.revealed, m.styleAnimFrame)
 	m.viewport.SetContent(content)
 	m.msgOffsets, m.msgHeights = offsets, heights
 	return m
@@ -1366,7 +1425,8 @@ func (m ChatroomsModel) maybeLoadOlderMessages() (ChatroomsModel, tea.Cmd) {
 
 // updateBrowsingKey handles keys while a message is selected
 // (m.selectedMsgID != ""): up/down move the selection, esc returns to
-// typing, '!' reports the selected message. Everything else is swallowed
+// typing, '!' reports the selected message, enter toggles a spoiler- or
+// l33t-styled message's reveal state. Everything else is swallowed
 // rather than typed, since the input is blurred for the duration of
 // browsing — see the 'up' case in the typing-mode switch, the only place
 // browsing is entered.
@@ -1433,6 +1493,16 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 			selOffsets(m, sel), selHeights(m, sel), curPos, m.viewport.YOffset)
 		m.selectedMsgID = m.messages[sel[newPos]].ID
 		m.viewport.SetYOffset(newOffset)
+		return m.refreshMessages(), nil
+	case "enter":
+		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
+		if !ok || (!slices.Contains(targetMsg.Style, styleSpoiler) && !slices.Contains(targetMsg.Style, styleL33t)) {
+			return m, nil
+		}
+		if m.revealed == nil {
+			m.revealed = make(map[string]bool)
+		}
+		m.revealed[m.selectedMsgID] = !m.revealed[m.selectedMsgID]
 		return m.refreshMessages(), nil
 	case "!":
 		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)

@@ -125,6 +125,12 @@ type Message struct {
 	IsAction    bool // true for /me and other emote-style commands (undocumented API field);
 	// Body is just the action text with no username baked in — render as "* username body *"
 	Deleted bool // CIRC only: message was soft-deleted by its author; Body is "[DELETED]", render as a tombstone
+
+	ImageUrl        string      // direct image URL attached to the message; "" when absent
+	GifUrl          string      // direct animated GIF URL attached via /gif; "" when absent
+	AudioAttachment *Attachment // jukebox track attached via /song; nil when absent, Type is "audio"
+	Style           []string    // text-style command name(s), e.g. "rainbow", "blink"; nil when unstyled.
+	// "art" is a special case, not a text style: Body is ASCII art, already base64-decoded.
 }
 
 type Conversation struct {
