@@ -342,7 +342,7 @@ func TestPostDetail_FlagKey_Cancel_EmitsNoFlagMsg(t *testing.T) {
 	m = m.SetPost(pdPost("p1"))
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
-	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd != nil {
 		if _, ok := cmd().(screens.FlagPostMsg); ok {
 			t.Fatal("esc should not emit FlagPostMsg")

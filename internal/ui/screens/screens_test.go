@@ -741,7 +741,7 @@ func TestChatrooms_FlagKey_OnOtherMessage_FullFlowEmitsFlagMessageMsg(t *testing
 		t.Fatal("expected a cmd after confirming")
 	}
 	// The real runtime feeds the cmd's message back through Update; do the same here.
-	m, cmd = m.Update(cmd())
+	_, cmd = m.Update(cmd())
 	if cmd == nil {
 		t.Fatal("expected a cmd after routing FlagSubmitMsg through Update")
 	}

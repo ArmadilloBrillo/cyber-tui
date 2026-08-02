@@ -135,7 +135,7 @@ func TestFeed_FlagKey_OnOtherPost_FullFlowEmitsFlagPostMsg(t *testing.T) {
 		t.Fatal("expected a cmd after confirming")
 	}
 	// The real runtime feeds the cmd's message back through Update; do the same here.
-	m, cmd = m.Update(cmd())
+	_, cmd = m.Update(cmd())
 	if cmd == nil {
 		t.Fatal("expected a cmd after routing FlagSubmitMsg through Update")
 	}
@@ -159,7 +159,7 @@ func TestFeed_FlagKey_Cancel_EmitsNoFlagMsg(t *testing.T) {
 	m = m.SetCurrentUsername("alice")
 
 	m, _ = m.Update(keyRune("!"))
-	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd != nil {
 		if _, ok := cmd().(screens.FlagPostMsg); ok {
 			t.Fatal("esc should not emit FlagPostMsg")
