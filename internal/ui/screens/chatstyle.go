@@ -38,18 +38,33 @@ const (
 )
 
 // hasAnimatedStyle reports whether styles contains a frame-driven style
-// (slow, wave, glitch) that needs a running tea.Tick to progress.
+// (blink, wave, glitch) that needs a running tea.Tick to progress. slow is
+// a static, one-shot substitution (see applySlowDots) and doesn't need one.
 func hasAnimatedStyle(styles []string) bool {
-	return slices.Contains(styles, styleSlow) || slices.Contains(styles, styleWave) || slices.Contains(styles, styleGlitch)
+	return slices.Contains(styles, styleBlink) || slices.Contains(styles, styleWave) || slices.Contains(styles, styleGlitch)
 }
 
-// styleAnimTickMsg drives the frame counter for slow/wave/glitch styles.
+// styleAnimTickMsg drives the frame counter for blink/wave/glitch styles.
 type styleAnimTickMsg struct{}
 
 const styleAnimInterval = 150 * time.Millisecond
 
 func styleAnimTickCmd() tea.Cmd {
 	return tea.Tick(styleAnimInterval, func(time.Time) tea.Msg { return styleAnimTickMsg{} })
+}
+
+// blinkPhaseFrames is how many animation ticks each blink phase (visible or
+// hidden) lasts — 4 ticks * styleAnimInterval (150ms) ≈ 600ms per phase,
+// close to a typical terminal cursor blink rate.
+const blinkPhaseFrames = 4
+
+// blinkVisible reports whether a blink-styled message should show its real
+// content this frame, alternating every blinkPhaseFrames ticks. App-driven
+// rather than the ANSI blink SGR attribute (which some terminals/multiplexers
+// ignore or disable) — this guarantees the same behavior everywhere at the
+// cost of the message needing a running ticker, same as wave/glitch.
+func blinkVisible(frame int) bool {
+	return (frame/blinkPhaseFrames)%2 == 0
 }
 
 // --- character substitution (l33t, cursive, flip, glitch) ---
@@ -157,11 +172,53 @@ func glitchHash(msgID string, index, frame int) uint32 {
 	return h.Sum32()
 }
 
+// applyWave flips the case of a single rune position that sweeps
+// left-to-right across body, advancing one position per animation frame —
+// the same case-toggle mechanism as applyGlitch, but restricted to one
+// moving position instead of jittering ~1/3 of all letters at once. Sweeping
+// onto a non-letter (space, punctuation) is a no-op that frame, same as the
+// wave passing invisibly through whitespace.
+func applyWave(body string, frame int) string {
+	runes := []rune(body)
+	if len(runes) == 0 {
+		return body
+	}
+	pos := frame % len(runes)
+	r := runes[pos]
+	if unicode.IsUpper(r) {
+		runes[pos] = unicode.ToLower(r)
+	} else if unicode.IsLower(r) {
+		runes[pos] = unicode.ToUpper(r)
+	}
+	return string(runes)
+}
+
+// slowDot is a middle dot (·, U+00B7) rather than a period, so /slow reads
+// as a deliberate visual spacing effect instead of looking like punctuation.
+const slowDot = '·'
+
+// applySlowDots inserts slowDot between every character — a static, one-shot
+// transform (not frame-animated) evoking a stretched-out reading pace.
+func applySlowDots(body string) string {
+	runes := []rune(body)
+	if len(runes) < 2 {
+		return body
+	}
+	var sb strings.Builder
+	for i, r := range runes {
+		sb.WriteRune(r)
+		if i != len(runes)-1 {
+			sb.WriteRune(slowDot)
+		}
+	}
+	return sb.String()
+}
+
 // substituteChars applies the character-substitution styles (l33t, cursive,
-// flip, glitch) to raw message text, before markdown rendering — the
-// substituted characters are plain runes markdown treats literally. msgID
-// and frame are only used by glitch. No-op when none of these styles are
-// present.
+// flip, slow, wave, glitch) to raw message text, before markdown rendering —
+// the substituted characters are plain runes markdown treats literally.
+// msgID and frame are only used by wave and glitch. No-op when none of these
+// styles are present.
 func substituteChars(body, msgID string, styles []string, frame int) string {
 	out := body
 	if slices.Contains(styles, styleL33t) {
@@ -173,13 +230,23 @@ func substituteChars(body, msgID string, styles []string, frame int) string {
 	if slices.Contains(styles, styleFlip) {
 		out = applyFlip(out)
 	}
+	if slices.Contains(styles, styleSlow) {
+		out = applySlowDots(out)
+	}
+	if slices.Contains(styles, styleWave) {
+		out = applyWave(out, frame)
+	}
 	if slices.Contains(styles, styleGlitch) {
 		out = applyGlitch(out, msgID, frame)
 	}
 	return out
 }
 
-// --- attribute styles (blink, quiet, rainbow) ---
+// --- attribute styles (quiet, rainbow) ---
+// blink is handled separately (see blinkVisible) as a post-wrap visibility
+// toggle rather than a strip-and-restyle attribute, so it can blank already
+// word-wrapped lines without risking a rewrap on the blanked text — see the
+// blink toggle in renderCircMessagesStyled/renderChatMessagesStyled.
 
 var rainbowPalette = []lipgloss.Color{
 	theme.ColorRed, theme.ColorYellow, theme.ColorGreen,
@@ -187,10 +254,10 @@ var rainbowPalette = []lipgloss.Color{
 }
 
 func hasAttributeStyle(styles []string) bool {
-	return slices.Contains(styles, styleBlink) || slices.Contains(styles, styleQuiet) || slices.Contains(styles, styleRainbow)
+	return slices.Contains(styles, styleQuiet) || slices.Contains(styles, styleRainbow)
 }
 
-// applyAttributeStyle applies blink/quiet/rainbow to already-markdown-rendered
+// applyAttributeStyle applies quiet/rainbow to already-markdown-rendered
 // text. It strips existing ANSI first and restyles the plain text — the same
 // technique renderCircMessagesWithSelection uses for theme.SelectedRow —
 // because wrapping already-styled text in another style would terminate the
@@ -203,9 +270,6 @@ func applyAttributeStyle(rendered string, styles []string) string {
 	}
 	plain := ansi.Strip(rendered)
 	base := lipgloss.NewStyle()
-	if slices.Contains(styles, styleBlink) {
-		base = base.Blink(true)
-	}
 	if slices.Contains(styles, styleQuiet) {
 		base = base.Faint(true).Foreground(theme.ColorMuted)
 	}

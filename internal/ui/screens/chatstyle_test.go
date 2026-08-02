@@ -59,6 +59,67 @@ func TestSubstituteChars_Glitch_VariesByFrame(t *testing.T) {
 	}
 }
 
+func TestSubstituteChars_Slow_InsertsMiddleDots(t *testing.T) {
+	got := substituteChars("hi", "m1", []string{styleSlow}, 0)
+	if got != "h·i" {
+		t.Errorf("substituteChars slow = %q, want %q", got, "h·i")
+	}
+}
+
+func TestSubstituteChars_Slow_SingleCharUnchanged(t *testing.T) {
+	got := substituteChars("h", "m1", []string{styleSlow}, 0)
+	if got != "h" {
+		t.Errorf("substituteChars slow on a single char = %q, want unchanged", got)
+	}
+}
+
+func TestSubstituteChars_Slow_SameAcrossFrames(t *testing.T) {
+	a := substituteChars("hello", "m1", []string{styleSlow}, 0)
+	b := substituteChars("hello", "m1", []string{styleSlow}, 7)
+	if a != b {
+		t.Errorf("slow should be static (frame-independent), got %q vs %q", a, b)
+	}
+}
+
+func TestSubstituteChars_Wave_TogglesOneMovingPosition(t *testing.T) {
+	got0 := substituteChars("abc", "m1", []string{styleWave}, 0)
+	if got0 != "Abc" {
+		t.Errorf("substituteChars wave frame=0 = %q, want Abc", got0)
+	}
+	got1 := substituteChars("abc", "m1", []string{styleWave}, 1)
+	if got1 != "aBc" {
+		t.Errorf("substituteChars wave frame=1 = %q, want aBc", got1)
+	}
+	got3 := substituteChars("abc", "m1", []string{styleWave}, 3) // wraps: 3%3 == 0
+	if got3 != "Abc" {
+		t.Errorf("substituteChars wave frame=3 = %q, want Abc (wraps to position 0)", got3)
+	}
+}
+
+func TestSubstituteChars_Wave_EmptyBody(t *testing.T) {
+	got := substituteChars("", "m1", []string{styleWave}, 0)
+	if got != "" {
+		t.Errorf("substituteChars wave on empty body = %q, want empty", got)
+	}
+}
+
+func TestBlinkVisible_TogglesEveryPhase(t *testing.T) {
+	cases := []struct {
+		frame int
+		want  bool
+	}{
+		{0, true}, {1, true}, {3, true},
+		{4, false}, {6, false}, {7, false},
+		{8, true}, {11, true},
+		{12, false},
+	}
+	for _, c := range cases {
+		if got := blinkVisible(c.frame); got != c.want {
+			t.Errorf("blinkVisible(%d) = %v, want %v", c.frame, got, c.want)
+		}
+	}
+}
+
 func TestApplyAttributeStyle_NoStyles_ReturnsUnchanged(t *testing.T) {
 	got := applyAttributeStyle("plain text", nil)
 	if got != "plain text" {
@@ -93,9 +154,9 @@ func TestHasAnimatedStyle(t *testing.T) {
 		want   bool
 	}{
 		{nil, false},
-		{[]string{styleBlink}, false},
+		{[]string{styleSlow}, false},
 		{[]string{styleRainbow, styleQuiet}, false},
-		{[]string{styleSlow}, true},
+		{[]string{styleBlink}, true},
 		{[]string{styleWave}, true},
 		{[]string{styleGlitch}, true},
 		{[]string{styleBlink, styleWave}, true},

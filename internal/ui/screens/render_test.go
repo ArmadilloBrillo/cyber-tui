@@ -605,3 +605,41 @@ func TestRenderCircMessages_ArtStyle_TimestampAlignsWithNormalMessage(t *testing
 		t.Errorf("art header timestamp starts at column %d, want %d (same as a normal message)", artIdx, normalIdx)
 	}
 }
+
+// TestRenderCircMessagesStyled_Blink_HidesAndShowsWithoutChangingLineCount
+// confirms blink toggles the body's visibility across animation frames while
+// keeping the same line count and per-line width — blanking must happen
+// after word-wrap, not before, or an all-space string could rewrap to fewer
+// lines than the real text did (see the comment at the blink toggle site).
+func TestRenderCircMessagesStyled_Blink_HidesAndShowsWithoutChangingLineCount(t *testing.T) {
+	const width = 60
+	msg := circMsg("molly", "hello there")
+	msg.Style = []string{"blink"}
+
+	visible := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, 0)
+	hidden := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, blinkPhaseFrames)
+
+	if !strings.Contains(ansi.Strip(visible), "hello there") {
+		t.Errorf("expected the visible phase to contain the body text, got: %q", visible)
+	}
+	plainHidden := ansi.Strip(hidden)
+	if strings.Contains(plainHidden, "hello") || strings.Contains(plainHidden, "there") {
+		t.Errorf("expected the hidden phase to blank the body text, got: %q", hidden)
+	}
+
+	visibleLines := strings.Split(strings.TrimRight(ansi.Strip(visible), "\n"), "\n")
+	hiddenLines := strings.Split(strings.TrimRight(plainHidden, "\n"), "\n")
+	if len(visibleLines) != len(hiddenLines) {
+		t.Fatalf("line count changed across blink phases: visible=%d hidden=%d", len(visibleLines), len(hiddenLines))
+	}
+	for i := range visibleLines {
+		if lipgloss.Width(visibleLines[i]) != lipgloss.Width(hiddenLines[i]) {
+			t.Errorf("line %d width changed across blink phases: visible=%d hidden=%d", i, lipgloss.Width(visibleLines[i]), lipgloss.Width(hiddenLines[i]))
+		}
+	}
+
+	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
+	if !strings.Contains(plainHidden, ts) {
+		t.Errorf("expected the timestamp to stay visible during the hidden phase, got: %q", hidden)
+	}
+}

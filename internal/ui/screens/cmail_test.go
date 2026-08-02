@@ -480,7 +480,7 @@ func TestTypingIndicator_DotsCycleThroughZeroOneTwoThree(t *testing.T) {
 func TestCMailUpdate_StartsStyleAnimTickerWhenAnimatedMessageArrives(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
 
-	m, cmd := m.Update(dmReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"slow"}}})
+	m, cmd := m.Update(dmReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"blink"}}})
 
 	if !m.styleAnimRunning {
 		t.Error("expected styleAnimRunning = true after an animated-style message arrived")

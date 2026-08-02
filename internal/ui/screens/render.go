@@ -281,6 +281,17 @@ func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisp
 			body := applyAttributeStyle(markdown.RenderInline(strings.TrimRight(raw, "\n"), currentUser), msg.Style)
 			lines = strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(body), "\n")
 		}
+
+		// Blink toggling runs after wrapping, blanking each already-wrapped
+		// line to its own rendered width, so hiding the message never
+		// changes its line count/wrap structure (blanking pre-wrap risks
+		// lipgloss collapsing an all-space string into fewer lines than the
+		// real text wrapped to).
+		if slices.Contains(msg.Style, styleBlink) && !blinkVisible(frame) {
+			for i := range lines {
+				lines[i] = strings.Repeat(" ", lipgloss.Width(lines[i]))
+			}
+		}
 		last := len(lines) - 1
 
 		for i, line := range lines {
@@ -499,6 +510,13 @@ func renderChatMessagesStyled(msgs []model.Message, currentUser string, loc *tim
 
 		raw := substituteChars(displayBody, msg.ID, msg.Style, frame)
 		body := applyAttributeStyle(strings.TrimRight(markdown.Render(raw, naturalW), "\n"), msg.Style)
+		if slices.Contains(msg.Style, styleBlink) && !blinkVisible(frame) {
+			bodyLines := strings.Split(body, "\n")
+			for i := range bodyLines {
+				bodyLines[i] = strings.Repeat(" ", lipgloss.Width(bodyLines[i]))
+			}
+			body = strings.Join(bodyLines, "\n")
+		}
 		rows := []string{header}
 		if body != "" {
 			rows = append(rows, body)
