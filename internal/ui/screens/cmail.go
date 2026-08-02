@@ -208,6 +208,11 @@ type CMailModel struct {
 	lastKeystrokeAt   time.Time          // updated on every keystroke; idle-check compares against this
 	typingHeartbeatMs int                // from AnnounceTyping's response; drives our own re-announce cadence
 	typingAnimFrame   int                // cycles the indicator's animated dot count; free-runs while a conversation is open
+
+	// styleAnimFrame/styleAnimRunning drive the slow/wave/glitch animated
+	// message styles — see maybeStartStyleAnim and chatrooms.go's identical fields.
+	styleAnimFrame   int
+	styleAnimRunning bool
 }
 
 // SendCMailMsg is emitted when the user sends a C-Mail message.
@@ -575,7 +580,7 @@ func (m CMailModel) GetFocusedURLs() []string {
 	}
 	var urls []string
 	for _, msg := range m.activeConv.Messages {
-		urls = append(urls, extractURLs(msg.Body)...)
+		urls = append(urls, messageURLs(msg)...)
 	}
 	return dedupeURLs(urls)
 }
@@ -588,8 +593,47 @@ func (m CMailModel) HasActiveConv() bool { return m.mode == cmailModeDetail }
 
 func (m CMailModel) Init() tea.Cmd { return textinput.Blink }
 
+// Update processes msg via updateInner, then (re)arms the style-animation
+// ticker if a loaded message needs one — same wrap-the-switch shape as
+// chatrooms.go's Update/maybeStartStyleAnim, chosen there to avoid a
+// cascading tea.Cmd-return change through refreshMessages' many call sites.
 func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
+	m, cmd := m.updateInner(msg)
+	var tickCmd tea.Cmd
+	m, tickCmd = m.maybeStartStyleAnim()
+	if tickCmd != nil {
+		cmd = tea.Batch(cmd, tickCmd)
+	}
+	return m, cmd
+}
+
+// maybeStartStyleAnim starts the slow/wave/glitch animation ticker if the
+// open conversation has a loaded message that needs one and it isn't already
+// running. Coarse-scoped: checks every loaded message in the conversation,
+// not just ones visible in the viewport — see the plan's Trade-offs section.
+func (m CMailModel) maybeStartStyleAnim() (CMailModel, tea.Cmd) {
+	if m.styleAnimRunning || m.mode != cmailModeDetail || m.activeConv == nil {
+		return m, nil
+	}
+	for _, msg := range m.activeConv.Messages {
+		if hasAnimatedStyle(msg.Style) {
+			m.styleAnimRunning = true
+			return m, styleAnimTickCmd()
+		}
+	}
+	return m, nil
+}
+
+func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case styleAnimTickMsg:
+		m.styleAnimFrame++
+		m.styleAnimRunning = false
+		if m.mode == cmailModeDetail && m.activeConv != nil {
+			m.viewport.SetContent(m.renderMessages())
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -1011,7 +1055,7 @@ func (m CMailModel) renderMessages() string {
 		}
 		return theme.Subtle.Render("no messages")
 	}
-	return renderChatMessages(m.activeConv.Messages, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width)
+	return renderChatMessagesStyled(m.activeConv.Messages, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width, m.styleAnimFrame)
 }
 
 func (m CMailModel) location() *time.Location {

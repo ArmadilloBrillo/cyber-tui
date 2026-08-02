@@ -450,3 +450,158 @@ func TestRenderCircMessages_MentionStyleContinuesAfterMultipleWords(t *testing.T
 		t.Errorf("expected '2' to also keep theme.Base styling, not left unstyled by a broken reset, got: %q", out)
 	}
 }
+
+// TestRenderAttachments_GifBadge confirms a "gif" attachment gets its own
+// [gif] badge rather than falling into the generic [attachment] default.
+func TestRenderAttachments_GifBadge(t *testing.T) {
+	out := renderAttachments([]model.Attachment{{Type: "gif", Src: "https://cyberspace.online/a.gif"}})
+	if !strings.Contains(out, "[gif]") {
+		t.Errorf("expected [gif] badge, got: %q", out)
+	}
+	if !strings.Contains(out, "https://cyberspace.online/a.gif") {
+		t.Errorf("expected gif URL in output, got: %q", out)
+	}
+}
+
+// TestRenderCircMessages_AttachmentOnlyBodySkipsDuplicateURL confirms that
+// when Body merely duplicates ImageUrl (an attachment-only message), the URL
+// is shown once via the attachment badge, not a second time as wrapped body text.
+func TestRenderCircMessages_AttachmentOnlyBodySkipsDuplicateURL(t *testing.T) {
+	msg := circMsg("case", "https://cyberspace.online/img.png")
+	msg.ImageUrl = "https://cyberspace.online/img.png"
+
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 60, "")
+
+	if n := strings.Count(out, "https://cyberspace.online/img.png"); n != 1 {
+		t.Errorf("expected the image URL to appear exactly once, got %d times in: %q", n, out)
+	}
+	if !strings.Contains(out, "[image]") {
+		t.Errorf("expected [image] attachment badge, got: %q", out)
+	}
+}
+
+// TestRenderCircMessages_AttachmentOnlyHasNoBlankLine guards against a
+// regression where an attachment-only message (empty display body) rendered
+// a blank-looking line — just the username prefix and timestamp, no visible
+// content — before the attachment badge. The username/timestamp should land
+// directly on the attachment line instead.
+func TestRenderCircMessages_AttachmentOnlyHasNoBlankLine(t *testing.T) {
+	msg := circMsg("case", "https://cyberspace.online/img.png")
+	msg.Body = ""
+	msg.ImageUrl = "https://cyberspace.online/img.png"
+
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 60, "")
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly 1 line for a single attachment-only message, got %d: %q", len(lines), out)
+	}
+	if !strings.Contains(lines[0], "<case>") || !strings.Contains(lines[0], "[image]") {
+		t.Errorf("expected username and [image] badge on the same line, got: %q", lines[0])
+	}
+}
+
+// TestRenderCircMessages_AttachmentOnlyLongURL_TimestampStaysInBounds guards
+// against a regression where an attachment-only message's URL, merged onto
+// the username/timestamp line without going through the same
+// Width(bodyWidth).Render wrapping normal text bodies use, could run well
+// past viewportWidth for a long URL — pushing the timestamp far to the
+// right instead of wrapping the URL underneath it.
+func TestRenderCircMessages_AttachmentOnlyLongURL_TimestampStaysInBounds(t *testing.T) {
+	const width = 60
+	msg := circMsg("case", "")
+	msg.GifUrl = "https://cyberspace.online/uploads/reactions/mind-blown-reaction.gif"
+
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "")
+	plain := ansi.Strip(out)
+
+	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
+	for _, line := range strings.Split(strings.TrimRight(plain, "\n"), "\n") {
+		if lipgloss.Width(line) > width {
+			t.Errorf("line exceeds viewportWidth %d: %q (%d cols)", width, line, lipgloss.Width(line))
+		}
+	}
+	if !strings.Contains(plain, ts) {
+		t.Fatalf("timestamp %q not found anywhere in output: %q", ts, plain)
+	}
+	lastLine := strings.Split(strings.TrimRight(plain, "\n"), "\n")
+	last := lastLine[len(lastLine)-1]
+	if !strings.HasSuffix(strings.TrimRight(last, " "), ts) {
+		t.Errorf("expected the timestamp flush right on the last line, got: %q", last)
+	}
+}
+
+// TestRenderChatMessages_AttachmentOnlyHasNoBlankLine is the C-Mail
+// equivalent of TestRenderCircMessages_AttachmentOnlyHasNoBlankLine: the
+// bordered bubble must not contain a blank row between the header and the
+// attachment block for an attachment-only message.
+func TestRenderChatMessages_AttachmentOnlyHasNoBlankLine(t *testing.T) {
+	msg := circMsg("case", "")
+	msg.ImageUrl = "https://cyberspace.online/img.png"
+
+	out := renderChatMessages([]model.Message{msg}, "", time.UTC, "datetime", 60)
+	plain := ansi.Strip(out)
+
+	// A blank content row inside the bubble would sit between the header
+	// line (contains "case") and the attachment line (contains "[image]");
+	// check there's no all-whitespace line between them.
+	lines := strings.Split(plain, "\n")
+	headerIdx, attIdx := -1, -1
+	for i, line := range lines {
+		if strings.Contains(line, "case") && headerIdx == -1 {
+			headerIdx = i
+		}
+		if strings.Contains(line, "[image]") {
+			attIdx = i
+		}
+	}
+	if headerIdx == -1 || attIdx == -1 {
+		t.Fatalf("expected both a header line and an [image] line, got: %q", plain)
+	}
+	if attIdx != headerIdx+1 {
+		t.Errorf("expected the attachment line immediately after the header with no blank line between, got lines:\n%q", lines[headerIdx:attIdx+1])
+	}
+}
+
+// TestRenderCircMessages_ArtStyleSkipsWrapAndMarkdown confirms a style:"art"
+// message's body is printed verbatim, line for line, with no word-wrap and
+// no markdown reinterpretation of leading spaces (which would otherwise be
+// read as an indented code block and mangle the picture).
+func TestRenderCircMessages_ArtStyleSkipsWrapAndMarkdown(t *testing.T) {
+	art := "  /\\_/\\\n ( o.o )\n  > ^ <"
+	msg := circMsg("case", art)
+	msg.Style = []string{"art"}
+
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 20, "")
+
+	for _, line := range strings.Split(art, "\n") {
+		if !strings.Contains(out, line) {
+			t.Errorf("expected art line %q preserved verbatim, got: %q", line, out)
+		}
+	}
+}
+
+// TestRenderCircMessages_ArtStyle_TimestampAlignsWithNormalMessage guards
+// against a regression where renderArtMessage's header-line width
+// calculation came up 2 columns short of viewportWidth, shifting the
+// timestamp left of where every other message type right-aligns it.
+func TestRenderCircMessages_ArtStyle_TimestampAlignsWithNormalMessage(t *testing.T) {
+	const width = 60
+	normal := circMsg("molly", "hello there")
+	art := circMsg("molly", "  /\\_/\\\n ( o.o )")
+	art.Style = []string{"art"}
+
+	normalLine := strings.Split(strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{normal}, time.UTC, "datetime", width, "")), "\n"), "\n")[0]
+	artLines := strings.Split(strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{art}, time.UTC, "datetime", width, "")), "\n"), "\n")
+	artHeader := artLines[0]
+
+	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
+	normalIdx := strings.Index(normalLine, ts)
+	artIdx := strings.Index(artHeader, ts)
+	if normalIdx == -1 || artIdx == -1 {
+		t.Fatalf("timestamp %q not found: normal=%q art=%q", ts, normalLine, artHeader)
+	}
+	if normalIdx != artIdx {
+		t.Errorf("art header timestamp starts at column %d, want %d (same as a normal message)", artIdx, normalIdx)
+	}
+}

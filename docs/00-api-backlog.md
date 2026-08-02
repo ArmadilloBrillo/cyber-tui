@@ -154,13 +154,13 @@ Both cIRC and C-Mail support IRC-style slash commands expanded server-side: `/me
 
 ### Message attachments & styles (new in v0.8)
 
-cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAttachment` (`/song ... — supporter-only`), `style` (chainable text styles via `/blink`, `/l33t`, `/comic`, `/cursive`, `/times`, `/rainbow`, `/flip`, `/quiet`, `/slow`, `/glitch`, `/spoiler`, `/wave`), and ASCII art (`/art`, cIRC-only, base64-encoded `content` when `style: "art"`). `/mute`/`/unmute`/`/muted`/`/unmuteall` manage a per-room, client-side-enforced mute list (also stored in `mutedUsersByRoom` under Settings — currently intentionally omitted from the TUI per the Settings row below). None of this is implemented client-side yet; `content` can now legitimately be empty when an attachment is the whole message.
+cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAttachment` (`/song ... — supporter-only`), `style` (chainable text styles via `/blink`, `/l33t`, `/comic`, `/cursive`, `/times`, `/rainbow`, `/flip`, `/quiet`, `/slow`, `/glitch`, `/spoiler`, `/wave`), and ASCII art (`/art`, cIRC-only, base64-encoded `content` when `style: "art"`). `/mute`/`/unmute`/`/muted`/`/unmuteall` manage a per-room, client-side-enforced mute list (also stored in `mutedUsersByRoom` under Settings — currently intentionally omitted from the TUI per the Settings row below).
 
 | Area | Description | Priority |
 |---|---|---|
-| `gifUrl`, `audioAttachment`, `style`, chained styles | Render/decode in message view; `style: "art"` needs base64 decode | Not implemented |
+| `gifUrl`, `audioAttachment`, `style`, chained styles | Render/decode in message view; `style: "art"` needs base64 decode | **Done** — wire/model fields across all four message shapes, attachment badges reusing `renderAttachments`, and a middle-fidelity style pipeline (ANSI attributes for blink/quiet/rainbow, Unicode substitution for l33t/cursive/flip, ASCII-safe jitter for glitch, `tea.Tick`-driven slow/wave/glitch animation, select-to-reveal spoiler in cIRC only — see `internal/ui/screens/chatstyle.go`) |
 | `/mute` family + `mutedUsersByRoom` | Client-side message filtering by muted user | Not implemented |
-| Empty `content` with attachment-only messages | Message rendering must not assume non-empty `content` | Not implemented |
+| Empty `content` with attachment-only messages | Message rendering must not assume non-empty `content` | **Done** — covered by the same change; `messageDisplayBody` skips duplicate URL text and empty bodies render without assuming non-empty `content` |
 
 ### Auth (new in v0.8)
 

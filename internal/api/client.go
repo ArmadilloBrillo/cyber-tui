@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +78,36 @@ type wireAttachment struct {
 	Artist string `json:"artist,omitempty"`
 	Title  string `json:"title,omitempty"`
 	Genre  string `json:"genre,omitempty"`
+}
+
+// wireStyle decodes a message's `style` field, sent as either a single
+// string or an array of strings for chained styles (e.g. "rainbow" or
+// ["comic","rainbow"]).
+type wireStyle []string
+
+func (s *wireStyle) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*s = nil
+		return nil
+	}
+	if b[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal(b, &arr); err != nil {
+			return err
+		}
+		*s = arr
+		return nil
+	}
+	var str string
+	if err := json.Unmarshal(b, &str); err != nil {
+		return err
+	}
+	if str != "" {
+		*s = []string{str}
+	} else {
+		*s = nil
+	}
+	return nil
 }
 
 // apiTimestamp decodes a JSON value that may be an RFC3339 string (the
@@ -445,14 +477,18 @@ type wireRTDBPresenceEntry struct {
 
 // wireCircMessage is a single message from GET /v1/circ/:roomId.
 type wireCircMessage struct {
-	ID          string `json:"id"`
-	UserID      string `json:"userId"`
-	Username    string `json:"username"`
-	IsChatAdmin bool   `json:"isChatAdmin"`
-	IsAction    bool   `json:"isAction"` // undocumented; true for /me and other emote commands
-	Content     string `json:"content"`
-	Timestamp   int64  `json:"timestamp"` // epoch ms
-	Deleted     bool   `json:"deleted"`
+	ID              string          `json:"id"`
+	UserID          string          `json:"userId"`
+	Username        string          `json:"username"`
+	IsChatAdmin     bool            `json:"isChatAdmin"`
+	IsAction        bool            `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content         string          `json:"content"`
+	Timestamp       int64           `json:"timestamp"` // epoch ms
+	Deleted         bool            `json:"deleted"`
+	ImageUrl        string          `json:"imageUrl,omitempty"`
+	GifUrl          string          `json:"gifUrl,omitempty"`
+	AudioAttachment *wireAttachment `json:"audioAttachment,omitempty"`
+	Style           wireStyle       `json:"style,omitempty"`
 }
 
 // --- C-Mail wire types ---
@@ -473,12 +509,16 @@ type wireCMailConversation struct {
 
 // wireCMailMessage is a single message from GET /v1/cmail/:id.
 type wireCMailMessage struct {
-	ID             string `json:"id"`
-	SenderID       string `json:"senderId"`
-	SenderUsername string `json:"senderUsername"`
-	IsAction       bool   `json:"isAction"` // undocumented; true for /me and other emote commands
-	Content        string `json:"content"`
-	Timestamp      int64  `json:"timestamp"` // epoch ms
+	ID              string          `json:"id"`
+	SenderID        string          `json:"senderId"`
+	SenderUsername  string          `json:"senderUsername"`
+	IsAction        bool            `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content         string          `json:"content"`
+	Timestamp       int64           `json:"timestamp"` // epoch ms
+	ImageUrl        string          `json:"imageUrl,omitempty"`
+	GifUrl          string          `json:"gifUrl,omitempty"`
+	AudioAttachment *wireAttachment `json:"audioAttachment,omitempty"`
+	Style           wireStyle       `json:"style,omitempty"`
 }
 
 // wireCMailStartResponse is returned by POST /v1/cmail.
@@ -505,24 +545,32 @@ type wireRTDBTypingEntry struct {
 
 // wireRTDBMessage is the Firebase shape for a DM message in /dm_messages/<convId>/<msgId>.
 type wireRTDBMessage struct {
-	SenderID       string  `json:"senderId"`
-	SenderUsername string  `json:"senderUsername"`
-	IsAction       bool    `json:"isAction"` // undocumented; true for /me and other emote commands
-	Content        string  `json:"content"`
-	Timestamp      float64 `json:"timestamp"` // epoch ms as a Firebase number
-	Read           bool    `json:"read"`
+	SenderID        string          `json:"senderId"`
+	SenderUsername  string          `json:"senderUsername"`
+	IsAction        bool            `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content         string          `json:"content"`
+	Timestamp       float64         `json:"timestamp"` // epoch ms as a Firebase number
+	Read            bool            `json:"read"`
+	ImageUrl        string          `json:"imageUrl,omitempty"`
+	GifUrl          string          `json:"gifUrl,omitempty"`
+	AudioAttachment *wireAttachment `json:"audioAttachment,omitempty"`
+	Style           wireStyle       `json:"style,omitempty"`
 }
 
 // wireRTDBCircMessage is the Firebase shape for a CIRC chatroom message in /chat_messages/<roomId>/<msgId>.
 // Field names differ from DM messages (userId/username vs senderId/senderUsername).
 type wireRTDBCircMessage struct {
-	UserID      string  `json:"userId"`
-	Username    string  `json:"username"`
-	IsChatAdmin bool    `json:"isChatAdmin"`
-	IsAction    bool    `json:"isAction"` // undocumented; true for /me and other emote commands
-	Content     string  `json:"content"`
-	Timestamp   float64 `json:"timestamp"` // epoch ms as a Firebase number
-	Deleted     bool    `json:"deleted"`
+	UserID          string          `json:"userId"`
+	Username        string          `json:"username"`
+	IsChatAdmin     bool            `json:"isChatAdmin"`
+	IsAction        bool            `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content         string          `json:"content"`
+	Timestamp       float64         `json:"timestamp"` // epoch ms as a Firebase number
+	Deleted         bool            `json:"deleted"`
+	ImageUrl        string          `json:"imageUrl,omitempty"`
+	GifUrl          string          `json:"gifUrl,omitempty"`
+	AudioAttachment *wireAttachment `json:"audioAttachment,omitempty"`
+	Style           wireStyle       `json:"style,omitempty"`
 }
 
 // wireRTDBSSEData is the outer wrapper of a Firebase "put" SSE event's data field.
@@ -811,6 +859,39 @@ func wireAttachmentsToModel(ws []wireAttachment) []model.Attachment {
 		}
 	}
 	return out
+}
+
+// wireAudioAttachmentToModel converts a message's optional audioAttachment
+// object to the model type. Returns nil when w is nil.
+func wireAudioAttachmentToModel(w *wireAttachment) *model.Attachment {
+	if w == nil {
+		return nil
+	}
+	return &model.Attachment{
+		Type:   "audio",
+		Src:    w.Src,
+		Origin: w.Origin,
+		Artist: w.Artist,
+		Title:  w.Title,
+		Genre:  w.Genre,
+	}
+}
+
+// decodeArtBody base64-decodes content when styles contains "art" (the
+// /art command's response shape sends its ASCII art body base64-encoded).
+// Returns content unchanged otherwise. An undecodable payload falls back to
+// the raw string rather than dropping the message — same "never break the
+// rest of the decode" philosophy as apiTimestamp's unrecognized-shape fallback.
+func decodeArtBody(content string, styles []string) string {
+	if !slices.Contains(styles, "art") {
+		return content
+	}
+	decoded, err := base64.StdEncoding.DecodeString(content)
+	if err != nil {
+		log.Printf("api: decodeArtBody: bad base64 for art message")
+		return content
+	}
+	return string(decoded)
 }
 
 func wirePostToModel(w wirePost) model.Post {
@@ -1622,13 +1703,17 @@ func (c *HTTPClient) GetRoomMessages(roomID string, limit int, before int64) ([]
 func wireCircMessageToModel(w wireCircMessage) model.Message {
 	sanitize.Strings(&w)
 	return model.Message{
-		ID:          w.ID,
-		From:        model.User{ID: w.UserID, Username: w.Username},
-		Body:        w.Content,
-		CreatedAt:   time.UnixMilli(w.Timestamp),
-		IsChatAdmin: w.IsChatAdmin,
-		IsAction:    w.IsAction,
-		Deleted:     w.Deleted,
+		ID:              w.ID,
+		From:            model.User{ID: w.UserID, Username: w.Username},
+		Body:            decodeArtBody(w.Content, w.Style),
+		CreatedAt:       time.UnixMilli(w.Timestamp),
+		IsChatAdmin:     w.IsChatAdmin,
+		IsAction:        w.IsAction,
+		Deleted:         w.Deleted,
+		ImageUrl:        w.ImageUrl,
+		GifUrl:          w.GifUrl,
+		AudioAttachment: wireAudioAttachmentToModel(w.AudioAttachment),
+		Style:           []string(w.Style),
 	}
 }
 
@@ -1983,11 +2068,15 @@ func (c *HTTPClient) rtdbOrErr() (*rtdb.Client, error) {
 func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
 	sanitize.Strings(&wm)
 	return model.Message{
-		ID:        id,
-		From:      model.User{ID: wm.SenderID, Username: wm.SenderUsername},
-		Body:      wm.Content,
-		CreatedAt: time.UnixMilli(int64(wm.Timestamp)),
-		IsAction:  wm.IsAction,
+		ID:              id,
+		From:            model.User{ID: wm.SenderID, Username: wm.SenderUsername},
+		Body:            decodeArtBody(wm.Content, wm.Style),
+		CreatedAt:       time.UnixMilli(int64(wm.Timestamp)),
+		IsAction:        wm.IsAction,
+		ImageUrl:        wm.ImageUrl,
+		GifUrl:          wm.GifUrl,
+		AudioAttachment: wireAudioAttachmentToModel(wm.AudioAttachment),
+		Style:           []string(wm.Style),
 	}
 }
 
@@ -1995,13 +2084,17 @@ func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
 func wireRTDBCircMessageToModel(id string, wm wireRTDBCircMessage) model.Message {
 	sanitize.Strings(&wm)
 	return model.Message{
-		ID:          id,
-		From:        model.User{ID: wm.UserID, Username: wm.Username},
-		Body:        wm.Content,
-		CreatedAt:   time.UnixMilli(int64(wm.Timestamp)),
-		IsChatAdmin: wm.IsChatAdmin,
-		IsAction:    wm.IsAction,
-		Deleted:     wm.Deleted,
+		ID:              id,
+		From:            model.User{ID: wm.UserID, Username: wm.Username},
+		Body:            decodeArtBody(wm.Content, wm.Style),
+		CreatedAt:       time.UnixMilli(int64(wm.Timestamp)),
+		IsChatAdmin:     wm.IsChatAdmin,
+		IsAction:        wm.IsAction,
+		Deleted:         wm.Deleted,
+		ImageUrl:        wm.ImageUrl,
+		GifUrl:          wm.GifUrl,
+		AudioAttachment: wireAudioAttachmentToModel(wm.AudioAttachment),
+		Style:           []string(wm.Style),
 	}
 }
 
@@ -2056,11 +2149,15 @@ func (c *HTTPClient) GetMessages(conversationID string, limit int, before int64)
 func wireCMailMessageToModel(w wireCMailMessage) model.Message {
 	sanitize.Strings(&w)
 	return model.Message{
-		ID:        w.ID,
-		From:      model.User{ID: w.SenderID, Username: w.SenderUsername},
-		Body:      w.Content,
-		CreatedAt: time.UnixMilli(w.Timestamp),
-		IsAction:  w.IsAction,
+		ID:              w.ID,
+		From:            model.User{ID: w.SenderID, Username: w.SenderUsername},
+		Body:            decodeArtBody(w.Content, w.Style),
+		CreatedAt:       time.UnixMilli(w.Timestamp),
+		IsAction:        w.IsAction,
+		ImageUrl:        w.ImageUrl,
+		GifUrl:          w.GifUrl,
+		AudioAttachment: wireAudioAttachmentToModel(w.AudioAttachment),
+		Style:           []string(w.Style),
 	}
 }
 
