@@ -96,3 +96,106 @@ func TestFeed_FilterNSFW_Off_ShowsAll(t *testing.T) {
 		t.Errorf("expected p2 (nsfw), got %s", sp.Post.ID)
 	}
 }
+
+// --- Flag / report ---
+
+func keyRune(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+
+func TestFeed_FlagKey_OnOwnPost_DoesNothing(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine"},
+	}, "")
+	m = m.SetCurrentUsername("alice")
+
+	_, cmd := m.Update(keyRune("!"))
+	if cmd != nil {
+		t.Fatal("expected no cmd when flagging own post")
+	}
+}
+
+func TestFeed_FlagKey_OnOtherPost_FullFlowEmitsFlagPostMsg(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "bob", Content: "not mine"},
+	}, "")
+	m = m.SetCurrentUsername("alice")
+
+	m, cmd := m.Update(keyRune("!"))
+	if cmd == nil {
+		t.Fatal("expected Open() to return a focus cmd")
+	}
+
+	for _, r := range "spam" {
+		m, _ = m.Update(keyRune(string(r)))
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd = m.Update(keyRune("y"))
+	if cmd == nil {
+		t.Fatal("expected a cmd after confirming")
+	}
+	// The real runtime feeds the cmd's message back through Update; do the same here.
+	_, cmd = m.Update(cmd())
+	if cmd == nil {
+		t.Fatal("expected a cmd after routing FlagSubmitMsg through Update")
+	}
+	msg, ok := cmd().(screens.FlagPostMsg)
+	if !ok {
+		t.Fatalf("expected FlagPostMsg, got %T", cmd())
+	}
+	if msg.PostID != "p1" {
+		t.Errorf("PostID = %q, want p1", msg.PostID)
+	}
+	if msg.Reason != "spam" {
+		t.Errorf("Reason = %q, want spam", msg.Reason)
+	}
+}
+
+func TestFeed_FlagKey_Cancel_EmitsNoFlagMsg(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "bob", Content: "not mine"},
+	}, "")
+	m = m.SetCurrentUsername("alice")
+
+	m, _ = m.Update(keyRune("!"))
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		if _, ok := cmd().(screens.FlagPostMsg); ok {
+			t.Fatal("esc should not emit FlagPostMsg")
+		}
+	}
+}
+
+func TestFeed_ComposeActive_TrueWhileFlagPromptOpen(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "bob", Content: "not mine"},
+	}, "")
+	m = m.SetCurrentUsername("alice")
+
+	if m.ComposeActive() {
+		t.Fatal("setup: expected ComposeActive false before opening the flag prompt")
+	}
+	m, _ = m.Update(keyRune("!"))
+	if !m.ComposeActive() {
+		t.Error("expected ComposeActive to report true while the flag/report overlay is open")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.ComposeActive() {
+		t.Error("expected ComposeActive to go false again once the flag prompt is cancelled")
+	}
+}
+
+func TestFeed_ComposeActive_TrueWhileConfirmingDelete(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine"},
+	}, "")
+	m = m.SetCurrentUsername("alice")
+
+	m, _ = m.Update(keyRune("d"))
+	if !m.ComposeActive() {
+		t.Error("expected ComposeActive to report true while the delete-confirm overlay is open")
+	}
+}

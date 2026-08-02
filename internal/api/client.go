@@ -303,6 +303,15 @@ type createBookmarkResponseData struct {
 	BookmarkID string `json:"bookmarkId"`
 }
 
+type flagRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type flagResponseData struct {
+	FlagID         string `json:"flagId"`
+	AlreadyFlagged bool   `json:"alreadyFlagged"`
+}
+
 type createPostRequest struct {
 	Content  string   `json:"content"`
 	Title    string   `json:"title,omitempty"`
@@ -443,6 +452,7 @@ type wireCircMessage struct {
 	IsAction    bool   `json:"isAction"` // undocumented; true for /me and other emote commands
 	Content     string `json:"content"`
 	Timestamp   int64  `json:"timestamp"` // epoch ms
+	Deleted     bool   `json:"deleted"`
 }
 
 // --- C-Mail wire types ---
@@ -512,6 +522,7 @@ type wireRTDBCircMessage struct {
 	IsAction    bool    `json:"isAction"` // undocumented; true for /me and other emote commands
 	Content     string  `json:"content"`
 	Timestamp   float64 `json:"timestamp"` // epoch ms as a Firebase number
+	Deleted     bool    `json:"deleted"`
 }
 
 // wireRTDBSSEData is the outer wrapper of a Firebase "put" SSE event's data field.
@@ -1169,6 +1180,30 @@ func (c *HTTPClient) DeleteReply(replyID string) error {
 	return err
 }
 
+func (c *HTTPClient) FlagPost(postID, reason string) (string, bool, error) {
+	env, err := c.doJSON("POST", "/v1/posts/"+url.PathEscape(postID)+"/flag", flagRequest{Reason: reason})
+	if err != nil {
+		return "", false, err
+	}
+	var data flagResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", false, err
+	}
+	return data.FlagID, data.AlreadyFlagged, nil
+}
+
+func (c *HTTPClient) FlagReply(replyID, reason string) (string, bool, error) {
+	env, err := c.doJSON("POST", "/v1/replies/"+url.PathEscape(replyID)+"/flag", flagRequest{Reason: reason})
+	if err != nil {
+		return "", false, err
+	}
+	var data flagResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", false, err
+	}
+	return data.FlagID, data.AlreadyFlagged, nil
+}
+
 func (c *HTTPClient) GetReply(replyID string) (model.Reply, error) {
 	env, err := c.doRequest("GET", "/v1/replies/"+url.PathEscape(replyID), nil)
 	if err != nil {
@@ -1593,6 +1628,7 @@ func wireCircMessageToModel(w wireCircMessage) model.Message {
 		CreatedAt:   time.UnixMilli(w.Timestamp),
 		IsChatAdmin: w.IsChatAdmin,
 		IsAction:    w.IsAction,
+		Deleted:     w.Deleted,
 	}
 }
 
@@ -1614,6 +1650,24 @@ func (c *HTTPClient) SendRoomMessage(roomID, body string) (string, error) {
 // MarkRoomRead resets the unread indicator for roomID via POST /v1/circ/:roomId/read.
 func (c *HTTPClient) MarkRoomRead(roomID string) error {
 	_, err := c.doRequest("POST", "/v1/circ/"+url.PathEscape(roomID)+"/read", nil)
+	return err
+}
+
+func (c *HTTPClient) FlagRoomMessage(roomID, messageID, reason string) (string, bool, error) {
+	env, err := c.doJSON("POST", "/v1/circ/"+url.PathEscape(roomID)+"/messages/"+url.PathEscape(messageID)+"/flag", flagRequest{Reason: reason})
+	if err != nil {
+		return "", false, err
+	}
+	var data flagResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", false, err
+	}
+	return data.FlagID, data.AlreadyFlagged, nil
+}
+
+// DeleteRoomMessage soft-deletes a message via DELETE /v1/circ/:roomId/messages/:messageId.
+func (c *HTTPClient) DeleteRoomMessage(roomID, messageID string) error {
+	_, err := c.doRequest("DELETE", "/v1/circ/"+url.PathEscape(roomID)+"/messages/"+url.PathEscape(messageID), nil)
 	return err
 }
 
@@ -1642,7 +1696,7 @@ func (c *HTTPClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 			if ev.Err != nil {
 				return
 			}
-			if ev.Event != "put" {
+			if ev.Event != "put" && ev.Event != "patch" {
 				continue
 			}
 			var d wireRTDBSSEData
@@ -1657,13 +1711,28 @@ func (c *HTTPClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 				// Deletion event — skip.
 				continue
 			}
+			msgID := strings.TrimPrefix(d.Path, "/")
 			var wm wireRTDBCircMessage
 			if err := json.Unmarshal(d.Data, &wm); err != nil {
 				continue
 			}
-			msgID := strings.TrimPrefix(d.Path, "/")
+			var msg model.Message
+			if ev.Event == "patch" {
+				// A patch on an existing message's path is currently only
+				// ever a delete ({"content":"[DELETED]","deleted":true}),
+				// which omits sender/timestamp/etc. entirely — unmarshaling
+				// it as a full message would zero those fields out. Send
+				// just {ID, Deleted}; callers must merge this onto the
+				// existing message by ID, never append it as new.
+				if !wm.Deleted {
+					continue
+				}
+				msg = model.Message{ID: msgID, Deleted: true}
+			} else {
+				msg = wireRTDBCircMessageToModel(msgID, wm)
+			}
 			select {
-			case out <- wireRTDBCircMessageToModel(msgID, wm):
+			case out <- msg:
 			case <-ctx.Done():
 				return
 			}
@@ -1932,6 +2001,7 @@ func wireRTDBCircMessageToModel(id string, wm wireRTDBCircMessage) model.Message
 		CreatedAt:   time.UnixMilli(int64(wm.Timestamp)),
 		IsChatAdmin: wm.IsChatAdmin,
 		IsAction:    wm.IsAction,
+		Deleted:     wm.Deleted,
 	}
 }
 

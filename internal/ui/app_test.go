@@ -560,6 +560,53 @@ func TestHandleKeys_Left_NotConsumed_WhileChatroomsInputFocusedAndComposeHasText
 	}
 }
 
+// TestHandleKeys_Left_NotConsumed_WhileChatroomsFlagPromptOpen guards a bug
+// found in manual testing: ComposeEmpty() only checked the compose box's own
+// value, so left/right escaped to tab-cycling while typing a flag/report
+// reason — even though focus was on the reason field, not the (empty)
+// compose box.
+func TestHandleKeys_Left_NotConsumed_WhileChatroomsFlagPromptOpen(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	cm, _ := a.chatrooms.Update(tea.KeyMsg{Type: tea.KeyUp}) // select the message
+	cm, _ = cm.Update(keyMsg("!"))                           // open the flag prompt
+	a.chatrooms = cm
+
+	if a.chatrooms.ComposeEmpty() {
+		t.Fatal("setup: expected ComposeEmpty() false while the flag prompt is open, even with an empty compose box")
+	}
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if consumed {
+		t.Error("expected plain left arrow to NOT be consumed while the flag/report reason box is focused — it must move the cursor instead")
+	}
+}
+
+// TestHandleKeys_Left_NotConsumed_WhileChatroomsDeleteConfirmOpen is the same
+// bug class as the flag-prompt case above, for the delete-confirm overlay:
+// ComposeEmpty() must also account for confirmingDeleteMsg, not just the
+// flag prompt.
+func TestHandleKeys_Left_NotConsumed_WhileChatroomsDeleteConfirmOpen(t *testing.T) {
+	a := loggedInApp()
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	cm = cm.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: ""}, Body: "mine", CreatedAt: time.Now()},
+	})
+	a.active = screenChatrooms
+	a.chatrooms = cm
+	cm, _ = a.chatrooms.Update(tea.KeyMsg{Type: tea.KeyUp}) // select the message
+	cm, _ = cm.Update(keyMsg("d"))                          // open the delete confirm
+	a.chatrooms = cm
+
+	if a.chatrooms.ComposeEmpty() {
+		t.Fatal("setup: expected ComposeEmpty() false while the delete-confirm overlay is open")
+	}
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if consumed {
+		t.Error("expected plain left arrow to NOT be consumed while the delete-confirm overlay is open")
+	}
+}
+
 // C-Mail's compose input is focused for the entire detail view exactly like
 // Chatrooms', and now gets the same background-resume treatment (see
 // TestActivateScreen_CMailConvSurvivesTabSwitch), so it needs the same
@@ -640,6 +687,70 @@ func TestHandleKeys_Slash_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
 	_, _, consumed := a.handleKeys(keyMsg("/"))
 	if consumed {
 		t.Error("expected '/' to NOT be consumed while chatrooms input is focused — it must still type into the compose box (needed for /dice, /me, etc.)")
+	}
+}
+
+// --- Flag/report overlay: same input-focus bug class as chatrooms/cmail ---
+
+// setupFeedFlagPromptOpen opens the flag/report overlay on someone else's
+// post via FeedModel's own Update, mirroring setupChatroomsDetailWithURL
+// above (ComposeActive() must report true afterwards, or handleKeys will
+// treat later keys as global shortcuts instead of reason-box input).
+func setupFeedFlagPromptOpen(a App) App {
+	a.active = screenFeed
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "bob", Content: "not mine"},
+	}, "")
+	a.feed = a.feed.SetCurrentUsername("alice")
+	m, _ := a.feed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	a.feed = m
+	return a
+}
+
+func TestHandleKeys_Q_NotConsumed_WhileFeedFlagPromptOpen(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	if !a.feed.ComposeActive() {
+		t.Fatal("setup: expected flag prompt open (ComposeActive true) after '!'")
+	}
+	_, _, consumed := a.handleKeys(keyMsg("q"))
+	if consumed {
+		t.Error("expected plain 'q' to NOT be consumed while the flag/report reason box is focused — it must still type into the reason field")
+	}
+}
+
+func TestHandleKeys_Digit_NotConsumed_WhileFeedFlagPromptOpen(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	_, _, consumed := a.handleKeys(keyMsg("1"))
+	if consumed {
+		t.Error("expected digit '1' to NOT be consumed while the flag/report reason box is focused — it must still type into the reason field")
+	}
+}
+
+func TestHandleKeys_CtrlQ_QuitsWhileFeedFlagPromptOpen(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	_, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if !consumed {
+		t.Error("expected ctrl+q to be consumed even while the flag/report reason box is focused")
+	}
+	if cmd == nil {
+		t.Error("expected ctrl+q to fire a quit command")
+	}
+}
+
+func TestHandleKeys_Digit_NotConsumed_WhileFeedConfirmingDelete(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine"},
+	}, "")
+	a.feed = a.feed.SetCurrentUsername("alice")
+	m, _ := a.feed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	a.feed = m
+	if !a.feed.ComposeActive() {
+		t.Fatal("setup: expected delete-confirm overlay open (ComposeActive true) after 'd'")
+	}
+	_, _, consumed := a.handleKeys(keyMsg("1"))
+	if consumed {
+		t.Error("expected digit '1' to NOT be consumed while the delete-confirm overlay is open")
 	}
 }
 
@@ -1292,6 +1403,34 @@ func TestFriendlyErr_404IsSoftened(t *testing.T) {
 	}
 	if got := friendlyErr(errors.New("boom")); got != "boom" {
 		t.Errorf("friendlyErr(non-api) = %q, want raw text", got)
+	}
+}
+
+// flagErrorMsg softens the documented self-report 403 into a friendly banner;
+// anything else falls through to the normal actionErrMsg handling.
+func TestFlagErrorMsg_403IsSoftened(t *testing.T) {
+	got := flagErrorMsg(&api.APIError{Code: "FORBIDDEN", Status: 403, Message: "cannot flag own content"})
+	msg, ok := got.(notifyMsg)
+	if !ok {
+		t.Fatalf("flagErrorMsg(403) = %T, want notifyMsg", got)
+	}
+	if msg.level != notifyError {
+		t.Errorf("level = %v, want notifyError", msg.level)
+	}
+	if msg.text != "you can't report your own content" {
+		t.Errorf("text = %q, want friendly self-report message", msg.text)
+	}
+}
+
+func TestFlagErrorMsg_OtherErrorsFallThrough(t *testing.T) {
+	err := &api.APIError{Code: "RATE_LIMITED", Status: 429, Message: "too many requests"}
+	got := flagErrorMsg(err)
+	ae, ok := got.(actionErrMsg)
+	if !ok {
+		t.Fatalf("flagErrorMsg(429) = %T, want actionErrMsg", got)
+	}
+	if ae.err != err {
+		t.Errorf("actionErrMsg.err = %v, want the original error", ae.err)
 	}
 }
 

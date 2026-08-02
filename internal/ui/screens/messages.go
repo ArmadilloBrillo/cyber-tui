@@ -143,6 +143,36 @@ type DeleteReplyMsg struct {
 	PostID  string
 }
 
+// FlagPostMsg is emitted by FeedModel or PostDetailModel when the user
+// confirms reporting a post. Reason is optional (max 500 chars).
+type FlagPostMsg struct {
+	PostID string
+	Reason string
+}
+
+// FlagReplyMsg is emitted by PostDetailModel when the user confirms
+// reporting a reply. Reason is optional (max 500 chars).
+type FlagReplyMsg struct {
+	ReplyID string
+	PostID  string
+	Reason  string
+}
+
+// FlagMessageMsg is emitted by ChatroomsModel when the user confirms
+// reporting a cIRC message. Reason is optional (max 500 chars).
+type FlagMessageMsg struct {
+	RoomID    string
+	MessageID string
+	Reason    string
+}
+
+// DeleteRoomMessageMsg is emitted by ChatroomsModel when the user confirms
+// deleting their own cIRC message.
+type DeleteRoomMessageMsg struct {
+	RoomID    string
+	MessageID string
+}
+
 // ShowProfilePostMsg is emitted by ProfileModel when the user opens a post from
 // the Posts sub-tab. Handled by App in handleProfile (sets return to screenProfile).
 type ShowProfilePostMsg struct{ Post model.Post }

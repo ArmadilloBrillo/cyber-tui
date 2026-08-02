@@ -241,6 +241,19 @@ type ChatroomsModel struct {
 	// when not cycling. See mentionCycle's doc comment.
 	mentionCycle *mentionCycle
 
+	// Message selection ("browsing") + flag/report overlay state.
+	// selectedMsgID == "" is the sentinel for normal typing (input focused,
+	// up/down raw-scroll); non-empty means the input is blurred and up/down/!
+	// act on the selected message instead. Selection is tracked by ID rather
+	// than index since PrependMessages splices older history onto the front
+	// of m.messages, which would silently invalidate a stored index.
+	selectedMsgID       string
+	msgOffsets          []int // start line of m.messages[i]'s rendered block; 1:1 with m.messages
+	msgHeights          []int // rendered line-height of m.messages[i]'s block; 1:1 with m.messages
+	flagPrompt          FlagPrompt
+	flagTargetMsgID     string // message ID being flagged, set right before flagPrompt.Open()
+	confirmingDeleteMsg bool   // true while the y/n delete-confirm overlay for the selected message is showing
+
 	// focused is true while the Chatrooms tab is the one on screen. The RTDB
 	// subscription for an open room stays alive regardless (see
 	// IsRoomStreamMsg), so this only gates whether incoming messages bump
@@ -269,6 +282,7 @@ func NewChatroomsModel(currentUser string, client api.Client) ChatroomsModel {
 		currentUser: currentUser,
 		client:      client,
 		mode:        chatroomModeList,
+		flagPrompt:  NewFlagPrompt(),
 	}
 }
 
@@ -518,10 +532,18 @@ func (m ChatroomsModel) loadOlderRoomMessagesCmd(roomID string, before int64) te
 // InputFocused returns true in detail mode to prevent tab-navigation key capture.
 func (m ChatroomsModel) InputFocused() bool { return m.mode == chatroomModeDetail }
 
-// ComposeEmpty reports whether the compose input has no typed text — used by
-// App to let plain left/right fall through to tab-cycling instead of being
-// captured as cursor movement (see handleKeys' focused-input gate in app.go).
-func (m ChatroomsModel) ComposeEmpty() bool { return m.input.Value() == "" }
+// SelectedMessageID returns the ID of the currently browsed/highlighted
+// message, or "" if none is selected (normal typing state).
+func (m ChatroomsModel) SelectedMessageID() string { return m.selectedMsgID }
+
+// ComposeEmpty reports whether there's no text a bare left/right arrow would
+// need to navigate — app.go uses this to decide whether bare left/right can
+// escape to tab-cycling instead of moving the input cursor. False while the
+// flag/report overlay is open, regardless of the compose box's own value:
+// arrows must move within the reason field then, never escape to tabs.
+func (m ChatroomsModel) ComposeEmpty() bool {
+	return !m.flagPrompt.Active() && !m.confirmingDeleteMsg && m.input.Value() == ""
+}
 
 // IsShowingDetail reports whether the detail view is active.
 func (m ChatroomsModel) IsShowingDetail() bool { return m.mode == chatroomModeDetail }
@@ -619,9 +641,10 @@ func (m ChatroomsModel) enterRoomDetail(idx int, room model.Room) (ChatroomsMode
 	m.historyExhausted = false
 	m.loadingHistory = false
 	m.err = nil
+	m.selectedMsgID = ""
 	m.input.Focus()
 	if m.ready {
-		m.viewport.SetContent(m.renderMessages())
+		m = m.refreshMessages()
 		m.viewport.GotoBottom()
 	}
 	roomID := room.Slug
@@ -638,8 +661,29 @@ func (m ChatroomsModel) AppendMessage(msg model.Message) ChatroomsModel {
 	m.messages = append(m.messages, msg)
 	m.err = nil
 	if m.ready {
-		m.viewport.SetContent(m.renderMessages())
+		m = m.refreshMessages()
 		m.viewport.GotoBottom()
+	}
+	return m
+}
+
+// ApplyMessageDeleted marks an existing message (by ID) as soft-deleted in
+// place — the message stays in the list (per the API: "the message stays in
+// the room so the conversation around it still reads"), just with its body
+// replaced by a tombstone marker. No-op if the ID isn't currently loaded.
+// Used both for the optimistic update after the caller's own delete succeeds
+// and for a delete patch received from the live RTDB stream.
+func (m ChatroomsModel) ApplyMessageDeleted(messageID string) ChatroomsModel {
+	for i, msg := range m.messages {
+		if msg.ID != messageID {
+			continue
+		}
+		m.messages[i].Deleted = true
+		m.messages[i].Body = "[DELETED]"
+		if m.ready {
+			m = m.refreshMessages()
+		}
+		return m
 	}
 	return m
 }
@@ -667,7 +711,7 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 	m.messages = msgs
 	m.err = nil
 	if m.ready {
-		m.viewport.SetContent(m.renderMessages())
+		m = m.refreshMessages()
 		m.viewport.GotoBottom()
 	}
 	return m
@@ -682,7 +726,7 @@ func (m ChatroomsModel) SetRoomUsers(users []model.RoomUser) ChatroomsModel {
 	if m.ready {
 		msgW, _ := m.panelWidths()
 		m.viewport.Width = msgW
-		m.viewport.SetContent(m.renderMessages())
+		m = m.refreshMessages()
 	}
 	return m
 }
@@ -707,9 +751,9 @@ func (m ChatroomsModel) PrependMessages(roomID string, msgs []model.Message) Cha
 	}
 	m.messages = append(msgs, m.messages...)
 	if m.ready {
-		newContent := m.renderMessages()
-		m.viewport.SetContent(newContent)
-		m.viewport.SetYOffset(oldOffset + lipgloss.Height(newContent) - oldLines)
+		newLines := lipgloss.Height(m.renderMessages())
+		m = m.refreshMessages()
+		m.viewport.SetYOffset(oldOffset + newLines - oldLines)
 	}
 	return m
 }
@@ -729,7 +773,7 @@ func (m ChatroomsModel) SetLocation(loc *time.Location) ChatroomsModel {
 	if m.ready {
 		m.listVP.SetContent(m.renderRoomCards())
 		if m.activeRoom != nil {
-			m.viewport.SetContent(m.renderMessages())
+			m = m.refreshMessages()
 		}
 	}
 	return m
@@ -743,21 +787,20 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		listH := msg.Height - theme.ChromeHeight
-		detailH := msg.Height - theme.ChromeHeight - chatroomDetailChrome
 		msgW, _ := m.panelWidths()
 		if !m.ready {
 			m.listVP = viewport.New(msg.Width, listH)
-			m.viewport = viewport.New(msgW, detailH)
+			m.viewport = viewport.New(msgW, m.viewportHeight())
 			m.listVP.SetContent(m.renderRoomCards())
 			m.ready = true
 		} else {
 			m.listVP.Width = msg.Width
 			m.listVP.Height = listH
 			m.viewport.Width = msgW
-			m.viewport.Height = detailH
+			m.viewport.Height = m.viewportHeight()
 			m.listVP.SetContent(m.renderRoomCards())
 			if m.activeRoom != nil {
-				m.viewport.SetContent(m.renderMessages())
+				m = m.refreshMessages()
 			}
 		}
 		// textinput.View() renders 3 columns wider than Width the instant
@@ -793,9 +836,16 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		return m.PrependMessages(msg.roomID, msg.msgs), nil
 
 	case roomReceivedMsg:
-		m = m.AppendMessage(msg.msg)
-		if !m.focused {
-			m.unreadCount++
+		if msg.msg.Deleted {
+			// A delete patch — from us in another session, or from another
+			// user — carries only {ID, Deleted}; merge onto the existing
+			// message rather than appending it as a new one.
+			m = m.ApplyMessageDeleted(msg.msg.ID)
+		} else {
+			m = m.AppendMessage(msg.msg)
+			if !m.focused {
+				m.unreadCount++
+			}
 		}
 		if m.sub != nil {
 			return m, waitForRoomMsg(m.sub)
@@ -853,7 +903,7 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		m.err = msg.err
 		m.loadingHistory = false
 		if m.ready && m.mode == chatroomModeDetail {
-			m.viewport.SetContent(m.renderMessages())
+			m = m.refreshMessages()
 		}
 		return m, nil
 
@@ -958,6 +1008,27 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		m.presenceReconnectAttempt = 0
 		return m, waitForRoomPresenceMsg(m.presenceSub)
 
+	case FlagSubmitMsg:
+		messageID := m.flagTargetMsgID
+		m.flagTargetMsgID = ""
+		roomID := ""
+		if m.activeRoom != nil {
+			roomID = m.activeRoom.Slug
+		}
+		if m.ready {
+			m.viewport.Height = m.viewportHeight()
+		}
+		return m, func() tea.Msg {
+			return FlagMessageMsg{RoomID: roomID, MessageID: messageID, Reason: msg.Reason}
+		}
+
+	case FlagCancelMsg:
+		m.flagTargetMsgID = ""
+		if m.ready {
+			m.viewport.Height = m.viewportHeight()
+		}
+		return m, nil
+
 	// --- Keyboard ---
 
 	case tea.KeyMsg:
@@ -990,6 +1061,14 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			}
 
 		case chatroomModeDetail:
+			if m.flagPrompt.Active() {
+				var cmd tea.Cmd
+				m.flagPrompt, cmd = m.flagPrompt.Update(msg)
+				return m, cmd
+			}
+			if m.selectedMsgID != "" {
+				return m.updateBrowsingKey(msg)
+			}
 			// Any key other than Tab or Space ends an in-progress mention
 			// preview: Tab cycles which candidate is shown, Space commits
 			// the current one. Everything else just clears the preview,
@@ -1067,12 +1146,24 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				}
 				return m, nil
 			case "up":
-				m.viewport.ScrollUp(1)
-				if m.viewport.AtTop() && !m.loadingHistory && !m.historyExhausted &&
-					m.activeRoom != nil && len(m.messages) > 0 {
-					m.loadingHistory = true
-					before := m.messages[0].CreatedAt.UnixMilli()
-					return m, m.loadOlderRoomMessagesCmd(m.activeRoom.Slug, before)
+				sel := selectableMessageIndices(m.messages)
+				if len(sel) == 0 {
+					m.viewport.ScrollUp(1)
+					return m.maybeLoadOlderMessages()
+				}
+				m.input.Blur()
+				m.selectedMsgID = m.messages[sel[len(sel)-1]].ID
+				m = m.refreshMessages()
+				m = m.ensureSelectedMessageVisible()
+				// Only fetch older history here if entering browsing landed
+				// straight on the oldest message (a single-message room) —
+				// otherwise pagination fires once curPos reaches 0 while
+				// already browsing (see updateBrowsingKey's "up" case).
+				// Checking AtTop() here instead would fire on every short
+				// room whose content already fits the viewport, regardless
+				// of which message was just selected.
+				if len(sel) == 1 {
+					return m.maybeLoadOlderMessages()
 				}
 				return m, nil
 			case "down":
@@ -1162,6 +1253,223 @@ func (m ChatroomsModel) renderMessages() string {
 		return theme.Subtle.Render("no messages yet")
 	}
 	return renderCircMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser)
+}
+
+// refreshMessages rebuilds the viewport content and the per-message
+// offset/height tables (m.msgOffsets/m.msgHeights) used to keep the selected
+// message in view and to highlight it. Every mutation of m.messages or the
+// viewport's width must call this instead of setting content directly.
+func (m ChatroomsModel) refreshMessages() ChatroomsModel {
+	if len(m.messages) == 0 {
+		m.viewport.SetContent(m.renderMessages())
+		m.msgOffsets, m.msgHeights = nil, nil
+		return m
+	}
+	content, offsets, heights := renderCircMessagesWithSelection(
+		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID)
+	m.viewport.SetContent(content)
+	m.msgOffsets, m.msgHeights = offsets, heights
+	return m
+}
+
+// selectableMessageIndices returns the indices into msgs of messages that can
+// be selected/flagged: a real (non-system) message with a stable ID. System
+// notices (AppendSystemMessage) have no ID and are never selectable.
+func selectableMessageIndices(msgs []model.Message) []int {
+	var sel []int
+	for i, msg := range msgs {
+		if !msg.IsSystem && msg.ID != "" {
+			sel = append(sel, i)
+		}
+	}
+	return sel
+}
+
+// selectablePos returns the position within sel whose message ID matches id,
+// or -1 if id is empty or not found (e.g. it scrolled out of the loaded
+// window, or — in the future — was deleted).
+func selectablePos(msgs []model.Message, sel []int, id string) int {
+	if id == "" {
+		return -1
+	}
+	for pos, idx := range sel {
+		if msgs[idx].ID == id {
+			return pos
+		}
+	}
+	return -1
+}
+
+// findMessageByID returns the message with the given ID and whether it was found.
+func findMessageByID(msgs []model.Message, id string) (model.Message, bool) {
+	for _, msg := range msgs {
+		if msg.ID == id {
+			return msg, true
+		}
+	}
+	return model.Message{}, false
+}
+
+// selOffsets/selHeights project m.msgOffsets/m.msgHeights through sel (the
+// selectable-only index list), for feeding into millerPageNav.
+func selOffsets(m ChatroomsModel, sel []int) []int {
+	out := make([]int, len(sel))
+	for i, idx := range sel {
+		out[i] = m.msgOffsets[idx]
+	}
+	return out
+}
+
+func selHeights(m ChatroomsModel, sel []int) []int {
+	out := make([]int, len(sel))
+	for i, idx := range sel {
+		out[i] = m.msgHeights[idx]
+	}
+	return out
+}
+
+// ensureSelectedMessageVisible scrolls the viewport the minimum amount so the
+// selected message is fully visible, mirroring PostDetailModel's
+// ensureSelectedVisible.
+func (m ChatroomsModel) ensureSelectedMessageVisible() ChatroomsModel {
+	if !m.ready {
+		return m
+	}
+	for i, msg := range m.messages {
+		if msg.ID != m.selectedMsgID {
+			continue
+		}
+		itemStart := m.msgOffsets[i]
+		itemEnd := itemStart + m.msgHeights[i] - 1
+		if itemStart < m.viewport.YOffset {
+			m.viewport.SetYOffset(itemStart)
+		} else if itemEnd >= m.viewport.YOffset+m.viewport.Height {
+			m.viewport.SetYOffset(itemEnd - m.viewport.Height + 1)
+		}
+		return m
+	}
+	return m
+}
+
+// maybeLoadOlderMessages fires the older-history fetch once scrolled to the
+// very top of loaded messages. Shared by both places 'up' can reach the top:
+// raw scroll from the sentinel, and paging further up while already browsing.
+func (m ChatroomsModel) maybeLoadOlderMessages() (ChatroomsModel, tea.Cmd) {
+	if m.viewport.AtTop() && !m.loadingHistory && !m.historyExhausted &&
+		m.activeRoom != nil && len(m.messages) > 0 {
+		m.loadingHistory = true
+		before := m.messages[0].CreatedAt.UnixMilli()
+		return m, m.loadOlderRoomMessagesCmd(m.activeRoom.Slug, before)
+	}
+	return m, nil
+}
+
+// updateBrowsingKey handles keys while a message is selected
+// (m.selectedMsgID != ""): up/down move the selection, esc returns to
+// typing, '!' reports the selected message. Everything else is swallowed
+// rather than typed, since the input is blurred for the duration of
+// browsing — see the 'up' case in the typing-mode switch, the only place
+// browsing is entered.
+func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.Cmd) {
+	if m.confirmingDeleteMsg {
+		switch msg.String() {
+		case "y":
+			messageID := m.selectedMsgID
+			roomID := ""
+			if m.activeRoom != nil {
+				roomID = m.activeRoom.Slug
+			}
+			m.confirmingDeleteMsg = false
+			m.viewport.Height = m.viewportHeight()
+			return m, func() tea.Msg {
+				return DeleteRoomMessageMsg{RoomID: roomID, MessageID: messageID}
+			}
+		case "n", "esc":
+			m.confirmingDeleteMsg = false
+			m.viewport.Height = m.viewportHeight()
+		}
+		return m, nil
+	}
+	sel := selectableMessageIndices(m.messages)
+	curPos := selectablePos(m.messages, sel, m.selectedMsgID)
+	if curPos < 0 {
+		// The selected message no longer exists — fall back to typing.
+		m.selectedMsgID = ""
+		m.input.Focus()
+		return m.refreshMessages(), nil
+	}
+	switch msg.String() {
+	case "esc":
+		m.selectedMsgID = ""
+		m.input.Focus()
+		m = m.refreshMessages()
+		m.viewport.GotoBottom()
+		return m, nil
+	case "up":
+		if curPos == 0 {
+			return m.maybeLoadOlderMessages()
+		}
+		newPos, newOffset := millerPageNav(-1, m.viewport.Height, 0,
+			selOffsets(m, sel), selHeights(m, sel), curPos, m.viewport.YOffset)
+		if newPos < 0 {
+			newPos = 0
+		}
+		m.selectedMsgID = m.messages[sel[newPos]].ID
+		m.viewport.SetYOffset(newOffset)
+		m = m.refreshMessages()
+		if newPos == 0 {
+			return m.maybeLoadOlderMessages()
+		}
+		return m, nil
+	case "down":
+		if curPos >= len(sel)-1 {
+			m.selectedMsgID = ""
+			m.input.Focus()
+			m = m.refreshMessages()
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+		newPos, newOffset := millerPageNav(+1, m.viewport.Height, 0,
+			selOffsets(m, sel), selHeights(m, sel), curPos, m.viewport.YOffset)
+		m.selectedMsgID = m.messages[sel[newPos]].ID
+		m.viewport.SetYOffset(newOffset)
+		return m.refreshMessages(), nil
+	case "!":
+		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
+		if !ok || targetMsg.Deleted || targetMsg.From.Username == m.currentUser {
+			return m, nil
+		}
+		m.flagTargetMsgID = m.selectedMsgID
+		var cmd tea.Cmd
+		m.flagPrompt, cmd = m.flagPrompt.Open(FlagKindMessage)
+		m.viewport.Height = m.viewportHeight()
+		return m, cmd
+	case "d":
+		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
+		if !ok || targetMsg.Deleted || targetMsg.From.Username != m.currentUser {
+			return m, nil
+		}
+		m.confirmingDeleteMsg = true
+		m.viewport.Height = m.viewportHeight()
+		return m, nil
+	}
+	return m, nil
+}
+
+// viewportHeight returns the message-history viewport height in rows,
+// shrinking to make room for the flag/report overlay when it's open.
+func (m ChatroomsModel) viewportHeight() int {
+	h := m.height - theme.ChromeHeight - chatroomDetailChrome
+	if m.flagPrompt.Active() {
+		h -= m.flagPrompt.Height()
+	}
+	if m.confirmingDeleteMsg {
+		h -= confirmBoxHeight
+	}
+	if h < 1 {
+		h = 1
+	}
+	return h
 }
 
 // Panel sizing: the users panel is pinned to a preferred width that
@@ -1433,6 +1741,16 @@ func (m ChatroomsModel) View() string {
 			messageArea = lipgloss.JoinHorizontal(lipgloss.Top, messageArea, sep, panel)
 		}
 		divider := theme.Subtle.Render(strings.Repeat("─", max(m.width, 0)))
+		if m.flagPrompt.Active() {
+			return lipgloss.JoinVertical(lipgloss.Left, header, divider, messageArea, m.flagPrompt.View(m.width), inputBox)
+		}
+		if m.confirmingDeleteMsg {
+			prompt := theme.Error.Render("Delete this message?") + "  " +
+				theme.Base.Render("[y]es") + "  " +
+				theme.Subtle.Render("[n]o / esc")
+			promptView := theme.ActiveBorder.Width(m.width - 2).Render(prompt)
+			return lipgloss.JoinVertical(lipgloss.Left, header, divider, messageArea, promptView, inputBox)
+		}
 		return lipgloss.JoinVertical(lipgloss.Left, header, divider, messageArea, inputBox)
 	default: // chatroomModeList
 		if !m.ready {

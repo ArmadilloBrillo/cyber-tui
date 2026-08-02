@@ -1,8 +1,10 @@
 package screens
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -852,6 +854,48 @@ func TestMentionGhostText_RendersAdjacentToCursorAtConstantWidth(t *testing.T) {
 	}
 	if !strings.Contains(content, "hey @alice") {
 		t.Errorf("expected the typed text and ghost to read as an unbroken %q with the cursor overlaying its first character, got: %q", "hey @alice", content)
+	}
+}
+
+// TestChatrooms_Esc_WhileBrowsing_ResetsViewportToBottom guards a real bug
+// found in manual testing: esc while browsing cleared the selection and
+// refocused the input, but — unlike the "down past the newest message"
+// exit path — left the viewport wherever browsing had scrolled it, instead
+// of also jumping back to the live tail.
+func TestChatrooms_Esc_WhileBrowsing_ResetsViewportToBottom(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	var msgs []model.Message
+	for i := 1; i <= 30; i++ {
+		msgs = append(msgs, model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "molly"},
+			Body:      fmt.Sprintf("message %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+	m = m.SetMessages("zion", msgs)
+	if !m.viewport.AtBottom() {
+		t.Fatal("setup: expected the viewport to start at the bottom after SetMessages")
+	}
+
+	for i := 0; i < len(msgs); i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q after paging all the way up, want m1", m.selectedMsgID)
+	}
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected paging up through browsing to leave the bottom")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.selectedMsgID != "" {
+		t.Errorf("selectedMsgID = %q, want cleared after esc", m.selectedMsgID)
+	}
+	if !m.viewport.AtBottom() {
+		t.Errorf("expected esc to reset the viewport to the bottom, YOffset=%d maxYOffset≈%d", m.viewport.YOffset, m.viewport.Height)
 	}
 }
 

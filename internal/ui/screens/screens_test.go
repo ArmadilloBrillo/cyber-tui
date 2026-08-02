@@ -2,6 +2,7 @@ package screens_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -460,6 +461,33 @@ func TestChatrooms_UpAtTop_TriggersHistoryLoadThenGuards(t *testing.T) {
 	}
 }
 
+// TestChatrooms_Up_MultiMessageRoomThatFits_NoSpuriousHistoryLoad guards a
+// bug found in manual testing: a short room's content already fits within
+// the viewport, so the viewport is trivially "at top" (YOffset 0) from the
+// moment it renders — checking viewport.AtTop() right after entering
+// browsing fired a history-load on essentially every first "up" press,
+// regardless of which message got selected. Pagination should only fire
+// once the selection actually reaches the oldest loaded message.
+func TestChatrooms_Up_MultiMessageRoomThatFits_NoSpuriousHistoryLoad(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "wintermute"}, Body: "second", CreatedAt: time.Now()},
+		{ID: "m3", From: model.User{Username: "molly"}, Body: "third", CreatedAt: time.Now()},
+	})
+
+	m, cmd := sendChatroomSpecialKey(m, tea.KeyUp) // enter browsing, select m3 (newest)
+	if cmd != nil {
+		t.Error("expected no history-load command when entering browsing on a multi-message room")
+	}
+	if m.SelectedMessageID() != "m3" {
+		t.Fatalf("SelectedMessageID() = %q, want m3", m.SelectedMessageID())
+	}
+}
+
 func TestChatrooms_UpAtTop_NoMessagesNoCmd(t *testing.T) {
 	m := screens.NewChatroomsModel("neuromancer", nil)
 	m = m.SetRooms(sampleRooms())
@@ -468,6 +496,411 @@ func TestChatrooms_UpAtTop_NoMessagesNoCmd(t *testing.T) {
 	_, cmd := sendChatroomSpecialKey(m, tea.KeyUp)
 	if cmd != nil {
 		t.Error("expected no history-load command with no messages loaded")
+	}
+}
+
+// --- ChatroomsModel: per-message selection ("browsing") + flag/report ---
+
+func TestChatrooms_Up_EntersBrowsing_SelectsNewest(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "wintermute"}, Body: "second", CreatedAt: time.Now()},
+	})
+
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+	if m.SelectedMessageID() != "m2" {
+		t.Errorf("SelectedMessageID() = %q, want m2 (newest)", m.SelectedMessageID())
+	}
+}
+
+func TestChatrooms_Up_SkipsSystemMessages(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: time.Now()},
+	})
+	m = m.AppendSystemMessage("zion", "*** a local notice")
+
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+	if m.SelectedMessageID() != "m1" {
+		t.Errorf("SelectedMessageID() = %q, want m1 (system notice must never be selectable)", m.SelectedMessageID())
+	}
+}
+
+func TestChatrooms_Esc_WhileBrowsing_ClearsSelectionWithoutLeavingRoom(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+	if m.SelectedMessageID() == "" {
+		t.Fatal("setup: expected a selection after up")
+	}
+
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEsc)
+	if m.SelectedMessageID() != "" {
+		t.Error("expected esc to clear the selection")
+	}
+	if !m.IsShowingDetail() {
+		t.Error("expected esc while browsing to stay in the room, not leave it")
+	}
+}
+
+func TestChatrooms_Down_PastNewest_ExitsBrowsing(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp) // select the only (newest) message
+
+	m, _ = sendChatroomSpecialKey(m, tea.KeyDown)
+	if m.SelectedMessageID() != "" {
+		t.Error("expected down past the newest message to exit browsing")
+	}
+}
+
+func TestChatrooms_WhileBrowsing_OtherKeysAreSwallowed_NotTypedIntoCompose(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+
+	m, _ = sendChatroomKey(m, "q")
+	m, _ = sendChatroomKey(m, "1")
+	if m.SelectedMessageID() == "" {
+		t.Error("expected selection to remain active after unrelated keys")
+	}
+
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEsc)
+	if !m.ComposeEmpty() {
+		t.Error("expected compose box to remain empty — browsing must not type into it")
+	}
+}
+
+func TestChatrooms_DraftPreserved_AcrossBrowsingRoundTrip(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: time.Now()},
+	})
+	for _, r := range "hello" {
+		m, _ = sendChatroomKey(m, string(r))
+	}
+	if m.ComposeEmpty() {
+		t.Fatal("setup: expected a draft before browsing")
+	}
+
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)  // enter browsing
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEsc) // back to typing
+
+	if m.ComposeEmpty() {
+		t.Error("expected the draft to survive a trip into browsing and back")
+	}
+}
+
+func TestChatrooms_Up_WhileBrowsingAtOldest_StillTriggersHistoryLoad(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	// A short viewport (2 message-history rows) so 3 one-line messages don't
+	// all fit at once — otherwise the viewport is trivially "at top" the
+	// instant any message renders, regardless of which one is selected, and
+	// this test couldn't distinguish "browsing" from "reached the oldest".
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "wintermute"}, Body: "second", CreatedAt: time.Now()},
+		{ID: "m3", From: model.User{Username: "molly"}, Body: "third", CreatedAt: time.Now()},
+	})
+
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp) // enter browsing, select m3 (newest)
+	if m.SelectedMessageID() != "m3" {
+		t.Fatalf("setup: SelectedMessageID() = %q, want m3", m.SelectedMessageID())
+	}
+	m, cmd := sendChatroomSpecialKey(m, tea.KeyUp) // move to m2 (middle — not the oldest yet)
+	if cmd != nil {
+		t.Fatal("expected no history-load cmd yet — not at the oldest message")
+	}
+	if m.SelectedMessageID() != "m2" {
+		t.Fatalf("SelectedMessageID() = %q, want m2", m.SelectedMessageID())
+	}
+
+	_, cmd = sendChatroomSpecialKey(m, tea.KeyUp) // reaches m1 (oldest) — pagination fires
+	if cmd == nil {
+		t.Error("expected a history-load command when browsing reaches the oldest loaded message")
+	}
+}
+
+// TestChatrooms_DownThroughManyMessages_ReachesNewestAndExits guards a real
+// bug found in manual testing: with more messages than fit in the viewport,
+// 'down' got permanently stuck partway through and never reached the newest
+// message or exited browsing. Root cause was in renderCircMessagesWithSelection
+// (render.go): each message's height was measured with lipgloss.Height,
+// which is strings.Count(s, "\n")+1 — correct once for a whole multi-line
+// string, but wrong when applied per-message and summed, since it counts
+// each message's own trailing "\n" as a phantom extra line. The summed
+// (inflated) offsets desynced from the viewport's real line count, so
+// millerPageNav kept computing a YOffset the viewport's own maxYOffset()
+// clamped right back down — an invisible deadlock.
+func TestChatrooms_DownThroughManyMessages_ReachesNewestAndExits(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 14}) // small: forces real scrolling
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+
+	var msgs []model.Message
+	for i := 1; i <= 10; i++ {
+		msgs = append(msgs, model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "molly"},
+			Body:      fmt.Sprintf("message number %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+	m = m.SetMessages("zion", msgs)
+
+	// Walk all the way up to the oldest message first (m1), then test that
+	// 'down' can walk all the way back down without getting stuck.
+	for i := 0; i < 10; i++ {
+		m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+	}
+	if m.SelectedMessageID() != "m1" {
+		t.Fatalf("setup: SelectedMessageID() = %q after walking up, want m1 (oldest)", m.SelectedMessageID())
+	}
+
+	for i := 0; i < 9; i++ {
+		m, _ = sendChatroomSpecialKey(m, tea.KeyDown)
+		if m.SelectedMessageID() == "" {
+			t.Fatalf("down got stuck or exited early after %d presses (expected still browsing)", i+1)
+		}
+	}
+	if m.SelectedMessageID() != "m10" {
+		t.Fatalf("SelectedMessageID() = %q after 9 downs from m1, want m10 (newest)", m.SelectedMessageID())
+	}
+
+	m, _ = sendChatroomSpecialKey(m, tea.KeyDown) // one more: past newest, exits browsing
+	if m.SelectedMessageID() != "" {
+		t.Errorf("expected browsing to exit after 'down' past the newest message, got selected=%q", m.SelectedMessageID())
+	}
+}
+
+func TestChatrooms_FlagKey_OnOwnMessage_DoesNothing(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "neuromancer"}, Body: "mine", CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+
+	_, cmd := sendChatroomKey(m, "!")
+	if cmd != nil {
+		t.Error("expected no cmd when flagging own message")
+	}
+}
+
+func TestChatrooms_FlagKey_OnOtherMessage_FullFlowEmitsFlagMessageMsg(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "not mine", CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+
+	m, cmd := sendChatroomKey(m, "!")
+	if cmd == nil {
+		t.Fatal("expected a focus cmd from opening the flag prompt")
+	}
+	for _, r := range "spam" {
+		m, _ = sendChatroomKey(m, string(r))
+	}
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m, cmd = sendChatroomKey(m, "y")
+	if cmd == nil {
+		t.Fatal("expected a cmd after confirming")
+	}
+	// The real runtime feeds the cmd's message back through Update; do the same here.
+	_, cmd = m.Update(cmd())
+	if cmd == nil {
+		t.Fatal("expected a cmd after routing FlagSubmitMsg through Update")
+	}
+	msg, ok := cmd().(screens.FlagMessageMsg)
+	if !ok {
+		t.Fatalf("expected FlagMessageMsg, got %T", cmd())
+	}
+	if msg.MessageID != "m1" {
+		t.Errorf("MessageID = %q, want m1", msg.MessageID)
+	}
+	if msg.RoomID != "zion" {
+		t.Errorf("RoomID = %q, want zion", msg.RoomID)
+	}
+	if msg.Reason != "spam" {
+		t.Errorf("Reason = %q, want spam", msg.Reason)
+	}
+}
+
+func TestChatrooms_DeleteKey_OnOwnMessage_OpensConfirm(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "neuromancer"}, Body: "mine", CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+
+	m, _ = sendChatroomKey(m, "d")
+	if m.ComposeEmpty() {
+		t.Error("expected the delete-confirm overlay to be open after 'd' on your own message")
+	}
+}
+
+func TestChatrooms_DeleteKey_OnOtherMessage_DoesNothing(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "not mine", CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+
+	m, cmd := sendChatroomKey(m, "d")
+	if cmd != nil {
+		t.Error("expected no cmd when deleting someone else's message")
+	}
+	if !m.ComposeEmpty() {
+		t.Error("expected no delete-confirm overlay for someone else's message")
+	}
+}
+
+func TestChatrooms_DeleteKey_OnAlreadyDeletedMessage_DoesNothing(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "neuromancer"}, Body: "[DELETED]", Deleted: true, CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+
+	m, _ = sendChatroomKey(m, "d")
+	if !m.ComposeEmpty() {
+		t.Error("expected no delete-confirm overlay for an already-deleted message")
+	}
+}
+
+func TestChatrooms_FlagKey_OnAlreadyDeletedMessage_DoesNothing(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "[DELETED]", Deleted: true, CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+
+	_, cmd := sendChatroomKey(m, "!")
+	if cmd != nil {
+		t.Error("expected no cmd when flagging an already-deleted message")
+	}
+}
+
+func TestChatrooms_DeleteConfirm_Yes_EmitsDeleteRoomMessageMsg(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "neuromancer"}, Body: "mine", CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+	m, _ = sendChatroomKey(m, "d")
+
+	m, cmd := sendChatroomKey(m, "y")
+	if cmd == nil {
+		t.Fatal("expected a cmd after confirming delete")
+	}
+	msg, ok := cmd().(screens.DeleteRoomMessageMsg)
+	if !ok {
+		t.Fatalf("expected DeleteRoomMessageMsg, got %T", cmd())
+	}
+	if msg.MessageID != "m1" {
+		t.Errorf("MessageID = %q, want m1", msg.MessageID)
+	}
+	if msg.RoomID != "zion" {
+		t.Errorf("RoomID = %q, want zion", msg.RoomID)
+	}
+	if !m.ComposeEmpty() {
+		t.Error("expected the delete-confirm overlay to close after confirming")
+	}
+}
+
+func TestChatrooms_DeleteConfirm_No_Cancels(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "neuromancer"}, Body: "mine", CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp)
+	m, _ = sendChatroomKey(m, "d")
+
+	m, cmd := sendChatroomKey(m, "n")
+	if cmd != nil {
+		t.Error("expected no cmd when declining the delete confirmation")
+	}
+	if !m.ComposeEmpty() {
+		t.Error("expected the delete-confirm overlay to close after declining")
+	}
+	if m.SelectedMessageID() != "m1" {
+		t.Errorf("expected the selection to remain on m1 after declining, got %q", m.SelectedMessageID())
+	}
+}
+
+func TestChatrooms_ApplyMessageDeleted_RendersTombstoneInPlace(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter)
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "top secret plans", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "wintermute"}, Body: "unrelated message", CreatedAt: time.Now()},
+	})
+
+	m = m.ApplyMessageDeleted("m1")
+
+	view := m.View()
+	if !strings.Contains(view, "[DELETED]") {
+		t.Errorf("expected a [DELETED] tombstone in the view, got: %q", view)
+	}
+	if strings.Contains(view, "top secret plans") {
+		t.Errorf("expected the original body to be gone, got: %q", view)
+	}
+	if !strings.Contains(view, "unrelated message") {
+		t.Errorf("expected the other message to be unaffected, got: %q", view)
 	}
 }
 
@@ -744,4 +1177,3 @@ func resolveMsgs(cmd tea.Cmd) []tea.Msg {
 	}
 	return []tea.Msg{msg}
 }
-

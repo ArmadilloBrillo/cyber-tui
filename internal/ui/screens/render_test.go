@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
@@ -114,6 +115,64 @@ func TestRenderCircMessages_SystemNotice(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected the regular message after the system notice to still render")
+	}
+}
+
+// TestRenderCircMessages_DeletedTombstone confirms a soft-deleted message
+// renders as a muted "[DELETED]" tombstone, keeping the author and
+// timestamp (per the API's "your name and the original timestamp stay"),
+// but never the original body text.
+func TestRenderCircMessages_DeletedTombstone(t *testing.T) {
+	const width = 60
+	deleted := model.Message{
+		ID:        "m1",
+		From:      model.User{Username: "molly"},
+		Body:      "this secret sauce recipe leaked",
+		Deleted:   true,
+		CreatedAt: circMsgTime,
+	}
+
+	out := renderCircMessages([]model.Message{deleted}, time.UTC, "datetime", width, "")
+
+	if !strings.Contains(out, "<molly>") {
+		t.Errorf("expected the author to still be shown, got: %q", out)
+	}
+	if !strings.Contains(out, "[DELETED]") {
+		t.Errorf("expected a [DELETED] marker, got: %q", out)
+	}
+	if strings.Contains(out, "secret sauce") {
+		t.Errorf("expected the original body to NOT appear, got: %q", out)
+	}
+}
+
+// TestRenderCircMessages_DeletedTombstone_TimestampAlignsWithNormalMessage
+// guards a real bug found in manual testing: the tombstone's timestamp
+// landed two columns left of where every other message's timestamp sits,
+// because its gap math used the "[DELETED]" marker's own short width
+// instead of the same elastic body-field width renderCircMessages reserves
+// for normal messages.
+func TestRenderCircMessages_DeletedTombstone_TimestampAlignsWithNormalMessage(t *testing.T) {
+	const width = 60
+	normal := circMsg("molly", "hello there")
+	deleted := model.Message{
+		ID:        "m1",
+		From:      model.User{Username: "molly"},
+		Body:      "irrelevant once deleted",
+		Deleted:   true,
+		CreatedAt: circMsgTime,
+	}
+
+	normalLine := strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{normal}, time.UTC, "datetime", width, "")), "\n")
+	deletedLine := strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{deleted}, time.UTC, "datetime", width, "")), "\n")
+
+	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
+	normalIdx := strings.Index(normalLine, ts)
+	deletedIdx := strings.Index(deletedLine, ts)
+	if normalIdx == -1 || deletedIdx == -1 {
+		t.Fatalf("timestamp %q not found: normal=%q deleted=%q", ts, normalLine, deletedLine)
+	}
+	if normalIdx != deletedIdx {
+		t.Errorf("tombstone timestamp starts at column %d, want %d (same as a normal message)", deletedIdx, normalIdx)
 	}
 }
 

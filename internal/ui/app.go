@@ -741,6 +741,11 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, a.loadFeedCmd(), true
 		}
 		return a, nil, true
+	case screens.FlagPostMsg:
+		if a.active != screenFeed {
+			return a, nil, false
+		}
+		return a, a.flagPostCmd(msg.PostID, msg.Reason), true
 	}
 	return a, nil, false
 }
@@ -795,6 +800,13 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case replyDeletedMsg:
 		a.postDetail = a.postDetail.RemoveReply(msg.replyID)
 		return a, nil, true
+	case screens.FlagPostMsg:
+		if a.active != screenPostDetail {
+			return a, nil, false
+		}
+		return a, a.flagPostCmd(msg.PostID, msg.Reason), true
+	case screens.FlagReplyMsg:
+		return a, a.flagReplyCmd(msg.ReplyID, msg.Reason), true
 	}
 	return a, nil, false
 }
@@ -821,6 +833,13 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, tea.Batch(a.markNotifReadCmd(msg.NotifID), activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
+	case screens.FlagMessageMsg:
+		return a, a.flagRoomMessageCmd(msg.RoomID, msg.MessageID, msg.Reason), true
+	case screens.DeleteRoomMessageMsg:
+		return a, a.deleteRoomMessageCmd(msg.RoomID, msg.MessageID), true
+	case roomMessageDeletedMsg:
+		a.chatrooms = a.chatrooms.ApplyMessageDeleted(msg.messageID)
+		return a, nil, true
 	case screens.RoomOpenedMsg:
 		return a, a.markRoomReadCmd(msg.RoomID), true
 	case screens.RoomReconnectedMsg:
@@ -2223,6 +2242,7 @@ type roomCommandReplyMsg struct {
 	roomID string
 	reply  string
 }
+type roomMessageDeletedMsg struct{ messageID string }
 type cmailCommandReplyMsg struct {
 	convID string
 	reply  string
@@ -3304,6 +3324,69 @@ func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 			return actionErrMsg{err}
 		}
 		return replyDeletedMsg{replyID: replyID}
+	}
+}
+
+// flagResultText picks the banner text for a completed report, distinguishing
+// a fresh report from one the caller had already filed (idempotent replay).
+func flagResultText(alreadyFlagged bool) string {
+	if alreadyFlagged {
+		return "already reported"
+	}
+	return "reported"
+}
+
+// flagErrorMsg converts a flag-action error into the message to emit. The API's
+// only documented 403 for these endpoints is reporting your own content — the
+// client-side guard (see FeedModel/PostDetailModel's "!" handler) should make
+// this unreachable, but a stale currentUsername could still race past it, so
+// it gets a friendly banner instead of the raw "API error FORBIDDEN (403): …"
+// text. Anything else falls through to actionErrMsg's normal handling
+// (including the session-expiry redirect in handleUnauthorized).
+func flagErrorMsg(err error) tea.Msg {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.Status == 403 {
+		return notifyMsg{level: notifyError, text: "you can't report your own content"}
+	}
+	return actionErrMsg{err}
+}
+
+func (a *App) flagPostCmd(postID, reason string) tea.Cmd {
+	return func() tea.Msg {
+		_, alreadyFlagged, err := a.client.FlagPost(postID, reason)
+		if err != nil {
+			return flagErrorMsg(err)
+		}
+		return notifyMsg{level: notifyInfo, text: flagResultText(alreadyFlagged)}
+	}
+}
+
+func (a *App) flagReplyCmd(replyID, reason string) tea.Cmd {
+	return func() tea.Msg {
+		_, alreadyFlagged, err := a.client.FlagReply(replyID, reason)
+		if err != nil {
+			return flagErrorMsg(err)
+		}
+		return notifyMsg{level: notifyInfo, text: flagResultText(alreadyFlagged)}
+	}
+}
+
+func (a *App) flagRoomMessageCmd(roomID, messageID, reason string) tea.Cmd {
+	return func() tea.Msg {
+		_, alreadyFlagged, err := a.client.FlagRoomMessage(roomID, messageID, reason)
+		if err != nil {
+			return flagErrorMsg(err)
+		}
+		return notifyMsg{level: notifyInfo, text: flagResultText(alreadyFlagged)}
+	}
+}
+
+func (a *App) deleteRoomMessageCmd(roomID, messageID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.DeleteRoomMessage(roomID, messageID); err != nil {
+			return actionErrMsg{err}
+		}
+		return roomMessageDeletedMsg{messageID: messageID}
 	}
 }
 

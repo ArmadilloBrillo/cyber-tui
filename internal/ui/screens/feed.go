@@ -87,24 +87,28 @@ type FeedModel struct {
 	currentUsername  string // set after login; used to guard the delete key
 	confirmingDelete bool   // true while the delete-post confirmation overlay is shown
 
+	flagPrompt       FlagPrompt // active while reporting the selected post
+	flagTargetPostID string
+
 	bookmarkedPostIDs map[string]struct{}
 	watchedPostIDs    map[string]struct{}
 	filterNSFW        bool
 
 	// Miller reading pane: replies for the currently selected post.
-	detailPostID     string
-	detailReplies    []model.Reply
-	detailFlatTree   []replyNode // DFS-ordered tree built from detailReplies
-	detailReplyIndex int         // -1 = post selected; 0+ = index into detailFlatTree
-	detailScrollOffset int       // raw line offset for pager scrolling in the detail pane
-	detailLoading    bool
-	maxThreadDepth   int
+	detailPostID       string
+	detailReplies      []model.Reply
+	detailFlatTree     []replyNode // DFS-ordered tree built from detailReplies
+	detailReplyIndex   int         // -1 = post selected; 0+ = index into detailFlatTree
+	detailScrollOffset int         // raw line offset for pager scrolling in the detail pane
+	detailLoading      bool
+	maxThreadDepth     int
 }
 
 func NewFeedModel() FeedModel {
 	return FeedModel{
 		panel:            NewPostComposePanel(0),
 		detailReplyIndex: -1,
+		flagPrompt:       NewFlagPrompt(),
 	}
 }
 
@@ -300,10 +304,16 @@ func (m FeedModel) ensureSelectedVisible() FeedModel {
 	return m
 }
 
-// ComposeActive reports whether the new-post compose panel is open.
-func (m FeedModel) ComposeActive() bool            { return m.panel.IsActive() }
-func (m FeedModel) ComposeHeight() int             { return m.panel.PanelHeight() }
-func (m FeedModel) ComposeView(width int) string   { return m.panel.SetWidth(width).View() }
+// ComposeActive reports whether the new-post compose panel, the flag/report
+// overlay, or the delete-confirmation overlay is open. Every screen-owned
+// overlay that intercepts keys first in Update (see the top of the
+// tea.KeyMsg case) must be OR'd in here — app.go's global shortcuts fire
+// instead of reaching Update whenever this returns false.
+func (m FeedModel) ComposeActive() bool {
+	return m.panel.IsActive() || m.flagPrompt.Active() || m.confirmingDelete
+}
+func (m FeedModel) ComposeHeight() int           { return m.panel.PanelHeight() }
+func (m FeedModel) ComposeView(width int) string { return m.panel.SetWidth(width).View() }
 
 func (m FeedModel) Init() tea.Cmd { return nil }
 
@@ -400,7 +410,24 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		m = m.closeCompose()
 		return m, nil
 
+	case FlagSubmitMsg:
+		postID := m.flagTargetPostID
+		m.flagTargetPostID = ""
+		m.viewport.Height = m.viewportHeight()
+		return m, func() tea.Msg { return FlagPostMsg{PostID: postID, Reason: msg.Reason} }
+
+	case FlagCancelMsg:
+		m.flagTargetPostID = ""
+		m.viewport.Height = m.viewportHeight()
+		return m, nil
+
 	case tea.KeyMsg:
+		// Flag overlay intercepts all keys while active.
+		if m.flagPrompt.Active() {
+			var cmd tea.Cmd
+			m.flagPrompt, cmd = m.flagPrompt.Update(msg)
+			return m, cmd
+		}
 		// Confirmation overlay intercepts all keys while active.
 		if m.confirmingDelete {
 			switch msg.String() {
@@ -485,6 +512,16 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				m.viewport.Height = m.viewportHeight()
 			}
 			return m, nil
+		case "!":
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) &&
+				visible[m.selectedIndex].AuthorUsername != m.currentUsername {
+				m.flagTargetPostID = visible[m.selectedIndex].ID
+				var cmd tea.Cmd
+				m.flagPrompt, cmd = m.flagPrompt.Open(FlagKindPost)
+				m.viewport.Height = m.viewportHeight()
+				return m, cmd
+			}
+			return m, nil
 		case "n":
 			var cmd tea.Cmd
 			m.panel, cmd = m.panel.Open(m.defaultPublicPost)
@@ -532,6 +569,9 @@ func (m FeedModel) viewportHeight() int {
 	}
 	if m.confirmingDelete {
 		h -= confirmBoxHeight
+	}
+	if m.flagPrompt.Active() {
+		h -= m.flagPrompt.Height()
 	}
 	if h < 1 {
 		h = 1
@@ -739,7 +779,7 @@ func ansiTruncate(s string, maxWidth int) string {
 }
 
 func (m FeedModel) IsCompactListActive() bool { return true }
-func (m FeedModel) ListTitle() string          { return "posts" }
+func (m FeedModel) ListTitle() string         { return "posts" }
 
 // CompactListView returns the compact single-line post list for the Miller reading pane.
 // It calculates a sticky-scroll window of height rows without storing extra state.
@@ -874,6 +914,13 @@ func (m FeedModel) View() string {
 		return lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
 			promptView,
+		)
+	}
+
+	if m.flagPrompt.Active() {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			m.flagPrompt.View(m.width),
 		)
 	}
 
