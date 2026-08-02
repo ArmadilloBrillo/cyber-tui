@@ -2087,7 +2087,7 @@ func TestUpdate_ImageModal_OtherKey_ClosesAndClearsCarousel(t *testing.T) {
 	a.imageModalOpen = true
 	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
 	a.imageCarouselIndex = 1
-	a.imageCache = map[string]image.Image{"https://x.com/a.jpg": image.NewRGBA(image.Rect(0, 0, 2, 2))}
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{image.NewRGBA(image.Rect(0, 0, 2, 2))}}}
 	genBefore := a.imageFetchGen
 
 	m, _ := a.Update(keyMsg("x"))
@@ -2112,7 +2112,7 @@ func TestOpenImageInTerminal_CacheHit_SkipsFetch(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolKitty
 	cachedImg := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	a.imageCache = map[string]image.Image{"https://x.com/a.jpg": cachedImg}
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{cachedImg}}}
 
 	_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
 	if cmd == nil {
@@ -2128,7 +2128,7 @@ func TestOpenImageInTerminal_CacheHit_SkipsFetch(t *testing.T) {
 	if fm.err != nil {
 		t.Errorf("expected no error on a cache hit, got %v", fm.err)
 	}
-	if fm.decoded != cachedImg {
+	if len(fm.frames) != 1 || fm.frames[0] != cachedImg {
 		t.Error("expected the cached image to be reused rather than re-fetched")
 	}
 	if fm.encoded == "" {
@@ -2140,11 +2140,12 @@ func TestHandleImageViewer_Success_PopulatesCache(t *testing.T) {
 	a := loggedInApp()
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 
-	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", decoded: img, encoded: "seq", cols: 2, rows: 2})
+	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", frames: []image.Image{img}, encoded: "seq", encodedFrames: []string{"seq"}, cols: 2, rows: 2})
 	if !ok {
 		t.Fatal("expected imageFetchedMsg to be handled")
 	}
-	if a2.imageCache["https://x.com/a.jpg"] != img {
+	cached := a2.imageCache["https://x.com/a.jpg"]
+	if len(cached.frames) != 1 || cached.frames[0] != img {
 		t.Error("expected the decoded image to be cached under its URL")
 	}
 }
@@ -2163,6 +2164,68 @@ func TestHandleImageViewer_StaleGeneration_Dropped(t *testing.T) {
 	}
 	if a2.imageModalEncoded != "current" {
 		t.Error("expected a stale (superseded) result to be dropped, not overwrite the current image")
+	}
+}
+
+func TestHandleImageViewer_GIFSuccess_StartsTicker(t *testing.T) {
+	a := loggedInApp()
+	a.imageFetchGen = 5
+
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{
+		rawURL:        "https://x.com/a.gif",
+		gen:           5,
+		encodedFrames: []string{"f0", "f1", "f2"},
+		delays:        []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond},
+		encoded:       "f0",
+		cols:          2, rows: 2,
+	})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if a2.imageModalEncoded != "f0" {
+		t.Errorf("imageModalEncoded = %q, want %q", a2.imageModalEncoded, "f0")
+	}
+	if cmd == nil {
+		t.Error("expected a cmd to schedule the next GIF frame")
+	}
+}
+
+func TestHandleImageViewer_GifFrameTick_AdvancesFrame(t *testing.T) {
+	a := loggedInApp()
+	a.imageFetchGen = 7
+
+	msg := gifFrameTickMsg{
+		gen:           7,
+		encodedFrames: []string{"f0", "f1", "f2"},
+		delays:        []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond},
+		idx:           1,
+	}
+	a2, cmd, ok := a.handleImageViewer(msg)
+	if !ok {
+		t.Fatal("expected gifFrameTickMsg to be handled")
+	}
+	if a2.imageModalEncoded != "f1" {
+		t.Errorf("imageModalEncoded = %q, want %q", a2.imageModalEncoded, "f1")
+	}
+	if cmd == nil {
+		t.Error("expected a cmd to schedule the next GIF frame")
+	}
+}
+
+func TestHandleImageViewer_GifFrameTick_StaleGenDropped(t *testing.T) {
+	a := loggedInApp()
+	a.imageFetchGen = 5
+	a.imageModalEncoded = "current"
+
+	a2, cmd, ok := a.handleImageViewer(gifFrameTickMsg{gen: 3, encodedFrames: []string{"f0", "f1"}, delays: []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}, idx: 1})
+	if !ok {
+		t.Fatal("expected gifFrameTickMsg to be handled (and dropped)")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd for a stale tick")
+	}
+	if a2.imageModalEncoded != "current" {
+		t.Error("expected a stale (superseded) tick to be dropped, not overwrite the current frame")
 	}
 }
 

@@ -22,3 +22,12 @@ func IsImageURL(rawURL string) bool {
 	ext := strings.ToLower(path.Ext(u.Path))
 	return imageExts[ext]
 }
+
+// IsGIFURL reports whether the URL's path ends with a .gif extension.
+func IsGIFURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return strings.ToLower(path.Ext(u.Path)) == ".gif"
+}
