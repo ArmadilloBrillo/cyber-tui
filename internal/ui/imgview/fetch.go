@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image"
-	_ "image/gif"
+	"image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
@@ -23,12 +23,22 @@ const maxImageBytes = 10 << 20
 // file claiming huge dimensions cannot drive allocation during decode.
 const maxImagePixels = 50 << 20 // ~52 megapixels
 
+// maxGIFFrames bounds the number of frames a GIF may declare, guarding
+// against a small file claiming an enormous frame count.
+const maxGIFFrames = 512
+
+// maxGIFTotalPixels bounds frames×width×height combined, since every frame
+// is later composited into its own full-canvas RGBA image held in memory
+// simultaneously (see GIFFrames) — maxImagePixels alone only bounds a single
+// canvas, not the multiplied-out worst case across all frames.
+const maxGIFTotalPixels = 64 << 20
+
 // httpClient is dedicated to image fetching so this path never inherits
 // global mutations to http.DefaultClient.
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
-// Fetch downloads the image at rawURL and decodes it. Supports JPEG, PNG, GIF, and WebP.
-func Fetch(ctx context.Context, rawURL string) (image.Image, error) {
+// fetchBody downloads rawURL, capping the read at maxImageBytes.
+func fetchBody(ctx context.Context, rawURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("imgview: %w", err)
@@ -49,6 +59,16 @@ func Fetch(ctx context.Context, rawURL string) (image.Image, error) {
 	if len(body) > maxImageBytes {
 		return nil, fmt.Errorf("imgview: image exceeds %d MiB size limit", maxImageBytes>>20)
 	}
+	return body, nil
+}
+
+// Fetch downloads the image at rawURL and decodes it. Supports JPEG, PNG, GIF, and WebP.
+// GIFs are decoded to their first frame only — use FetchGIF for all frames.
+func Fetch(ctx context.Context, rawURL string) (image.Image, error) {
+	body, err := fetchBody(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("imgview: decode: %w", err)
@@ -61,4 +81,30 @@ func Fetch(ctx context.Context, rawURL string) (image.Image, error) {
 		return nil, fmt.Errorf("imgview: decode: %w", err)
 	}
 	return img, nil
+}
+
+// FetchGIF downloads the GIF at rawURL and decodes all of its frames.
+func FetchGIF(ctx context.Context, rawURL string) (*gif.GIF, error) {
+	body, err := fetchBody(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := gif.DecodeConfig(bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("imgview: decode: %w", err)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width*cfg.Height > maxImagePixels {
+		return nil, fmt.Errorf("imgview: image dimensions %dx%d exceed limit", cfg.Width, cfg.Height)
+	}
+	g, err := gif.DecodeAll(bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("imgview: decode: %w", err)
+	}
+	if len(g.Image) > maxGIFFrames {
+		return nil, fmt.Errorf("imgview: gif has %d frames, exceeds %d frame limit", len(g.Image), maxGIFFrames)
+	}
+	if total := len(g.Image) * cfg.Width * cfg.Height; total > maxGIFTotalPixels {
+		return nil, fmt.Errorf("imgview: gif frames×dimensions %d exceed %d pixel budget", total, maxGIFTotalPixels)
+	}
+	return g, nil
 }

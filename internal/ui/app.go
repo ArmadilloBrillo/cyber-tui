@@ -132,7 +132,7 @@ type App struct {
 	// imageCache holds decoded images already fetched during the current
 	// modal's lifetime, keyed by URL, so cycling back to one skips the
 	// network fetch. Cleared whenever the modal closes.
-	imageCache map[string]image.Image
+	imageCache map[string]cachedImage
 
 	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
 	// loc is the parsed *time.Location derived from timezone.
@@ -199,12 +199,12 @@ type App struct {
 
 	// imageModal holds the state for the inline image overlay. When imageModalOpen
 	// is true, View composites the encoded image sequence over the base content.
-	imageModalOpen     bool
-	imageModalEncoded  string
-	imageModalCols     int
-	imageModalRows     int
-	imageNeedsCleanup  bool // true after modal closes until a delete-placement frame reaches the terminal
-	imageFetchGen      int  // bumped on every fetch and on close; stale imageFetchedMsg results are dropped
+	imageModalOpen    bool
+	imageModalEncoded string
+	imageModalCols    int
+	imageModalRows    int
+	imageNeedsCleanup bool // true after modal closes until a delete-placement frame reaches the terminal
+	imageFetchGen     int  // bumped on every fetch and on close; stale imageFetchedMsg results are dropped
 
 	// ephemeral marks an SSH-hosted session whose state must never be read from
 	// or written to the host operator's config file.
@@ -2000,8 +2000,10 @@ func openExternalURL(u string) tea.Cmd {
 
 // openImageInTerminal fetches rawURL, encodes it for the detected graphics
 // protocol, and returns a command that sends an imageFetchedMsg when done.
+// GIF URLs are decoded and encoded frame-by-frame so the modal can animate.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
+	isGIF := urlutil.IsGIFURL(rawURL)
 	displayCols := a.width * 4 / 5
 	displayRows := a.height*4/5 - 2 // reserve 2 rows for the modal border
 	if displayRows < 1 {
@@ -2011,25 +2013,47 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	gen := a.imageFetchGen
 	cached, hit := a.imageCache[rawURL]
 	return a, func() tea.Msg {
-		img := cached
+		frames := cached.frames
+		delays := cached.delays
 		if !hit {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			var err error
-			img, err = imgview.Fetch(ctx, rawURL)
-			if err != nil {
-				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+			if isGIF {
+				g, err := imgview.FetchGIF(ctx, rawURL)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
+				frames, delays = imgview.GIFFrames(g)
+			} else {
+				img, err := imgview.Fetch(ctx, rawURL)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
+				frames = []image.Image{img}
+				delays = nil
 			}
 		}
-		switch proto {
-		case imgview.ProtocolKitty:
-			encoded, cols, rows := imgview.EncodeKitty(img, displayCols, displayRows)
-			return imageFetchedMsg{rawURL: rawURL, gen: gen, decoded: img, encoded: encoded, cols: cols, rows: rows}
-		case imgview.ProtocolITerm2:
-			encoded, cols, rows, err := imgview.EncodeITerm2(img, displayCols, displayRows)
-			return imageFetchedMsg{rawURL: rawURL, gen: gen, decoded: img, encoded: encoded, cols: cols, rows: rows, err: err}
-		default:
-			return imageFetchedMsg{rawURL: rawURL, gen: gen, err: fmt.Errorf("no graphics protocol")}
+		encodedFrames := make([]string, len(frames))
+		var cols, rows int
+		for i, img := range frames {
+			switch proto {
+			case imgview.ProtocolKitty:
+				encodedFrames[i], cols, rows = imgview.EncodeKitty(img, displayCols, displayRows)
+			case imgview.ProtocolITerm2:
+				var err error
+				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
+			default:
+				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: fmt.Errorf("no graphics protocol")}
+			}
+		}
+		return imageFetchedMsg{
+			rawURL: rawURL, gen: gen,
+			frames: frames, delays: delays,
+			encodedFrames: encodedFrames, encoded: encodedFrames[0],
+			cols: cols, rows: rows,
 		}
 	}
 }
@@ -2058,16 +2082,27 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageModalOpen = true
 		a.imageNeedsCleanup = false
 		if a.imageCache == nil {
-			a.imageCache = make(map[string]image.Image)
+			a.imageCache = make(map[string]cachedImage)
 		}
-		a.imageCache[m.rawURL] = m.decoded
+		a.imageCache[m.rawURL] = cachedImage{frames: m.frames, delays: m.delays}
+		var cmds []tea.Cmd
 		if a.graphicsProtocol == imgview.ProtocolITerm2 && len(a.imageCarouselItems) > 1 {
 			// iTerm2/WezTerm has no Kitty-style delete-all self-heal; force a
 			// full repaint so a cycled-to smaller image can't leave stray
 			// pixels from the previous one in rows the new frame skips.
-			return a, tea.ClearScreen, true
+			cmds = append(cmds, tea.ClearScreen)
 		}
-		return a, nil, true
+		if len(m.encodedFrames) > 1 {
+			cmds = append(cmds, gifFrameTickCmd(m.encodedFrames, m.delays, 1, m.delays[0], m.gen))
+		}
+		return a, tea.Batch(cmds...), true
+	case gifFrameTickMsg:
+		if m.gen != a.imageFetchGen {
+			return a, nil, true // modal closed, cycled, or replaced since this tick was scheduled
+		}
+		a.imageModalEncoded = m.encodedFrames[m.idx]
+		nextIdx := (m.idx + 1) % len(m.encodedFrames)
+		return a, gifFrameTickCmd(m.encodedFrames, m.delays, nextIdx, m.delays[m.idx], m.gen), true
 	}
 	return a, nil, false
 }
@@ -2285,17 +2320,47 @@ type notifPostLoadErrMsg struct{ err error }
 
 // imageFetchedMsg carries the result of fetching and encoding an image for
 // terminal display. err is non-nil when the download or decode failed; rawURL
-// is retained so a failed decode can fall back to opening the browser.
+// is retained so a failed decode can fall back to opening the browser. frames
+// holds every decoded frame (len 1 for a static image); encodedFrames holds
+// each frame pre-encoded for the current graphics protocol, with encoded ==
+// encodedFrames[0] kept for the existing single-frame call sites.
 type imageFetchedMsg struct {
-	rawURL  string
-	gen     int
-	decoded image.Image
-	encoded string
-	cols    int
-	rows    int
-	err     error
+	rawURL        string
+	gen           int
+	frames        []image.Image
+	delays        []time.Duration
+	encoded       string
+	encodedFrames []string
+	cols          int
+	rows          int
+	err           error
 }
 
+// cachedImage holds a fetched/composited image's frames, keyed by URL in
+// imageCache. A static image has len(frames) == 1 and nil delays.
+type cachedImage struct {
+	frames []image.Image
+	delays []time.Duration
+}
+
+// gifFrameTickMsg advances the open image modal to its next pre-encoded GIF
+// frame. gen must match the current imageFetchGen or the tick is dropped —
+// this is how closing the modal, cycling the carousel, or opening a new
+// image stops an in-flight GIF animation with no extra bookkeeping (mirrors
+// the imageFetchedMsg staleness guard above).
+type gifFrameTickMsg struct {
+	gen           int
+	encodedFrames []string
+	delays        []time.Duration
+	idx           int
+}
+
+// gifFrameTickCmd schedules the display of encodedFrames[idx] after delay.
+func gifFrameTickCmd(encodedFrames []string, delays []time.Duration, idx int, delay time.Duration, gen int) tea.Cmd {
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return gifFrameTickMsg{gen: gen, encodedFrames: encodedFrames, delays: delays, idx: idx}
+	})
+}
 
 // notifyLevel selects the color of a global notification banner.
 type notifyLevel int
@@ -2309,7 +2374,7 @@ const (
 type logoAnimPhase int
 
 const (
-	logoPhaseIdle         logoAnimPhase = iota
+	logoPhaseIdle logoAnimPhase = iota
 	logoPhaseScrambling
 	logoPhaseHold
 	logoPhaseUnscrambling

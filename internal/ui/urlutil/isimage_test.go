@@ -32,3 +32,24 @@ func TestIsImageURL(t *testing.T) {
 		}
 	}
 }
+
+func TestIsGIFURL(t *testing.T) {
+	t.Helper()
+	cases := []struct {
+		url  string
+		want bool
+	}{
+		{"https://example.com/anim.gif", true},
+		{"https://example.com/anim.GIF", true},
+		{"https://example.com/photo.jpg", false},
+		{"https://example.com/post/123", false},
+		{"https://example.com/", false},
+		{"not a url", false},
+	}
+	for _, c := range cases {
+		got := urlutil.IsGIFURL(c.url)
+		if got != c.want {
+			t.Errorf("IsGIFURL(%q) = %v, want %v", c.url, got, c.want)
+		}
+	}
+}
