@@ -89,18 +89,23 @@ func (m *MockClient) Login(email, password string) (model.Tokens, error) {
 		return model.Tokens{}, fmt.Errorf("email and password required")
 	}
 	m.tokens = model.Tokens{
-		IDToken:      "mock-idtoken-" + email,
+		// threatcrush-disable-next-line secret-generic-credential  literal mock string, not a credential
+		IDToken: "mock-idtoken-" + email,
+		// threatcrush-disable-next-line secret-generic-credential  literal mock string, not a credential
 		RefreshToken: "mock-refresh-" + email,
-		RTDBToken:    "mock-rtdb-" + email,
+		// threatcrush-disable-next-line secret-generic-credential  literal mock string, not a credential
+		RTDBToken: "mock-rtdb-" + email,
 	}
 	return m.tokens, nil
 }
 
 func (m *MockClient) LoginWithRefreshToken(refreshToken string) (model.Tokens, error) {
 	m.tokens = model.Tokens{
+		// threatcrush-disable-next-line secret-generic-credential  literal mock string, not a credential
 		IDToken:      "mock-idtoken-refreshed",
 		RefreshToken: refreshToken,
-		RTDBToken:    "mock-rtdb-refreshed",
+		// threatcrush-disable-next-line secret-generic-credential  literal mock string, not a credential
+		RTDBToken: "mock-rtdb-refreshed",
 	}
 	return m.tokens, nil
 }
