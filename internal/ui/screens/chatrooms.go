@@ -103,6 +103,7 @@ type roomPresenceAnnouncedMsg struct {
 	roomID       string
 	heartbeatMs  int
 	staleAfterMs int
+	idleAfterMs  int
 }
 type roomHeartbeatTickMsg struct{ roomID string }
 type roomUsersLoadedMsg struct {
@@ -201,6 +202,8 @@ type ChatroomsModel struct {
 	client       api.Client
 	err          error // last message-load/subscribe failure for the active room; cleared on success
 
+	mutedUsersByRoom map[string][]string // roomID -> muted usernames, from Settings
+
 	// canGoBack is true when the active room was opened via a deep link
 	// (e.g. a chat_mention notification) rather than by switching to this
 	// tab normally. When true, ESC in detail mode leaves Chatrooms
@@ -228,6 +231,14 @@ type ChatroomsModel struct {
 	presenceSub  *roomPresenceSubscription
 	heartbeatMs  int
 	staleAfterMs int
+	idleAfterMs  int
+
+	// Own idle tracking: lastActivityAt is reported to the server on every
+	// heartbeat; lastHeartbeatSentAt is when we last actually told the
+	// server anything, used to cooldown-guard the corrective heartbeat (see
+	// selfShownIdle) against the presence-heartbeat rate limit.
+	lastActivityAt      time.Time
+	lastHeartbeatSentAt time.Time
 
 	// Presence-stream reconnect-retry state, mirroring the message stream's
 	// reconnect* fields above but tracked separately since the two streams
@@ -284,6 +295,15 @@ type SendRoomMessageMsg struct {
 	Body   string
 }
 
+// knownCircCommands are the slash commands the server recognizes. Checked
+// client-side so a typo'd command shows a local error instead of being sent
+// as a literal chat message. Command *syntax* validation stays server-side.
+var knownCircCommands = map[string]bool{
+	"/me": true, "/poke": true, "/hug": true, "/hi5": true, "/slap": true,
+	"/dice": true, "/8ball": true, "/fortune": true, "/help": true,
+	"/mute": true, "/unmute": true, "/muted": true, "/unmuteall": true,
+}
+
 // RoomOpenedMsg is emitted when the user enters a chatroom. App uses it to call MarkRoomRead.
 type RoomOpenedMsg struct {
 	RoomID string
@@ -333,6 +353,8 @@ func (m ChatroomsModel) cancelRoomSub() ChatroomsModel {
 	m.roomUsers = nil
 	m.heartbeatMs = 0
 	m.staleAfterMs = 0
+	m.idleAfterMs = 0
+	m.lastHeartbeatSentAt = time.Time{}
 	return m
 }
 
@@ -381,28 +403,28 @@ func (m ChatroomsModel) openRoomSubscriptionCmd(roomID string) tea.Cmd {
 
 // announcePresenceCmd announces the caller's presence in roomID, kicking off
 // the heartbeat/users-load/presence-subscribe sequence once it returns.
-func (m ChatroomsModel) announcePresenceCmd(roomID string) tea.Cmd {
+func (m ChatroomsModel) announcePresenceCmd(roomID string, lastActivity time.Time) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
 		if client == nil {
 			return nil
 		}
-		heartbeatMs, staleAfterMs, err := client.AnnouncePresence(roomID)
+		heartbeatMs, staleAfterMs, idleAfterMs, err := client.AnnouncePresence(roomID, lastActivity)
 		if err != nil {
 			return nil // presence is supplementary; a failed announce just means no panel data
 		}
-		return roomPresenceAnnouncedMsg{roomID: roomID, heartbeatMs: heartbeatMs, staleAfterMs: staleAfterMs}
+		return roomPresenceAnnouncedMsg{roomID: roomID, heartbeatMs: heartbeatMs, staleAfterMs: staleAfterMs, idleAfterMs: idleAfterMs}
 	}
 }
 
 // sendHeartbeatCmd re-announces presence for roomID as a best-effort
 // background heartbeat; the result is discarded (failures fail silently,
 // matching presence's supplementary status).
-func (m ChatroomsModel) sendHeartbeatCmd(roomID string) tea.Cmd {
+func (m ChatroomsModel) sendHeartbeatCmd(roomID string, lastActivity time.Time) tea.Cmd {
 	client := m.client
 	return func() tea.Msg {
 		if client != nil {
-			_, _, _ = client.AnnouncePresence(roomID)
+			_, _, _, _ = client.AnnouncePresence(roomID, lastActivity)
 		}
 		return nil
 	}
@@ -659,6 +681,8 @@ func (m ChatroomsModel) enterRoomDetail(idx int, room model.Room) (ChatroomsMode
 	m.err = nil
 	m.selectedMsgID = ""
 	m.input.Focus()
+	m.lastActivityAt = time.Now()
+	m.lastHeartbeatSentAt = time.Now()
 	if m.ready {
 		m = m.refreshMessages()
 		m.viewport.GotoBottom()
@@ -667,7 +691,7 @@ func (m ChatroomsModel) enterRoomDetail(idx int, room model.Room) (ChatroomsMode
 	return m, tea.Batch(
 		m.loadRoomMessagesCmd(room.Slug),
 		m.openRoomSubscriptionCmd(room.Slug),
-		m.announcePresenceCmd(room.Slug),
+		m.announcePresenceCmd(room.Slug, m.lastActivityAt),
 		func() tea.Msg { return RoomOpenedMsg{RoomID: roomID} },
 	)
 }
@@ -798,13 +822,29 @@ func (m ChatroomsModel) SetLocation(loc *time.Location) ChatroomsModel {
 func (m ChatroomsModel) Init() tea.Cmd { return textinput.Blink }
 
 // Update processes msg via updateInner, then (re)arms the style-animation
-// ticker (see maybeStartStyleAnim) if a loaded message needs one. Wrapping
-// the whole switch this way — rather than threading a tea.Cmd return through
-// refreshMessages and its many call sites, several of which are public
-// mutators also called directly from app.go outside of Update (e.g.
-// AppendSystemMessage/ApplyMessageDeleted) — keeps the coarse-scoped
-// animation check to a single choke point instead of a cascading signature
-// change.
+// ticker (see maybeStartStyleAnim) if a loaded message needs one, and records
+// own-activity for idle tracking. Wrapping the whole switch this way — rather
+// than threading a tea.Cmd return through refreshMessages and its many call
+// sites, several of which are public mutators also called directly from
+// app.go outside of Update (e.g. AppendSystemMessage/ApplyMessageDeleted) —
+// keeps the coarse-scoped animation check (and the activity check below) to a
+// single choke point instead of a cascading signature change.
+//
+// Any key handled while a room is open counts as activity: it resets
+// lastActivityAt (reported on the next heartbeat). If the online-users panel
+// would currently render our own entry as idle (selfShownIdle) — i.e. the
+// server's last-recorded lastActivity for us is stale, regardless of how
+// recently we've actually been typing — it also fires an immediate
+// out-of-cycle heartbeat to correct it rather than waiting for the next
+// scheduled beat, cooldown-guarded by lastHeartbeatSentAt so a fast typing
+// burst can't spam the presence-heartbeat rate limit. An earlier version
+// tracked "am I idle" as a separate local guess derived purely from
+// lastActivityAt; that could disagree with what was actually shown (the
+// guess stayed "active" as long as the user kept typing, even while the
+// server's copy of lastActivity — only ever updated by a heartbeat — had
+// gone stale), so the correction never fired and the badge got stuck. Tying
+// the check directly to the rendered state removes that second, conflicting
+// source of truth.
 func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	m, cmd := m.updateInner(msg)
 	var tickCmd tea.Cmd
@@ -812,7 +852,39 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	if tickCmd != nil {
 		cmd = tea.Batch(cmd, tickCmd)
 	}
+	if _, ok := msg.(tea.KeyMsg); ok && m.mode == chatroomModeDetail && m.activeRoomID != "" {
+		m.lastActivityAt = time.Now()
+		if m.selfShownIdle() && time.Since(m.lastHeartbeatSentAt) > selfIdleCorrectionCooldown {
+			m.lastHeartbeatSentAt = time.Now()
+			cmd = tea.Batch(cmd, m.sendHeartbeatCmd(m.activeRoomID, m.lastActivityAt))
+		}
+	}
 	return m, cmd
+}
+
+// selfIdleCorrectionCooldown bounds how often selfShownIdle's correction can
+// fire, so a fast typing burst right after one correction (before the RTDB
+// round-trip clears the panel's stale view of us) can't spam
+// POST .../presence past its 15/min-per-room rate limit. Comfortably under
+// that limit, comfortably faster than waiting for the next heartbeatMs tick.
+const selfIdleCorrectionCooldown = 5 * time.Second
+
+// selfShownIdle reports whether the online-users panel would currently
+// render the caller's own entry as idle — the same formula
+// renderRoomUsersPanel applies to every row, applied here to whichever entry
+// in m.roomUsers matches m.currentUser. Grounding the correction check in
+// this (what's actually displayed) rather than a separately-tracked idle
+// guess is what keeps the two from disagreeing — see Update's doc comment.
+func (m ChatroomsModel) selfShownIdle() bool {
+	if m.idleAfterMs <= 0 || m.currentUser == "" {
+		return false
+	}
+	for _, u := range m.roomUsers {
+		if u.Username == m.currentUser {
+			return u.LastActivity != nil && time.Since(*u.LastActivity) > time.Duration(m.idleAfterMs)*time.Millisecond
+		}
+	}
+	return false
 }
 
 // maybeStartStyleAnim starts the slow/wave/glitch animation ticker if any
@@ -874,7 +946,16 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		m.mutedUsersByRoom = msg.Settings.MutedUsersByRoom
 		m = m.SetLocation(msg.Loc)
+		if m.mode == chatroomModeDetail && m.activeRoom != nil {
+			m = m.refreshMessages()
+			if m.selectedMsgID != "" {
+				m = m.ensureSelectedMessageVisible()
+			} else {
+				m.viewport.GotoBottom()
+			}
+		}
 		return m, nil
 
 	// --- CIRC subscription lifecycle ---
@@ -973,6 +1054,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		}
 		m.heartbeatMs = msg.heartbeatMs
 		m.staleAfterMs = msg.staleAfterMs
+		m.idleAfterMs = msg.idleAfterMs
 		return m, tea.Batch(
 			scheduleHeartbeatCmd(msg.roomID, msg.heartbeatMs),
 			m.loadRoomUsersCmd(msg.roomID),
@@ -983,8 +1065,9 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		if msg.roomID != m.activeRoomID {
 			return m, nil // left the room; let the tick chain die out
 		}
+		m.lastHeartbeatSentAt = time.Now()
 		return m, tea.Batch(
-			m.sendHeartbeatCmd(msg.roomID),
+			m.sendHeartbeatCmd(msg.roomID, m.lastActivityAt),
 			scheduleHeartbeatCmd(msg.roomID, m.heartbeatMs),
 		)
 
@@ -1195,8 +1278,15 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				if m.activeRoom != nil {
 					val := m.input.Value()
 					if val != "" {
-						m.input.Reset()
 						roomID := m.activeRoom.Slug
+						if strings.HasPrefix(val, "/") {
+							cmd := strings.ToLower(strings.Fields(val)[0])
+							if !knownCircCommands[cmd] {
+								m.input.Reset()
+								return m.AppendSystemMessage(roomID, "*** unknown command: "+cmd), nil
+							}
+						}
+						m.input.Reset()
 						return m, func() tea.Msg {
 							return SendRoomMessageMsg{RoomID: roomID, Body: val}
 						}
@@ -1204,7 +1294,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				}
 				return m, nil
 			case "up":
-				sel := selectableMessageIndices(m.messages)
+				sel := selectableMessageIndices(m.messages, m.mutedUsers())
 				if len(sel) == 0 {
 					m.viewport.ScrollUp(1)
 					return m.maybeLoadOlderMessages()
@@ -1303,6 +1393,19 @@ func (m ChatroomsModel) renderRoomCards() string {
 	return sb.String()
 }
 
+// mutedUsers returns the set of usernames muted in the active room, for
+// filtering them out of the rendered message list.
+func (m ChatroomsModel) mutedUsers() map[string]bool {
+	if m.activeRoomID == "" || len(m.mutedUsersByRoom[m.activeRoomID]) == 0 {
+		return nil
+	}
+	muted := make(map[string]bool, len(m.mutedUsersByRoom[m.activeRoomID]))
+	for _, u := range m.mutedUsersByRoom[m.activeRoomID] {
+		muted[strings.ToLower(u)] = true
+	}
+	return muted
+}
+
 func (m ChatroomsModel) renderMessages() string {
 	if len(m.messages) == 0 {
 		if m.err != nil {
@@ -1310,7 +1413,7 @@ func (m ChatroomsModel) renderMessages() string {
 		}
 		return theme.Subtle.Render("no messages yet")
 	}
-	return renderCircMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser)
+	return renderCircMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.mutedUsers())
 }
 
 // refreshMessages rebuilds the viewport content and the per-message
@@ -1325,7 +1428,7 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 	}
 	content, offsets, heights := renderCircMessagesWithSelection(
 		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID,
-		m.revealed, m.styleAnimFrame)
+		m.revealed, m.styleAnimFrame, m.mutedUsers())
 	m.viewport.SetContent(content)
 	m.msgOffsets, m.msgHeights = offsets, heights
 	return m
@@ -1333,11 +1436,12 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 
 // selectableMessageIndices returns the indices into msgs of messages that can
 // be selected/flagged: a real (non-system) message with a stable ID. System
-// notices (AppendSystemMessage) have no ID and are never selectable.
-func selectableMessageIndices(msgs []model.Message) []int {
+// notices (AppendSystemMessage) have no ID and are never selectable. Muted
+// senders are also excluded, since their messages render as hidden/zero-height.
+func selectableMessageIndices(msgs []model.Message, muted map[string]bool) []int {
 	var sel []int
 	for i, msg := range msgs {
-		if !msg.IsSystem && msg.ID != "" {
+		if !msg.IsSystem && msg.ID != "" && !muted[strings.ToLower(msg.From.Username)] {
 			sel = append(sel, i)
 		}
 	}
@@ -1450,7 +1554,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		}
 		return m, nil
 	}
-	sel := selectableMessageIndices(m.messages)
+	sel := selectableMessageIndices(m.messages, m.mutedUsers())
 	curPos := selectablePos(m.messages, sel, m.selectedMsgID)
 	if curPos < 0 {
 		// The selected message no longer exists — fall back to typing.
@@ -1543,14 +1647,15 @@ func (m ChatroomsModel) viewportHeight() int {
 }
 
 // Panel sizing: the users panel is pinned to a preferred width that
-// comfortably fits an admin marker plus the longest possible username (20
-// chars, the API's max); below roomUsersPanelMinMsgWidth for the message
-// viewport, the panel collapses entirely rather than shrinking below its
-// preferred width — an in-between size could be narrower than the worst-case
-// content, and lipgloss/cellbuf.Wrap hard-breaks a too-long unbroken word
-// (a username has no spaces to break on) instead of truncating it.
+// comfortably fits an admin marker, the longest possible username (20 chars,
+// the API's max), and an idle badge; below roomUsersPanelMinMsgWidth for the
+// message viewport, the panel collapses entirely rather than shrinking below
+// its preferred width — an in-between size could be narrower than the
+// worst-case content, and lipgloss/cellbuf.Wrap hard-breaks a too-long
+// unbroken word (a username has no spaces to break on) instead of truncating
+// it.
 const (
-	roomUsersPanelPreferredWidth = 24 // admin marker(2) + username(20) + padding(2)
+	roomUsersPanelPreferredWidth = 27 // admin marker(2) + username(20) + idle badge(3) + padding(2)
 	roomUsersPanelMinMsgWidth    = 40 // message viewport never shrinks below this
 	roomUsersPanelSep            = 1  // vertical separator column
 )
@@ -1696,8 +1801,12 @@ func sortRoomUsers(users []model.RoomUser) []model.RoomUser {
 // admin signal, independent of who's viewing); the username text itself uses
 // theme.MeHighlight for the viewer's own name — same substitution
 // renderCircMessages makes for the message list (render.go) — theme.Highlight
-// for another admin, or unstyled otherwise.
-func renderRoomUsersPanel(users []model.RoomUser, currentUser string) string {
+// for another admin, or unstyled otherwise. idleAfterMs is the threshold (ms)
+// past which a user with no recent LastActivity is shown idle (💤, prefixed
+// right before the name — after the admin marker, if any); a nil
+// LastActivity always means active (the client never reported one), and
+// idleAfterMs <= 0 (not yet known from the server) means nobody is flagged.
+func renderRoomUsersPanel(users []model.RoomUser, currentUser string, idleAfterMs int) string {
 	if len(users) == 0 {
 		return theme.Subtle.Render("no one else is here")
 	}
@@ -1709,6 +1818,10 @@ func renderRoomUsersPanel(users []model.RoomUser, currentUser string) string {
 			name = theme.MeHighlight.Render(name)
 		case u.IsChatAdmin:
 			name = theme.Highlight.Render(name)
+		}
+		idle := idleAfterMs > 0 && u.LastActivity != nil && time.Since(*u.LastActivity) > time.Duration(idleAfterMs)*time.Millisecond
+		if idle {
+			name = theme.Subtle.Render("💤 ") + name
 		}
 		if u.IsChatAdmin {
 			rows[i] = theme.Highlight.Render("★ ") + name
@@ -1806,7 +1919,7 @@ func (m ChatroomsModel) View() string {
 		messageArea := m.viewport.View()
 		if usersW > 0 {
 			panel := lipgloss.NewStyle().Width(usersW).Height(m.viewport.Height).MaxHeight(m.viewport.Height).
-				Render(renderRoomUsersPanel(m.roomUsers, m.currentUser))
+				Render(renderRoomUsersPanel(m.roomUsers, m.currentUser, m.idleAfterMs))
 			sep := theme.Subtle.Render(strings.TrimSuffix(strings.Repeat("│\n", m.viewport.Height), "\n"))
 			messageArea = lipgloss.JoinHorizontal(lipgloss.Top, messageArea, sep, panel)
 		}

@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.8
+# ᑕ¥βєяรקค¢є API v0.8.2
 
 ## Access
 
@@ -103,6 +103,8 @@ or
 ```
 
 No authentication required.
+
+Rate limit: 10/min, 60/hour (per IP).
 
 ---
 
@@ -1068,9 +1070,11 @@ Marks the room as viewed for you (drives the "new messages" indicator). Returns 
 GET /v1/circ/:roomId/users
 ```
 
-Returns the people currently in the room, sorted by username. Each entry: `userId`, `username`, `isChatAdmin`, `lastSeen` (ms epoch). Returns `403` if the room isn't available to you.
+Returns the people currently in the room, sorted by username. Each entry: `userId`, `username`, `isChatAdmin`, `lastSeen` (ms epoch), `lastActivity` (ms epoch, or `null`). Returns `403` if the room isn't available to you.
 
 Presence is heartbeat-based: someone counts as present while they keep announcing themselves. Stop hearing from a client and it drops off the list on its own, so a crashed or force-quit client clears itself without any cleanup call.
+
+`lastActivity` is when that person last did something. Treat anyone whose `lastActivity` is older than `idleAfterMs` as idle — the website shows them with a 💤 next to their name. `null` means their client doesn't report it; treat them as active. Re-evaluate on a timer, since someone going idle produces no update of its own.
 
 ### Announce Your Presence
 
@@ -1080,13 +1084,19 @@ POST /v1/circ/:roomId/presence
 
 Call this when you enter a room, then repeat it every `heartbeatMs` for as long as you stay. This is what puts you in the room's user list — including for people on the website, who see you alongside everyone else. Skip it and you can still read and send, you're just invisible.
 
-No body. `username` and `isChatAdmin` are set from your authenticated account, so you can only ever publish your own presence. Returns:
+The body is optional. `username` and `isChatAdmin` are set from your authenticated account, so you can only ever publish your own presence.
 
 ```json
-{ "data": { "roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000 } }
+{ "lastActivity": 1719700000000 }
 ```
 
-Read the cadence off the response rather than hard-coding it: send a heartbeat every `heartbeatMs`, and you drop out of the room once `staleAfterMs` passes with no heartbeat. Returns `403` if the room isn't available to you.
+`lastActivity` is when your user last did something — a keystroke, a command, your window regaining focus — as a ms epoch on your own clock. Send it with every heartbeat, plus an extra one the moment they wake up or go quiet. Leave it out and you always read as active. Returns:
+
+```json
+{ "data": { "roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000, "idleAfterMs": 600000 } }
+```
+
+Read the cadence off the response rather than hard-coding it: send a heartbeat every `heartbeatMs`, and you drop out of the room once `staleAfterMs` passes with no heartbeat. Once `idleAfterMs` passes with no `lastActivity` update you show as idle — a 💤 beside your name on the website. Keep heartbeating while your user is idle, or you drop out of the room instead. Returns `403` if the room isn't available to you.
 
 ### Leave a Room
 
@@ -1109,7 +1119,7 @@ The first event is a `put` with the whole window; each new message is another `p
 
 Don't only listen for new messages: [deleting a message](#delete-your-message) *changes* an existing one rather than adding one, so it arrives as a `patch` on that message's path (`{ "content": "[DELETED]", "deleted": true }`). Apply it to the message you already have, or the deletion stays invisible to you until you reload the room.
 
-To keep the room's user list live without polling `GET /v1/circ/:roomId/users`, open a second stream on `chat_presence/<roomId>.json?auth=<idToken>`. Entries look like `{ "<userId>": { "username": "...", "isChatAdmin": false, "online": true, "lastSeen": 1719700000000 } }`. Apply the same rule the endpoint does: show an entry only if `online` is `true` and `lastSeen` is newer than `staleAfterMs` — and re-evaluate on a timer, not just on events, since an entry going stale produces no event. Publishing your own presence still goes through `POST /v1/circ/:roomId/presence`.
+To keep the room's user list live without polling `GET /v1/circ/:roomId/users`, open a second stream on `chat_presence/<roomId>.json?auth=<idToken>`. Entries look like `{ "<userId>": { "username": "...", "isChatAdmin": false, "online": true, "lastSeen": 1719700000000, "lastActivity": 1719699000000 } }`. Apply the same rules the endpoint does: show an entry only if `online` is `true` and `lastSeen` is newer than `staleAfterMs`, and show it as idle if its `lastActivity` is older than `idleAfterMs` (absent means active) — and re-evaluate on a timer, not just on events, since an entry going stale or idle produces no event. Publishing your own presence still goes through `POST /v1/circ/:roomId/presence`.
 
 **Stay within bounds (or get denied):**
 
@@ -1287,16 +1297,16 @@ All responses follow this structure:
 | C-Mail message | 15 | 300 |
 | Start C-Mail conversation | 5 | 50 |
 | Mark C-Mail read | 60 | — |
-| C-Mail typing on/off | 45 | — |
+| C-Mail typing on/off | 40 per conversation, 120 overall | — |
 | cIRC message | 15 | 300 |
 | Delete a cIRC message | 5 | 30 |
 | Mark cIRC room read | 60 | — |
-| cIRC presence heartbeat / leave | 30 | — |
+| cIRC presence heartbeat / leave | 15 per room, 90 overall | — |
 | Flag an entry, reply or message | 5 | 50 |
 
-C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour). Flagging is capped at 20/hour, and the three flag endpoints share one budget between them.
+C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour). Flagging is capped at 20/hour, and the three flag endpoints share one budget between them. Presence is counted per room, and C-Mail typing per conversation.
 
-`POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour.
+`POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour. `POST /v1/auth/check-username` is limited to 10/min and 60/hour per IP.
 
 ### Read Actions (Anti-Scraping)
 

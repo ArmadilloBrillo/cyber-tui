@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"github.com/ragnar/cyber-tui/internal/model"
 )
@@ -14,6 +15,9 @@ type Client interface {
 	// LoginWithRefreshToken exchanges a saved refresh token for a fresh set of
 	// tokens (IDToken + RTDBToken) without requiring the user's password.
 	LoginWithRefreshToken(refreshToken string) (model.Tokens, error)
+	// ResendVerification requests a fresh verification email for an account
+	// whose email isn't verified yet (see EMAIL_NOT_VERIFIED).
+	ResendVerification(idToken string) error
 	Logout() error
 	// RefreshSession proactively refreshes the ID token (and RTDB token) using
 	// the stored refresh token, without waiting for a failed request to trigger
@@ -81,10 +85,11 @@ type Client interface {
 	// GetRoomUsers returns who's currently present in roomID (server-side
 	// staleness-filtered already; no client-side filtering needed).
 	GetRoomUsers(roomID string) ([]model.RoomUser, error)
-	// AnnouncePresence announces the caller's presence in roomID. Returns the
-	// heartbeat cadence and staleness window (both ms) to honor — read these
-	// from the response rather than hard-coding them.
-	AnnouncePresence(roomID string) (heartbeatMs, staleAfterMs int, err error)
+	// AnnouncePresence announces the caller's presence in roomID and reports
+	// when they were last active. Returns the heartbeat cadence, staleness
+	// window, and idle threshold (all ms) to honor — read these from the
+	// response rather than hard-coding them.
+	AnnouncePresence(roomID string, lastActivity time.Time) (heartbeatMs, staleAfterMs, idleAfterMs int, err error)
 	// LeaveRoomPresence removes the caller from roomID's presence list immediately.
 	LeaveRoomPresence(roomID string) error
 	// SubscribeRoomPresence opens a live RTDB SSE stream for roomID's presence
@@ -220,6 +225,13 @@ type Client interface {
 	// AnnounceTyping's response, or a fixed default if subscribing before ever
 	// announcing typing ourselves.
 	SubscribeDMTyping(ctx context.Context, conversationID string, staleAfterMs int) (<-chan []model.TypingUser, context.CancelFunc, error)
+	// SubscribeUserConversations opens a live RTDB SSE stream for uid's
+	// conversation-list summary node. Each receive is the full converted+
+	// sorted conversation list (unread first, then most recently active)
+	// rather than a single incremental event, since a conversation summary
+	// mutates in place. initial seeds the merge state for a reconnect so the
+	// list doesn't go blank until the first live event arrives.
+	SubscribeUserConversations(ctx context.Context, uid string, initial []model.Conversation) (<-chan []model.Conversation, context.CancelFunc, error)
 
 	// Search — full-text search across users, posts, and replies (v0.7).
 	// Search returns the grouped "type=all" preview: up to 8 hits per category,

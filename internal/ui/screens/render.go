@@ -200,8 +200,8 @@ func listFooter(loading, exhausted bool) string {
 // highlighted. Bodies word-wrap to fit viewportWidth, with room reserved on
 // every wrapped line for the timestamp column so long messages never push it
 // off-screen; continuation lines are indented to align under the body.
-func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string) string {
-	return renderCircMessagesStyled(msgs, loc, timeDisplayFormat, viewportWidth, currentUser, nil, 0)
+func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, muted map[string]bool) string {
+	return renderCircMessagesStyled(msgs, loc, timeDisplayFormat, viewportWidth, currentUser, nil, 0, muted)
 }
 
 // renderCircMessagesStyled is renderCircMessages plus style/attachment
@@ -209,14 +209,19 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 // body and which l33t-styled messages show their original, unsubstituted
 // text (keyed by message ID; nil means none revealed), and frame drives
 // the slow/wave/glitch animated styles. renderCircMessages is a thin wrapper
-// passing (nil, 0), so its many existing call sites are unaffected.
-func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, revealed map[string]bool, frame int) string {
+// passing (nil, 0), so its many existing call sites are unaffected. muted
+// (username, lowercased -> true) hides a sender's messages entirely — the
+// message contributes no output, keeping msgs/offsets/heights 1:1.
+func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, revealed map[string]bool, frame int, muted map[string]bool) string {
 	if viewportWidth < 20 {
 		viewportWidth = 80
 	}
 	const tsGap = 2 // minimum space between the wrapped text and the timestamp
 	var sb strings.Builder
 	for _, msg := range msgs {
+		if !msg.IsSystem && muted[strings.ToLower(msg.From.Username)] {
+			continue
+		}
 		if msg.IsSystem {
 			sb.WriteString(renderSystemNotice(msg.Body, viewportWidth))
 			continue
@@ -344,13 +349,13 @@ func renderDeletedTombstone(username, ts string, viewportWidth int) string {
 // the selected message's block is stripped back to plain text (ansi.Strip)
 // and only that plain text is wrapped in theme.SelectedRow — the same
 // approach settings.go uses for its selected-row highlight.
-func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int) (content string, offsets []int, heights []int) {
+func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int, muted map[string]bool) (content string, offsets []int, heights []int) {
 	offsets = make([]int, len(msgs))
 	heights = make([]int, len(msgs))
 	var sb strings.Builder
 	var lineCount int
 	for i, msg := range msgs {
-		rendered := renderCircMessagesStyled([]model.Message{msg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame)
+		rendered := renderCircMessagesStyled([]model.Message{msg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame, muted)
 		if selectedID != "" && msg.ID == selectedID {
 			plain := strings.TrimSuffix(ansi.Strip(rendered), "\n")
 			rendered = theme.SelectedRow.Width(viewportWidth).Render(plain) + "\n"

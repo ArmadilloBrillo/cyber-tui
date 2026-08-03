@@ -158,6 +158,10 @@ type RoomUser struct {
 	Username    string
 	IsChatAdmin bool
 	LastSeen    time.Time
+	// LastActivity is when the user last reported doing something (a
+	// keystroke, a command). Nil means their client doesn't report it —
+	// treat as always active, never idle.
+	LastActivity *time.Time
 }
 
 // TypingUser is a single entry in a C-Mail conversation's typing indicator —
@@ -177,7 +181,7 @@ type NotificationPrefs struct {
 }
 
 // Settings maps to the fields returned by GET /v1/settings.
-// KeyboardBindings and MutedUsersByRoom are opaque JSON objects — not modelled yet.
+// KeyboardBindings is an opaque JSON object — not modelled yet.
 type Settings struct {
 	Notifications     NotificationPrefs
 	FilterNSFW        bool
@@ -189,6 +193,7 @@ type Settings struct {
 	ImagePixelSize    string // named preset or pixel multiplier, e.g. "sharp", "2"
 	TimeDisplayFormat string // "datetime", "relative", "unix", or "swatch"
 	DefaultPublicPost bool
+	MutedUsersByRoom  map[string][]string // roomID -> muted usernames; server-managed via /mute commands, cIRC only
 }
 
 // Bookmark maps to the shape returned by GET /v1/bookmarks.

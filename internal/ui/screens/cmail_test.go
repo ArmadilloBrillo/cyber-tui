@@ -12,7 +12,7 @@ import (
 )
 
 func TestCMailTotalUnread(t *testing.T) {
-	m := NewCMailModel("me", nil)
+	m := NewCMailModel("me", "", nil)
 
 	if got := m.TotalUnread(); got != 0 {
 		t.Fatalf("TotalUnread() on empty model = %d, want 0", got)
@@ -35,7 +35,7 @@ func TestCMailTotalUnread(t *testing.T) {
 // being dropped in a future edit.
 func TestCMailDetailView_HeaderHasDividerBeforeMessages(t *testing.T) {
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
-	m := NewCMailModel("neo", api.NewMockClient())
+	m := NewCMailModel("neo", "", api.NewMockClient())
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.activeConvID = "c1"
 	m.activeConv = &conv
@@ -67,7 +67,7 @@ func TestCMailDetailView_HeaderHasDividerBeforeMessages(t *testing.T) {
 // package).
 func TestCMailInputBox_WidthConstantBetweenEmptyAndTyped(t *testing.T) {
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
-	m := NewCMailModel("neo", api.NewMockClient())
+	m := NewCMailModel("neo", "", api.NewMockClient())
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
 	m.activeConvID = "c1"
 	m.activeConv = &conv
@@ -95,7 +95,7 @@ func TestCMailInputBox_WidthConstantBetweenEmptyAndTyped(t *testing.T) {
 
 func cmailInConversation(client api.Client, convID string) CMailModel {
 	conv := model.Conversation{ID: convID, Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
-	m := NewCMailModel("neo", client)
+	m := NewCMailModel("neo", "", client)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
 	m.activeConvID = convID
 	m.activeConv = &conv
@@ -149,7 +149,7 @@ func TestSetFocusedCMail_ClearsUnreadOnReturn(t *testing.T) {
 }
 
 func TestHasLiveConv(t *testing.T) {
-	m := NewCMailModel("neo", api.NewMockClient())
+	m := NewCMailModel("neo", "", api.NewMockClient())
 	if m.HasLiveConv() {
 		t.Error("expected no live conversation before any conversation is opened")
 	}
