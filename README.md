@@ -18,7 +18,7 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh | sh
 ```
 
 Downloads the latest release binary for your platform, verifies it against the published `SHA256SUMS`, and installs it to `/usr/local/bin` (falling back to `~/.local/bin` when that is not writable). Then run:
@@ -29,6 +29,27 @@ cyber-tui
 
 Prebuilt binaries cover Linux (amd64/arm64), macOS (amd64/arm64), and Windows (amd64). Anywhere else — or against a release that predates a given platform — the script falls back to cloning this repo and building with your local Go toolchain, so the same command works everywhere.
 
+### Update and uninstall
+
+The same script handles updates and removal. Through a pipe, pass the command after `sh -s --`:
+
+```bash
+# update to the latest release, in place
+curl -fsSL https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh | sh -s -- update
+
+# uninstall
+curl -fsSL https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh | sh -s -- remove
+```
+
+| Command | Aliases | Description |
+|---|---|---|
+| `install` | — | Install cyber-tui (the default when no command is given) |
+| `update` | `upgrade` | Reinstall the latest release over the current one, in the directory it already lives in |
+| `remove` | `uninstall` | Delete the installed binary |
+| `help` | `-h`, `--help` | Show usage |
+
+`remove` leaves `~/.cyber-tui.json` alone, so your saved session survives a reinstall — delete that file yourself to clear it.
+
 Overrides:
 
 | Variable | Description |
@@ -38,7 +59,7 @@ Overrides:
 | `CYBER_TUI_REPO` | Install from a fork, e.g. `you/cyber-tui` |
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh \
+curl -fsSL https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh \
   | CYBER_TUI_INSTALL_DIR="$HOME/bin" sh
 ```
 
@@ -72,7 +93,7 @@ Prefer not to pipe to a shell? Download [`install.sh`](install.sh), read it, the
 
 ## Requirements
 
-- [Go](https://go.dev) 1.25+ — only needed to build from source; the [install script](#install) fetches a prebuilt binary on Linux and Windows
+- [Go](https://go.dev) 1.25+ — only needed to build from source; the [install script](#install) fetches a prebuilt binary on Linux, macOS, and Windows
 
 ---
 
@@ -81,7 +102,7 @@ Prefer not to pipe to a shell? Download [`install.sh`](install.sh), read it, the
 Clone the repository and run directly:
 
 ```bash
-git clone https://github.com/ArmadilloBrillo/cyber-tui.git
+git clone https://github.com/ralyodio/cyber-tui.git
 cd cyber-tui
 go run ./cmd/cyber-tui
 ```

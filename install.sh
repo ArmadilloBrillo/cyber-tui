@@ -1,7 +1,13 @@
 #!/bin/sh
 # cyber-tui installer
 #
-#   curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh | sh
+#
+# Commands (pass through a pipe with `sh -s -- <command>`):
+#   install              install cyber-tui (default)
+#   update | upgrade     reinstall the latest release over the current one
+#   remove | uninstall   delete the installed binary
+#   help                 show usage
 #
 # Environment overrides:
 #   CYBER_TUI_VERSION      tag to install (default: latest release)
@@ -10,12 +16,52 @@
 
 set -eu
 
+# Release binaries are published on the upstream repo, so that is where assets
+# and the source fallback are fetched from. The script itself is served from the
+# repo below, which is why the two can differ.
 REPO="${CYBER_TUI_REPO:-ArmadilloBrillo/cyber-tui}"
+SCRIPT_URL="https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh"
 BINARY="cyber-tui"
 
 # Everything lives in main() so a truncated download can never execute a
 # half-read script.
 main() {
+	case "${1:-install}" in
+	install) cmd_install ;;
+	update | upgrade) cmd_install update ;;
+	remove | uninstall) cmd_remove ;;
+	help | -h | --help) usage ;;
+	*)
+		printf 'error: unknown command: %s\n\n' "$1" >&2
+		usage
+		exit 1
+		;;
+	esac
+}
+
+usage() {
+	cat >&2 <<EOF
+cyber-tui installer
+
+  install              install cyber-tui (default)
+  update, upgrade      reinstall the latest release over the current one
+  remove, uninstall    delete the installed binary
+  help                 show this message
+
+Through a pipe, pass the command after \`sh -s --\`:
+
+  curl -fsSL $SCRIPT_URL | sh -s -- update
+  curl -fsSL $SCRIPT_URL | sh -s -- remove
+
+Environment:
+  CYBER_TUI_VERSION      tag to install (default: latest release)
+  CYBER_TUI_INSTALL_DIR  install directory
+  CYBER_TUI_REPO         owner/repo to install from
+EOF
+}
+
+cmd_install() {
+	mode="${1:-install}"
 	version="${CYBER_TUI_VERSION:-}"
 	tmpdir=""
 	trap 'if [ -n "$tmpdir" ]; then rm -rf "$tmpdir"; fi' EXIT INT TERM
@@ -26,6 +72,14 @@ main() {
 
 	target=$(detect_target)
 	install_dir=$(resolve_install_dir)
+
+	if [ "$mode" = "update" ]; then
+		if [ -x "$install_dir/$BINARY" ]; then
+			say "current: $("$install_dir/$BINARY" --version 2>/dev/null | head -n 1)"
+		else
+			say "$BINARY is not installed in $install_dir — installing it fresh"
+		fi
+	fi
 
 	if [ "$target" = "unsupported" ]; then
 		say "no prebuilt binary is published for $(uname -s)/$(uname -m)"
@@ -67,6 +121,40 @@ main() {
 	say "installed $install_dir/$BINARY"
 	"$install_dir/$BINARY" --version 2>/dev/null || true
 	warn_path "$install_dir"
+}
+
+# Delete the installed binary. Idempotent: removing nothing is a success, so
+# this is safe to run twice or on a machine that never had it.
+cmd_remove() {
+	target=$(installed_path)
+
+	if [ -z "$target" ]; then
+		say "$BINARY is not installed — nothing to remove"
+		return
+	fi
+
+	if [ -w "$(dirname "$target")" ]; then
+		rm -f "$target"
+	elif command -v sudo >/dev/null 2>&1; then
+		say "$(dirname "$target") is not writable — removing with sudo"
+		sudo rm -f "$target"
+	else
+		err "cannot remove $target — no write permission and sudo is unavailable"
+	fi
+
+	say "removed $target"
+
+	# Config is deliberately left alone: it holds the saved session token, and a
+	# reinstall should not force the user to log in again.
+	if [ -f "$HOME/.cyber-tui.json" ]; then
+		say "kept your config at ~/.cyber-tui.json — delete it to clear the saved session"
+	fi
+
+	# A second copy earlier on the PATH would make the removal look like it failed.
+	remaining=$(installed_path)
+	if [ -n "$remaining" ]; then
+		say "note: another copy is still installed at $remaining — re-run to remove it"
+	fi
 }
 
 say() { printf '  %s\n' "$*" >&2; }
@@ -112,14 +200,52 @@ detect_target() {
 	esac
 }
 
+# Prefer an existing installation so a reinstall or update replaces it in place
+# instead of leaving a second, shadowed copy on the PATH.
 resolve_install_dir() {
+	existing=$(installed_path)
+
 	if [ -n "${CYBER_TUI_INSTALL_DIR:-}" ]; then
 		echo "$CYBER_TUI_INSTALL_DIR"
+	elif [ -n "$existing" ]; then
+		dirname "$existing"
 	elif [ -w /usr/local/bin ] 2>/dev/null; then
 		echo "/usr/local/bin"
 	else
 		echo "$HOME/.local/bin"
 	fi
+}
+
+# Print the path of the installed binary, or nothing. Checks $PATH first, then
+# the directories this script installs into.
+#
+# An explicit CYBER_TUI_INSTALL_DIR is a hard boundary: only that directory is
+# considered, so `remove` can never reach outside the directory it was pointed
+# at and delete some other copy.
+installed_path() {
+	if [ -n "${CYBER_TUI_INSTALL_DIR:-}" ]; then
+		if [ -x "$CYBER_TUI_INSTALL_DIR/$BINARY" ]; then
+			echo "$CYBER_TUI_INSTALL_DIR/$BINARY"
+		fi
+		return 0
+	fi
+
+	found=$(command -v "$BINARY" 2>/dev/null || true)
+	if [ -n "$found" ]; then
+		echo "$found"
+		return
+	fi
+
+	for dir in /usr/local/bin "$HOME/.local/bin" "$HOME/bin"; do
+		if [ -x "$dir/$BINARY" ]; then
+			echo "$dir/$BINARY"
+			return 0
+		fi
+	done
+
+	# Not installed. Explicit success: a failing status here would abort the
+	# caller under `set -e`.
+	return 0
 }
 
 # fetch URL DEST — returns non-zero on HTTP errors; callers report the reason,
