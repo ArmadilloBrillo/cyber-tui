@@ -15,6 +15,37 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
 ---
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh | sh
+```
+
+Downloads the latest release binary for your platform, verifies it against the published `SHA256SUMS`, and installs it to `/usr/local/bin` (falling back to `~/.local/bin` when that is not writable). Then run:
+
+```bash
+cyber-tui
+```
+
+Prebuilt binaries cover Linux (amd64/arm64), macOS (amd64/arm64), and Windows (amd64). Anywhere else — or against a release that predates a given platform — the script falls back to cloning this repo and building with your local Go toolchain, so the same command works everywhere.
+
+Overrides:
+
+| Variable | Description |
+|---|---|
+| `CYBER_TUI_VERSION` | Install a specific tag, e.g. `v0.7.2` (default: latest release) |
+| `CYBER_TUI_INSTALL_DIR` | Install to a specific directory |
+| `CYBER_TUI_REPO` | Install from a fork, e.g. `you/cyber-tui` |
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh \
+  | CYBER_TUI_INSTALL_DIR="$HOME/bin" sh
+```
+
+Prefer not to pipe to a shell? Download [`install.sh`](install.sh), read it, then run it — or [build from source](#running).
+
+---
+
 ## Features
 
 - **Feed** — browse posts from people you follow; compose new posts with topics; open any post for replies; delete your own posts
@@ -41,7 +72,7 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
 ## Requirements
 
-- [Go](https://go.dev) 1.25+
+- [Go](https://go.dev) 1.25+ — only needed to build from source; the [install script](#install) fetches a prebuilt binary on Linux and Windows
 
 ---
 
