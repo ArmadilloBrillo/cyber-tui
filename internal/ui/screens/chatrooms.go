@@ -201,6 +201,8 @@ type ChatroomsModel struct {
 	client       api.Client
 	err          error // last message-load/subscribe failure for the active room; cleared on success
 
+	mutedUsersByRoom map[string][]string // roomID -> muted usernames, from Settings
+
 	// canGoBack is true when the active room was opened via a deep link
 	// (e.g. a chat_mention notification) rather than by switching to this
 	// tab normally. When true, ESC in detail mode leaves Chatrooms
@@ -874,7 +876,16 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		m.mutedUsersByRoom = msg.Settings.MutedUsersByRoom
 		m = m.SetLocation(msg.Loc)
+		if m.mode == chatroomModeDetail && m.activeRoom != nil {
+			m = m.refreshMessages()
+			if m.selectedMsgID != "" {
+				m = m.ensureSelectedMessageVisible()
+			} else {
+				m.viewport.GotoBottom()
+			}
+		}
 		return m, nil
 
 	// --- CIRC subscription lifecycle ---
@@ -1204,7 +1215,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				}
 				return m, nil
 			case "up":
-				sel := selectableMessageIndices(m.messages)
+				sel := selectableMessageIndices(m.messages, m.mutedUsers())
 				if len(sel) == 0 {
 					m.viewport.ScrollUp(1)
 					return m.maybeLoadOlderMessages()
@@ -1303,6 +1314,19 @@ func (m ChatroomsModel) renderRoomCards() string {
 	return sb.String()
 }
 
+// mutedUsers returns the set of usernames muted in the active room, for
+// filtering them out of the rendered message list.
+func (m ChatroomsModel) mutedUsers() map[string]bool {
+	if m.activeRoomID == "" || len(m.mutedUsersByRoom[m.activeRoomID]) == 0 {
+		return nil
+	}
+	muted := make(map[string]bool, len(m.mutedUsersByRoom[m.activeRoomID]))
+	for _, u := range m.mutedUsersByRoom[m.activeRoomID] {
+		muted[strings.ToLower(u)] = true
+	}
+	return muted
+}
+
 func (m ChatroomsModel) renderMessages() string {
 	if len(m.messages) == 0 {
 		if m.err != nil {
@@ -1310,7 +1334,7 @@ func (m ChatroomsModel) renderMessages() string {
 		}
 		return theme.Subtle.Render("no messages yet")
 	}
-	return renderCircMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser)
+	return renderCircMessages(m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.mutedUsers())
 }
 
 // refreshMessages rebuilds the viewport content and the per-message
@@ -1325,7 +1349,7 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 	}
 	content, offsets, heights := renderCircMessagesWithSelection(
 		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID,
-		m.revealed, m.styleAnimFrame)
+		m.revealed, m.styleAnimFrame, m.mutedUsers())
 	m.viewport.SetContent(content)
 	m.msgOffsets, m.msgHeights = offsets, heights
 	return m
@@ -1333,11 +1357,12 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 
 // selectableMessageIndices returns the indices into msgs of messages that can
 // be selected/flagged: a real (non-system) message with a stable ID. System
-// notices (AppendSystemMessage) have no ID and are never selectable.
-func selectableMessageIndices(msgs []model.Message) []int {
+// notices (AppendSystemMessage) have no ID and are never selectable. Muted
+// senders are also excluded, since their messages render as hidden/zero-height.
+func selectableMessageIndices(msgs []model.Message, muted map[string]bool) []int {
 	var sel []int
 	for i, msg := range msgs {
-		if !msg.IsSystem && msg.ID != "" {
+		if !msg.IsSystem && msg.ID != "" && !muted[strings.ToLower(msg.From.Username)] {
 			sel = append(sel, i)
 		}
 	}
@@ -1450,7 +1475,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		}
 		return m, nil
 	}
-	sel := selectableMessageIndices(m.messages)
+	sel := selectableMessageIndices(m.messages, m.mutedUsers())
 	curPos := selectablePos(m.messages, sel, m.selectedMsgID)
 	if curPos < 0 {
 		// The selected message no longer exists — fall back to typing.

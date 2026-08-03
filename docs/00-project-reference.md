@@ -980,7 +980,7 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 |---|---|
 | **Chatrooms API** | UI fully built; REST integration deferred (server paths not finalized) |
 | **HTTPClient thread safety** | Resolved: `tokens` is guarded by a `sync.Mutex` (see `docs/30-security-hardening.md`) |
-| **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized |
+| **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized. `mutedUsersByRoom` is also read but excluded from PATCH for a different reason — it's server-managed via `/mute` slash commands only (see `docs/37-circ-mute.md`), never client-patched |
 | **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |
 | **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |
 | **Attachments** | Image and YouTube audio attachments on posts/replies are not supported in the TUI |

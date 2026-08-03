@@ -39,7 +39,7 @@ func circMsg(username, body string) model.Message {
 func TestRenderCircMessages_WrapsLongBodyWithinWidth(t *testing.T) {
 	const width = 60
 	body := strings.Repeat("a very long word soup that keeps going and going ", 5)
-	out := renderCircMessages([]model.Message{circMsg("alice", body)}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{circMsg("alice", body)}, time.UTC, "datetime", width, "", nil)
 
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) < 2 {
@@ -62,7 +62,7 @@ func TestRenderCircMessages_WrapsLongBodyWithinWidth(t *testing.T) {
 // when the last wrapped line runs close to the viewport edge.
 func TestRenderCircMessages_TimestampHasGapFromText(t *testing.T) {
 	const width = 60
-	out := renderCircMessages([]model.Message{circMsg("bob", "short reply")}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{circMsg("bob", "short reply")}, time.UTC, "datetime", width, "", nil)
 
 	line := strings.TrimRight(out, "\n")
 	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
@@ -93,7 +93,7 @@ func TestRenderCircMessages_SystemNotice(t *testing.T) {
 	}
 	regular := circMsg("bob", "hi")
 
-	out := renderCircMessages([]model.Message{sys, regular}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{sys, regular}, time.UTC, "datetime", width, "", nil)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
 	if !strings.HasPrefix(lines[0], "***") {
@@ -132,7 +132,7 @@ func TestRenderCircMessages_DeletedTombstone(t *testing.T) {
 		CreatedAt: circMsgTime,
 	}
 
-	out := renderCircMessages([]model.Message{deleted}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{deleted}, time.UTC, "datetime", width, "", nil)
 
 	if !strings.Contains(out, "<molly>") {
 		t.Errorf("expected the author to still be shown, got: %q", out)
@@ -162,8 +162,8 @@ func TestRenderCircMessages_DeletedTombstone_TimestampAlignsWithNormalMessage(t 
 		CreatedAt: circMsgTime,
 	}
 
-	normalLine := strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{normal}, time.UTC, "datetime", width, "")), "\n")
-	deletedLine := strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{deleted}, time.UTC, "datetime", width, "")), "\n")
+	normalLine := strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{normal}, time.UTC, "datetime", width, "", nil)), "\n")
+	deletedLine := strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{deleted}, time.UTC, "datetime", width, "", nil)), "\n")
 
 	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
 	normalIdx := strings.Index(normalLine, ts)
@@ -202,7 +202,7 @@ func TestRenderCircMessages_ActionLine(t *testing.T) {
 	action.IsAction = true
 	regular := circMsg("bob", "hi there")
 
-	out := renderCircMessages([]model.Message{action, regular}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{action, regular}, time.UTC, "datetime", width, "", nil)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
 	if !strings.HasPrefix(lines[0], "* ragnar tests the plumbing") {
@@ -245,7 +245,7 @@ func TestRenderCircMessages_ActionLineWrapsCorrectly(t *testing.T) {
 	action := circMsg("ragnar", strings.Repeat("does a very long dramatic action sequence ", 5))
 	action.IsAction = true
 
-	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width, "", nil)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("expected the long action to wrap onto multiple lines, got %d line(s)", len(lines))
@@ -278,7 +278,7 @@ func TestRenderCircMessages_MarkdownEmphasisBoldCode(t *testing.T) {
 		circMsg("bob", "this is **bold** text"),
 		circMsg("carol", "run `go test` please"),
 	}
-	out := renderCircMessages(msgs, time.UTC, "datetime", width, "")
+	out := renderCircMessages(msgs, time.UTC, "datetime", width, "", nil)
 
 	if !strings.Contains(out, "emphasis") || strings.Contains(out, "*emphasis*") {
 		t.Errorf("expected *emphasis* to be styled, not left as raw markdown: %q", out)
@@ -299,7 +299,7 @@ func TestRenderCircMessages_MarkdownLinkAndBareURL(t *testing.T) {
 		circMsg("alice", "see [the docs](https://example.com/docs)"),
 		circMsg("bob", "check https://example.com/path for details"),
 	}
-	out := renderCircMessages(msgs, time.UTC, "datetime", width, "")
+	out := renderCircMessages(msgs, time.UTC, "datetime", width, "", nil)
 
 	if !strings.Contains(out, "the docs") || strings.Contains(out, "[the docs](") {
 		t.Errorf("expected markdown link syntax to be rendered, not left raw: %q", out)
@@ -321,7 +321,7 @@ func TestRenderCircMessages_LeadingBlockCharsStayLiteral(t *testing.T) {
 		circMsg("bob", "# thoughts for today"),
 		circMsg("carol", "> what did you say"),
 	}
-	out := renderCircMessages(msgs, time.UTC, "datetime", width, "")
+	out := renderCircMessages(msgs, time.UTC, "datetime", width, "", nil)
 
 	for _, want := range []string{"- get milk", "# thoughts for today", "> what did you say"} {
 		if !strings.Contains(out, want) {
@@ -340,7 +340,7 @@ func TestRenderCircMessages_ActionLineWithAsteriskBody(t *testing.T) {
 	action := circMsg("ragnar", "throws a *loud* party")
 	action.IsAction = true
 
-	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width, "", nil)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
 	if !strings.HasPrefix(lines[0], "* ragnar throws a ") {
@@ -389,7 +389,7 @@ func TestRenderCircMessages_OwnUsernameUsesMeHighlight(t *testing.T) {
 	mine := circMsg("ragnar", "hi all")
 	other := circMsg("bob", "hello")
 
-	out := renderCircMessages([]model.Message{mine, other}, time.UTC, "datetime", width, "ragnar")
+	out := renderCircMessages([]model.Message{mine, other}, time.UTC, "datetime", width, "ragnar", nil)
 
 	if !strings.Contains(out, "<"+theme.MeHighlight.Render("ragnar")+">") {
 		t.Errorf("expected own username styled with MeHighlight, got: %q", out)
@@ -411,7 +411,7 @@ func TestRenderCircMessages_MentionHighlighted(t *testing.T) {
 	const width = 60
 	msg := circMsg("bob", "hey @Ragnar and ragnarwessels, is ragnar around?")
 
-	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "ragnar")
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "ragnar", nil)
 
 	if !strings.Contains(out, theme.MeHighlight.Render("@Ragnar")) {
 		t.Errorf("expected case-insensitive @mention to be highlighted, got: %q", out)
@@ -438,7 +438,7 @@ func TestRenderCircMessages_MentionStyleContinuesAfterMultipleWords(t *testing.T
 	const width = 60
 	msg := circMsg("bob", "@ragnar 1 2")
 
-	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "ragnar")
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "ragnar", nil)
 
 	if !strings.Contains(out, theme.MeHighlight.Render("@ragnar")) {
 		t.Errorf("expected @ragnar to be highlighted, got: %q", out)
@@ -470,7 +470,7 @@ func TestRenderCircMessages_AttachmentOnlyBodySkipsDuplicateURL(t *testing.T) {
 	msg := circMsg("case", "https://cyberspace.online/img.png")
 	msg.ImageUrl = "https://cyberspace.online/img.png"
 
-	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 60, "")
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 60, "", nil)
 
 	if n := strings.Count(out, "https://cyberspace.online/img.png"); n != 1 {
 		t.Errorf("expected the image URL to appear exactly once, got %d times in: %q", n, out)
@@ -490,7 +490,7 @@ func TestRenderCircMessages_AttachmentOnlyHasNoBlankLine(t *testing.T) {
 	msg.Body = ""
 	msg.ImageUrl = "https://cyberspace.online/img.png"
 
-	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 60, "")
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 60, "", nil)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
 	if len(lines) != 1 {
@@ -512,7 +512,7 @@ func TestRenderCircMessages_AttachmentOnlyLongURL_TimestampStaysInBounds(t *test
 	msg := circMsg("case", "")
 	msg.GifUrl = "https://cyberspace.online/uploads/reactions/mind-blown-reaction.gif"
 
-	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "", nil)
 	plain := ansi.Strip(out)
 
 	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
@@ -572,7 +572,7 @@ func TestRenderCircMessages_ArtStyleSkipsWrapAndMarkdown(t *testing.T) {
 	msg := circMsg("case", art)
 	msg.Style = []string{"art"}
 
-	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 20, "")
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 20, "", nil)
 
 	for _, line := range strings.Split(art, "\n") {
 		if !strings.Contains(out, line) {
@@ -591,8 +591,8 @@ func TestRenderCircMessages_ArtStyle_TimestampAlignsWithNormalMessage(t *testing
 	art := circMsg("molly", "  /\\_/\\\n ( o.o )")
 	art.Style = []string{"art"}
 
-	normalLine := strings.Split(strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{normal}, time.UTC, "datetime", width, "")), "\n"), "\n")[0]
-	artLines := strings.Split(strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{art}, time.UTC, "datetime", width, "")), "\n"), "\n")
+	normalLine := strings.Split(strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{normal}, time.UTC, "datetime", width, "", nil)), "\n"), "\n")[0]
+	artLines := strings.Split(strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{art}, time.UTC, "datetime", width, "", nil)), "\n"), "\n")
 	artHeader := artLines[0]
 
 	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
@@ -616,8 +616,8 @@ func TestRenderCircMessagesStyled_Blink_HidesAndShowsWithoutChangingLineCount(t 
 	msg := circMsg("molly", "hello there")
 	msg.Style = []string{"blink"}
 
-	visible := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, 0)
-	hidden := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, blinkPhaseFrames)
+	visible := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, 0, nil)
+	hidden := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, blinkPhaseFrames, nil)
 
 	if !strings.Contains(ansi.Strip(visible), "hello there") {
 		t.Errorf("expected the visible phase to contain the body text, got: %q", visible)
@@ -641,5 +641,51 @@ func TestRenderCircMessagesStyled_Blink_HidesAndShowsWithoutChangingLineCount(t 
 	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
 	if !strings.Contains(plainHidden, ts) {
 		t.Errorf("expected the timestamp to stay visible during the hidden phase, got: %q", hidden)
+	}
+}
+
+// TestRenderCircMessages_MutedSenderHidden confirms a muted sender's messages
+// are dropped entirely from output, while other senders' messages still render.
+func TestRenderCircMessages_MutedSenderHidden(t *testing.T) {
+	const width = 60
+	msgs := []model.Message{circMsg("alice", "hi from alice"), circMsg("bob", "hi from bob")}
+	muted := map[string]bool{"alice": true}
+
+	out := renderCircMessages(msgs, time.UTC, "datetime", width, "", muted)
+
+	if strings.Contains(out, "hi from alice") {
+		t.Errorf("expected alice's message to be hidden, got: %q", out)
+	}
+	if !strings.Contains(out, "hi from bob") {
+		t.Errorf("expected bob's message to still render, got: %q", out)
+	}
+}
+
+// TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned confirms
+// a muted sender's message contributes zero-height output but the
+// offsets/heights slices stay 1:1 with msgs, matching the invariant relied on
+// by selection/scrolling code.
+func TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned(t *testing.T) {
+	const width = 60
+	muted := circMsg("alice", "hi from alice")
+	muted.ID = "m1"
+	visible := circMsg("bob", "hi from bob")
+	visible.ID = "m2"
+	msgs := []model.Message{muted, visible}
+
+	content, offsets, heights := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "", "", nil, 0,
+		map[string]bool{"alice": true})
+
+	if len(offsets) != len(msgs) || len(heights) != len(msgs) {
+		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
+	}
+	if heights[0] != 0 {
+		t.Errorf("expected muted message's height to be 0, got %d", heights[0])
+	}
+	if strings.Contains(content, "hi from alice") {
+		t.Errorf("expected alice's message to be hidden, got: %q", content)
+	}
+	if !strings.Contains(content, "hi from bob") {
+		t.Errorf("expected bob's message to still render, got: %q", content)
 	}
 }
