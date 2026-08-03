@@ -1406,6 +1406,121 @@ func TestFriendlyErr_404IsSoftened(t *testing.T) {
 	}
 }
 
+// friendlyErr also softens EMAIL_NOT_VERIFIED — the one other error code the
+// app branches on by Code rather than Status, since it can surface from any
+// authenticated call, not just login.
+func TestFriendlyErr_EmailNotVerifiedIsSoftened(t *testing.T) {
+	got := friendlyErr(&api.APIError{Code: "EMAIL_NOT_VERIFIED", Status: 403, Message: "email not verified"})
+	if got != "Please verify your email — check your inbox for the verification link." {
+		t.Errorf("friendlyErr(EMAIL_NOT_VERIFIED) = %q, want softened message", got)
+	}
+}
+
+// loginErrMsgFor is what routes an EMAIL_NOT_VERIFIED profile-fetch failure
+// (login itself succeeded — an idToken is required to call
+// resend-verification) into a distinguishable LoginErrMsg the login screen
+// can offer a resend action from, instead of a generic error.
+func TestLoginErrMsgFor_EmailNotVerifiedCarriesIDToken(t *testing.T) {
+	err := &api.APIError{Code: "EMAIL_NOT_VERIFIED", Status: 403, Message: "email not verified"}
+	got := loginErrMsgFor(err, "id-abc")
+	if !got.EmailNotVerified {
+		t.Error("expected EmailNotVerified = true")
+	}
+	if got.IDToken != "id-abc" {
+		t.Errorf("IDToken = %q, want id-abc", got.IDToken)
+	}
+	if got.Err != err {
+		t.Errorf("Err = %v, want the original error", got.Err)
+	}
+}
+
+func TestLoginErrMsgFor_OtherErrorsDoNotSetEmailNotVerified(t *testing.T) {
+	got := loginErrMsgFor(&api.APIError{Code: "UNAUTHORIZED", Status: 401, Message: "bad credentials"}, "id-abc")
+	if got.EmailNotVerified {
+		t.Error("expected EmailNotVerified = false for an unrelated error")
+	}
+	if got.IDToken != "" {
+		t.Errorf("IDToken = %q, want empty for an unrelated error", got.IDToken)
+	}
+}
+
+// emailNotVerifiedClient simulates a login that succeeds but whose follow-up
+// profile fetch is rejected because the account's email isn't verified —
+// the actual failure point per the API docs (Login itself doesn't gate on
+// verification; an idToken is needed to call resend-verification).
+type emailNotVerifiedClient struct {
+	*api.MockClient
+}
+
+func (c *emailNotVerifiedClient) GetOwnProfile() (model.User, error) {
+	return model.User{}, &api.APIError{Code: "EMAIL_NOT_VERIFIED", Status: 403, Message: "email not verified"}
+}
+
+// TestLoginCmd_EmailNotVerified_ReturnsDistinguishableLoginErrMsg confirms
+// the end-to-end wiring: a real Login() success followed by an
+// EMAIL_NOT_VERIFIED profile-fetch failure produces a LoginErrMsg carrying
+// the idToken the login screen needs to offer a resend action, not a
+// generic error.
+func TestLoginCmd_EmailNotVerified_ReturnsDistinguishableLoginErrMsg(t *testing.T) {
+	a := NewApp(&emailNotVerifiedClient{MockClient: api.NewMockClient()})
+	msg := a.loginCmd("user@example.com", "secret")()
+	lem, ok := msg.(screens.LoginErrMsg)
+	if !ok {
+		t.Fatalf("expected LoginErrMsg, got %T", msg)
+	}
+	if !lem.EmailNotVerified {
+		t.Error("expected EmailNotVerified = true")
+	}
+	if lem.IDToken == "" {
+		t.Error("expected a non-empty IDToken carried over from the successful Login() call")
+	}
+}
+
+// resendVerificationSpyClient records the idToken ResendVerification was
+// called with, and returns a canned error.
+type resendVerificationSpyClient struct {
+	*api.MockClient
+	gotIDToken string
+	err        error
+}
+
+func (c *resendVerificationSpyClient) ResendVerification(idToken string) error {
+	c.gotIDToken = idToken
+	return c.err
+}
+
+func TestResendVerificationCmd_CallsClientAndWrapsResult(t *testing.T) {
+	spy := &resendVerificationSpyClient{MockClient: api.NewMockClient()}
+	a := NewApp(spy)
+
+	msg := a.resendVerificationCmd("id-abc")()
+	rvr, ok := msg.(screens.ResendVerificationResultMsg)
+	if !ok {
+		t.Fatalf("expected ResendVerificationResultMsg, got %T", msg)
+	}
+	if rvr.Err != nil {
+		t.Errorf("Err = %v, want nil", rvr.Err)
+	}
+	if spy.gotIDToken != "id-abc" {
+		t.Errorf("ResendVerification called with %q, want id-abc", spy.gotIDToken)
+	}
+}
+
+func TestResendVerificationCmd_PropagatesError(t *testing.T) {
+	wantErr := errors.New("rate limited")
+	spy := &resendVerificationSpyClient{MockClient: api.NewMockClient(), err: wantErr}
+	a := NewApp(spy)
+
+	msg := a.resendVerificationCmd("id-abc")()
+	rvr, ok := msg.(screens.ResendVerificationResultMsg)
+	if !ok {
+		t.Fatalf("expected ResendVerificationResultMsg, got %T", msg)
+	}
+	if rvr.Err != wantErr {
+		t.Errorf("Err = %v, want %v", rvr.Err, wantErr)
+	}
+}
+
 // flagErrorMsg softens the documented self-report 403 into a friendly banner;
 // anything else falls through to the normal actionErrMsg handling.
 func TestFlagErrorMsg_403IsSoftened(t *testing.T) {

@@ -672,6 +672,12 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 		var cmd tea.Cmd
 		a.login, cmd = a.login.Update(msg)
 		return a, cmd, true
+	case screens.ResendVerificationMsg:
+		return a, a.resendVerificationCmd(msg.IDToken), true
+	case screens.ResendVerificationResultMsg:
+		var cmd tea.Cmd
+		a.login, cmd = a.login.Update(msg)
+		return a, cmd, true
 	}
 	return a, nil, false
 }
@@ -1825,8 +1831,13 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 // raw "API error NOT_FOUND (404): …" wording for the common deleted-resource case.
 func friendlyErr(err error) string {
 	var apiErr *api.APIError
-	if errors.As(err, &apiErr) && apiErr.Status == 404 {
-		return "Not found — it may have been deleted."
+	if errors.As(err, &apiErr) {
+		switch {
+		case apiErr.Status == 404:
+			return "Not found — it may have been deleted."
+		case apiErr.Code == "EMAIL_NOT_VERIFIED":
+			return "Please verify your email — check your inbox for the verification link."
+		}
 	}
 	return err.Error()
 }
@@ -2165,6 +2176,31 @@ type loginSuccessMsg struct {
 	user   model.User
 }
 
+// loginErrMsgFor builds a LoginErrMsg from a login/profile-fetch failure,
+// detecting EMAIL_NOT_VERIFIED so the login screen can offer a resend action
+// using the already-issued idToken instead of showing a generic error. Login
+// itself succeeds regardless of verification status (per the API docs, an
+// idToken is required to call resend-verification, which only makes sense
+// if login itself didn't already block on this) — the 403 shows up on the
+// profile fetch that follows.
+func loginErrMsgFor(err error, idToken string) screens.LoginErrMsg {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.Code == "EMAIL_NOT_VERIFIED" {
+		return screens.LoginErrMsg{Err: err, EmailNotVerified: true, IDToken: idToken}
+	}
+	return screens.LoginErrMsg{Err: err}
+}
+
+// resendVerificationCmd calls POST /v1/auth/resend-verification for idToken,
+// obtained from a login that succeeded but hit EMAIL_NOT_VERIFIED on the
+// follow-up profile fetch.
+func (a *App) resendVerificationCmd(idToken string) tea.Cmd {
+	client := a.client
+	return func() tea.Msg {
+		return screens.ResendVerificationResultMsg{Err: client.ResendVerification(idToken)}
+	}
+}
+
 func (a *App) loginCmd(email, password string) tea.Cmd {
 	return func() tea.Msg {
 		tokens, err := a.client.Login(email, password)
@@ -2177,7 +2213,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
-			return screens.LoginErrMsg{Err: err}
+			return loginErrMsgFor(err, tokens.IDToken)
 		}
 		// Wire the user ID into the HTTP client for RTDB path construction.
 		if hc, ok := a.client.(*api.HTTPClient); ok {
@@ -2214,7 +2250,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
-			return screens.LoginErrMsg{Err: err}
+			return loginErrMsgFor(err, tokens.IDToken)
 		}
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			hc.SetCurrentUID(user.ID)

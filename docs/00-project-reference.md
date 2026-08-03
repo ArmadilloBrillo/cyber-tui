@@ -157,7 +157,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 
 | Group | Methods |
 |---|---|
-| Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()` |
+| Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()`, `ResendVerification(idToken)` |
 | Feed | `GetFeed(cursor)`, `CreatePost(content, title, slug, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)` |
 | Thread watching | `GetWatches(cursor)`, `WatchPost(postID)`, `UnwatchPost(postID)` |
 | Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)` |
@@ -198,7 +198,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 - `refresh()` — token refresh path; does not recurse
 - `wirePostToModel()`, `wireReplyToModel()`, `wireUserToModel()`, `wireSettingsToModel()`, `wireNotificationToModel()`, `wireNoteToModel()` — convert API JSON wire types to `model.*` types
 
-**Wire types (unexported):** `loginRequest`, `loginResponseData`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireRoom`, `wireCircMessage`, `wireRoomUser`, `wirePresenceResponse`, `wireRTDBPresenceEntry`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData`, `wireSearchPreview` — match the JSON envelope shapes returned by the API.
+**Wire types (unexported):** `loginRequest`, `loginResponseData`, `resendVerificationRequest`, `wirePost`, `wireUser`, `wireReply`, `wireNotification`, `wireSettings`, `wireNote`, `wireBookmark`, `wireTopic`, `wireFollow`, `wireRoom`, `wireCircMessage`, `wireRoomUser`, `wirePresenceResponse`, `wireRTDBPresenceEntry`, `wireCMailConversation`, `wireCMailMessage`, `wireRTDBMessage`, `wireRTDBSSEData`, `wireSearchPreview` — match the JSON envelope shapes returned by the API.
 
 **Note:** `HTTPClient.tokens` is guarded by a `sync.Mutex`. Bubble Tea runs commands in concurrent goroutines, so reads in `doRequest` and writes in `Login`/`refresh` go through the token accessor methods (`idToken`, `setTokens`, `snapshotTokens`, `applyRefresh`). See `docs/30-security-hardening.md`.
 

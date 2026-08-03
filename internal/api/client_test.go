@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -454,6 +455,39 @@ func TestHTTPTokenRefresh_Failure(t *testing.T) {
 	}
 	if apiErr.Code != "UNAUTHORIZED" {
 		t.Errorf("Code = %q, want UNAUTHORIZED", apiErr.Code)
+	}
+}
+
+func TestHTTPResendVerification_SendsIDTokenBody(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/auth/resend-verification" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			IDToken string `json:"idToken"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body.IDToken != "id-abc" {
+			t.Errorf("idToken = %q, want id-abc", body.IDToken)
+		}
+		writeOK(t, w, map[string]any{"sent": true})
+	}))
+
+	if err := c.ResendVerification("id-abc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPResendVerification_RateLimited(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+
+	err := c.ResendVerification("id-abc")
+	if !errors.Is(err, api.ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got %v", err)
 	}
 }
 

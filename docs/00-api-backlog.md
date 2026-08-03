@@ -176,7 +176,7 @@ cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAt
 
 | Error | Description | Priority |
 |---|---|---|
-| `403 EMAIL_NOT_VERIFIED` | New error code — account access now gated on email verification instead of supporter/API-access-grant. Client should surface a clear message pointing at `/v1/auth/resend-verification` (web-only flow) rather than a generic auth failure. | Not implemented |
+| `403 EMAIL_NOT_VERIFIED` | New error code — account access now gated on email verification instead of supporter/API-access-grant. Surfaces from the profile fetch immediately after a successful login (login itself doesn't gate on this); the login screen shows a distinct message with an `r` keybinding to call `POST /v1/auth/resend-verification`, and `friendlyErr` softens the same code for any mid-session authenticated call. See `docs/38-email-verification.md`. | **Done** — 2026-08-03 |
 
 ### Thread Watching (new in v0.5.1)
 

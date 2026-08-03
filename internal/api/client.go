@@ -69,6 +69,10 @@ type refreshResponseData struct {
 	RTDBUrl   string `json:"rtdbUrl"`
 }
 
+type resendVerificationRequest struct {
+	IDToken string `json:"idToken"`
+}
+
 type wireAttachment struct {
 	Type   string `json:"type"`
 	Src    string `json:"src"`
@@ -1164,6 +1168,16 @@ func (c *HTTPClient) Login(email, password string) (model.Tokens, error) {
 	}
 	c.setTokens(t)
 	return t, nil
+}
+
+// ResendVerification requests a fresh verification email via
+// POST /v1/auth/resend-verification, for an account whose email isn't
+// verified yet (surfaced as a 403 EMAIL_NOT_VERIFIED on any authenticated
+// request). Rate limited server-side to 1/min, 5/hour — a RATE_LIMITED
+// APIError is returned as-is for the caller to display.
+func (c *HTTPClient) ResendVerification(idToken string) error {
+	_, err := c.doJSON("POST", "/v1/auth/resend-verification", resendVerificationRequest{IDToken: idToken})
+	return err
 }
 
 // LoginWithRefreshToken exchanges a saved refresh token for a fresh IDToken and

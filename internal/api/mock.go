@@ -110,6 +110,10 @@ func (m *MockClient) Logout() error {
 	return nil
 }
 
+func (m *MockClient) ResendVerification(idToken string) error {
+	return nil
+}
+
 func (m *MockClient) RefreshSession() error {
 	return nil
 }
