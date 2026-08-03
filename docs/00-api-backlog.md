@@ -18,6 +18,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `/v1/notifications?type=...` | GET | **Open** | The `type` query param (comma-separated notification-type filter) returns `500 INTERNAL_ERROR` for every value tested live — single types (`type=reply`, `type=chat_mention`, `type=dm_message`) and comma-separated combinations (`type=dm_message,chat_mention`) all fail server-side. Confirmed via `apifetch`. The client's `types []string` param plumbing (`GetNotifications`) is left in place unaffected for when the server bug is fixed; no UI currently sends a non-nil filter, so there's no live-facing regression today. | 2026-07-24 |
 | `/v1/users/me`, `/v1/users/:username` | GET | **Resolved (client-side removal)** | `postsCount` was deprecated and no longer returned reliable data; the field is also absent from the current API docs snapshot (`followersCount`/`followingCount` still present). Removed the `posts` segment from the profile counts line and the `PostsCount` field from `model.User`/`wireUser`. | 2026-07-29 |
 | `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8 live. `docs/00-latest-api-reference.md` re-fetched and diffed — new surface (flagging, cIRC message delete, message attachments/styles/mute commands, `EMAIL_NOT_VERIFIED`) added to Unimplemented API Features below. | 2026-07-31 |
+| `/v1/notifications` vs `/v1/notifications/unread-count` | GET | **Open (by design, per docs)** | The two endpoints disagree on a fresh, unpaginated session: `unread-count` returned `{"count": 5}` while `?limit=20&read=false` returned only 3 items (2 `thread_reply`, 1 `new_post_following`) — a `new_follower` and a `poke` notification counted in the badge were absent from the list. Confirmed live via `apifetch` 2026-08-03. Matches the documented caveat at `docs/00-latest-api-reference.md:690` ("the count may be slightly higher... which applies additional filtering"), so this is expected server behavior rather than a bug, but it means the TUI's badge and its notification list can legitimately disagree — not a TUI regression. No client-side fix possible; investigated after a user report of "webui shows 5 unread, tui shows 3." | 2026-08-03 |
 
 ---
 
@@ -159,7 +160,7 @@ cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAt
 | Area | Description | Priority |
 |---|---|---|
 | `gifUrl`, `audioAttachment`, `style`, chained styles | Render/decode in message view; `style: "art"` needs base64 decode | **Done** — wire/model fields across all four message shapes, attachment badges reusing `renderAttachments`, and a middle-fidelity style pipeline (ANSI attributes for blink/quiet/rainbow, Unicode substitution for l33t/cursive/flip, ASCII-safe jitter for glitch, `tea.Tick`-driven slow/wave/glitch animation, select-to-reveal spoiler in cIRC only — see `internal/ui/screens/chatstyle.go`) |
-| `/mute` family + `mutedUsersByRoom` | Client-side message filtering by muted user | Not implemented |
+| `/mute` family + `mutedUsersByRoom` | Client-side message filtering by muted user | **Done** — cIRC only (C-Mail 400s per API spec); see `docs/37-circ-mute.md` |
 | Empty `content` with attachment-only messages | Message rendering must not assume non-empty `content` | **Done** — covered by the same change; `messageDisplayBody` skips duplicate URL text and empty bodies render without assuming non-empty `content` |
 
 ### Auth (new in v0.8)
@@ -222,7 +223,7 @@ Notes:
 | --------------- | ------------------------------------- | -------------------------------------------------------------------- |
 | Notes (Journal) | List, create, edit, delete, revision history | — |
 | Profile         | View and edit all fields              | —                                                                    |
-| Settings        | All TUI-relevant fields editable      | `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom` — web UI concepts with no TUI equivalent; intentionally omitted |
+| Settings        | All TUI-relevant fields editable; `mutedUsersByRoom` read and enforced (feature 37) | `keyboardBindings`, `keyboardPreset` — web UI concepts with no TUI equivalent; intentionally omitted |
 | Follows         | Follow, unfollow, list following and followers | — |
 | Notifications   | All v0.4 types received and displayed with dedicated text and icons | — |
 

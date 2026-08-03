@@ -847,7 +847,7 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, cmd, true
 	case roomCommandReplyMsg:
 		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, sanitize.Strip(msg.reply))
-		return a, nil, true
+		return a, a.loadSettingsCmd(), true
 	case screens.LeaveChatroomsMsg:
 		a.active = a.chatroomsReturn
 		return a, nil, true

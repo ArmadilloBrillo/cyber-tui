@@ -2661,6 +2661,29 @@ func TestHTTPGetOwnProfile_ParsesNewFields(t *testing.T) {
 	}
 }
 
+func TestHTTPGetSettings_ParsesMutedUsersByRoom(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/settings" {
+			http.NotFound(w, r)
+			return
+		}
+		writeOK(t, w, map[string]any{
+			"mutedUsersByRoom": map[string][]string{
+				"general": {"alice", "bob"},
+			},
+		})
+	})))
+	c.Login("u@example.com", "pass")
+
+	settings, err := c.GetSettings()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := settings.MutedUsersByRoom["general"]; len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
+		t.Errorf("MutedUsersByRoom[general] = %v, want [alice bob]", got)
+	}
+}
+
 // --- Notes ---
 
 func TestHTTPGetNotes_ParsesList(t *testing.T) {

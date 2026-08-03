@@ -424,11 +424,13 @@ type wireSettings struct {
 	ImagePixelSize    string                `json:"imagePixelSize"`
 	TimeDisplayFormat string                `json:"timeDisplayFormat"`
 	DefaultPublicPost bool                  `json:"defaultPublicPost"`
+	MutedUsersByRoom  map[string][]string   `json:"mutedUsersByRoom"`
 }
 
 // wirePatchSettings is the PATCH /v1/settings payload — only the fields the
 // UI manages. Deferred fields (iconTheme, imagePixelSize, followedTopics,
-// mutedTopics) are intentionally excluded so the API never receives them.
+// mutedTopics, mutedUsersByRoom) are intentionally excluded so the API never
+// receives them — mutedUsersByRoom is server-managed via /mute commands, not PATCH.
 type wirePatchSettings struct {
 	Notifications     wireNotificationPrefs `json:"notifications"`
 	FilterNSFW        bool                  `json:"filterNSFW"`
@@ -1024,6 +1026,7 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 		ImagePixelSize:    w.ImagePixelSize,
 		TimeDisplayFormat: w.TimeDisplayFormat,
 		DefaultPublicPost: w.DefaultPublicPost,
+		MutedUsersByRoom:  w.MutedUsersByRoom,
 	}
 }
 

@@ -899,6 +899,80 @@ func TestChatrooms_Esc_WhileBrowsing_ResetsViewportToBottom(t *testing.T) {
 	}
 }
 
+// TestChatrooms_SettingsRefresh_WhileTyping_ResetsViewportToBottom guards a
+// real bug: an incoming SharedConfigMsg (e.g. the settings refresh fired
+// after the user's own /mute or /unmute) re-filters and re-renders the
+// message list via refreshMessages(), which changes the rendered line count
+// but never touched viewport.YOffset — leaving the view pinned to a stale
+// raw line number that now maps to different content instead of following
+// the reload, the same class of bug the esc-while-browsing case above guards.
+func TestChatrooms_SettingsRefresh_WhileTyping_ResetsViewportToBottom(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	var msgs []model.Message
+	for i := 1; i <= 30; i++ {
+		msgs = append(msgs, model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "molly"},
+			Body:      fmt.Sprintf("message %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+	m = m.SetMessages("zion", msgs)
+	m.viewport.SetYOffset(0)
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected the viewport to start away from the bottom")
+	}
+
+	m, _ = m.Update(SharedConfigMsg{Settings: model.Settings{MutedUsersByRoom: map[string][]string{"zion": {"molly"}}}})
+
+	if !m.viewport.AtBottom() {
+		t.Errorf("expected a settings refresh to reset the viewport to the bottom while typing, YOffset=%d", m.viewport.YOffset)
+	}
+}
+
+// TestChatrooms_SettingsRefresh_WhileBrowsing_KeepsSelectionVisible mirrors
+// the above for the browsing-a-selected-message case: the selected message
+// should stay on screen (not necessarily at the bottom) after the reload.
+func TestChatrooms_SettingsRefresh_WhileBrowsing_KeepsSelectionVisible(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	var msgs []model.Message
+	for i := 1; i <= 30; i++ {
+		msgs = append(msgs, model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "molly"},
+			Body:      fmt.Sprintf("message %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+	m = m.SetMessages("zion", msgs)
+	for i := 0; i < len(msgs); i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q after paging all the way up, want m1", m.selectedMsgID)
+	}
+
+	m, _ = m.Update(SharedConfigMsg{Settings: model.Settings{MutedUsersByRoom: map[string][]string{"zion": {"someoneElse"}}}})
+
+	idx := -1
+	for i, msg := range m.messages {
+		if msg.ID == m.selectedMsgID {
+			idx = i
+		}
+	}
+	if idx == -1 {
+		t.Fatalf("selected message %q not found after refresh", m.selectedMsgID)
+	}
+	itemStart := m.msgOffsets[idx]
+	itemEnd := itemStart + m.msgHeights[idx] - 1
+	if itemStart < m.viewport.YOffset || itemEnd >= m.viewport.YOffset+m.viewport.Height {
+		t.Errorf("selected message (lines %d-%d) not visible in viewport window [%d, %d)",
+			itemStart, itemEnd, m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height)
+	}
+}
+
 // TestMentionGhostText_CursorOverlayUsesGhostColor guards against the
 // overlaid character rendering in normal text color during the cursor's
 // text-style blink phase, which would make it indistinguishable from
@@ -975,7 +1049,7 @@ func TestBrowsing_Enter_TogglesSpoilerReveal(t *testing.T) {
 	}
 	renderedWithReveal := func(m ChatroomsModel) string {
 		content, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
-			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame)
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil)
 		return content
 	}
 	if strings.Contains(renderedWithReveal(m), "the ending is a twist") {
@@ -1028,7 +1102,7 @@ func TestBrowsing_Enter_TogglesL33tReveal(t *testing.T) {
 
 	renderedWithReveal := func(m ChatroomsModel) string {
 		content, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
-			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame)
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil)
 		return content
 	}
 	if !strings.Contains(renderedWithReveal(m), "3l173") {
