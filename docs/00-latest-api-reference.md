@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.8.1
+# ᑕ¥βєяรקค¢є API v0.8.2
 
 ## Access
 
@@ -103,6 +103,8 @@ or
 ```
 
 No authentication required.
+
+Rate limit: 10/min, 60/hour (per IP).
 
 ---
 
@@ -1304,7 +1306,7 @@ All responses follow this structure:
 
 C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour). Flagging is capped at 20/hour, and the three flag endpoints share one budget between them. Presence is counted per room, and C-Mail typing per conversation.
 
-`POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour.
+`POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour. `POST /v1/auth/check-username` is limited to 10/min and 60/hour per IP.
 
 ### Read Actions (Anti-Scraping)
 

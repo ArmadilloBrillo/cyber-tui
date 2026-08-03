@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.8.1) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.8.2) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -20,6 +20,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8 live. `docs/00-latest-api-reference.md` re-fetched and diffed — new surface (flagging, cIRC message delete, message attachments/styles/mute commands, `EMAIL_NOT_VERIFIED`) added to Unimplemented API Features below. | 2026-07-31 |
 | `/v1/notifications` vs `/v1/notifications/unread-count` | GET | **Open (by design, per docs)** | The two endpoints disagree on a fresh, unpaginated session: `unread-count` returned `{"count": 5}` while `?limit=20&read=false` returned only 3 items (2 `thread_reply`, 1 `new_post_following`) — a `new_follower` and a `poke` notification counted in the badge were absent from the list. Confirmed live via `apifetch` 2026-08-03. Matches the documented caveat at `docs/00-latest-api-reference.md:690` ("the count may be slightly higher... which applies additional filtering"), so this is expected server behavior rather than a bug, but it means the TUI's badge and its notification list can legitimately disagree — not a TUI regression. No client-side fix possible; investigated after a user report of "webui shows 5 unread, tui shows 3." | 2026-08-03 |
 | `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8.1 live. `docs/00-latest-api-reference.md` re-fetched and diffed — only change is cIRC presence idle tracking (`lastActivity`/`idleAfterMs`) and reworked presence/typing rate limits (per-room/per-conversation caps replacing flat per-minute ones); added to Unimplemented API Features below. | 2026-08-03 |
+| `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8.2 live. `docs/00-latest-api-reference.md` re-fetched and diffed — only change is a newly-documented rate limit (10/min, 60/hour per IP) on `POST /v1/auth/check-username`, which is already out of scope for this client (web-only registration flow). No code changes needed. | 2026-08-03 |
 
 ---
 
