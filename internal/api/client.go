@@ -454,10 +454,11 @@ type wireRoom struct {
 
 // wireRoomUser is a single entry from GET /v1/circ/:roomId/users.
 type wireRoomUser struct {
-	UserID      string `json:"userId"`
-	Username    string `json:"username"`
-	IsChatAdmin bool   `json:"isChatAdmin"`
-	LastSeen    int64  `json:"lastSeen"` // epoch ms
+	UserID       string `json:"userId"`
+	Username     string `json:"username"`
+	IsChatAdmin  bool   `json:"isChatAdmin"`
+	LastSeen     int64  `json:"lastSeen"`               // epoch ms
+	LastActivity *int64 `json:"lastActivity,omitempty"` // epoch ms, nil = always active
 }
 
 // wirePresenceResponse is returned by POST/DELETE /v1/circ/:roomId/presence.
@@ -466,15 +467,23 @@ type wirePresenceResponse struct {
 	Ok           bool   `json:"ok"`
 	HeartbeatMs  int    `json:"heartbeatMs"`
 	StaleAfterMs int    `json:"staleAfterMs"`
+	IdleAfterMs  int    `json:"idleAfterMs"`
+}
+
+// wirePresenceRequest is the optional POST /v1/circ/:roomId/presence body,
+// letting the caller report when they were last active.
+type wirePresenceRequest struct {
+	LastActivity int64 `json:"lastActivity"`
 }
 
 // wireRTDBPresenceEntry is the Firebase shape for one user's entry in
 // /chat_presence/<roomId>/<userId>.
 type wireRTDBPresenceEntry struct {
-	Username    string  `json:"username"`
-	IsChatAdmin bool    `json:"isChatAdmin"`
-	Online      bool    `json:"online"`
-	LastSeen    float64 `json:"lastSeen"` // epoch ms as a Firebase number
+	Username     string   `json:"username"`
+	IsChatAdmin  bool     `json:"isChatAdmin"`
+	Online       bool     `json:"online"`
+	LastSeen     float64  `json:"lastSeen"`               // epoch ms as a Firebase number
+	LastActivity *float64 `json:"lastActivity,omitempty"` // epoch ms, nil = always active
 }
 
 // wireCircMessage is a single message from GET /v1/circ/:roomId.
@@ -1857,28 +1866,50 @@ func (c *HTTPClient) GetRoomUsers(roomID string) ([]model.RoomUser, error) {
 	for i, w := range wire {
 		sanitize.Strings(&w)
 		out[i] = model.RoomUser{
-			UserID:      w.UserID,
-			Username:    w.Username,
-			IsChatAdmin: w.IsChatAdmin,
-			LastSeen:    time.UnixMilli(w.LastSeen),
+			UserID:       w.UserID,
+			Username:     w.Username,
+			IsChatAdmin:  w.IsChatAdmin,
+			LastSeen:     time.UnixMilli(w.LastSeen),
+			LastActivity: msPtrToTime(w.LastActivity),
 		}
 	}
 	return out, nil
 }
 
-// AnnouncePresence announces the caller's presence in roomID via POST
-// /v1/circ/:roomId/presence. Returns the heartbeat cadence and staleness
-// window (both ms) the caller should honor.
-func (c *HTTPClient) AnnouncePresence(roomID string) (heartbeatMs, staleAfterMs int, err error) {
-	env, err := c.doRequest("POST", "/v1/circ/"+url.PathEscape(roomID)+"/presence", nil)
+// msPtrToTime converts a nullable epoch-ms wire field to *time.Time, keeping
+// the null/absent distinction (nil in, nil out) rather than defaulting to the
+// Unix epoch — the API treats a nil lastActivity as "always active".
+func msPtrToTime(ms *int64) *time.Time {
+	if ms == nil {
+		return nil
+	}
+	t := time.UnixMilli(*ms)
+	return &t
+}
+
+// msPtrFloatToTime is msPtrToTime for RTDB's float64-typed epoch-ms fields.
+func msPtrFloatToTime(ms *float64) *time.Time {
+	if ms == nil {
+		return nil
+	}
+	t := time.UnixMilli(int64(*ms))
+	return &t
+}
+
+// AnnouncePresence announces the caller's presence (and, per lastActivity,
+// when they were last active) in roomID via POST /v1/circ/:roomId/presence.
+// Returns the heartbeat cadence, staleness window, and idle threshold (all
+// ms) the caller should honor.
+func (c *HTTPClient) AnnouncePresence(roomID string, lastActivity time.Time) (heartbeatMs, staleAfterMs, idleAfterMs int, err error) {
+	env, err := c.doJSON("POST", "/v1/circ/"+url.PathEscape(roomID)+"/presence", wirePresenceRequest{LastActivity: lastActivity.UnixMilli()})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	var data wirePresenceResponse
 	if err := json.Unmarshal(env.Data, &data); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	return data.HeartbeatMs, data.StaleAfterMs, nil
+	return data.HeartbeatMs, data.StaleAfterMs, data.IdleAfterMs, nil
 }
 
 // LeaveRoomPresence removes the caller from roomID's presence list immediately
@@ -1969,10 +2000,11 @@ func filterFreshPresence(state map[string]wireRTDBPresenceEntry, staleAfterMs in
 			continue
 		}
 		out = append(out, model.RoomUser{
-			UserID:      userID,
-			Username:    e.Username,
-			IsChatAdmin: e.IsChatAdmin,
-			LastSeen:    time.UnixMilli(int64(e.LastSeen)),
+			UserID:       userID,
+			Username:     e.Username,
+			IsChatAdmin:  e.IsChatAdmin,
+			LastSeen:     time.UnixMilli(int64(e.LastSeen)),
+			LastActivity: msPtrFloatToTime(e.LastActivity),
 		})
 	}
 	return out
@@ -2017,11 +2049,17 @@ func (c *HTTPClient) SubscribeRoomPresence(ctx context.Context, roomID string, s
 		defer close(out)
 		state := make(map[string]wireRTDBPresenceEntry, len(initial))
 		for _, u := range initial {
+			var lastActivity *float64
+			if u.LastActivity != nil {
+				v := float64(u.LastActivity.UnixMilli())
+				lastActivity = &v
+			}
 			state[u.UserID] = wireRTDBPresenceEntry{
-				Username:    u.Username,
-				IsChatAdmin: u.IsChatAdmin,
-				Online:      true,
-				LastSeen:    float64(u.LastSeen.UnixMilli()),
+				Username:     u.Username,
+				IsChatAdmin:  u.IsChatAdmin,
+				Online:       true,
+				LastSeen:     float64(u.LastSeen.UnixMilli()),
+				LastActivity: lastActivity,
 			}
 		}
 		if len(state) > 0 {

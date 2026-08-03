@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"github.com/ragnar/cyber-tui/internal/model"
 )
@@ -81,10 +82,11 @@ type Client interface {
 	// GetRoomUsers returns who's currently present in roomID (server-side
 	// staleness-filtered already; no client-side filtering needed).
 	GetRoomUsers(roomID string) ([]model.RoomUser, error)
-	// AnnouncePresence announces the caller's presence in roomID. Returns the
-	// heartbeat cadence and staleness window (both ms) to honor — read these
-	// from the response rather than hard-coding them.
-	AnnouncePresence(roomID string) (heartbeatMs, staleAfterMs int, err error)
+	// AnnouncePresence announces the caller's presence in roomID and reports
+	// when they were last active. Returns the heartbeat cadence, staleness
+	// window, and idle threshold (all ms) to honor — read these from the
+	// response rather than hard-coding them.
+	AnnouncePresence(roomID string, lastActivity time.Time) (heartbeatMs, staleAfterMs, idleAfterMs int, err error)
 	// LeaveRoomPresence removes the caller from roomID's presence list immediately.
 	LeaveRoomPresence(roomID string) error
 	// SubscribeRoomPresence opens a live RTDB SSE stream for roomID's presence

@@ -58,7 +58,7 @@ func TestRenderRoomUsersPanel_OwnNameUsesMeHighlight(t *testing.T) {
 		{Username: "bob"},
 	}
 
-	out := renderRoomUsersPanel(users, "ragnar")
+	out := renderRoomUsersPanel(users, "ragnar", 0)
 
 	if !strings.Contains(out, theme.MeHighlight.Render("ragnar")) {
 		t.Errorf("expected own name styled with MeHighlight, got: %q", out)
@@ -80,7 +80,7 @@ func TestRenderRoomUsersPanel_AdminMarkerStaysHighlightRegardlessOfViewer(t *tes
 		{Username: "ragnar", IsChatAdmin: true}, // admin, and the viewer
 	}
 
-	out := renderRoomUsersPanel(users, "ragnar")
+	out := renderRoomUsersPanel(users, "ragnar", 0)
 
 	marker := theme.Highlight.Render("★ ")
 	if strings.Count(out, marker) != 2 {
@@ -91,6 +91,48 @@ func TestRenderRoomUsersPanel_AdminMarkerStaysHighlightRegardlessOfViewer(t *tes
 	}
 	if !strings.Contains(out, marker+theme.MeHighlight.Render("ragnar")) {
 		t.Errorf("expected the viewer's own admin name styled with MeHighlight (not Highlight), got: %q", out)
+	}
+}
+
+// TestRenderRoomUsersPanel_IdleBadge confirms a user whose LastActivity is
+// older than idleAfterMs gets the 💤 prefix, and one still within the window
+// does not.
+func TestRenderRoomUsersPanel_IdleBadge(t *testing.T) {
+	withTrueColor(t)
+	longIdle := time.Now().Add(-20 * time.Minute)
+	recentActivity := time.Now().Add(-1 * time.Minute)
+	users := []model.RoomUser{
+		{Username: "sleepy", LastActivity: &longIdle},
+		{Username: "awake", LastActivity: &recentActivity},
+	}
+
+	out := renderRoomUsersPanel(users, "", 600000) // idleAfterMs = 10min
+
+	lines := strings.Split(out, "\n")
+	badgeIdx := strings.Index(lines[0], "💤")
+	nameIdx := strings.Index(lines[0], "sleepy")
+	if badgeIdx == -1 {
+		t.Fatalf("expected sleepy's row to carry the idle badge, got: %q", lines[0])
+	}
+	if badgeIdx > nameIdx {
+		t.Errorf("expected the idle badge before the username, got badge at %d, name at %d: %q", badgeIdx, nameIdx, lines[0])
+	}
+	if strings.Contains(lines[1], "💤") {
+		t.Errorf("expected awake's row to have no idle badge, got: %q", lines[1])
+	}
+}
+
+// TestRenderRoomUsersPanel_NilLastActivityNeverIdle confirms a nil
+// LastActivity (client never reported one) always renders active, regardless
+// of idleAfterMs, and doesn't panic on the nil-dereference path.
+func TestRenderRoomUsersPanel_NilLastActivityNeverIdle(t *testing.T) {
+	withTrueColor(t)
+	users := []model.RoomUser{{Username: "mystery"}}
+
+	out := renderRoomUsersPanel(users, "", 1) // smallest possible idleAfterMs
+
+	if strings.Contains(out, "💤") {
+		t.Errorf("expected no idle badge for a nil LastActivity, got: %q", out)
 	}
 }
 
@@ -138,6 +180,15 @@ func TestPanelWidths_NeverBetweenZeroAndPreferred(t *testing.T) {
 		if usersW != 0 && usersW != roomUsersPanelPreferredWidth {
 			t.Fatalf("width=%d: usersW = %d, want 0 or exactly %d", width, usersW, roomUsersPanelPreferredWidth)
 		}
+	}
+}
+
+// TestRoomUsersPanelPreferredWidth_AccountsForIdleBadge guards the width bump
+// that came with the idle badge: admin marker(2) + username(20) + idle
+// badge(3) + padding(2) = 27.
+func TestRoomUsersPanelPreferredWidth_AccountsForIdleBadge(t *testing.T) {
+	if roomUsersPanelPreferredWidth != 27 {
+		t.Errorf("roomUsersPanelPreferredWidth = %d, want 27", roomUsersPanelPreferredWidth)
 	}
 }
 
@@ -198,6 +249,125 @@ func TestHeartbeatTick_ActiveRoomReschedules(t *testing.T) {
 	_, cmd := m.Update(roomHeartbeatTickMsg{roomID: "zion"})
 	if cmd == nil {
 		t.Fatal("expected a batch command (send heartbeat + reschedule tick)")
+	}
+}
+
+// --- own idle tracking (extra out-of-cycle heartbeat on a self idle/active flip) ---
+
+// presenceSpyClient counts AnnouncePresence calls so tests can verify an
+// extra out-of-cycle heartbeat actually fires (a returned tea.Cmd is lazy —
+// nothing runs until it's invoked).
+type presenceSpyClient struct {
+	*api.MockClient
+	calls int
+}
+
+func (c *presenceSpyClient) AnnouncePresence(roomID string, lastActivity time.Time) (int, int, int, error) {
+	c.calls++
+	return c.MockClient.AnnouncePresence(roomID, lastActivity)
+}
+
+// drainCmd recursively executes cmd (and, if it's a tea.Batch, every command
+// inside it) so a test can observe side effects of commands that would
+// otherwise only run once the Bubble Tea runtime gets around to them.
+func drainCmd(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			drainCmd(c)
+		}
+	}
+}
+
+// TestSelfShownIdle_MatchesPanelRendering exercises selfShownIdle's cases
+// directly: no self entry in the presence list, a fresh self entry, a stale
+// one, and idleAfterMs not yet known (<= 0, the pre-first-announce default).
+func TestSelfShownIdle_MatchesPanelRendering(t *testing.T) {
+	stale := time.Now().Add(-20 * time.Minute)
+	fresh := time.Now()
+
+	m := ChatroomsModel{currentUser: "neo", idleAfterMs: 600000}
+	if m.selfShownIdle() {
+		t.Error("expected false with no self entry in roomUsers")
+	}
+
+	m.roomUsers = []model.RoomUser{{Username: "neo", LastActivity: &fresh}}
+	if m.selfShownIdle() {
+		t.Error("expected false for a fresh self entry")
+	}
+
+	m.roomUsers = []model.RoomUser{{Username: "neo", LastActivity: &stale}}
+	if !m.selfShownIdle() {
+		t.Error("expected true for a stale self entry past idleAfterMs")
+	}
+
+	m.idleAfterMs = 0
+	if m.selfShownIdle() {
+		t.Error("expected false when idleAfterMs isn't known yet (<= 0)")
+	}
+}
+
+// TestChatroomsModel_KeyPressCorrectsStaleSelfIdleBadge confirms a keypress
+// while the panel currently shows our own entry as idle (a stale
+// server-recorded lastActivity, regardless of how recently we've actually
+// been typing) fires an immediate corrective heartbeat rather than waiting
+// for the next scheduled tick — this is the fix for the badge getting stuck
+// showing idle while the user keeps typing.
+func TestChatroomsModel_KeyPressCorrectsStaleSelfIdleBadge(t *testing.T) {
+	spy := &presenceSpyClient{MockClient: api.NewMockClient()}
+	m := chatroomsInRoom(spy, "zion")
+	m.idleAfterMs = 600000
+	stale := time.Now().Add(-20 * time.Minute)
+	m.roomUsers = []model.RoomUser{{Username: "neo", LastActivity: &stale}}
+	// lastHeartbeatSentAt left at its zero value — well outside the cooldown.
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+
+	if time.Since(m.lastActivityAt) > time.Second {
+		t.Errorf("expected lastActivityAt to be refreshed to now, got %v", m.lastActivityAt)
+	}
+	drainCmd(cmd)
+	if spy.calls != 1 {
+		t.Errorf("expected exactly one corrective heartbeat call, got %d", spy.calls)
+	}
+}
+
+// TestChatroomsModel_KeyPressWhileActiveDoesNotExtraBeat confirms a keypress
+// while the panel already shows us as active (no self entry, or a fresh one)
+// doesn't fire a spurious extra heartbeat.
+func TestChatroomsModel_KeyPressWhileActiveDoesNotExtraBeat(t *testing.T) {
+	spy := &presenceSpyClient{MockClient: api.NewMockClient()}
+	m := chatroomsInRoom(spy, "zion")
+	m.idleAfterMs = 600000
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	drainCmd(cmd)
+	if spy.calls != 0 {
+		t.Errorf("expected no extra heartbeat when the panel doesn't show us idle, got %d calls", spy.calls)
+	}
+}
+
+// TestChatroomsModel_KeyPressRespectsCorrectionCooldown guards the failure
+// mode a fast typing burst right after a correction could otherwise hit: the
+// panel's stale view of self won't clear until the corrective heartbeat
+// round-trips through the server and RTDB, so without a cooldown, every key
+// typed in that gap would fire another heartbeat — risking the 15/min-per-
+// room presence rate limit.
+func TestChatroomsModel_KeyPressRespectsCorrectionCooldown(t *testing.T) {
+	spy := &presenceSpyClient{MockClient: api.NewMockClient()}
+	m := chatroomsInRoom(spy, "zion")
+	m.idleAfterMs = 600000
+	stale := time.Now().Add(-20 * time.Minute)
+	m.roomUsers = []model.RoomUser{{Username: "neo", LastActivity: &stale}}
+	m.lastHeartbeatSentAt = time.Now() // a correction (or heartbeat) just fired
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	drainCmd(cmd)
+	if spy.calls != 0 {
+		t.Errorf("expected the cooldown to block a second correction so soon, got %d calls", spy.calls)
 	}
 }
 
