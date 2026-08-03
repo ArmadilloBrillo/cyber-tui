@@ -15,6 +15,9 @@ type Client interface {
 	// LoginWithRefreshToken exchanges a saved refresh token for a fresh set of
 	// tokens (IDToken + RTDBToken) without requiring the user's password.
 	LoginWithRefreshToken(refreshToken string) (model.Tokens, error)
+	// ResendVerification requests a fresh verification email for an account
+	// whose email isn't verified yet (see EMAIL_NOT_VERIFIED).
+	ResendVerification(idToken string) error
 	Logout() error
 	// RefreshSession proactively refreshes the ID token (and RTDB token) using
 	// the stored refresh token, without waiting for a failed request to trigger
