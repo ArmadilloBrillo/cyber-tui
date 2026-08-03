@@ -351,7 +351,10 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 			return a, nil
 		}
 		a.cmail = a.cmail.ResetToList()
-		return a, a.loadConvsCmd()
+		// No REST refetch: the live user_conversations subscription keeps the
+		// list current continuously, regardless of which tab is active — see
+		// OpenUserConvsSubscription.
+		return a, nil
 	case screenProfile:
 		return a, a.loadProfileCmd()
 	case screenNotifications:

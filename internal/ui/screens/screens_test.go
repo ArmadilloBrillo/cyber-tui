@@ -25,7 +25,7 @@ func TestChatroomsInputFocused_DefaultFalse(t *testing.T) {
 // --- CMailModel.InputFocused ---
 
 func TestCMailInputFocused_DefaultFalse(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	if m.InputFocused() {
 		t.Error("input should not be focused on a freshly created CMailModel")
 	}
@@ -63,7 +63,7 @@ func sendSpecialKey(m screens.CMailModel, keyType tea.KeyType) (screens.CMailMod
 // --- List mode navigation ---
 
 func TestCMailCursorDown(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendKey(m, "j")
 	if m.SelectedConv() != 1 {
@@ -72,7 +72,7 @@ func TestCMailCursorDown(t *testing.T) {
 }
 
 func TestCMailCursorUp_ClampsAtZero(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendKey(m, "k")
 	if m.SelectedConv() != 0 {
@@ -81,7 +81,7 @@ func TestCMailCursorUp_ClampsAtZero(t *testing.T) {
 }
 
 func TestCMailCursorDown_ClampsAtBottom(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendKey(m, "j")
 	m, _ = sendKey(m, "j") // already at bottom
@@ -93,7 +93,7 @@ func TestCMailCursorDown_ClampsAtBottom(t *testing.T) {
 // --- Default mode is list ---
 
 func TestCMailIsShowingDetail_DefaultFalse(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	if m.IsShowingDetail() {
 		t.Error("fresh CMailModel should be in list mode, not detail mode")
 	}
@@ -102,7 +102,7 @@ func TestCMailIsShowingDetail_DefaultFalse(t *testing.T) {
 // --- Enter in list mode opens detail mode ---
 
 func TestCMailEnterOpensConversation(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyEnter)
 	if !m.HasActiveConv() {
@@ -119,7 +119,7 @@ func TestCMailEnterOpensConversation(t *testing.T) {
 // --- Esc in detail mode returns to list mode ---
 
 func TestCMailEsc_InDetail_ReturnsToList(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyEnter) // enter detail mode
 	if !m.IsShowingDetail() {
@@ -137,7 +137,7 @@ func TestCMailEsc_InDetail_ReturnsToList(t *testing.T) {
 // --- Enter in detail mode with non-empty input emits SendCMailMsg ---
 
 func TestCMailSend_EmitsMessage(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyEnter) // open conversation
 
@@ -165,7 +165,7 @@ func TestCMailSend_EmitsMessage(t *testing.T) {
 // --- Enter with empty body does not emit a command ---
 
 func TestCMailSend_EmptyBodyNoCmd(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations(twoConvs())
 	m, _ = sendSpecialKey(m, tea.KeyEnter) // open conversation
 	// input is empty
@@ -412,7 +412,7 @@ func TestChatrooms_AppendSystemMessage_WrongRoomIsNoOp(t *testing.T) {
 }
 
 func TestCMail_AppendSystemMessage_RendersLocally(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = m.SetConversations(sampleConvWithMessage())
 	m, _ = sendSpecialKey(m, tea.KeyEnter)
@@ -426,7 +426,7 @@ func TestCMail_AppendSystemMessage_RendersLocally(t *testing.T) {
 }
 
 func TestCMail_AppendSystemMessage_WrongConvIsNoOp(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = m.SetConversations(sampleConvWithMessage())
 	m, _ = sendSpecialKey(m, tea.KeyEnter) // opens "c1"
@@ -957,7 +957,7 @@ func sampleConvWithMessage() []model.Conversation {
 }
 
 func TestCMail_GetFocusedURLs_NilInListMode(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations(sampleConvWithMessage())
 	if urls := m.GetFocusedURLs(); urls != nil {
 		t.Errorf("expected nil URLs in list mode, got %v", urls)
@@ -965,7 +965,7 @@ func TestCMail_GetFocusedURLs_NilInListMode(t *testing.T) {
 }
 
 func TestCMail_GetFocusedURLs_AggregatesLoadedMessages(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations([]model.Conversation{
 		{
 			ID:           "c1",
@@ -985,7 +985,7 @@ func TestCMail_GetFocusedURLs_AggregatesLoadedMessages(t *testing.T) {
 }
 
 func TestCMail_UpAtTop_TriggersHistoryLoadThenGuards(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations(sampleConvWithMessage())
 	m, _ = sendSpecialKey(m, tea.KeyEnter)
 
@@ -1001,7 +1001,7 @@ func TestCMail_UpAtTop_TriggersHistoryLoadThenGuards(t *testing.T) {
 }
 
 func TestCMail_PrependMessages_InsertsOlderMessagesAbove(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = m.SetConversations(sampleConvWithMessage())
 	m, _ = sendSpecialKey(m, tea.KeyEnter)
@@ -1022,7 +1022,7 @@ func TestCMail_PrependMessages_InsertsOlderMessagesAbove(t *testing.T) {
 }
 
 func TestCMail_PrependMessages_EmptyMarksExhausted(t *testing.T) {
-	m := screens.NewCMailModel("neuromancer", nil)
+	m := screens.NewCMailModel("neuromancer", "", nil)
 	m = m.SetConversations(sampleConvWithMessage())
 	m, _ = sendSpecialKey(m, tea.KeyEnter)
 
@@ -1112,7 +1112,7 @@ func TestChatrooms_View_ShowsErrorWhenInitialLoadFails(t *testing.T) {
 
 func TestCMail_LoadOlderFailure_ResetsLoadingHistory(t *testing.T) {
 	client := &flakyOlderPageClient{MockClient: api.NewMockClient()}
-	m := screens.NewCMailModel("neuromancer", client)
+	m := screens.NewCMailModel("neuromancer", "", client)
 	m = m.SetConversations(sampleConvWithMessage())
 	m, _ = sendSpecialKey(m, tea.KeyEnter)
 
@@ -1130,7 +1130,7 @@ func TestCMail_LoadOlderFailure_ResetsLoadingHistory(t *testing.T) {
 
 func TestCMail_View_ShowsErrorWhenInitialLoadFails(t *testing.T) {
 	client := &alwaysFailClient{MockClient: api.NewMockClient()}
-	m := screens.NewCMailModel("neuromancer", client)
+	m := screens.NewCMailModel("neuromancer", "", client)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	// A conversation with no pre-loaded messages, so the failing initial fetch
 	// is what determines the detail view's content.

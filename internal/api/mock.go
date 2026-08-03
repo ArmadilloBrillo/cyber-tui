@@ -598,6 +598,27 @@ func (m *MockClient) SubscribeDMTyping(ctx context.Context, conversationID strin
 	return ch, cancel, nil
 }
 
+// SubscribeUserConversations returns a channel that delivers the same canned
+// GetConversations snapshot once after 1 second, then closes — mirrors
+// SubscribeRoomPresence's mock.
+func (m *MockClient) SubscribeUserConversations(ctx context.Context, uid string, initial []model.Conversation) (<-chan []model.Conversation, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan []model.Conversation, 1)
+	go func() {
+		defer close(ch)
+		convs, _ := m.GetConversations()
+		select {
+		case <-time.After(1 * time.Second):
+			select {
+			case ch <- convs:
+			case <-ctx.Done():
+			}
+		case <-ctx.Done():
+		}
+	}()
+	return ch, cancel, nil
+}
+
 func (m *MockClient) StartConversation(recipientUsername string) (model.Conversation, error) {
 	return model.Conversation{
 		ID:           "c-new",

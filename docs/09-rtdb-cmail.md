@@ -58,6 +58,7 @@ func (c *Client) Subscribe(ctx, path string, params) <-chan SSEEvent
 |---|---|---|
 | Live stream | `/dm_messages/<conversationId>` (SSE) | New messages |
 | Typing indicator | `/dm_presence/<conversationId>` (SSE) | Who's currently typing; same full-snapshot-per-event shape as CIRC's `/chat_presence/<roomId>` |
+| Conversation list | `/user_conversations/<uid>` (SSE) | Account-wide list of conversation summaries (unread count, last message, other participant); same full-snapshot-per-event shape, keyed by `conversationId` instead of `userId` |
 
 All other C-Mail operations (list conversations, load history, send message, mark read, announce/clear typing) are handled by the REST API at `/v1/cmail/*`. See `docs/08-cmail.md` for the full endpoint table.
 
@@ -94,6 +95,23 @@ The initial SSE event has `path: "/"` and carries the full snapshot. This is ski
 ```
 Unlike the message stream, the initial `path: "/"` snapshot **is** consumed (not skipped) — it's the only way to know who's typing when the conversation is first opened. An entry is shown only while `typing == true` and `timestamp` is newer than `staleAfterMs` (9000ms); since a flag going stale produces no RTDB event of its own, the client re-filters on both every event and a 5s ticker — identical caveat to CIRC's `chat_presence` handling.
 
+**Conversation-list wire format** — one entry in `/user_conversations/<uid>`, keyed by `conversationId` (discovered live, not documented in `docs/00-latest-api-reference.md` beyond the path and SSE mechanics — see `docs/00-api-backlog.md`):
+```json
+{
+  "path": "/c1a2b3",
+  "data": {
+    "otherUserId":   "uid-abc",
+    "otherUsername": "molly",
+    "lastMessage":   "hello",
+    "lastMessageAt": 1700000001000,
+    "unreadCount":   1
+  }
+}
+```
+Every field but `unreadCount` is absent on some entries (older/stale conversations); the client falls back to "unknown" for the participant, same as it does for a REST-loaded conversation with no participant info. Like `chat_presence`/`dm_presence`, the initial `path: "/"` snapshot **is** consumed (it's the only source of the conversation list's live state — no separate ticker is needed here, since nothing about a conversation summary goes stale on its own the way presence/typing does).
+
+Unlike presence/typing — where every write rewrites a participant's whole entry — a conversation summary write is often partial: a new message typically only touches `lastMessage`/`lastMessageAt`/`unreadCount`, not `otherUserId`/`otherUsername`. So a `patch` at a single `/<conversationId>` path is *merged* onto the existing entry (Go's `json.Unmarshal` onto a non-zero struct only sets fields present in the JSON, leaving the rest untouched) rather than replacing it outright — only a `put` (root or single-path) is a full replace. Root-level `patch` (multiple conversations changing in one multi-location update) still merges per-key like `applyPresenceEvent`.
+
 ---
 
 ## Bubble Tea Subscription Lifecycle
@@ -117,6 +135,33 @@ waitForDM blocks on sub.C
 Navigating away (keys 1/2/4, arrow tabs, or re-pressing 3)
   → cancelDMSubscription() → sub.cancel() → goroutine exits → channel closes
 ```
+
+**Account-wide conversation-list subscription** (independent of the flow above — not tied to any single conversation being open):
+
+```
+Login succeeds
+  → afterLoginCmd calls CMailModel.OpenUserConvsSubscription() directly — no REST
+    seed; the subscription's own first event (a full snapshot, like chat_presence's)
+    populates the list, so there's exactly one writer to m.conversations, not two
+  → openUserConvsSubscriptionCmd starts RTDB SSE stream on /user_conversations/<uid>,
+    seeded with m.conversations (nil on a fresh login; the last known-good list on
+    a reconnect)
+
+openUserConvsSubscriptionCmd resolves
+  → userConvsSubscribedMsg{sub} → store m.userConvsSub, fire waitForUserConvs(sub)
+
+waitForUserConvs blocks on sub.C
+  → userConvsReceivedMsg{convs} → SetConversations(convs) → re-fire waitForUserConvs
+  → userConvsStreamClosedMsg    → reconnect sequence (RefreshSession + resubscribe,
+                                   1s/2s/4s/8s/15s backoff, 6 attempts, same schedule
+                                   as the message stream) — gives up silently (no UI
+                                   indicator) if all attempts fail
+
+Session ends (handleUnauthorized)
+  → CancelUserConvsSubscription() → sub.cancel() → goroutine exits → channel closes
+```
+
+Routed via the same background-delivery path as the message/typing streams (`screens.IsDMStreamMsg`, checked in `App.handleCMail` when C-Mail isn't the active screen) — this is what lets the tab-bar unread badge update live regardless of which tab is on screen.
 
 ---
 
@@ -149,6 +194,7 @@ go run ./cmd/cyber-tui
 6. On another client/browser, open the same conversation — observe the message arrives.
 7. Send a reply from the other client — it should appear live in the TUI without refreshing.
 8. Press `1` or another tab key — subscription is cleanly cancelled.
+9. From the conversation list (or another tab entirely), have the other client send a new message — the tab-bar unread badge and the conversation's card (unread count, preview, timestamp) should update within ~1s via the live `user_conversations/<uid>` stream, with no 60s poll delay and no manual refresh.
 
 ---
 
