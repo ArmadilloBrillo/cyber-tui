@@ -220,6 +220,13 @@ type Client interface {
 	// AnnounceTyping's response, or a fixed default if subscribing before ever
 	// announcing typing ourselves.
 	SubscribeDMTyping(ctx context.Context, conversationID string, staleAfterMs int) (<-chan []model.TypingUser, context.CancelFunc, error)
+	// SubscribeUserConversations opens a live RTDB SSE stream for uid's
+	// conversation-list summary node. Each receive is the full converted+
+	// sorted conversation list (unread first, then most recently active)
+	// rather than a single incremental event, since a conversation summary
+	// mutates in place. initial seeds the merge state for a reconnect so the
+	// list doesn't go blank until the first live event arrives.
+	SubscribeUserConversations(ctx context.Context, uid string, initial []model.Conversation) (<-chan []model.Conversation, context.CancelFunc, error)
 
 	// Search — full-text search across users, posts, and replies (v0.7).
 	// Search returns the grouped "type=all" preview: up to 8 hits per category,

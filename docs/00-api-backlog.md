@@ -92,7 +92,7 @@ All REST endpoints and the RTDB SSE subscription are fully implemented. See `doc
 | `POST /v1/cmail/:conversationId` | POST | Send a message | **Done** — `SendMessage` |
 | `POST /v1/cmail/:conversationId/read` | POST | Mark conversation as read | **Done** — `MarkCMailRead`; called on conversation open |
 | RTDB `dm_messages/<conversationId>` | SSE | Real-time new messages | **Done** — `SubscribeDMs`; skips initial snapshot |
-| RTDB `user_conversations/<uid>` | SSE | Live conversation list / unread updates | Not implemented — REST list covers the use case at navigation time |
+| RTDB `user_conversations/<uid>` | SSE | Live conversation list / unread updates | **Done** — `SubscribeUserConversations`; replaces the old 60s REST poll (`docs/08-cmail.md`, `docs/09-rtdb-cmail.md`) |
 
 ### cIRC (new in v0.7)
 

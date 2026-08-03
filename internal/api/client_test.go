@@ -1779,6 +1779,134 @@ func TestHTTPSubscribeDMTyping_SingleKeyUpdateReplacesEntry(t *testing.T) {
 	}
 }
 
+// TestHTTPSubscribeUserConversations_DecodesAndSorts verifies the initial
+// snapshot decodes into model.Conversation and sorts unread-first, then
+// most-recently-active — matching GetConversations' REST ordering.
+func TestHTTPSubscribeUserConversations_DecodesAndSorts(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/","data":{"c1":{"otherUserId":"u1","otherUsername":"alice","lastMessage":"hi","lastMessageAt":1000,"unreadCount":0},"c2":{"otherUserId":"u2","otherUsername":"bob","lastMessage":"yo","lastMessageAt":2000,"unreadCount":3},"c3":{"unreadCount":0}}}`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeUserConversations(context.Background(), "uid-me", nil)
+	if err != nil {
+		t.Fatalf("SubscribeUserConversations error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case convs, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering a snapshot")
+		}
+		if len(convs) != 3 {
+			t.Fatalf("len(convs) = %d, want 3: %+v", len(convs), convs)
+		}
+		if convs[0].ID != "c2" || convs[0].UnreadCount != 3 {
+			t.Errorf("convs[0] = %+v, want the unread conversation (c2) first", convs[0])
+		}
+		if convs[0].Participants[0].Username != "bob" {
+			t.Errorf("convs[0].Participants[0].Username = %q, want bob", convs[0].Participants[0].Username)
+		}
+		// c1 (lastMessageAt 1000) and c3 (no lastMessageAt) are both unread=0;
+		// c1 must sort before c3's zero-value timestamp.
+		if convs[1].ID != "c1" || convs[2].ID != "c3" {
+			t.Errorf("read conversations not sorted most-recent-first: got order %s, %s", convs[1].ID, convs[2].ID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for snapshot")
+	}
+}
+
+// TestHTTPSubscribeUserConversations_RootPatchMergesInsteadOfReplacing is the
+// applyUserConversationsEvent counterpart of
+// TestHTTPSubscribeRoomPresence_RootPatchMergesInsteadOfReplacing — a root
+// "patch" event must merge the listed keys, not wipe every other conversation.
+func TestHTTPSubscribeUserConversations_RootPatchMergesInsteadOfReplacing(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/","data":{"c1":{"otherUserId":"u1","otherUsername":"alice","lastMessage":"hi","lastMessageAt":1000,"unreadCount":0},"c2":{"otherUserId":"u2","otherUsername":"bob","lastMessage":"yo","lastMessageAt":2000,"unreadCount":0}}}`)
+		writeSSEEvent(w, "patch", `{"path":"/","data":{"c2":null}}`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeUserConversations(context.Background(), "uid-me", nil)
+	if err != nil {
+		t.Fatalf("SubscribeUserConversations error: %v", err)
+	}
+	defer cancel()
+
+	var last []model.Conversation
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case convs, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before delivering the post-patch snapshot")
+			}
+			last = convs
+			if len(last) == 1 {
+				if last[0].ID != "c1" {
+					t.Fatalf("expected c1 to remain after c2's root-patch removal, got %+v", last)
+				}
+				return
+			}
+			if len(last) == 0 {
+				t.Fatal("root patch removing one conversation wiped the whole list")
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for the post-patch snapshot, last snapshot: %+v", last)
+		}
+	}
+}
+
+// TestHTTPSubscribeUserConversations_SingleConvPatchMergesPartialFields
+// verifies a "/<conversationId>" patch (the common case: a new message
+// updates lastMessage/lastMessageAt/unreadCount) merges onto the existing
+// entry instead of wiping fields the patch didn't mention — unlike presence,
+// where every write replaces the whole entry, a conversation's participant
+// info (otherUserId/otherUsername) usually isn't repeated on every message.
+func TestHTTPSubscribeUserConversations_SingleConvPatchMergesPartialFields(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/","data":{"c1":{"otherUserId":"u1","otherUsername":"alice","lastMessage":"hi","lastMessageAt":1000,"unreadCount":0}}}`)
+		writeSSEEvent(w, "patch", `{"path":"/c1","data":{"lastMessage":"new message","lastMessageAt":2000,"unreadCount":1}}`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeUserConversations(context.Background(), "uid-me", nil)
+	if err != nil {
+		t.Fatalf("SubscribeUserConversations error: %v", err)
+	}
+	defer cancel()
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case convs, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before delivering the post-patch snapshot")
+			}
+			if len(convs) != 1 || convs[0].UnreadCount != 1 {
+				continue // saw the initial snapshot; wait for the patched one
+			}
+			if convs[0].LastMessage != "new message" {
+				t.Errorf("LastMessage = %q, want %q", convs[0].LastMessage, "new message")
+			}
+			if convs[0].Participants[0].Username != "alice" {
+				t.Errorf("Participants[0].Username = %q, want alice (must survive the partial patch)", convs[0].Participants[0].Username)
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for the post-patch snapshot")
+		}
+	}
+}
+
 func TestHTTPStartConversation_ReturnsConversation(t *testing.T) {
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/cmail" || r.Method != http.MethodPost {

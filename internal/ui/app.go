@@ -250,7 +250,7 @@ func NewApp(client api.Client) App {
 		login:              screens.NewLoginModel(""),
 		feed:               screens.NewFeedModel(),
 		chatrooms:          screens.NewChatroomsModel("", client),
-		cmail:              screens.NewCMailModel("", client),
+		cmail:              screens.NewCMailModel("", "", client),
 		profile:            screens.NewProfileModel(),
 		postDetail:         screens.NewPostDetailModel(),
 		notifications:      screens.NewNotificationsModel(),
@@ -659,7 +659,7 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 	case loginSuccessMsg:
 		a.tokens = msg.tokens
 		a.currentUser = msg.user
-		a.cmail = screens.NewCMailModel(msg.user.Username, a.client)
+		a.cmail = screens.NewCMailModel(msg.user.Username, msg.user.ID, a.client)
 		a.chatrooms = screens.NewChatroomsModel(msg.user.Username, a.client)
 		// Initialize the fresh models' viewports with the current terminal size.
 		if a.width > 0 {
@@ -870,9 +870,6 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 // are coordinated here.
 func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
-	case convsLoadedMsg:
-		a.cmail = a.cmail.SetConversations(msg.convs)
-		return a, nil, true
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
 	case screens.CMailConvSelectedMsg:
@@ -888,8 +885,11 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.active = screenCMail
 		a.cmail = a.cmail.SetActiveConversation(msg.conv)
 		convID := msg.conv.ID
+		// The new conversation appears in the list via the live
+		// user_conversations subscription once the server's write reaches
+		// it — no REST refetch here (would race the subscription's own
+		// state; see OpenUserConvsSubscription's doc comment).
 		return a, tea.Batch(
-			a.loadConvsCmd(),
 			a.cmail.ConvOpenCmds(convID),
 			func() tea.Msg { return screens.CMailConvSelectedMsg{ConversationID: convID} },
 		), true
@@ -1774,6 +1774,7 @@ func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	_ = a.client.Logout()
 	a.tokens = model.Tokens{}
+	a.cmail = a.cmail.CancelUserConvsSubscription()
 	a.saveConfig(func(cfg *config.Config) { cfg.RefreshToken = "" })
 
 	a.active = screenLogin
@@ -2243,13 +2244,20 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	a.topics = a.topics.SetFetching()
 	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username)
 	a.broadcastConfig()
+	// Conversation list has no REST seed — the live subscription's own first
+	// event (a full snapshot, like chat_presence's) populates it. Seeding via
+	// GetConversations first and then opening the subscription would leave
+	// two independent writers to CMailModel.conversations (see
+	// OpenUserConvsSubscription's doc comment).
+	var cmailCmd tea.Cmd
+	a.cmail, cmailCmd = a.cmail.OpenUserConvsSubscription()
 	return tea.Batch(
 		a.loadFeedCmd(),
 		a.loadBookmarksCmd(""),
 		a.loadWatchesPageCmd(""),
 		a.loadTopicsCmd(),
 		a.loadProfileCmd(),
-		a.loadConvsCmd(),
+		cmailCmd,
 		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
 		a.loadSettingsCmd(),
@@ -2268,8 +2276,6 @@ type feedPageMsg struct {
 	cursor string
 }
 type roomsLoadedMsg struct{ rooms []model.Room }
-type convsLoadedMsg struct{ convs []model.Conversation }
-
 // roomCommandReplyMsg/cmailCommandReplyMsg carry a reply-only slash command's
 // text (e.g. /help) back from the send response, for local display only —
 // nothing was posted, so nothing arrives via the RTDB subscription.
@@ -2592,16 +2598,6 @@ func (a *App) loadRoomsCmd() tea.Cmd {
 			return errMsg{err}
 		}
 		return roomsLoadedMsg{rooms}
-	}
-}
-
-func (a *App) loadConvsCmd() tea.Cmd {
-	return func() tea.Msg {
-		convs, err := a.client.GetConversations()
-		if err != nil {
-			return errMsg{err}
-		}
-		return convsLoadedMsg{convs}
 	}
 }
 
@@ -2938,7 +2934,11 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.profileReturn = screenNotifications
 		return a, a.loadUserProfileCmd(msg.Username), true
 	case pollUnreadTickMsg:
-		return a, tea.Batch(a.fetchUnreadCountCmd(), a.loadConvsCmd(), a.schedulePollCmd()), true
+		// C-Mail's conversation list no longer polls here — it updates live via
+		// the RTDB subscription opened in afterLoginCmd (see
+		// OpenUserConvsSubscription). This ticker now only drives the
+		// notifications unread-count badge.
+		return a, tea.Batch(a.fetchUnreadCountCmd(), a.schedulePollCmd()), true
 	case unreadCountMsg:
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count
