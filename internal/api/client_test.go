@@ -1439,15 +1439,42 @@ func TestHTTPGetRoomUsers_SanitizesControlChars(t *testing.T) {
 	}
 }
 
+// TestHTTPGetRoomUsers_LastActivityNilWhenAbsent guards against a nil
+// lastActivity being misread as "idle since the Unix epoch" (which would
+// wrongly flag an always-active user as idle) or causing a decode panic.
+func TestHTTPGetRoomUsers_LastActivityNilWhenAbsent(t *testing.T) {
+	activity := int64(1700000000500)
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"userId": "u1", "username": "alwaysActive", "isChatAdmin": false, "lastSeen": 1700000001000},
+			{"userId": "u2", "username": "idle", "isChatAdmin": false, "lastSeen": 1700000001000, "lastActivity": activity},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	users, err := c.GetRoomUsers("general")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("len(users) = %d, want 2", len(users))
+	}
+	if users[0].LastActivity != nil {
+		t.Errorf("users[0].LastActivity = %v, want nil (field omitted)", users[0].LastActivity)
+	}
+	if users[1].LastActivity == nil || users[1].LastActivity.UnixMilli() != activity {
+		t.Errorf("users[1].LastActivity = %v, want %d", users[1].LastActivity, activity)
+	}
+}
+
 func TestHTTPAnnouncePresence_ParsesCadence(t *testing.T) {
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/circ/general/presence" || r.Method != http.MethodPost {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		writeOK(t, w, map[string]any{"roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000})
+		writeOK(t, w, map[string]any{"roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000, "idleAfterMs": 600000})
 	})))
 	c.LoginWithRefreshToken("tok")
-	heartbeatMs, staleAfterMs, err := c.AnnouncePresence("general")
+	heartbeatMs, staleAfterMs, idleAfterMs, err := c.AnnouncePresence("general", time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1456,6 +1483,29 @@ func TestHTTPAnnouncePresence_ParsesCadence(t *testing.T) {
 	}
 	if staleAfterMs != 180000 {
 		t.Errorf("staleAfterMs = %d, want 180000", staleAfterMs)
+	}
+	if idleAfterMs != 600000 {
+		t.Errorf("idleAfterMs = %d, want 600000", idleAfterMs)
+	}
+}
+
+func TestHTTPAnnouncePresence_SendsLastActivityBody(t *testing.T) {
+	want := time.Now().Add(-2 * time.Minute)
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			LastActivity int64 `json:"lastActivity"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body.LastActivity != want.UnixMilli() {
+			t.Errorf("lastActivity = %d, want %d", body.LastActivity, want.UnixMilli())
+		}
+		writeOK(t, w, map[string]any{"roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000, "idleAfterMs": 600000})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if _, _, _, err := c.AnnouncePresence("general", want); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1538,6 +1588,86 @@ func TestHTTPSubscribeRoomPresence_InitialSnapshotFiltersOfflineAndStale(t *test
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for snapshot")
+	}
+}
+
+// TestHTTPSubscribeRoomPresence_IdleUserSurvivesFilteringButFlagged verifies
+// that an idle user (fresh lastSeen, but a stale-looking lastActivity) is
+// NOT dropped by the same filter that removes offline/stale users — idle is
+// a separate, render-time-only concept from staleness, and idleAfterMs plays
+// no part in filterFreshPresence/SubscribeRoomPresence's filtering.
+func TestHTTPSubscribeRoomPresence_IdleUserSurvivesFilteringButFlagged(t *testing.T) {
+	now := time.Now().UnixMilli()
+	idleSince := now - 700000
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		data := fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","isChatAdmin":false,"online":true,"lastSeen":%d,"lastActivity":%d},"u2":{"username":"bob","isChatAdmin":false,"online":false,"lastSeen":%d}}}`, now, idleSince, now)
+		writeSSEEvent(w, "put", data)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000, nil)
+	if err != nil {
+		t.Fatalf("SubscribeRoomPresence error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case users, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering a snapshot")
+		}
+		if len(users) != 1 {
+			t.Fatalf("len(users) = %d, want 1 (offline bob filtered, idle alice kept): %+v", len(users), users)
+		}
+		if users[0].Username != "alice" {
+			t.Fatalf("users[0] = %+v, want alice (idle but online/fresh)", users[0])
+		}
+		if users[0].LastActivity == nil || users[0].LastActivity.UnixMilli() != idleSince {
+			t.Errorf("LastActivity = %v, want %d", users[0].LastActivity, idleSince)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for snapshot")
+	}
+}
+
+// TestHTTPSubscribeRoomPresence_PatchPreservesLastActivity guards against a
+// patch-merge losing the lastActivity field (e.g. a struct-copy bug that
+// only copies the fields present before this feature was added).
+func TestHTTPSubscribeRoomPresence_PatchPreservesLastActivity(t *testing.T) {
+	now := time.Now().UnixMilli()
+	activity := now - 1000
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","isChatAdmin":false,"online":true,"lastSeen":%d}}}`, now))
+		writeSSEEvent(w, "patch", fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","isChatAdmin":false,"online":true,"lastSeen":%d,"lastActivity":%d}}}`, now, activity))
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000, nil)
+	if err != nil {
+		t.Fatalf("SubscribeRoomPresence error: %v", err)
+	}
+	defer cancel()
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case users, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before delivering the post-patch snapshot")
+			}
+			if len(users) == 1 && users[0].LastActivity != nil {
+				if users[0].LastActivity.UnixMilli() != activity {
+					t.Errorf("LastActivity = %v, want %d", users[0].LastActivity, activity)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the patched lastActivity to appear")
+		}
 	}
 }
 

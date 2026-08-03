@@ -158,6 +158,10 @@ type RoomUser struct {
 	Username    string
 	IsChatAdmin bool
 	LastSeen    time.Time
+	// LastActivity is when the user last reported doing something (a
+	// keystroke, a command). Nil means their client doesn't report it —
+	// treat as always active, never idle.
+	LastActivity *time.Time
 }
 
 // TypingUser is a single entry in a C-Mail conversation's typing indicator —

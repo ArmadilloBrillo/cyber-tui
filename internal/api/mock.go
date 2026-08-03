@@ -481,17 +481,21 @@ func (m *MockClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 	return ch, cancel, nil
 }
 
-// GetRoomUsers returns a couple of canned users, one flagged as admin.
+// GetRoomUsers returns a couple of canned users, one flagged as admin and one
+// idle (LastActivity well past the canned idleAfterMs), plus one with no
+// LastActivity reported at all (always active).
 func (m *MockClient) GetRoomUsers(roomID string) ([]model.RoomUser, error) {
+	idleSince := time.Now().Add(-10 * time.Minute)
 	return []model.RoomUser{
 		{UserID: "2", Username: mockUsers[1].Username, IsChatAdmin: true, LastSeen: time.Now()},
 		{UserID: "1", Username: mockUsers[0].Username, LastSeen: time.Now().Add(-30 * time.Second)},
+		{UserID: "3", Username: "sleepyhead", LastSeen: time.Now(), LastActivity: &idleSince},
 	}, nil
 }
 
-// AnnouncePresence returns a fixed 30s heartbeat / 3min staleness window.
-func (m *MockClient) AnnouncePresence(roomID string) (heartbeatMs, staleAfterMs int, err error) {
-	return 30000, 180000, nil
+// AnnouncePresence returns a fixed 30s heartbeat / 3min staleness / 10min idle window.
+func (m *MockClient) AnnouncePresence(roomID string, lastActivity time.Time) (heartbeatMs, staleAfterMs, idleAfterMs int, err error) {
+	return 30000, 180000, 600000, nil
 }
 
 func (m *MockClient) LeaveRoomPresence(roomID string) error {

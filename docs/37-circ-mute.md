@@ -19,5 +19,5 @@ The server does all the bookkeeping: each command posts nothing and returns `{"d
 
 ## Out of scope
 
-- No dedicated keybinding — muting is slash-command-only, matching every other cIRC command (no client-side command parsing/autocomplete exists for any of them).
+- No dedicated keybinding — muting is slash-command-only, matching every other cIRC command. The client only checks that `/mute` etc. are *recognized* command names (`knownCircCommands`, `docs/33-circ.md`); there's no argument parsing or autocomplete for the username.
 - No local-only config file storage — unlike `Timezone` (which has no server equivalent), `mutedUsersByRoom` is genuinely server-synced and shared with the website, so it lives in `model.Settings`.

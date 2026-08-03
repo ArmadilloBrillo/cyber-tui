@@ -338,6 +338,46 @@ func TestChatrooms_Send_EmitsMessage(t *testing.T) {
 	}
 }
 
+func TestChatrooms_Send_UnknownCommandIsRejected(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // open room
+
+	for _, r := range "/bogus" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+	if cmd != nil {
+		t.Fatal("expected no command for an unknown slash command")
+	}
+	if view := m.View(); !strings.Contains(view, "unknown command: /bogus") {
+		t.Errorf("expected an unknown-command notice in the view, got: %q", view)
+	}
+}
+
+func TestChatrooms_Send_KnownCommandStillSends(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // open room
+
+	for _, r := range "/me waves" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	_, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("expected a command for a known slash command")
+	}
+	msg := cmd()
+	sendMsg, ok := msg.(screens.SendRoomMessageMsg)
+	if !ok {
+		t.Fatalf("expected SendRoomMessageMsg, got %T", msg)
+	}
+	if sendMsg.Body != "/me waves" {
+		t.Errorf("expected body='/me waves', got %q", sendMsg.Body)
+	}
+}
+
 func TestChatrooms_AppendMessage(t *testing.T) {
 	m := screens.NewChatroomsModel("neuromancer", nil)
 	m = m.SetRooms(sampleRooms())
