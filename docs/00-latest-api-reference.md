@@ -1,13 +1,12 @@
-# ᑕ¥βєяรקค¢є API v0.7
+# ᑕ¥βєяรקค¢є API v0.8.2
 
 ## Access
 
-To use the API your account must either:
+The API is open to every Cyberspace account. All you need is a **verified email address**.
 
-- have API access explicitly granted on it, or
-- be a Cyberspace **supporter** account.
+If your email isn't verified yet, authenticated requests are rejected with `403 EMAIL_NOT_VERIFIED` — log in, call [Resend Verification Email](#resend-verification-email), click the link, and you're in.
 
-Without one of these, all authenticated requests will be rejected.
+Accounts are created on the [website](https://cyberspace.online); there is no signup endpoint.
 
 ## Terms
 
@@ -105,6 +104,8 @@ or
 
 No authentication required.
 
+Rate limit: 10/min, 60/hour (per IP).
+
 ---
 
 ## Entries
@@ -201,6 +202,22 @@ DELETE /v1/posts/:id
 
 Deletes the entry. Only the author (or site admin) can delete.
 
+### Flag an Entry
+
+```
+POST /v1/posts/:id/flag
+```
+
+```json
+{ "reason": "why you're reporting it" }
+```
+
+Reports the entry for review. `reason` is optional, max 500 characters. Returns `{ "data": { "postId": "...", "flagId": "...", "flagged": true } }` (`201`).
+
+Reporting is idempotent: report the same entry again and you get `200` with `{ "data": { "postId": "...", "flagged": true, "alreadyFlagged": true } }` and no second report is filed — so it's safe to retry. Reports made from the website count too. You can't report your own entry (`403`), and there's no way to withdraw a report.
+
+Rate limit: 5/min, 20/hour, 50/day, shared with the other flag endpoints.
+
 ---
 
 ## Replies
@@ -250,6 +267,18 @@ DELETE /v1/replies/:id
 ```
 
 Deletes the reply. Only the author (or site admin) can delete.
+
+### Flag a Reply
+
+```
+POST /v1/replies/:id/flag
+```
+
+```json
+{ "reason": "why you're reporting it" }
+```
+
+Same as [Flag an Entry](#flag-an-entry). Returns `{ "data": { "replyId": "...", "flagId": "...", "flagged": true } }` (`201`), or `200` with `alreadyFlagged: true` if you've already reported it.
 
 ---
 
@@ -682,7 +711,7 @@ Returns `{ "data": { "updated": 12 } }` with the count of notifications marked r
 
 ---
 
-## Notes (Private)
+## Notes
 
 Notes are private to you. No other user can see them.
 
@@ -852,7 +881,9 @@ Returns the caller's conversations, unread first then newest activity first. Eac
 GET /v1/cmail/:conversationId?limit=50&before=<timestamp>
 ```
 
-Participant only. Use this to load history — the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-in-real-time), not from here. Returns up to `limit` (1–100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp). Each message: `id`, `senderId`, `senderUsername`, `content`, `timestamp` (ms epoch).
+Participant only. Use this to load history — the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-in-real-time), not from here. Returns up to `limit` (1–100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp).
+
+Each message: `id`, `senderId`, `senderUsername`, `content`, `timestamp` (ms epoch), plus the optional attachment and formatting fields described under [Message fields](#message-fields). **`content` can be empty** — an attached image, GIF or song is the whole message. Don't assume every message has text.
 
 ### Send a Message
 
@@ -866,7 +897,7 @@ POST /v1/cmail/:conversationId
 
 Sends into an existing conversation (start one first via `POST /v1/cmail`). `senderUsername` is always set from your authenticated account — any value in the body is ignored. Blocked in either direction (you blocked them, or they blocked you) returns `403`. Returns `{ "data": { "conversationId": "...", "messageId": "..." } }` (`201`).
 
-Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`) is expanded server-side.
+Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. `/art` and the `/mute` family are cIRC-only and return `400` here.
 
 ### Mark as Read
 
@@ -977,7 +1008,9 @@ Returns the rooms available to you, sorted by `sortOrder` then most-recently-act
 GET /v1/circ/:roomId?limit=50&before=<timestamp>
 ```
 
-Use this to load history — the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-a-room-in-real-time), not from here. Returns up to `limit` (1–100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp). Each message: `id`, `userId`, `username`, `isChatAdmin`, `content`, `timestamp` (ms epoch). Returns `403` if the room isn't available to you.
+Use this to load history — the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-a-room-in-real-time), not from here. Returns up to `limit` (1–100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp). Returns `403` if the room isn't available to you.
+
+Each message: `id`, `userId`, `username`, `isChatAdmin`, `content`, `timestamp` (ms epoch), plus the optional attachment and formatting fields described under [Message fields](#message-fields). **`content` can be empty** — an attached image, GIF or song is the whole message. Don't assume every message has text.
 
 ### Send a Message
 
@@ -991,7 +1024,37 @@ POST /v1/circ/:roomId
 
 `username` and `isChatAdmin` are always set from your authenticated account — any values in the body are ignored. Returns `{ "data": { "roomId": "...", "messageId": "..." } }` (`201`). Returns `403` if the room isn't available to you.
 
-Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`) is expanded server-side.
+Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side.
+
+### Delete Your Message
+
+```
+DELETE /v1/circ/:roomId/messages/:messageId
+```
+
+Deletes a message you sent. It's a soft delete: the message stays in the room so the conversation around it still reads, but its `content` becomes `[DELETED]`, it comes back with `deleted: true`, and any image, GIF, song, style or command result is stripped. Your name and the original timestamp stay. This is exactly what the website does, and people reading there see the same thing.
+
+Returns `{ "data": { "roomId": "...", "messageId": "...", "deleted": true } }`.
+
+**It can't be undone.** Deleting again returns `409 CONFLICT`; there is no un-delete. You can only delete your own messages — someone else's returns `403`, and an unknown `messageId` returns `404`.
+
+Rate limit: 5/min, 30/day.
+
+### Flag a Message
+
+```
+POST /v1/circ/:roomId/messages/:messageId/flag
+```
+
+```json
+{ "reason": "why you're reporting it" }
+```
+
+Reports someone's message for review. `reason` is optional, max 500 characters. The message's text (and any attachment) is recorded with the report, so it survives even if the message is deleted afterwards. Returns `{ "data": { "roomId": "...", "messageId": "...", "flagId": "...", "flagged": true } }` (`201`).
+
+Reporting is idempotent — the same message twice returns `200` with `alreadyFlagged: true` and files nothing new, and reports made from the website count too. You can't report your own message (`403`). A message that's already been deleted can still be reported. There's no way to withdraw a report.
+
+Rate limit: 5/min, 20/hour, 50/day, shared with [Flag an Entry](#flag-an-entry) and [Flag a Reply](#flag-a-reply).
 
 ### Mark a Room as Read
 
@@ -1007,9 +1070,11 @@ Marks the room as viewed for you (drives the "new messages" indicator). Returns 
 GET /v1/circ/:roomId/users
 ```
 
-Returns the people currently in the room, sorted by username. Each entry: `userId`, `username`, `isChatAdmin`, `lastSeen` (ms epoch). Returns `403` if the room isn't available to you.
+Returns the people currently in the room, sorted by username. Each entry: `userId`, `username`, `isChatAdmin`, `lastSeen` (ms epoch), `lastActivity` (ms epoch, or `null`). Returns `403` if the room isn't available to you.
 
 Presence is heartbeat-based: someone counts as present while they keep announcing themselves. Stop hearing from a client and it drops off the list on its own, so a crashed or force-quit client clears itself without any cleanup call.
+
+`lastActivity` is when that person last did something. Treat anyone whose `lastActivity` is older than `idleAfterMs` as idle — the website shows them with a 💤 next to their name. `null` means their client doesn't report it; treat them as active. Re-evaluate on a timer, since someone going idle produces no update of its own.
 
 ### Announce Your Presence
 
@@ -1019,13 +1084,19 @@ POST /v1/circ/:roomId/presence
 
 Call this when you enter a room, then repeat it every `heartbeatMs` for as long as you stay. This is what puts you in the room's user list — including for people on the website, who see you alongside everyone else. Skip it and you can still read and send, you're just invisible.
 
-No body. `username` and `isChatAdmin` are set from your authenticated account, so you can only ever publish your own presence. Returns:
+The body is optional. `username` and `isChatAdmin` are set from your authenticated account, so you can only ever publish your own presence.
 
 ```json
-{ "data": { "roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000 } }
+{ "lastActivity": 1719700000000 }
 ```
 
-Read the cadence off the response rather than hard-coding it: send a heartbeat every `heartbeatMs`, and you drop out of the room once `staleAfterMs` passes with no heartbeat. Returns `403` if the room isn't available to you.
+`lastActivity` is when your user last did something — a keystroke, a command, your window regaining focus — as a ms epoch on your own clock. Send it with every heartbeat, plus an extra one the moment they wake up or go quiet. Leave it out and you always read as active. Returns:
+
+```json
+{ "data": { "roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000, "idleAfterMs": 600000 } }
+```
+
+Read the cadence off the response rather than hard-coding it: send a heartbeat every `heartbeatMs`, and you drop out of the room once `staleAfterMs` passes with no heartbeat. Once `idleAfterMs` passes with no `lastActivity` update you show as idle — a 💤 beside your name on the website. Keep heartbeating while your user is idle, or you drop out of the room instead. Returns `403` if the room isn't available to you.
 
 ### Leave a Room
 
@@ -1046,7 +1117,9 @@ Accept: text/event-stream
 
 The first event is a `put` with the whole window; each new message is another `put`/`patch`. A `data` of `null` means that path was deleted. Merge events into your local view by `path`.
 
-To keep the room's user list live without polling `GET /v1/circ/:roomId/users`, open a second stream on `chat_presence/<roomId>.json?auth=<idToken>`. Entries look like `{ "<userId>": { "username": "...", "isChatAdmin": false, "online": true, "lastSeen": 1719700000000 } }`. Apply the same rule the endpoint does: show an entry only if `online` is `true` and `lastSeen` is newer than `staleAfterMs` — and re-evaluate on a timer, not just on events, since an entry going stale produces no event. Publishing your own presence still goes through `POST /v1/circ/:roomId/presence`.
+Don't only listen for new messages: [deleting a message](#delete-your-message) *changes* an existing one rather than adding one, so it arrives as a `patch` on that message's path (`{ "content": "[DELETED]", "deleted": true }`). Apply it to the message you already have, or the deletion stays invisible to you until you reload the room.
+
+To keep the room's user list live without polling `GET /v1/circ/:roomId/users`, open a second stream on `chat_presence/<roomId>.json?auth=<idToken>`. Entries look like `{ "<userId>": { "username": "...", "isChatAdmin": false, "online": true, "lastSeen": 1719700000000, "lastActivity": 1719699000000 } }`. Apply the same rules the endpoint does: show an entry only if `online` is `true` and `lastSeen` is newer than `staleAfterMs`, and show it as idle if its `lastActivity` is older than `idleAfterMs` (absent means active) — and re-evaluate on a timer, not just on events, since an entry going stale or idle produces no event. Publishing your own presence still goes through `POST /v1/circ/:roomId/presence`.
 
 **Stay within bounds (or get denied):**
 
@@ -1126,11 +1199,49 @@ Both cIRC and C-Mail sends understand IRC-style slash commands. When a message's
 | `/dice <notation>` | Roll dice: `/dice`, `/dice:SIDES`, `/dice:COUNT:SIDES`, or full notation (`4d6kh3`, `2d6+3`, `adv`, `d%`, `6x4d6kh3`) |
 | `/8ball <question>` | Ask the magic 8-ball |
 | `/fortune` | A random fortune cookie |
+| `/gif <https url>` | Post an animated GIF by link |
+| `/song <youtube url> \| <artist> \| <title> [\| <genre>]` | Attach a track to play in the jukebox. Requires supporter status |
+| `/art <ascii art>` | Post ASCII art. cIRC only; max 80 columns × 25 lines |
+| `/blink` `/l33t` `/comic` `/cursive` `/times` `/rainbow` `/flip` `/quiet` `/slow` `/glitch` `/spoiler` `/wave` `<message>` | Post the message with a text style |
+| `/mute <username>` `/unmute <username>` `/muted` `/unmuteall` | Manage who you've muted in this room. cIRC only; posts nothing |
 | `/help` | Returns the command list as `{ "data": { "reply": "…" } }`; posts nothing |
 
-Plain text is posted as-is. A malformed command (e.g. bad `/dice` notation) returns `400 VALIDATION_ERROR`.
+Plain text is posted as-is. A malformed command (e.g. bad `/dice` notation, a `/song` that isn't a YouTube link) returns `400 VALIDATION_ERROR`. `/song` without supporter status returns `403 FORBIDDEN`.
 
-> **Undocumented, observed via live testing (2026, cyber-tui client work) — not confirmed against the official docs, re-verify on next drift check:** command messages carry additional fields not listed above. `/me` (and likely the other emote commands) sets `"isAction": true` on the stored/broadcast message, and `content` is just the bare action text with the username stripped out (e.g. `/me tests the plumbing` → `content: "tests the plumbing"`, `isAction: true`) — the client is expected to prepend the username for display. `/8ball` was observed to set `isAction: true` alongside `"isEightball": true` and an `"eightballAnswer"` field. Confirmed live for CIRC (`GET /v1/circ/:roomId`); not yet independently confirmed for C-Mail.
+`/gif` is checked before the message is posted: the link has to be reachable and actually be a GIF. If it isn't you get a `400` saying why (`That URL returned HTTP 404`, `That URL isn't a GIF`, …) and nothing is posted — the same gate the website applies, so a GIF that posts will render for everyone.
+
+Styles chain with `+` — `/comic+rainbow hello` applies both. Every style combines except `/spoiler`. Only `/img` is website-only, since it needs a file upload; send it and it posts as plain text.
+
+**Posting ASCII art.** Put the art on the lines after the command, and it's stored as-is — leading spaces are preserved, because they're the picture:
+
+```json
+{ "content": "/art\n /\\_/\\\n( o.o )\n > ^ <" }
+```
+
+The canvas is 80 columns × 25 lines; going over returns a `400` telling you which limit you hit. Art comes back with `style: "art"` and a base64-encoded `content` — see [Message fields](#message-fields).
+
+**Muting.** `/mute`, `/unmute`, `/muted` and `/unmuteall` change *your own* view of a room and post nothing; each returns `{ "data": { "reply": "…" } }`. They're the same mutes as on the website — mute someone from your client and the site honours it too. Nothing is filtered server-side: `GET /v1/circ/:roomId` still returns a muted user's messages, and your client is expected to hide them, which is also what lets an unmute reveal history you've already fetched. The list lives in `mutedUsersByRoom` on [Settings](#settings), so you can also read or edit it wholesale there.
+
+### Message fields
+
+Beyond `content`, a message may carry any of these. They're all optional — a plain text message has none of them.
+
+| Field | Meaning |
+|-------|---------|
+| `imageUrl` | An attached image. Posted from the website; render it alongside the text |
+| `gifUrl` | An attached animated GIF (`/gif`) |
+| `audioAttachment` | A jukebox track (`/song`): `{ src, origin: "youtube", artist, title, genre }` |
+| `style` | A text style name, or an array of them for chained styles |
+| `isAction` | The message is a third-person action (`/me` and the emotes) — conventionally rendered as `* username content` |
+| `isDice` | The action was a dice roll |
+| `isEightball`, `eightballAnswer` | The action was an 8-ball; the answer on its own for clients that want to highlight it |
+| `isFortune`, `fortuneText` | The action was a fortune cookie; likewise |
+| `deleted` | cIRC only. The message was deleted by its author — `content` is `[DELETED]` and every field above is gone. Render it as a tombstone rather than as text |
+
+Two things worth handling:
+
+- **`content` may be empty.** An attachment can be the entire message. When a message posted from the website has an attachment and no caption, `content` is sometimes set to the same URL as `imageUrl`/`gifUrl` — skip the text in that case rather than printing the link twice.
+- **`style: "art"` means `content` is base64-encoded** ASCII art, not readable text. Decode it before display. It's the one style that changes how `content` should be read; the rest are purely presentational, and it's up to your client to decide what `rainbow` or `blink` looks like — or to ignore them entirely.
 
 ---
 
@@ -1157,6 +1268,7 @@ All responses follow this structure:
 | `UNAUTHORIZED` | 401 | Missing or invalid token |
 | `FORBIDDEN` | 403 | Not allowed to perform this action |
 | `BANNED` | 403 | Account is banned |
+| `EMAIL_NOT_VERIFIED` | 403 | Account's email address is not verified |
 | `NOT_FOUND` | 404 | Resource does not exist |
 | `VALIDATION_ERROR` | 400 | Invalid input |
 | `CONFLICT` | 409 | Already exists (duplicate follow, taken username) |
@@ -1185,14 +1297,16 @@ All responses follow this structure:
 | C-Mail message | 15 | 300 |
 | Start C-Mail conversation | 5 | 50 |
 | Mark C-Mail read | 60 | — |
-| C-Mail typing on/off | 45 | — |
+| C-Mail typing on/off | 40 per conversation, 120 overall | — |
 | cIRC message | 15 | 300 |
+| Delete a cIRC message | 5 | 30 |
 | Mark cIRC room read | 60 | — |
-| cIRC presence heartbeat / leave | 30 | — |
+| cIRC presence heartbeat / leave | 15 per room, 90 overall | — |
+| Flag an entry, reply or message | 5 | 50 |
 
-C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour).
+C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour). Flagging is capped at 20/hour, and the three flag endpoints share one budget between them. Presence is counted per room, and C-Mail typing per conversation.
 
-`POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour.
+`POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour. `POST /v1/auth/check-username` is limited to 10/min and 60/hour per IP.
 
 ### Read Actions (Anti-Scraping)
 
@@ -1231,6 +1345,7 @@ Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for 
 | Entry title | 100 chars |
 | Entry slug | 60 chars, `[a-z0-9-]` |
 | cIRC / C-Mail message | 2,048 chars |
+| Flag reason | 500 chars |
 | Search query | 512 chars |
 | Bio | 640 chars |
 | Display name | 64 chars |

@@ -42,6 +42,13 @@ func (c *flakySubscribeClient) SubscribeRoomPresence(ctx context.Context, roomID
 	return c.MockClient.SubscribeRoomPresence(ctx, roomID, staleAfterMs, initial)
 }
 
+func (c *flakySubscribeClient) SubscribeUserConversations(ctx context.Context, uid string, initial []model.Conversation) (<-chan []model.Conversation, context.CancelFunc, error) {
+	if atomic.AddInt32(&c.subscribeFailures, -1) >= 0 {
+		return nil, nil, errors.New("boom")
+	}
+	return c.MockClient.SubscribeUserConversations(ctx, uid, initial)
+}
+
 // failingRefreshClient always fails RefreshSession, for exercising give-up
 // after exhausting reconnect attempts.
 type failingRefreshClient struct {
@@ -416,7 +423,7 @@ func TestChatroomsPresenceReconnect_IgnoresResultForAbandonedRoom(t *testing.T) 
 // --- C-Mail ---
 
 func TestCMailReconnect_StaleEventIgnored(t *testing.T) {
-	m := NewCMailModel("neo", api.NewMockClient())
+	m := NewCMailModel("neo", "", api.NewMockClient())
 	m.activeConvID = "c1"
 	m.mode = cmailModeDetail
 
@@ -428,7 +435,7 @@ func TestCMailReconnect_StaleEventIgnored(t *testing.T) {
 
 func TestCMailReconnect_SucceedsForActiveConversation(t *testing.T) {
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
-	m := NewCMailModel("neo", api.NewMockClient())
+	m := NewCMailModel("neo", "", api.NewMockClient())
 	m.activeConvID = "c1"
 	m.activeConv = &conv
 	m.mode = cmailModeDetail
@@ -460,7 +467,7 @@ func TestCMailReconnect_RetriesWithBackoffThenSucceeds(t *testing.T) {
 
 	client := &flakySubscribeClient{MockClient: api.NewMockClient(), subscribeFailures: 2}
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
-	m := NewCMailModel("neo", client)
+	m := NewCMailModel("neo", "", client)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.activeConvID = "c1"
 	m.activeConv = &conv
@@ -496,7 +503,7 @@ func TestCMailReconnect_GivesUpAfterMaxAttempts(t *testing.T) {
 
 	client := &failingRefreshClient{MockClient: api.NewMockClient()}
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
-	m := NewCMailModel("neo", client)
+	m := NewCMailModel("neo", "", client)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.activeConvID = "c1"
 	m.activeConv = &conv
@@ -525,7 +532,7 @@ func TestCMailReconnect_GivesUpAfterMaxAttempts(t *testing.T) {
 func TestCMailReconnect_CancelSubscriptionStopsRetrySequence(t *testing.T) {
 	client := &failingRefreshClient{MockClient: api.NewMockClient()}
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
-	m := NewCMailModel("neo", client)
+	m := NewCMailModel("neo", "", client)
 	m.activeConvID = "c1"
 	m.activeConv = &conv
 	m.mode = cmailModeDetail
@@ -551,5 +558,116 @@ func TestCMailReconnect_CancelSubscriptionStopsRetrySequence(t *testing.T) {
 	}
 	if m2.reconnecting || m2.reconnectFailed {
 		t.Error("expected reconnect state to stay cleared after a stale result")
+	}
+}
+
+// --- Account-wide conversation-list subscription reconnect ---
+// Independent of the per-conversation dmSub reconnect sequence above (own
+// state fields, own message types) but the same tea.Cmd shape.
+
+func TestCMailUserConvsReconnect_SucceedsAfterStreamClosed(t *testing.T) {
+	m := NewCMailModel("neo", "uid1", api.NewMockClient())
+
+	m, cmd := m.Update(userConvsStreamClosedMsg{})
+	if !m.userConvsReconnecting {
+		t.Fatal("expected userConvsReconnecting to be true after stream closed")
+	}
+	if cmd == nil {
+		t.Fatal("expected a reconnect command")
+	}
+	msg := cmd()
+	reconnected, ok := msg.(userConvsReconnectedMsg)
+	if !ok {
+		t.Fatalf("expected userConvsReconnectedMsg, got %T", msg)
+	}
+
+	m2, cmd2 := m.Update(reconnected)
+	if m2.userConvsSub != reconnected.sub {
+		t.Error("expected m.userConvsSub to be set to the reconnected subscription")
+	}
+	if m2.userConvsReconnecting {
+		t.Error("expected userConvsReconnecting to be cleared after success")
+	}
+	if cmd2 == nil {
+		t.Error("expected a command to resume waiting on the reconnected stream")
+	}
+}
+
+func TestCMailUserConvsReconnect_RetriesWithBackoffThenSucceeds(t *testing.T) {
+	withShortBackoff(t)
+
+	client := &flakySubscribeClient{MockClient: api.NewMockClient(), subscribeFailures: 2}
+	m := NewCMailModel("neo", "uid1", client)
+
+	m, cmd := m.Update(userConvsStreamClosedMsg{})
+	if !m.userConvsReconnecting {
+		t.Fatal("expected userConvsReconnecting to be true after stream closed")
+	}
+
+	var succeeded bool
+	for i := 0; i < 10 && cmd != nil && !succeeded; i++ {
+		msg := cmd()
+		m, cmd = m.Update(msg)
+		if _, ok := msg.(userConvsReconnectedMsg); ok {
+			succeeded = true
+		}
+	}
+
+	if !succeeded {
+		t.Fatal("expected reconnect to eventually succeed")
+	}
+	if m.userConvsReconnecting {
+		t.Error("expected userConvsReconnecting to be cleared after success")
+	}
+	if m.userConvsSub == nil {
+		t.Error("expected userConvsSub to be set after successful reconnect")
+	}
+}
+
+func TestCMailUserConvsReconnect_GivesUpAfterMaxAttempts(t *testing.T) {
+	withShortBackoff(t)
+
+	client := &failingRefreshClient{MockClient: api.NewMockClient()}
+	m := NewCMailModel("neo", "uid1", client)
+
+	m, cmd := m.Update(userConvsStreamClosedMsg{})
+	for i := 0; i < 20 && cmd != nil && m.userConvsReconnecting; i++ {
+		msg := cmd()
+		m, cmd = m.Update(msg)
+	}
+
+	if m.userConvsReconnecting {
+		t.Error("expected userConvsReconnecting to be false once attempts are exhausted")
+	}
+	if m.userConvsSub != nil {
+		t.Error("expected userConvsSub to remain nil after giving up")
+	}
+}
+
+func TestCMailUserConvsReconnect_CancelStopsRetrySequence(t *testing.T) {
+	client := &failingRefreshClient{MockClient: api.NewMockClient()}
+	m := NewCMailModel("neo", "uid1", client)
+
+	m, cmd := m.Update(userConvsStreamClosedMsg{})
+	if !m.userConvsReconnecting {
+		t.Fatal("expected userConvsReconnecting to be true after stream closed")
+	}
+	failMsg := cmd()
+
+	m = m.CancelUserConvsSubscription()
+	if m.userConvsReconnecting {
+		t.Error("expected userConvsReconnecting to be false after CancelUserConvsSubscription")
+	}
+	if m.userConvsReconnectCancel != nil {
+		t.Error("expected userConvsReconnectCancel to be cleared after CancelUserConvsSubscription")
+	}
+
+	// A late-arriving result for the cancelled sequence must be a no-op.
+	m2, cmd2 := m.Update(failMsg)
+	if cmd2 != nil {
+		t.Error("expected no further command from a stale reconnect result after cancellation")
+	}
+	if m2.userConvsReconnecting {
+		t.Error("expected userConvsReconnecting to stay cleared after a stale result")
 	}
 }

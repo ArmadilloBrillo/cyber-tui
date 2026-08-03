@@ -107,20 +107,15 @@ func visibleTabs() []navTab {
 // MillerLayout call this so the two layouts can never disagree about which
 // state a tab is in.
 //
-// detail is reported even while t isn't selected for Circ/Guilds/Topics/
-// PostDetail, since their detail state is genuinely still live/persisted in
-// the background: Circ's open room keeps its RTDB subscription streaming
-// regardless of the active tab (see IsRoomStreamMsg in app.go), Guilds/
+// detail is reported even while t isn't selected for Circ/C-Mail/Guilds/
+// Topics/PostDetail, since their detail state is genuinely still
+// live/persisted in the background: Circ's open room and C-Mail's open
+// conversation both keep their RTDB subscriptions streaming regardless of
+// the active tab (see IsRoomStreamMsg/IsDMStreamMsg in app.go), Guilds/
 // Topics' browse state is simply never reset by activateScreen on tab-away,
 // and a post opened via t stays open (PostDetailModel.HasPost) until closed
 // via Esc or re-navigating to t from PostDetail itself (activateScreen's
-// escape hatch). C-Mail alone is selected-only:
-// CMailModel.CancelSubscription (tab-away) tears the conversation's
-// subscription down immediately but doesn't reset m.mode, so it lingers as
-// cmailModeDetail — stale, not live — until the next ResetToList();
-// surfacing that in the background would claim a conversation is still open
-// when it's already been torn down (C-Mail's actual "something happened"
-// signal is the aggregate unread badge, not a left-open conversation).
+// escape hatch).
 func tabVisualState(a App, t screen) (selected, detail bool) {
 	selected = a.active == t || (a.active == screenPostDetail && a.postDetailReturn == t)
 
@@ -132,7 +127,7 @@ func tabVisualState(a App, t screen) (selected, detail bool) {
 	case screenTopics:
 		detail = a.topics.IsBrowsingTopic()
 	case screenCMail:
-		detail = selected && a.cmail.IsShowingDetail()
+		detail = a.cmail.IsShowingDetail()
 	}
 	if a.postDetail.HasPost() && a.postDetailReturn == t {
 		detail = true
@@ -299,8 +294,8 @@ func leaderRows(row func(key, desc string) string) []string {
 // the "1"-"9" numeric aliases and the "g"+mnemonic leader chords in both
 // layouts, so a direct jump behaves identically to arriving via cycling.
 func activateScreen(a App, s screen) (App, tea.Cmd) {
-	if a.active == screenCMail {
-		a.cmail = a.cmail.CancelSubscription()
+	if a.active == screenCMail && s != screenCMail {
+		a.cmail = a.cmail.SetFocused(false)
 	}
 	if a.active == screenChatrooms && s != screenChatrooms {
 		a.chatrooms = a.chatrooms.SetFocused(false)
@@ -345,8 +340,21 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 		a.chatrooms = a.chatrooms.ResetToList()
 		return a, a.loadRoomsCmd()
 	case screenCMail:
+		a.cmail = a.cmail.SetFocused(true)
+		// A conversation left open when the user last switched away to a
+		// *different* tab kept its RTDB subscription live in the background
+		// (see IsDMStreamMsg) — resume it as-is instead of bouncing back to
+		// the conversation list. Re-pressing the C-Mail key while already on
+		// it (prev == screenCMail) is the deliberate escape hatch out of a
+		// deep link, so that case still resets to the list.
+		if prev != screenCMail && a.cmail.HasLiveConv() {
+			return a, nil
+		}
 		a.cmail = a.cmail.ResetToList()
-		return a, a.loadConvsCmd()
+		// No REST refetch: the live user_conversations subscription keeps the
+		// list current continuously, regardless of which tab is active — see
+		// OpenUserConvsSubscription.
+		return a, nil
 	case screenProfile:
 		return a, a.loadProfileCmd()
 	case screenNotifications:

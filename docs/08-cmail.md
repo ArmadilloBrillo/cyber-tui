@@ -26,7 +26,7 @@ Full-width conversation list. Each conversation is a bordered card:
 Card header: `@username` (left) + timestamp + `(N)` unread badge (right, when unread > 0).
 Preview: first line of `LastMessage`, truncated to fit card width.
 
-The C-Mail tab itself also shows an aggregate unread badge, mirroring the Notifications tab: `c-mail (N)` in the Tabs layout, `c-mail ●N` in the Miller layout, where `N` is the sum of `UnreadCount` across all conversations (`CMailModel.TotalUnread()`). The badge clears immediately (optimistically) when a conversation is opened, and refreshes from the server every 60s alongside the notifications poll.
+The C-Mail tab itself also shows an aggregate unread badge, mirroring the Notifications tab: `c-mail (N)` in the Tabs layout, `c-mail ●N` in the Miller layout, where `N` is the sum of `UnreadCount` across all conversations (`CMailModel.TotalUnread()`). The badge clears immediately (optimistically) when a conversation is opened, and otherwise updates live via the account-wide `user_conversations/<uid>` RTDB subscription (see "RTDB SSE Subscriptions" below) — not a poll.
 
 ### Detail mode
 
@@ -51,6 +51,8 @@ Full-width message history viewport + fixed compose input at bottom:
 **Scroll-to-load history**: scrolling to the top of the loaded messages (`↑`) automatically fetches the next older page (`GetMessages(conversationID, 50, before)`, `before` = the oldest loaded message's timestamp) and prepends it, preserving scroll position. The header shows `(loading history…)` while a page is in flight. Stops once a fetch returns no messages. If a fetch fails, `loadingHistory` resets so a retry is possible on the next scroll-to-top, and the viewport shows "couldn't load messages" instead of a misleading "no messages" if nothing has loaded yet.
 
 **Live-stream reconnect**: the Firebase `idToken` backing the RTDB subscription expires hourly. The stream is treated as dead — triggering reconnect — on any of: the server sending a terminal `auth_revoked`/`cancel` SSE event, a 10-minute idle-read timeout (no line received, including keepalive comments), a 30-second connect-phase timeout, or an outright network error/close (see `internal/rtdb/client.go`). When the stream closes while a conversation is still open, the app calls `api.Client.RefreshSession()` and reopens the subscription, retrying with exponential backoff (`1s, 2s, 4s, 8s, 15s` — 6 attempts total) if an attempt fails. Success shows a brief "reconnected to live chat" notification. While retrying, the conversation header shows `(live updates lost, reconnecting… N/6)`; if all attempts fail, it shows a persistent `(live updates lost)` until the user leaves and re-enters the conversation — this indicator is independent of the message list, so it's visible even with history already loaded.
+
+**Conversation stays open across tab switches**: switching to another tab (Feed, Journal, etc.) no longer cancels the open conversation's RTDB subscriptions or drops it back to the conversation list — the message stream, typing stream, and reconnect-retry chains all keep running via `App`'s background routing (`screens.IsDMStreamMsg`, checked in `handleCMail` when C-Mail isn't the active screen). A message received while backgrounded still lands in `CMailModel`'s message state and bumps the currently-open conversation's `UnreadCount` (`CMailModel.bumpActiveConvUnread`) — the same field the aggregate tab badge (`TotalUnread()`, above) already sums, so the badge reflects it immediately instead of waiting for the next 60s poll; unlike CIRC, there's no separate single-room counter. Switching back to C-Mail resumes the same conversation as-is and zeroes that conversation's unread count (`CMailModel.SetFocused`). Only the single conversation the user had open is kept live — not every conversation they're a participant in. The subscription is torn down for real only on `Esc` (leaving the conversation) or a session-expiry logout, matching `CancelSubscription`'s narrower scope now — mirrors CIRC's identical background-persistence pattern (`docs/33-circ.md`).
 
 **Slash commands**: like CIRC, the server expands `/me`, `/poke`/`/hug`/`/hi5`/`/slap`, `/dice`, `/8ball`, and `/fortune` server-side. `/help` posts no message; its reply is captured from the send response and appended as a local-only system notice (`model.Message.IsSystem`, rendered via `renderSystemNotice` — no bubble, no border, just a muted `*** `-prefixed block). It's never sent to or stored by the server.
 
@@ -82,6 +84,7 @@ Full-width message history viewport + fixed compose input at bottom:
 | `ctrl+q` | Quit (same as global `q`) |
 | `ctrl+t` | Open theme picker (same as global `t`) |
 | `ctrl+←` / `ctrl+→` | Cycle tabs (same as global `←`/`→`; Tabs layout only) |
+| `←` / `→` | Cycle tabs — but only when the compose input is empty (detail mode, Tabs layout). With text in the box (just typed, or a draft left over from switching tabs away and back — the conversation and its subscription stay open in the background, see "Conversation stays open across tab switches" below), plain `←`/`→` moves the cursor instead and `ctrl+←`/`ctrl+→` is the way out, same as it's always been. Otherwise, resuming a backgrounded conversation on tab-return would silently swallow the very first `←`/`→` press into an empty box the user never asked to type into. See `CMailModel.ComposeEmpty()`. |
 | all other | Forwarded to compose input (`j`/`k` type normally) |
 
 ---
@@ -91,7 +94,7 @@ Full-width message history viewport + fixed compose input at bottom:
 **File:** `internal/ui/screens/cmail.go`
 
 **Type:** `CMailModel`
-**Constructor:** `NewCMailModel(currentUser string, client api.Client) CMailModel`
+**Constructor:** `NewCMailModel(currentUser, currentUserID string, client api.Client) CMailModel` — `currentUserID` is the account's RTDB uid, used to open the account-wide conversation-list subscription
 **Messages emitted:** `SendCMailMsg{ConversationID, Body}`, `CMailConvSelectedMsg{ConversationID}`, `StartConversationMsg{Username}` (from other screens), `LeaveCMailMsg{}` (Esc on a deep-linked conversation)
 **App field:** `a.cmail`
 **Screen constant:** `screenCMail`
@@ -102,8 +105,10 @@ Full-width message history viewport + fixed compose input at bottom:
 |---|---|
 | `IsShowingDetail() bool` | Whether detail mode is active |
 | `HasActiveConv() bool` | Alias for `IsShowingDetail()` |
+| `HasLiveConv() bool` | Detail mode active *and* a conversation object is actually loaded — used by `activateScreen` to decide whether re-entering the tab resumes in place |
 | `SelectedConv() int` | Cursor index in conversation list |
 | `InputFocused() bool` | True in detail mode (compose input focused) |
+| `ComposeEmpty() bool` | Whether the compose input has no typed text — lets plain `←`/`→` fall through to tab-cycling |
 | `TotalUnread() int` | Sum of `UnreadCount` across all conversations, for the tab-bar badge |
 | `GetFocusedURLs() []string` | URLs across all loaded messages in the open conversation (`URLProvider`); nil outside detail mode |
 
@@ -130,7 +135,7 @@ C-Mail uses a hybrid architecture: REST for listing, history, and sending; Fireb
 - Rate limits: 15 sends/min, 300/day, 150/hour; 5 start/min, 50/day, 30/hour; 60 mark-read/min; 45 typing on/off per min.
 - Blocked in either direction returns 403.
 
-### RTDB SSE Subscription
+### RTDB SSE Subscriptions
 
 Real-time new messages are delivered via Firebase RTDB Server-Sent Events:
 
@@ -147,11 +152,24 @@ The subscription is opened when a conversation is selected (Enter in list mode) 
 - A different conversation is opened
 - The user navigates away from the C-Mail screen
 
+**Conversation list — `user_conversations/<uid>`.** Separately, an account-wide subscription drives the conversation list and its unread badge live (`SubscribeUserConversations`):
+
+```
+Path: /user_conversations/<uid>
+Auth: ?auth=<idToken>
+```
+
+Each entry (keyed by `conversationId`) carries `unreadCount` (always present) plus `otherUserId`/`otherUsername`/`lastMessage`/`lastMessageAt` (absent on some legacy/stale conversations — the client falls back to "unknown" for the participant, same as it does for the REST list). Unlike `dm_messages`, entries mutate in place, so each receive on the channel is the full converted+sorted list (unread first, then most recently active), not a single incremental event — same shape as `SubscribeRoomPresence`/`SubscribeDMTyping`.
+
+Put-vs-patch handling has one wrinkle beyond `applyPresenceEvent`'s precedent (see `docs/33-circ.md`'s presence bug writeup): a `patch` at a single `/<conversationId>` path — the common case, since a new message typically only rewrites `lastMessage`/`lastMessageAt`/`unreadCount` — is *merged* onto the existing entry rather than replacing it outright, so `otherUserId`/`otherUsername` (not repeated on every message write) survive. Only a `put` (root or single-path) fully replaces an entry; presence/typing entries don't need this distinction because every write there already rewrites the whole entry.
+
+Opened once after the first conversation list loads (REST, at login) and stays open for the whole session — independent of which (if any) conversation is open, and unaffected by tab switches. Reconnects with the same `1s, 2s, 4s, 8s, 15s` backoff as the message stream (see "Live-stream reconnect" above) but fails silently after exhausting attempts — no UI indicator, since there's no natural place to show one outside an open conversation; the list simply stops updating live until the next login. Closed only on session end (`handleUnauthorized` → `CancelUserConvsSubscription`).
+
 ### API Client Methods
 
 | Method | Signature | Notes |
 |---|---|---|
-| `GetConversations` | `() ([]model.Conversation, error)` | Populates `UnreadCount`, `LastMessage`, and `LastMessageAt` from wire response |
+| `GetConversations` | `() ([]model.Conversation, error)` | Populates `UnreadCount`, `LastMessage`, and `LastMessageAt` from wire response. Not currently called by the TUI — the live `SubscribeUserConversations` subscription's own first event replaces it as the list's source; kept as a real, tested REST binding for `GET /v1/cmail` |
 | `GetMessages` | `(convID string, limit int, before int64) ([]model.Message, error)` | Returns oldest-first; pass `before=0` for the latest page, or a previous message's timestamp for older pages |
 | `SendMessage` | `(convID, body string) (string, error)` | POST to REST endpoint; returns the reply text for reply-only commands (`/help`), empty otherwise |
 | `StartConversation` | `(recipientUsername string) (model.Conversation, error)` | POST to REST; idempotent |
@@ -160,11 +178,12 @@ The subscription is opened when a conversation is selected (Enter in list mode) 
 | `AnnounceTyping` | `(convID string) (heartbeatMs, staleAfterMs int, err error)` | POST to REST; read the cadence from the response, never hard-code it |
 | `ClearTyping` | `(convID string) error` | DELETE to REST; best-effort, discarded on failure |
 | `SubscribeDMTyping` | `(ctx context.Context, convID string, staleAfterMs int) (<-chan []model.TypingUser, context.CancelFunc, error)` | RTDB SSE on `dm_presence/<convID>`; full filtered snapshot per receive, like `SubscribeRoomPresence` |
+| `SubscribeUserConversations` | `(ctx context.Context, uid string, initial []model.Conversation) (<-chan []model.Conversation, context.CancelFunc, error)` | RTDB SSE on `user_conversations/<uid>`; full converted+sorted list per receive; `initial` seeds a reconnect so the list doesn't go blank |
 | `RefreshSession` | `() error` | Proactively refreshes the idToken (shared across all screens); used to reconnect a live RTDB subscription after it closes |
 
 ### App-Level Wiring
 
-- Conversations are pre-loaded on login via `afterLoginCmd`, and re-fetched every 60s on the same `pollUnreadTickMsg` ticker that refreshes the notifications unread count (`app.go`), so the tab badge stays current even while the user is on another tab.
+- The conversation list has no REST seed. `afterLoginCmd` opens the `user_conversations/<uid>` RTDB subscription directly (`CMailModel.OpenUserConvsSubscription()`) right after login; its own first event is a full snapshot (see "Conversation list — `user_conversations/<uid>`" above) that populates the list, same as `chat_presence`'s initial event does for CIRC presence. Starting a new conversation and switching into the C-Mail tab (`activateScreen`, `layout.go`) both used to re-fetch the list via REST (`GetConversations`) as well — removed, since that REST call and the subscription's own internal merge state were two independent writers to `CMailModel.conversations` with no reconciliation between them, so whichever one updated last would silently win and the other's data would be reverted by the next unrelated live event. The subscription alone is now the only thing that ever updates the list after login. `pollUnreadTickMsg` (`app.go`) no longer touches C-Mail either — it now drives only the notifications unread-count badge.
 - When the user selects a conversation (Enter in list mode), `CMailModel` zeroes that conversation's local `UnreadCount` immediately (optimistic, before the server round-trip) and `CMailConvSelectedMsg` is emitted; App calls `markCMailReadCmd(convID)` to persist the read state server-side.
 - Pressing `c` on a highlighted post, reply, notification, or profile (read-only) — or opening a `dm_message` notification — emits `StartConversationMsg{Username}`. App records the screen this was sent from in `App.cmailReturn` and marks `CMailModel.canGoBack = true`, then calls `StartConversation(username)` and switches to C-Mail, opening the returned conversation in detail mode. Self-DMs are silently dropped in the App handler.
 - **Deep-link back-navigation**: when `canGoBack` is true, `Esc` in detail mode emits `LeaveCMailMsg` instead of dropping to the conversation list; App sets `active = cmailReturn`, returning to the screen the conversation was opened from (e.g. back to the post you pressed `c` on, or back to Notifications). Reaching C-Mail through the ordinary tab/leader-key navigation calls `CMailModel.ResetToList()`, which clears `canGoBack` *and* drops back to list mode — so switching to the C-Mail tab manually while a deep-linked conversation is still open (instead of pressing `Esc`) also lands on the conversation list, not stuck in that conversation. Mirrors the `canGoBack`/`profileReturn` pattern already used by read-only profiles (`docs/16-view-profile.md`).

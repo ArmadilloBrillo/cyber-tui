@@ -5,6 +5,7 @@ import (
 	"context"
 	"image"
 	"image/color"
+	"image/gif"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
@@ -70,5 +71,64 @@ func TestFetch_RejectsNon200(t *testing.T) {
 	_, err := imgview.Fetch(context.Background(), srv.URL)
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("err = %v, want 404 error", err)
+	}
+}
+
+// gifBytes encodes an n-frame, wxh GIF, each frame a solid color from
+// palette[i % len(palette)] so frames are visually distinguishable.
+func gifBytes(t *testing.T, w, h, n int) []byte {
+	t.Helper()
+	palette := []color.Color{
+		color.RGBA{R: 255, A: 255},
+		color.RGBA{G: 255, A: 255},
+		color.RGBA{B: 255, A: 255},
+	}
+	g := &gif.GIF{}
+	for i := 0; i < n; i++ {
+		pal := color.Palette{color.RGBA{}, palette[i%len(palette)]}
+		frame := image.NewPaletted(image.Rect(0, 0, w, h), pal)
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				frame.SetColorIndex(x, y, 1)
+			}
+		}
+		g.Image = append(g.Image, frame)
+		g.Delay = append(g.Delay, 5)
+		g.Disposal = append(g.Disposal, gif.DisposalNone)
+	}
+	var buf bytes.Buffer
+	if err := gif.EncodeAll(&buf, g); err != nil {
+		t.Fatalf("encode gif: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestFetchGIF_DecodesFrames(t *testing.T) {
+	srv := serve(t, http.StatusOK, gifBytes(t, 4, 3, 3))
+	g, err := imgview.FetchGIF(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("FetchGIF: %v", err)
+	}
+	if len(g.Image) != 3 {
+		t.Errorf("frame count = %d, want 3", len(g.Image))
+	}
+}
+
+func TestFetchGIF_RejectsTooManyFrames(t *testing.T) {
+	srv := serve(t, http.StatusOK, gifBytes(t, 1, 1, 513))
+	_, err := imgview.FetchGIF(context.Background(), srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "frame limit") {
+		t.Errorf("err = %v, want frame limit error", err)
+	}
+}
+
+func TestFetchGIF_RejectsExcessiveDimensions(t *testing.T) {
+	// GIF89a header declaring a 65535x65535 logical screen (~4.3 gigapixels)
+	// with no pixel data: DecodeConfig reads only the header.
+	header := []byte("GIF89a\xff\xff\xff\xff\x00\x00\x00")
+	srv := serve(t, http.StatusOK, header)
+	_, err := imgview.FetchGIF(context.Background(), srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "dimensions") {
+		t.Errorf("err = %v, want dimensions error", err)
 	}
 }

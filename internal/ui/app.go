@@ -132,7 +132,7 @@ type App struct {
 	// imageCache holds decoded images already fetched during the current
 	// modal's lifetime, keyed by URL, so cycling back to one skips the
 	// network fetch. Cleared whenever the modal closes.
-	imageCache map[string]image.Image
+	imageCache map[string]cachedImage
 
 	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
 	// loc is the parsed *time.Location derived from timezone.
@@ -199,12 +199,12 @@ type App struct {
 
 	// imageModal holds the state for the inline image overlay. When imageModalOpen
 	// is true, View composites the encoded image sequence over the base content.
-	imageModalOpen     bool
-	imageModalEncoded  string
-	imageModalCols     int
-	imageModalRows     int
-	imageNeedsCleanup  bool // true after modal closes until a delete-placement frame reaches the terminal
-	imageFetchGen      int  // bumped on every fetch and on close; stale imageFetchedMsg results are dropped
+	imageModalOpen    bool
+	imageModalEncoded string
+	imageModalCols    int
+	imageModalRows    int
+	imageNeedsCleanup bool // true after modal closes until a delete-placement frame reaches the terminal
+	imageFetchGen     int  // bumped on every fetch and on close; stale imageFetchedMsg results are dropped
 
 	// ephemeral marks an SSH-hosted session whose state must never be read from
 	// or written to the host operator's config file.
@@ -250,7 +250,7 @@ func NewApp(client api.Client) App {
 		login:              screens.NewLoginModel(""),
 		feed:               screens.NewFeedModel(),
 		chatrooms:          screens.NewChatroomsModel("", client),
-		cmail:              screens.NewCMailModel("", client),
+		cmail:              screens.NewCMailModel("", "", client),
 		profile:            screens.NewProfileModel(),
 		postDetail:         screens.NewPostDetailModel(),
 		notifications:      screens.NewNotificationsModel(),
@@ -548,18 +548,20 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
 		}
-		// A backgrounded Circ room resumes detail mode (and its "always
-		// focused" compose input, see ChatroomsModel.InputFocused) the
-		// instant you tab back into it — so plain left/right otherwise gets
-		// captured into a box you never asked to type into, forcing
-		// ctrl+left/right for what was plain left/right on every other tab a
-		// moment ago. An empty compose box has nothing for left/right to do
-		// anyway, so let it fall through to tab-cycling in that case only;
-		// once there's text (typed just now, or a draft left over from
-		// before backgrounding), left/right goes back to normal cursor
-		// movement and ctrl+left/right remains the way out, same as today.
+		// A backgrounded Circ room or C-Mail conversation resumes detail mode
+		// (and its "always focused" compose input, see
+		// ChatroomsModel.InputFocused / CMailModel.InputFocused) the instant
+		// you tab back into it — so plain left/right otherwise gets captured
+		// into a box you never asked to type into, forcing ctrl+left/right
+		// for what was plain left/right on every other tab a moment ago. An
+		// empty compose box has nothing for left/right to do anyway, so let
+		// it fall through to tab-cycling in that case only; once there's
+		// text (typed just now, or a draft left over from before
+		// backgrounding), left/right goes back to normal cursor movement and
+		// ctrl+left/right remains the way out, same as today.
 		bareArrowEscapesEmptyCompose := (m.String() == "left" || m.String() == "right") &&
-			a.active == screenChatrooms && a.chatrooms.ComposeEmpty()
+			((a.active == screenChatrooms && a.chatrooms.ComposeEmpty()) ||
+				(a.active == screenCMail && a.cmail.ComposeEmpty()))
 		switch {
 		case m.String() == "ctrl+o", m.String() == "ctrl+q", m.String() == "ctrl+t",
 			m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
@@ -635,7 +637,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			if a.active != screenSearch {
 				a.searchReturn = a.active
 			}
-			a.cmail = a.cmail.CancelSubscription()
+			a.cmail = a.cmail.SetFocused(false)
 			a.chatrooms = a.chatrooms.SetFocused(false)
 			a.active = screenSearch
 			a.search = a.search.FocusQuery()
@@ -657,7 +659,7 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 	case loginSuccessMsg:
 		a.tokens = msg.tokens
 		a.currentUser = msg.user
-		a.cmail = screens.NewCMailModel(msg.user.Username, a.client)
+		a.cmail = screens.NewCMailModel(msg.user.Username, msg.user.ID, a.client)
 		a.chatrooms = screens.NewChatroomsModel(msg.user.Username, a.client)
 		// Initialize the fresh models' viewports with the current terminal size.
 		if a.width > 0 {
@@ -667,6 +669,12 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, a.afterLoginCmd(), true
 	case screens.LoginErrMsg:
+		var cmd tea.Cmd
+		a.login, cmd = a.login.Update(msg)
+		return a, cmd, true
+	case screens.ResendVerificationMsg:
+		return a, a.resendVerificationCmd(msg.IDToken), true
+	case screens.ResendVerificationResultMsg:
 		var cmd tea.Cmd
 		a.login, cmd = a.login.Update(msg)
 		return a, cmd, true
@@ -739,6 +747,11 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, a.loadFeedCmd(), true
 		}
 		return a, nil, true
+	case screens.FlagPostMsg:
+		if a.active != screenFeed {
+			return a, nil, false
+		}
+		return a, a.flagPostCmd(msg.PostID, msg.Reason), true
 	}
 	return a, nil, false
 }
@@ -793,6 +806,13 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case replyDeletedMsg:
 		a.postDetail = a.postDetail.RemoveReply(msg.replyID)
 		return a, nil, true
+	case screens.FlagPostMsg:
+		if a.active != screenPostDetail {
+			return a, nil, false
+		}
+		return a, a.flagPostCmd(msg.PostID, msg.Reason), true
+	case screens.FlagReplyMsg:
+		return a, a.flagReplyCmd(msg.ReplyID, msg.Reason), true
 	}
 	return a, nil, false
 }
@@ -819,6 +839,13 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, tea.Batch(a.markNotifReadCmd(msg.NotifID), activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
+	case screens.FlagMessageMsg:
+		return a, a.flagRoomMessageCmd(msg.RoomID, msg.MessageID, msg.Reason), true
+	case screens.DeleteRoomMessageMsg:
+		return a, a.deleteRoomMessageCmd(msg.RoomID, msg.MessageID), true
+	case roomMessageDeletedMsg:
+		a.chatrooms = a.chatrooms.ApplyMessageDeleted(msg.messageID)
+		return a, nil, true
 	case screens.RoomOpenedMsg:
 		return a, a.markRoomReadCmd(msg.RoomID), true
 	case screens.RoomReconnectedMsg:
@@ -826,7 +853,7 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, cmd, true
 	case roomCommandReplyMsg:
 		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, sanitize.Strip(msg.reply))
-		return a, nil, true
+		return a, a.loadSettingsCmd(), true
 	case screens.LeaveChatroomsMsg:
 		a.active = a.chatroomsReturn
 		return a, nil, true
@@ -849,9 +876,6 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 // are coordinated here.
 func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
-	case convsLoadedMsg:
-		a.cmail = a.cmail.SetConversations(msg.convs)
-		return a, nil, true
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
 	case screens.CMailConvSelectedMsg:
@@ -867,8 +891,11 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.active = screenCMail
 		a.cmail = a.cmail.SetActiveConversation(msg.conv)
 		convID := msg.conv.ID
+		// The new conversation appears in the list via the live
+		// user_conversations subscription once the server's write reaches
+		// it — no REST refetch here (would race the subscription's own
+		// state; see OpenUserConvsSubscription's doc comment).
 		return a, tea.Batch(
-			a.loadConvsCmd(),
 			a.cmail.ConvOpenCmds(convID),
 			func() tea.Msg { return screens.CMailConvSelectedMsg{ConversationID: convID} },
 		), true
@@ -881,6 +908,17 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.LeaveCMailMsg:
 		a.active = a.cmailReturn
 		return a, nil, true
+	default:
+		// Keep the open conversation's RTDB subscription (and its typing/
+		// reconnect chains) alive while another tab is active — see
+		// SetFocused and IsDMStreamMsg. When C-Mail *is* active,
+		// delegateUpdate already routes these the normal way, so this only
+		// fires while backgrounded.
+		if a.active != screenCMail && screens.IsDMStreamMsg(msg) {
+			var cmd tea.Cmd
+			a.cmail, cmd = a.cmail.Update(msg)
+			return a, cmd, true
+		}
 	}
 	return a, nil, false
 }
@@ -1742,6 +1780,7 @@ func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	_ = a.client.Logout()
 	a.tokens = model.Tokens{}
+	a.cmail = a.cmail.CancelUserConvsSubscription()
 	a.saveConfig(func(cfg *config.Config) { cfg.RefreshToken = "" })
 
 	a.active = screenLogin
@@ -1792,8 +1831,13 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 // raw "API error NOT_FOUND (404): …" wording for the common deleted-resource case.
 func friendlyErr(err error) string {
 	var apiErr *api.APIError
-	if errors.As(err, &apiErr) && apiErr.Status == 404 {
-		return "Not found — it may have been deleted."
+	if errors.As(err, &apiErr) {
+		switch {
+		case apiErr.Status == 404:
+			return "Not found — it may have been deleted."
+		case apiErr.Code == "EMAIL_NOT_VERIFIED":
+			return "Please verify your email — check your inbox for the verification link."
+		}
 	}
 	return err.Error()
 }
@@ -1968,8 +2012,10 @@ func openExternalURL(u string) tea.Cmd {
 
 // openImageInTerminal fetches rawURL, encodes it for the detected graphics
 // protocol, and returns a command that sends an imageFetchedMsg when done.
+// GIF URLs are decoded and encoded frame-by-frame so the modal can animate.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
+	isGIF := urlutil.IsGIFURL(rawURL)
 	displayCols := a.width * 4 / 5
 	displayRows := a.height*4/5 - 2 // reserve 2 rows for the modal border
 	if displayRows < 1 {
@@ -1979,25 +2025,47 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	gen := a.imageFetchGen
 	cached, hit := a.imageCache[rawURL]
 	return a, func() tea.Msg {
-		img := cached
+		frames := cached.frames
+		delays := cached.delays
 		if !hit {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			var err error
-			img, err = imgview.Fetch(ctx, rawURL)
-			if err != nil {
-				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+			if isGIF {
+				g, err := imgview.FetchGIF(ctx, rawURL)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
+				frames, delays = imgview.GIFFrames(g)
+			} else {
+				img, err := imgview.Fetch(ctx, rawURL)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
+				frames = []image.Image{img}
+				delays = nil
 			}
 		}
-		switch proto {
-		case imgview.ProtocolKitty:
-			encoded, cols, rows := imgview.EncodeKitty(img, displayCols, displayRows)
-			return imageFetchedMsg{rawURL: rawURL, gen: gen, decoded: img, encoded: encoded, cols: cols, rows: rows}
-		case imgview.ProtocolITerm2:
-			encoded, cols, rows, err := imgview.EncodeITerm2(img, displayCols, displayRows)
-			return imageFetchedMsg{rawURL: rawURL, gen: gen, decoded: img, encoded: encoded, cols: cols, rows: rows, err: err}
-		default:
-			return imageFetchedMsg{rawURL: rawURL, gen: gen, err: fmt.Errorf("no graphics protocol")}
+		encodedFrames := make([]string, len(frames))
+		var cols, rows int
+		for i, img := range frames {
+			switch proto {
+			case imgview.ProtocolKitty:
+				encodedFrames[i], cols, rows = imgview.EncodeKitty(img, displayCols, displayRows)
+			case imgview.ProtocolITerm2:
+				var err error
+				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
+			default:
+				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: fmt.Errorf("no graphics protocol")}
+			}
+		}
+		return imageFetchedMsg{
+			rawURL: rawURL, gen: gen,
+			frames: frames, delays: delays,
+			encodedFrames: encodedFrames, encoded: encodedFrames[0],
+			cols: cols, rows: rows,
 		}
 	}
 }
@@ -2026,16 +2094,27 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageModalOpen = true
 		a.imageNeedsCleanup = false
 		if a.imageCache == nil {
-			a.imageCache = make(map[string]image.Image)
+			a.imageCache = make(map[string]cachedImage)
 		}
-		a.imageCache[m.rawURL] = m.decoded
+		a.imageCache[m.rawURL] = cachedImage{frames: m.frames, delays: m.delays}
+		var cmds []tea.Cmd
 		if a.graphicsProtocol == imgview.ProtocolITerm2 && len(a.imageCarouselItems) > 1 {
 			// iTerm2/WezTerm has no Kitty-style delete-all self-heal; force a
 			// full repaint so a cycled-to smaller image can't leave stray
 			// pixels from the previous one in rows the new frame skips.
-			return a, tea.ClearScreen, true
+			cmds = append(cmds, tea.ClearScreen)
 		}
-		return a, nil, true
+		if len(m.encodedFrames) > 1 {
+			cmds = append(cmds, gifFrameTickCmd(m.encodedFrames, m.delays, 1, m.delays[0], m.gen))
+		}
+		return a, tea.Batch(cmds...), true
+	case gifFrameTickMsg:
+		if m.gen != a.imageFetchGen {
+			return a, nil, true // modal closed, cycled, or replaced since this tick was scheduled
+		}
+		a.imageModalEncoded = m.encodedFrames[m.idx]
+		nextIdx := (m.idx + 1) % len(m.encodedFrames)
+		return a, gifFrameTickCmd(m.encodedFrames, m.delays, nextIdx, m.delays[m.idx], m.gen), true
 	}
 	return a, nil, false
 }
@@ -2097,6 +2176,31 @@ type loginSuccessMsg struct {
 	user   model.User
 }
 
+// loginErrMsgFor builds a LoginErrMsg from a login/profile-fetch failure,
+// detecting EMAIL_NOT_VERIFIED so the login screen can offer a resend action
+// using the already-issued idToken instead of showing a generic error. Login
+// itself succeeds regardless of verification status (per the API docs, an
+// idToken is required to call resend-verification, which only makes sense
+// if login itself didn't already block on this) — the 403 shows up on the
+// profile fetch that follows.
+func loginErrMsgFor(err error, idToken string) screens.LoginErrMsg {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.Code == "EMAIL_NOT_VERIFIED" {
+		return screens.LoginErrMsg{Err: err, EmailNotVerified: true, IDToken: idToken}
+	}
+	return screens.LoginErrMsg{Err: err}
+}
+
+// resendVerificationCmd calls POST /v1/auth/resend-verification for idToken,
+// obtained from a login that succeeded but hit EMAIL_NOT_VERIFIED on the
+// follow-up profile fetch.
+func (a *App) resendVerificationCmd(idToken string) tea.Cmd {
+	client := a.client
+	return func() tea.Msg {
+		return screens.ResendVerificationResultMsg{Err: client.ResendVerification(idToken)}
+	}
+}
+
 func (a *App) loginCmd(email, password string) tea.Cmd {
 	return func() tea.Msg {
 		tokens, err := a.client.Login(email, password)
@@ -2109,7 +2213,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
-			return screens.LoginErrMsg{Err: err}
+			return loginErrMsgFor(err, tokens.IDToken)
 		}
 		// Wire the user ID into the HTTP client for RTDB path construction.
 		if hc, ok := a.client.(*api.HTTPClient); ok {
@@ -2146,7 +2250,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		}
 		user, err := a.client.GetOwnProfile()
 		if err != nil {
-			return screens.LoginErrMsg{Err: err}
+			return loginErrMsgFor(err, tokens.IDToken)
 		}
 		if hc, ok := a.client.(*api.HTTPClient); ok {
 			hc.SetCurrentUID(user.ID)
@@ -2176,13 +2280,20 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	a.topics = a.topics.SetFetching()
 	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username)
 	a.broadcastConfig()
+	// Conversation list has no REST seed — the live subscription's own first
+	// event (a full snapshot, like chat_presence's) populates it. Seeding via
+	// GetConversations first and then opening the subscription would leave
+	// two independent writers to CMailModel.conversations (see
+	// OpenUserConvsSubscription's doc comment).
+	var cmailCmd tea.Cmd
+	a.cmail, cmailCmd = a.cmail.OpenUserConvsSubscription()
 	return tea.Batch(
 		a.loadFeedCmd(),
 		a.loadBookmarksCmd(""),
 		a.loadWatchesPageCmd(""),
 		a.loadTopicsCmd(),
 		a.loadProfileCmd(),
-		a.loadConvsCmd(),
+		cmailCmd,
 		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
 		a.loadSettingsCmd(),
@@ -2201,8 +2312,6 @@ type feedPageMsg struct {
 	cursor string
 }
 type roomsLoadedMsg struct{ rooms []model.Room }
-type convsLoadedMsg struct{ convs []model.Conversation }
-
 // roomCommandReplyMsg/cmailCommandReplyMsg carry a reply-only slash command's
 // text (e.g. /help) back from the send response, for local display only —
 // nothing was posted, so nothing arrives via the RTDB subscription.
@@ -2210,6 +2319,7 @@ type roomCommandReplyMsg struct {
 	roomID string
 	reply  string
 }
+type roomMessageDeletedMsg struct{ messageID string }
 type cmailCommandReplyMsg struct {
 	convID string
 	reply  string
@@ -2252,17 +2362,47 @@ type notifPostLoadErrMsg struct{ err error }
 
 // imageFetchedMsg carries the result of fetching and encoding an image for
 // terminal display. err is non-nil when the download or decode failed; rawURL
-// is retained so a failed decode can fall back to opening the browser.
+// is retained so a failed decode can fall back to opening the browser. frames
+// holds every decoded frame (len 1 for a static image); encodedFrames holds
+// each frame pre-encoded for the current graphics protocol, with encoded ==
+// encodedFrames[0] kept for the existing single-frame call sites.
 type imageFetchedMsg struct {
-	rawURL  string
-	gen     int
-	decoded image.Image
-	encoded string
-	cols    int
-	rows    int
-	err     error
+	rawURL        string
+	gen           int
+	frames        []image.Image
+	delays        []time.Duration
+	encoded       string
+	encodedFrames []string
+	cols          int
+	rows          int
+	err           error
 }
 
+// cachedImage holds a fetched/composited image's frames, keyed by URL in
+// imageCache. A static image has len(frames) == 1 and nil delays.
+type cachedImage struct {
+	frames []image.Image
+	delays []time.Duration
+}
+
+// gifFrameTickMsg advances the open image modal to its next pre-encoded GIF
+// frame. gen must match the current imageFetchGen or the tick is dropped —
+// this is how closing the modal, cycling the carousel, or opening a new
+// image stops an in-flight GIF animation with no extra bookkeeping (mirrors
+// the imageFetchedMsg staleness guard above).
+type gifFrameTickMsg struct {
+	gen           int
+	encodedFrames []string
+	delays        []time.Duration
+	idx           int
+}
+
+// gifFrameTickCmd schedules the display of encodedFrames[idx] after delay.
+func gifFrameTickCmd(encodedFrames []string, delays []time.Duration, idx int, delay time.Duration, gen int) tea.Cmd {
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return gifFrameTickMsg{gen: gen, encodedFrames: encodedFrames, delays: delays, idx: idx}
+	})
+}
 
 // notifyLevel selects the color of a global notification banner.
 type notifyLevel int
@@ -2276,7 +2416,7 @@ const (
 type logoAnimPhase int
 
 const (
-	logoPhaseIdle         logoAnimPhase = iota
+	logoPhaseIdle logoAnimPhase = iota
 	logoPhaseScrambling
 	logoPhaseHold
 	logoPhaseUnscrambling
@@ -2494,16 +2634,6 @@ func (a *App) loadRoomsCmd() tea.Cmd {
 			return errMsg{err}
 		}
 		return roomsLoadedMsg{rooms}
-	}
-}
-
-func (a *App) loadConvsCmd() tea.Cmd {
-	return func() tea.Msg {
-		convs, err := a.client.GetConversations()
-		if err != nil {
-			return errMsg{err}
-		}
-		return convsLoadedMsg{convs}
 	}
 }
 
@@ -2840,7 +2970,11 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.profileReturn = screenNotifications
 		return a, a.loadUserProfileCmd(msg.Username), true
 	case pollUnreadTickMsg:
-		return a, tea.Batch(a.fetchUnreadCountCmd(), a.loadConvsCmd(), a.schedulePollCmd()), true
+		// C-Mail's conversation list no longer polls here — it updates live via
+		// the RTDB subscription opened in afterLoginCmd (see
+		// OpenUserConvsSubscription). This ticker now only drives the
+		// notifications unread-count badge.
+		return a, tea.Batch(a.fetchUnreadCountCmd(), a.schedulePollCmd()), true
 	case unreadCountMsg:
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count
@@ -3291,6 +3425,69 @@ func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 			return actionErrMsg{err}
 		}
 		return replyDeletedMsg{replyID: replyID}
+	}
+}
+
+// flagResultText picks the banner text for a completed report, distinguishing
+// a fresh report from one the caller had already filed (idempotent replay).
+func flagResultText(alreadyFlagged bool) string {
+	if alreadyFlagged {
+		return "already reported"
+	}
+	return "reported"
+}
+
+// flagErrorMsg converts a flag-action error into the message to emit. The API's
+// only documented 403 for these endpoints is reporting your own content — the
+// client-side guard (see FeedModel/PostDetailModel's "!" handler) should make
+// this unreachable, but a stale currentUsername could still race past it, so
+// it gets a friendly banner instead of the raw "API error FORBIDDEN (403): …"
+// text. Anything else falls through to actionErrMsg's normal handling
+// (including the session-expiry redirect in handleUnauthorized).
+func flagErrorMsg(err error) tea.Msg {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.Status == 403 {
+		return notifyMsg{level: notifyError, text: "you can't report your own content"}
+	}
+	return actionErrMsg{err}
+}
+
+func (a *App) flagPostCmd(postID, reason string) tea.Cmd {
+	return func() tea.Msg {
+		_, alreadyFlagged, err := a.client.FlagPost(postID, reason)
+		if err != nil {
+			return flagErrorMsg(err)
+		}
+		return notifyMsg{level: notifyInfo, text: flagResultText(alreadyFlagged)}
+	}
+}
+
+func (a *App) flagReplyCmd(replyID, reason string) tea.Cmd {
+	return func() tea.Msg {
+		_, alreadyFlagged, err := a.client.FlagReply(replyID, reason)
+		if err != nil {
+			return flagErrorMsg(err)
+		}
+		return notifyMsg{level: notifyInfo, text: flagResultText(alreadyFlagged)}
+	}
+}
+
+func (a *App) flagRoomMessageCmd(roomID, messageID, reason string) tea.Cmd {
+	return func() tea.Msg {
+		_, alreadyFlagged, err := a.client.FlagRoomMessage(roomID, messageID, reason)
+		if err != nil {
+			return flagErrorMsg(err)
+		}
+		return notifyMsg{level: notifyInfo, text: flagResultText(alreadyFlagged)}
+	}
+}
+
+func (a *App) deleteRoomMessageCmd(roomID, messageID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.DeleteRoomMessage(roomID, messageID); err != nil {
+			return actionErrMsg{err}
+		}
+		return roomMessageDeletedMsg{messageID: messageID}
 	}
 }
 

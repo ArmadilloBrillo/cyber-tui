@@ -2,10 +2,12 @@ package screens
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/markdown"
@@ -162,6 +164,8 @@ func renderAttachments(attachments []model.Attachment) string {
 		switch a.Type {
 		case "image":
 			lines = append(lines, theme.Subtle.Render("[image]")+"  "+linkStyle.Render(a.Src))
+		case "gif":
+			lines = append(lines, theme.Subtle.Render("[gif]")+"  "+linkStyle.Render(a.Src))
 		case "audio":
 			label := a.Src
 			if a.Artist != "" || a.Title != "" {
@@ -196,19 +200,44 @@ func listFooter(loading, exhausted bool) string {
 // highlighted. Bodies word-wrap to fit viewportWidth, with room reserved on
 // every wrapped line for the timestamp column so long messages never push it
 // off-screen; continuation lines are indented to align under the body.
-func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string) string {
+func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, muted map[string]bool) string {
+	return renderCircMessagesStyled(msgs, loc, timeDisplayFormat, viewportWidth, currentUser, nil, 0, muted)
+}
+
+// renderCircMessagesStyled is renderCircMessages plus style/attachment
+// support: revealed gates which spoiler-styled messages show their real
+// body and which l33t-styled messages show their original, unsubstituted
+// text (keyed by message ID; nil means none revealed), and frame drives
+// the slow/wave/glitch animated styles. renderCircMessages is a thin wrapper
+// passing (nil, 0), so its many existing call sites are unaffected. muted
+// (username, lowercased -> true) hides a sender's messages entirely — the
+// message contributes no output, keeping msgs/offsets/heights 1:1.
+func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, revealed map[string]bool, frame int, muted map[string]bool) string {
 	if viewportWidth < 20 {
 		viewportWidth = 80
 	}
 	const tsGap = 2 // minimum space between the wrapped text and the timestamp
 	var sb strings.Builder
 	for _, msg := range msgs {
+		if !msg.IsSystem && muted[strings.ToLower(msg.From.Username)] {
+			continue
+		}
 		if msg.IsSystem {
 			sb.WriteString(renderSystemNotice(msg.Body, viewportWidth))
 			continue
 		}
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
 		tsWidth := lipgloss.Width(ts)
+
+		if slices.Contains(msg.Style, styleArt) {
+			sb.WriteString(renderArtMessage(msg.From.Username, msg.Body, ts, viewportWidth))
+			continue
+		}
+
+		if msg.Deleted {
+			sb.WriteString(renderDeletedTombstone(msg.From.Username, ts, viewportWidth))
+			continue
+		}
 
 		if msg.IsAction {
 			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser))
@@ -227,8 +256,47 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 
 		bodyWidth := max(viewportWidth-rawPrefixWidth-tsWidth-tsGap, 10)
 
-		body := markdown.RenderInline(strings.TrimRight(msg.Body, "\n"), currentUser)
-		lines := strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(body), "\n")
+		displayBody := messageDisplayBody(msg)
+		att := renderAttachments(messageAttachments(msg))
+
+		var lines []string
+		switch {
+		case displayBody == "" && att != "":
+			// Attachment-only message: use the attachment block itself as
+			// the "body" so the username/timestamp land on it directly
+			// instead of leaving a blank-looking line above it. Still runs
+			// through the same Width(bodyWidth).Render wrapping as normal
+			// text bodies — skipping it left long URLs pushing the
+			// timestamp far past viewportWidth instead of wrapping under it.
+			lines = strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(att), "\n")
+			att = ""
+		case slices.Contains(msg.Style, styleSpoiler) && !revealed[msg.ID]:
+			body := theme.Subtle.Render(maskSpoilerBody(strings.TrimRight(displayBody, "\n")))
+			lines = strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(body), "\n")
+		default:
+			// l33t substitution is reveal-gated like spoiler's masking; every
+			// other substitution/attribute style (cursive, flip, glitch,
+			// blink, quiet, rainbow) is not, so only l33t is dropped once
+			// the message is revealed.
+			effectiveStyles := msg.Style
+			if revealed[msg.ID] {
+				effectiveStyles = slices.DeleteFunc(slices.Clone(msg.Style), func(s string) bool { return s == styleL33t })
+			}
+			raw := substituteChars(displayBody, msg.ID, effectiveStyles, frame)
+			body := applyAttributeStyle(markdown.RenderInline(strings.TrimRight(raw, "\n"), currentUser), msg.Style)
+			lines = strings.Split(lipgloss.NewStyle().Width(bodyWidth).Render(body), "\n")
+		}
+
+		// Blink toggling runs after wrapping, blanking each already-wrapped
+		// line to its own rendered width, so hiding the message never
+		// changes its line count/wrap structure (blanking pre-wrap risks
+		// lipgloss collapsing an all-space string into fewer lines than the
+		// real text wrapped to).
+		if slices.Contains(msg.Style, styleBlink) && !blinkVisible(frame) {
+			for i := range lines {
+				lines[i] = strings.Repeat(" ", lipgloss.Width(lines[i]))
+			}
+		}
 		last := len(lines) - 1
 
 		for i, line := range lines {
@@ -242,8 +310,72 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 				sb.WriteString(prefix + line + "\n")
 			}
 		}
+
+		if att != "" {
+			for line := range strings.SplitSeq(att, "\n") {
+				sb.WriteString(indent + line + "\n")
+			}
+		}
 	}
 	return sb.String()
+}
+
+// renderDeletedTombstone renders a soft-deleted cIRC message: the author and
+// original timestamp stay (per the API), but the body is replaced with a
+// muted "[DELETED]" marker — no markdown, no attachments, no text style.
+func renderDeletedTombstone(username, ts string, viewportWidth int) string {
+	const tsGap = 2 // minimum space between the body and the timestamp
+	const plainBody = "[DELETED]"
+	tsWidth := lipgloss.Width(ts)
+	prefix := "<" + theme.Subtle.Render(username) + ">  "
+	rawPrefixWidth := len(username) + 4
+	// Match renderCircMessages' layout exactly: reserve an elastic body field
+	// of bodyFieldWidth (not the [DELETED] marker's own short width), so the
+	// timestamp lands at the same right-aligned column as every other line.
+	bodyFieldWidth := max(viewportWidth-rawPrefixWidth-tsWidth-tsGap, len(plainBody))
+	pad := max(bodyFieldWidth-len(plainBody), 0) + tsGap
+	return prefix + theme.Subtle.Render(plainBody) + strings.Repeat(" ", pad) + theme.Subtle.Render(ts) + "\n"
+}
+
+// renderCircMessagesWithSelection renders msgs exactly like renderCircMessages
+// (byte-identical when selectedID == ""), additionally returning each
+// message's start-line offset and rendered line-height (1:1 with msgs, so
+// indices stay aligned even though system notices are never selectable), and
+// highlighting the message whose ID matches selectedID with theme.SelectedRow.
+//
+// The highlight can't simply wrap the normally-styled block: theme.Highlight/
+// theme.MeHighlight/markdown.RenderInline already emit their own ANSI reset
+// codes, which would terminate an outer background style mid-line. Instead,
+// the selected message's block is stripped back to plain text (ansi.Strip)
+// and only that plain text is wrapped in theme.SelectedRow — the same
+// approach settings.go uses for its selected-row highlight.
+func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int, muted map[string]bool) (content string, offsets []int, heights []int) {
+	offsets = make([]int, len(msgs))
+	heights = make([]int, len(msgs))
+	var sb strings.Builder
+	var lineCount int
+	for i, msg := range msgs {
+		rendered := renderCircMessagesStyled([]model.Message{msg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame, muted)
+		if selectedID != "" && msg.ID == selectedID {
+			plain := strings.TrimSuffix(ansi.Strip(rendered), "\n")
+			rendered = theme.SelectedRow.Width(viewportWidth).Render(plain) + "\n"
+		}
+		offsets[i] = lineCount
+		// Not lipgloss.Height: it's strings.Count(s, "\n")+1, which treats
+		// rendered's own trailing "\n" as a phantom extra line. That's right
+		// for a whole-content string measured once, but wrong per-message
+		// here — concatenating N such strings and re-splitting on "\n" (as
+		// the viewport does) yields N real lines + 1 trailing empty line
+		// total, not N*(realLines+1). Summing the inflated per-message
+		// heights desyncs these offsets from the viewport's actual line
+		// count, which silently breaks scrolling (millerPageNav computes a
+		// YOffset the viewport's own maxYOffset() clamps right back down).
+		h := strings.Count(rendered, "\n")
+		heights[i] = h
+		lineCount += h
+		sb.WriteString(rendered)
+	}
+	return sb.String(), offsets, heights
 }
 
 // renderActionLine renders a /me-style action message in classic IRC form:
@@ -324,6 +456,16 @@ func renderSystemNotice(body string, viewportWidth int) string {
 // Others use Border (dim green) on the left.
 // Pass currentUser="" to render all messages left-aligned (chatrooms).
 func renderChatMessages(msgs []model.Message, currentUser string, loc *time.Location, timeDisplayFormat string, viewportWidth int) string {
+	return renderChatMessagesStyled(msgs, currentUser, loc, timeDisplayFormat, viewportWidth, 0)
+}
+
+// renderChatMessagesStyled is renderChatMessages plus style/attachment
+// support; frame drives the slow/wave/glitch animated styles.
+// renderChatMessages is a thin wrapper passing 0, so its existing call sites
+// are unaffected. Unlike cIRC's renderCircMessagesStyled, this has no
+// spoiler or "art" handling — C-Mail doesn't support either yet (see the
+// plan's Trade-offs section).
+func renderChatMessagesStyled(msgs []model.Message, currentUser string, loc *time.Location, timeDisplayFormat string, viewportWidth int, frame int) string {
 	if viewportWidth < 8 {
 		viewportWidth = 80
 	}
@@ -353,17 +495,41 @@ func renderChatMessages(msgs []model.Message, currentUser string, loc *time.Loca
 			header = theme.Highlight.Render("@"+username) + "  " + theme.Subtle.Render(ts)
 		}
 
-		// Natural inner width: widest of the header and each raw body line, capped at max.
+		displayBody := messageDisplayBody(msg)
+		attachments := renderAttachments(messageAttachments(msg))
+
+		// Natural inner width: widest of the header, each raw body line, and
+		// each attachment line, capped at max.
 		naturalW := lipgloss.Width(header)
-		for line := range strings.SplitSeq(msg.Body, "\n") {
+		for line := range strings.SplitSeq(displayBody, "\n") {
+			if w := lipgloss.Width(line); w > naturalW {
+				naturalW = w
+			}
+		}
+		for line := range strings.SplitSeq(attachments, "\n") {
 			if w := lipgloss.Width(line); w > naturalW {
 				naturalW = w
 			}
 		}
 		naturalW = min(naturalW, maxContentW)
 
-		body := strings.TrimRight(markdown.Render(msg.Body, naturalW), "\n")
-		content := lipgloss.JoinVertical(lipgloss.Left, header, body)
+		raw := substituteChars(displayBody, msg.ID, msg.Style, frame)
+		body := applyAttributeStyle(strings.TrimRight(markdown.Render(raw, naturalW), "\n"), msg.Style)
+		if slices.Contains(msg.Style, styleBlink) && !blinkVisible(frame) {
+			bodyLines := strings.Split(body, "\n")
+			for i := range bodyLines {
+				bodyLines[i] = strings.Repeat(" ", lipgloss.Width(bodyLines[i]))
+			}
+			body = strings.Join(bodyLines, "\n")
+		}
+		rows := []string{header}
+		if body != "" {
+			rows = append(rows, body)
+		}
+		if attachments != "" {
+			rows = append(rows, attachments)
+		}
+		content := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
 		if isMe {
 			bubble := theme.ActiveBorder.Render(content)

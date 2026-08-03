@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.7) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.8.2) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -17,6 +17,10 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `/v1/search` | GET | **Open** | `createdAt` is inconsistent across hit types, and doesn't match the RFC3339 string every other user/post/reply-returning endpoint uses. Confirmed live: a numeric epoch (assumed ms) on user hits, and a raw Firestore Timestamp object (`{"_seconds":N,"_nanoseconds":N}`) on post hits — apparently un-normalized before being sent to the client. Not documented in the API spec. Client-side workaround: `apiTimestamp` (`internal/api/client.go`) accepts string, number, or object for `wireUser`/`wirePost`/`wireReply`'s date fields, and degrades to an empty timestamp rather than failing the whole response for any other shape. | 2026-07-23 |
 | `/v1/notifications?type=...` | GET | **Open** | The `type` query param (comma-separated notification-type filter) returns `500 INTERNAL_ERROR` for every value tested live — single types (`type=reply`, `type=chat_mention`, `type=dm_message`) and comma-separated combinations (`type=dm_message,chat_mention`) all fail server-side. Confirmed via `apifetch`. The client's `types []string` param plumbing (`GetNotifications`) is left in place unaffected for when the server bug is fixed; no UI currently sends a non-nil filter, so there's no live-facing regression today. | 2026-07-24 |
 | `/v1/users/me`, `/v1/users/:username` | GET | **Resolved (client-side removal)** | `postsCount` was deprecated and no longer returned reliable data; the field is also absent from the current API docs snapshot (`followersCount`/`followingCount` still present). Removed the `posts` segment from the profile counts line and the `PostsCount` field from `model.User`/`wireUser`. | 2026-07-29 |
+| `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8 live. `docs/00-latest-api-reference.md` re-fetched and diffed — new surface (flagging, cIRC message delete, message attachments/styles/mute commands, `EMAIL_NOT_VERIFIED`) added to Unimplemented API Features below. | 2026-07-31 |
+| `/v1/notifications` vs `/v1/notifications/unread-count` | GET | **Open (by design, per docs)** | The two endpoints disagree on a fresh, unpaginated session: `unread-count` returned `{"count": 5}` while `?limit=20&read=false` returned only 3 items (2 `thread_reply`, 1 `new_post_following`) — a `new_follower` and a `poke` notification counted in the badge were absent from the list. Confirmed live via `apifetch` 2026-08-03. Matches the documented caveat at `docs/00-latest-api-reference.md:690` ("the count may be slightly higher... which applies additional filtering"), so this is expected server behavior rather than a bug, but it means the TUI's badge and its notification list can legitimately disagree — not a TUI regression. No client-side fix possible; investigated after a user report of "webui shows 5 unread, tui shows 3." | 2026-08-03 |
+| `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8.1 live. `docs/00-latest-api-reference.md` re-fetched and diffed — only change is cIRC presence idle tracking (`lastActivity`/`idleAfterMs`) and reworked presence/typing rate limits (per-room/per-conversation caps replacing flat per-minute ones); added to Unimplemented API Features below. | 2026-08-03 |
+| `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8.2 live. `docs/00-latest-api-reference.md` re-fetched and diffed — only change is a newly-documented rate limit (10/min, 60/hour per IP) on `POST /v1/auth/check-username`, which is already out of scope for this client (web-only registration flow). No code changes needed. | 2026-08-03 |
 
 ---
 
@@ -91,7 +95,7 @@ All REST endpoints and the RTDB SSE subscription are fully implemented. See `doc
 | `POST /v1/cmail/:conversationId` | POST | Send a message | **Done** — `SendMessage` |
 | `POST /v1/cmail/:conversationId/read` | POST | Mark conversation as read | **Done** — `MarkCMailRead`; called on conversation open |
 | RTDB `dm_messages/<conversationId>` | SSE | Real-time new messages | **Done** — `SubscribeDMs`; skips initial snapshot |
-| RTDB `user_conversations/<uid>` | SSE | Live conversation list / unread updates | Not implemented — REST list covers the use case at navigation time |
+| RTDB `user_conversations/<uid>` | SSE | Live conversation list / unread updates | **Done** — `SubscribeUserConversations`; replaces the old 60s REST poll (`docs/08-cmail.md`, `docs/09-rtdb-cmail.md`) |
 
 ### cIRC (new in v0.7)
 
@@ -110,7 +114,7 @@ cIRC REST API is now fully documented. A room is addressed by its `roomId` (slug
 
 Notes:
 - Each room message includes `isChatAdmin` flag — parsed into `model.Message.IsChatAdmin`. No longer shown as a `[admin]` badge on the message line; admin status now lives only in the online-users side panel (see `docs/33-circ.md`).
-- Rate limits: 15 sends/min, 300/day, 150/hour; 60 mark-read/min; 60 list-users/min; 30 presence heartbeat-or-leave/min.
+- Rate limits: 15 sends/min, 300/day, 150/hour; 60 mark-read/min; 60 list-users/min; presence heartbeat/leave 15/min per room (90/min overall, as of v0.8.1 — previously a flat 30/min).
 - 403 if room isn't available to you.
 - Online-users list: implemented (cIRC presence) — `GET .../users` for the initial list, `chat_presence` RTDB stream for live updates, `POST`/`DELETE .../presence` for announce/heartbeat/leave. Room-list cards also show `onlineCount` from `GET /v1/circ`.
 - Slash command rendering: server expands `/me`, `/poke`, `/dice` etc. server-side; no client-side preview yet.
@@ -133,7 +137,47 @@ Notes:
 
 Both cIRC and C-Mail support IRC-style slash commands expanded server-side: `/me`, `/poke`, `/hug`, `/hi5`, `/slap` (with optional `[@user]`), `/dice <notation>`, `/8ball <question>`, `/fortune`, `/help`. Malformed commands return 400. `/help` posts nothing; its `{ data: { reply } }` is captured by `SendRoomMessage`/`SendMessage` (**Done**) and shown as a local system notice — see `docs/33-circ.md` / `docs/08-cmail.md`.
 
-`/me` and the other emotes set an undocumented `isAction` field (with `content` stripped of the username), discovered by live-testing against CIRC — not in the official docs. `model.Message.IsAction` (**Done**) renders these as classic IRC `* username body *` lines. See the callout in `docs/00-latest-api-reference.md`'s Commands section.
+`/me` and the other emotes set an `isAction` field (with `content` stripped of the username). Previously observed only via live-testing; as of v0.8 this is officially documented under [Message fields](#message-fields) in `docs/00-latest-api-reference.md`, along with `isDice`, `isEightball`/`eightballAnswer`, `isFortune`/`fortuneText`. `model.Message.IsAction` (**Done**) renders these as classic IRC `* username body *` lines.
+
+### Flagging / Reporting (new in v0.8)
+
+`POST /v1/posts/:id/flag`, `POST /v1/replies/:id/flag`, `POST /v1/circ/:roomId/messages/:messageId/flag` — report content for review. Idempotent (200 + `alreadyFlagged` on repeat), optional `reason` (max 500 chars), can't flag your own content, no way to withdraw. Shared rate limit: 5/min, 20/hour, 50/day.
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/posts/:id/flag` | POST | Report a post | **Done** — `!` key in Feed and Post Detail; see `docs/35-flagging.md` |
+| `/v1/replies/:id/flag` | POST | Report a reply | **Done** — `!` key in Post Detail; see `docs/35-flagging.md` |
+| `/v1/circ/:roomId/messages/:messageId/flag` | POST | Report a cIRC message | **Done** — `!` while browsing messages (`up`/`down`); see `docs/36-circ-message-flagging.md` |
+
+### cIRC message delete (new in v0.8)
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/circ/:roomId/messages/:messageId` | DELETE | Soft-delete own cIRC message (`content` → `[DELETED]`, attachments stripped); arrives to other clients as an RTDB `patch`, not a new message | **Done** — `d` while browsing messages (own messages only), with live propagation to other clients via the now-handled RTDB `patch` event; see `docs/36-circ-message-flagging.md` |
+
+### Message attachments & styles (new in v0.8)
+
+cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAttachment` (`/song ... — supporter-only`), `style` (chainable text styles via `/blink`, `/l33t`, `/comic`, `/cursive`, `/times`, `/rainbow`, `/flip`, `/quiet`, `/slow`, `/glitch`, `/spoiler`, `/wave`), and ASCII art (`/art`, cIRC-only, base64-encoded `content` when `style: "art"`). `/mute`/`/unmute`/`/muted`/`/unmuteall` manage a per-room, client-side-enforced mute list (also stored in `mutedUsersByRoom` under Settings — currently intentionally omitted from the TUI per the Settings row below).
+
+| Area | Description | Priority |
+|---|---|---|
+| `gifUrl`, `audioAttachment`, `style`, chained styles | Render/decode in message view; `style: "art"` needs base64 decode | **Done** — wire/model fields across all four message shapes, attachment badges reusing `renderAttachments`, and a middle-fidelity style pipeline (ANSI attributes for blink/quiet/rainbow, Unicode substitution for l33t/cursive/flip, ASCII-safe jitter for glitch, `tea.Tick`-driven slow/wave/glitch animation, select-to-reveal spoiler in cIRC only — see `internal/ui/screens/chatstyle.go`) |
+| `/mute` family + `mutedUsersByRoom` | Client-side message filtering by muted user | **Done** — cIRC only (C-Mail 400s per API spec); see `docs/37-circ-mute.md` |
+| Empty `content` with attachment-only messages | Message rendering must not assume non-empty `content` | **Done** — covered by the same change; `messageDisplayBody` skips duplicate URL text and empty bodies render without assuming non-empty `content` |
+
+### cIRC idle presence (new in v0.8.1)
+
+`GET /v1/circ/:roomId/users` and the `chat_presence/<roomId>` RTDB stream now carry `lastActivity` (ms epoch, or `null`) per user. `POST /v1/circ/:roomId/presence` accepts an optional `{ "lastActivity": <ms epoch> }` body and its response gains `idleAfterMs`. A user is idle once `lastActivity` is older than `idleAfterMs`; the website shows a 💤 badge. Also reworked: C-Mail typing on/off is now rate-limited 40/min per conversation (120/min overall) rather than a flat 45/min, and cIRC presence heartbeat/leave is 15/min per room (90/min overall) rather than a flat 30/min.
+
+| Area | Description | Priority |
+|---|---|---|
+| `lastActivity`/`idleAfterMs` idle tracking | Send `lastActivity` on every presence heartbeat (tracked from any keypress while a room is open), plus an extra out-of-cycle, cooldown-guarded heartbeat on every keypress that finds the panel currently showing our own entry as idle (`ChatroomsModel.selfShownIdle`) — corrects a stale server-recorded `lastActivity` immediately rather than waiting for the next scheduled beat. Going idle needs no push of its own; the server computes it passively from the aging last-reported timestamp. Decode `lastActivity` from `GET .../users` and the `chat_presence` RTDB stream (nil = always active). Render a 💤 badge for idle users in the online-users panel, computed at render time off `idleAfterMs` — idle users are never filtered out of the list, only flagged. See `docs/33-circ.md`. | **Done** — 2026-08-03; corrected 2026-08-03 (self-idle badge could get stuck showing idle while actively typing — see `docs/33-circ.md`'s "Waking from idle" bullet) |
+
+### Auth (new in v0.8)
+
+| Error | Description | Priority |
+|---|---|---|
+| `403 EMAIL_NOT_VERIFIED` | New error code — account access now gated on email verification instead of supporter/API-access-grant. Surfaces from the profile fetch immediately after a successful login (login itself doesn't gate on this); the login screen shows a distinct message with an `r` keybinding to call `POST /v1/auth/resend-verification`, and `friendlyErr` softens the same code for any mid-session authenticated call. See `docs/38-email-verification.md`. | **Done** — 2026-08-03 |
 
 ### Thread Watching (new in v0.5.1)
 
@@ -189,7 +233,7 @@ Notes:
 | --------------- | ------------------------------------- | -------------------------------------------------------------------- |
 | Notes (Journal) | List, create, edit, delete, revision history | — |
 | Profile         | View and edit all fields              | —                                                                    |
-| Settings        | All TUI-relevant fields editable      | `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom` — web UI concepts with no TUI equivalent; intentionally omitted |
+| Settings        | All TUI-relevant fields editable; `mutedUsersByRoom` read and enforced (feature 37) | `keyboardBindings`, `keyboardPreset` — web UI concepts with no TUI equivalent; intentionally omitted |
 | Follows         | Follow, unfollow, list following and followers | — |
 | Notifications   | All v0.4 types received and displayed with dedicated text and icons | — |
 

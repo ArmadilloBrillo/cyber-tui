@@ -12,7 +12,7 @@ import (
 )
 
 func TestCMailTotalUnread(t *testing.T) {
-	m := NewCMailModel("me", nil)
+	m := NewCMailModel("me", "", nil)
 
 	if got := m.TotalUnread(); got != 0 {
 		t.Fatalf("TotalUnread() on empty model = %d, want 0", got)
@@ -35,7 +35,7 @@ func TestCMailTotalUnread(t *testing.T) {
 // being dropped in a future edit.
 func TestCMailDetailView_HeaderHasDividerBeforeMessages(t *testing.T) {
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
-	m := NewCMailModel("neo", api.NewMockClient())
+	m := NewCMailModel("neo", "", api.NewMockClient())
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.activeConvID = "c1"
 	m.activeConv = &conv
@@ -67,7 +67,7 @@ func TestCMailDetailView_HeaderHasDividerBeforeMessages(t *testing.T) {
 // package).
 func TestCMailInputBox_WidthConstantBetweenEmptyAndTyped(t *testing.T) {
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
-	m := NewCMailModel("neo", api.NewMockClient())
+	m := NewCMailModel("neo", "", api.NewMockClient())
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
 	m.activeConvID = "c1"
 	m.activeConv = &conv
@@ -95,7 +95,7 @@ func TestCMailInputBox_WidthConstantBetweenEmptyAndTyped(t *testing.T) {
 
 func cmailInConversation(client api.Client, convID string) CMailModel {
 	conv := model.Conversation{ID: convID, Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
-	m := NewCMailModel("neo", client)
+	m := NewCMailModel("neo", "", client)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
 	m.activeConvID = convID
 	m.activeConv = &conv
@@ -104,6 +104,100 @@ func cmailInConversation(client api.Client, convID string) CMailModel {
 	// textinput.Update() no-ops (it early-returns when unfocused), silently
 	// breaking any test that types through the normal forwarding path.
 	return m
+}
+
+// --- background-tab persistence ---
+
+func TestDMReceived_BumpsUnreadWhileUnfocused(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversations([]model.Conversation{{ID: "c1"}})
+	m = m.SetFocused(false)
+
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey again"}})
+
+	if got := m.TotalUnread(); got != 2 {
+		t.Errorf("TotalUnread() = %d, want 2", got)
+	}
+}
+
+func TestDMReceived_DoesNotBumpUnreadWhileFocused(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversations([]model.Conversation{{ID: "c1"}})
+	m = m.SetFocused(true)
+
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
+
+	if got := m.TotalUnread(); got != 0 {
+		t.Errorf("TotalUnread() = %d, want 0 (actively viewing the conversation)", got)
+	}
+}
+
+func TestSetFocusedCMail_ClearsUnreadOnReturn(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversations([]model.Conversation{{ID: "c1"}})
+	m = m.SetFocused(false)
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
+	if got := m.TotalUnread(); got != 1 {
+		t.Fatalf("setup: expected TotalUnread 1, got %d", got)
+	}
+
+	m = m.SetFocused(true)
+	if got := m.TotalUnread(); got != 0 {
+		t.Errorf("TotalUnread() = %d, want 0 after refocusing the tab", got)
+	}
+}
+
+func TestHasLiveConv(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	if m.HasLiveConv() {
+		t.Error("expected no live conversation before any conversation is opened")
+	}
+
+	m = cmailInConversation(api.NewMockClient(), "c1")
+	if !m.HasLiveConv() {
+		t.Error("expected HasLiveConv() once a conversation is open in detail mode")
+	}
+}
+
+func TestIsDMStreamMsg(t *testing.T) {
+	streamMsgs := []tea.Msg{
+		dmReceivedMsg{},
+		dmStreamClosedMsg{},
+		typingHeartbeatTickMsg{},
+		dmTypingReceivedMsg{},
+	}
+	for _, msg := range streamMsgs {
+		if !IsDMStreamMsg(msg) {
+			t.Errorf("IsDMStreamMsg(%T) = false, want true", msg)
+		}
+	}
+	if IsDMStreamMsg(tea.KeyMsg{Type: tea.KeyEnter}) {
+		t.Error("IsDMStreamMsg(tea.KeyMsg) = true, want false — key input must not be routed to a backgrounded conversation")
+	}
+}
+
+func TestDMReceived_KeepsStreamingWhileUnfocused(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.dmSub = &dmSubscription{ConvID: "c1", C: make(chan model.Message)}
+	m = m.SetFocused(false)
+
+	_, cmd := m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
+	if cmd == nil {
+		t.Error("expected waitForDM to be re-issued so the stream keeps running in the background")
+	}
+}
+
+func TestComposeEmptyCMail(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	if !m.ComposeEmpty() {
+		t.Error("expected ComposeEmpty() true on a freshly opened conversation")
+	}
+
+	m.input.SetValue("hi")
+	if m.ComposeEmpty() {
+		t.Error("expected ComposeEmpty() false once text has been typed")
+	}
 }
 
 func TestTypingAnnounced_StoresCadenceAndSchedulesHeartbeat(t *testing.T) {
@@ -378,5 +472,37 @@ func TestTypingIndicator_DotsCycleThroughZeroOneTwoThree(t *testing.T) {
 		if got != wantDots {
 			t.Errorf("frame %d: dot count = %d, want %d", frame, got, wantDots)
 		}
+	}
+}
+
+// --- style animation ticker (coarse-scoped, see maybeStartStyleAnim) ---
+
+func TestCMailUpdate_StartsStyleAnimTickerWhenAnimatedMessageArrives(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	m, cmd := m.Update(dmReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"blink"}}})
+
+	if !m.styleAnimRunning {
+		t.Error("expected styleAnimRunning = true after an animated-style message arrived")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd to start the animation ticker")
+	}
+}
+
+func TestCMailUpdate_StyleAnimTick_AdvancesFrameAndRearms(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})
+	if !m.styleAnimRunning {
+		t.Fatal("setup: expected styleAnimRunning = true")
+	}
+
+	m, cmd := m.Update(styleAnimTickMsg{})
+
+	if m.styleAnimFrame != 1 {
+		t.Errorf("styleAnimFrame = %d, want 1", m.styleAnimFrame)
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd to rearm the ticker")
 	}
 }

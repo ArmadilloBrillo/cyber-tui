@@ -58,6 +58,15 @@ type dmTypingSubscription struct {
 	cancel context.CancelFunc
 }
 
+// userConvsSubscription holds the live RTDB channel and its cancellation
+// function for /user_conversations/<uid> — the account-wide conversation
+// list, independent of which (if any) conversation is currently open. Each
+// receive is the full converted+sorted list (see SubscribeUserConversations).
+type userConvsSubscription struct {
+	C      <-chan []model.Conversation
+	cancel context.CancelFunc
+}
+
 // DM subscription message types — unexported, handled entirely within CMailModel.
 type dmSubscribedMsg struct {
 	convID string
@@ -102,6 +111,20 @@ type dmTypingSubscribedMsg struct {
 type dmTypingReceivedMsg struct{ users []model.TypingUser }
 type dmTypingStreamClosedMsg struct{ convID string }
 
+// Account-wide conversation-list subscription message types — unexported,
+// handled entirely within CMailModel. Unlike the DM/typing types above,
+// these aren't scoped to activeConvID: the subscription lives for as long as
+// the user is logged in, regardless of which conversation (if any) is open.
+type userConvsSubscribedMsg struct{ sub *userConvsSubscription }
+type userConvsReceivedMsg struct{ convs []model.Conversation }
+type userConvsStreamClosedMsg struct{}
+type userConvsReconnectedMsg struct{ sub *userConvsSubscription }
+type userConvsReconnectFailedMsg struct {
+	attempt int
+	err     error
+}
+type userConvsReconnectRetryDueMsg struct{ attempt int }
+
 // CMailReconnectedMsg is emitted after the live RTDB stream is successfully
 // re-established following an idToken expiry. App uses it to show a toast.
 type CMailReconnectedMsg struct{}
@@ -126,6 +149,41 @@ func waitForDMTyping(sub *dmTypingSubscription) tea.Cmd {
 			return dmTypingStreamClosedMsg{convID: sub.ConvID}
 		}
 		return dmTypingReceivedMsg{users: users}
+	}
+}
+
+// waitForUserConvs blocks on the account-wide conversation-list subscription
+// channel and returns the next snapshot as a tea.Cmd.
+func waitForUserConvs(sub *userConvsSubscription) tea.Cmd {
+	return func() tea.Msg {
+		convs, ok := <-sub.C
+		if !ok {
+			return userConvsStreamClosedMsg{}
+		}
+		return userConvsReceivedMsg{convs: convs}
+	}
+}
+
+// IsDMStreamMsg reports whether msg belongs to C-Mail's message/typing/
+// conversation-list subscription lifecycle. App uses this to keep routing
+// these messages to CMailModel.Update even when C-Mail isn't the active
+// screen, so the self-rescheduling waitForDM/heartbeat/idle-check/reconnect
+// tea.Cmd chains for the conversation the user had open — and the always-on
+// account-wide conversation-list stream — don't die just because they
+// switched tabs.
+func IsDMStreamMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case dmSubscribedMsg, dmReceivedMsg, dmStreamClosedMsg,
+		dmReconnectedMsg, dmReconnectFailedMsg, dmReconnectRetryDueMsg,
+		cmailMsgsLoadedMsg, cmailOlderMsgsLoadedMsg, cmailErrMsg,
+		typingAnnouncedMsg, typingHeartbeatTickMsg, typingIdleCheckMsg,
+		typingAnimTickMsg, dmTypingSubscribedMsg, dmTypingReceivedMsg,
+		dmTypingStreamClosedMsg,
+		userConvsSubscribedMsg, userConvsReceivedMsg, userConvsStreamClosedMsg,
+		userConvsReconnectedMsg, userConvsReconnectFailedMsg, userConvsReconnectRetryDueMsg:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -158,9 +216,28 @@ type CMailModel struct {
 	canGoBack bool
 
 	// DM subscription state — managed entirely within CMailModel.
-	client       api.Client
-	dmSub        *dmSubscription
-	activeConvID string
+	client        api.Client
+	currentUserID string
+	dmSub         *dmSubscription
+	activeConvID  string
+
+	// Account-wide conversation-list subscription state, independent of
+	// dmSub/activeConvID — lives for as long as the user is logged in. Its
+	// own reconnect-retry state mirrors reconnectAttempt/reconnecting/
+	// reconnectFailed/reconnectCtx/reconnectCancel below, kept separate so
+	// the two reconnect sequences (per-conversation vs account-wide) never
+	// interfere with each other.
+	userConvsSub              *userConvsSubscription
+	userConvsReconnectAttempt int
+	userConvsReconnecting     bool
+	userConvsReconnectCtx     context.Context
+	userConvsReconnectCancel  context.CancelFunc
+
+	// focused is true while the C-Mail tab is the one on screen. The RTDB
+	// subscription for an open conversation stays alive regardless (see
+	// IsDMStreamMsg), so this only gates whether an incoming message bumps
+	// that conversation's UnreadCount for the tab-bar badge (TotalUnread()).
+	focused bool
 
 	// Reconnect-retry state, active only between a stream closing and either
 	// a successful reconnect or exhausting maxReconnectAttempts.
@@ -182,6 +259,11 @@ type CMailModel struct {
 	lastKeystrokeAt   time.Time          // updated on every keystroke; idle-check compares against this
 	typingHeartbeatMs int                // from AnnounceTyping's response; drives our own re-announce cadence
 	typingAnimFrame   int                // cycles the indicator's animated dot count; free-runs while a conversation is open
+
+	// styleAnimFrame/styleAnimRunning drive the slow/wave/glitch animated
+	// message styles — see maybeStartStyleAnim and chatrooms.go's identical fields.
+	styleAnimFrame   int
+	styleAnimRunning bool
 }
 
 // SendCMailMsg is emitted when the user sends a C-Mail message.
@@ -197,14 +279,17 @@ type CMailConvSelectedMsg struct {
 }
 
 // NewCMailModel creates a new CMailModel for the given authenticated user.
-func NewCMailModel(currentUser string, client api.Client) CMailModel {
+// currentUserID is the account's RTDB uid, used to open the account-wide
+// conversation-list subscription (see OpenUserConvsSubscription).
+func NewCMailModel(currentUser, currentUserID string, client api.Client) CMailModel {
 	inp := textinput.New()
 	inp.Placeholder = "compose c-mail..."
 	return CMailModel{
-		input:       inp,
-		currentUser: currentUser,
-		client:      client,
-		mode:        cmailModeList,
+		input:         inp,
+		currentUser:   currentUser,
+		currentUserID: currentUserID,
+		client:        client,
+		mode:          cmailModeList,
 	}
 }
 
@@ -237,6 +322,85 @@ func (m CMailModel) cancelDMSub() CMailModel {
 // CancelSubscription is called by App when navigating away from the C-Mail screen.
 func (m CMailModel) CancelSubscription() CMailModel {
 	return m.cancelDMSub()
+}
+
+// OpenUserConvsSubscription starts the account-wide live conversation-list
+// subscription. There's no REST seed: the subscription's own first event is
+// a full snapshot (same as chat_presence's), so a separate GetConversations
+// call first would just create a second, independent writer to
+// m.conversations — see SetConversations' callers for why that's a bug, not
+// a feature. m.conversations (nil on a fresh login) is still passed as
+// initial so a *reconnect* can seed from the last known-good list instead of
+// going blank. A no-op if already subscribed — App calls this once, right
+// after login.
+func (m CMailModel) OpenUserConvsSubscription() (CMailModel, tea.Cmd) {
+	if m.userConvsSub != nil {
+		return m, nil
+	}
+	return m, m.openUserConvsSubscriptionCmd(m.conversations)
+}
+
+// CancelUserConvsSubscription stops the account-wide conversation-list
+// subscription and any in-flight reconnect sequence. Called on logout/
+// session end — unlike cancelDMSub, this is not tied to leaving a single
+// open conversation.
+func (m CMailModel) CancelUserConvsSubscription() CMailModel {
+	if m.userConvsSub != nil {
+		m.userConvsSub.cancel()
+		m.userConvsSub = nil
+	}
+	if m.userConvsReconnectCancel != nil {
+		m.userConvsReconnectCancel()
+		m.userConvsReconnectCancel = nil
+	}
+	m.userConvsReconnecting = false
+	m.userConvsReconnectAttempt = 0
+	return m
+}
+
+func (m CMailModel) openUserConvsSubscriptionCmd(initial []model.Conversation) tea.Cmd {
+	client := m.client
+	uid := m.currentUserID
+	return func() tea.Msg {
+		if client == nil || uid == "" {
+			return nil
+		}
+		ch, cancel, err := client.SubscribeUserConversations(context.Background(), uid, initial)
+		if err != nil {
+			return nil
+		}
+		return userConvsSubscribedMsg{sub: &userConvsSubscription{C: ch, cancel: cancel}}
+	}
+}
+
+// reconnectUserConvsCmd makes one reconnect attempt after the account-wide
+// conversation-list stream closed — refreshes the session token and reopens
+// the subscription, seeded with the last known-good list. Mirrors
+// reconnectConvCmd's shape.
+func (m CMailModel) reconnectUserConvsCmd(ctx context.Context, attempt int) tea.Cmd {
+	client := m.client
+	uid := m.currentUserID
+	initial := m.conversations
+	return func() tea.Msg {
+		if client == nil || uid == "" {
+			return nil
+		}
+		ch, cancel, err := attemptReconnect(client, ctx, func(ctx context.Context) (<-chan []model.Conversation, context.CancelFunc, error) {
+			return client.SubscribeUserConversations(ctx, uid, initial)
+		})
+		if err != nil {
+			return userConvsReconnectFailedMsg{attempt: attempt, err: err}
+		}
+		return userConvsReconnectedMsg{sub: &userConvsSubscription{C: ch, cancel: cancel}}
+	}
+}
+
+// scheduleUserConvsReconnectRetryCmd waits out the backoff for attempt, then
+// emits a userConvsReconnectRetryDueMsg to trigger the next reconnect attempt.
+func scheduleUserConvsReconnectRetryCmd(attempt int) tea.Cmd {
+	return tea.Tick(reconnectDelay(attempt), func(time.Time) tea.Msg {
+		return userConvsReconnectRetryDueMsg{attempt: attempt}
+	})
 }
 
 func (m CMailModel) openDMSubscriptionCmd(convID string) tea.Cmd {
@@ -469,6 +633,59 @@ func (m CMailModel) TotalUnread() int {
 	return total
 }
 
+// SetFocused marks whether the C-Mail tab is the one currently on screen.
+// Becoming focused clears the currently-open conversation's local unread
+// count (mirroring ChatroomsModel.SetFocused), so TotalUnread() doesn't keep
+// counting messages the user is now actively viewing.
+func (m CMailModel) SetFocused(focused bool) CMailModel {
+	m.focused = focused
+	if focused {
+		m = m.zeroActiveConvUnread()
+	}
+	return m
+}
+
+// zeroActiveConvUnread clears UnreadCount on the m.conversations entry
+// matching the currently open conversation, if any.
+func (m CMailModel) zeroActiveConvUnread() CMailModel {
+	for i := range m.conversations {
+		if m.conversations[i].ID == m.activeConvID {
+			m.conversations[i].UnreadCount = 0
+			break
+		}
+	}
+	return m
+}
+
+// bumpActiveConvUnread increments UnreadCount on the m.conversations entry
+// matching the currently open conversation, mirroring ChatroomsModel's
+// `if !m.focused { m.unreadCount++ }` — except here the target is the
+// existing per-conversation UnreadCount TotalUnread() already sums, not a
+// separate counter, so the tab-bar badge reflects it immediately instead of
+// waiting for the next 60s poll.
+func (m CMailModel) bumpActiveConvUnread() CMailModel {
+	for i := range m.conversations {
+		if m.conversations[i].ID == m.activeConvID {
+			m.conversations[i].UnreadCount++
+			break
+		}
+	}
+	return m
+}
+
+// HasLiveConv reports whether a conversation is currently open in detail
+// mode with its subscription state intact — used by activateScreen to
+// decide whether re-entering the C-Mail tab should resume in place instead
+// of resetting to the conversation list.
+func (m CMailModel) HasLiveConv() bool {
+	return m.mode == cmailModeDetail && m.activeConv != nil
+}
+
+// ComposeEmpty reports whether the compose input has no typed text — used by
+// App to let plain left/right fall through to tab-cycling instead of being
+// captured as cursor movement (see handleKeys' focused-input gate in app.go).
+func (m CMailModel) ComposeEmpty() bool { return m.input.Value() == "" }
+
 // ConvOpenCmds returns the batch command to load message history and open the
 // live RTDB subscription for convID. Call after SetActiveConversation.
 func (m CMailModel) ConvOpenCmds(convID string) tea.Cmd {
@@ -496,7 +713,7 @@ func (m CMailModel) GetFocusedURLs() []string {
 	}
 	var urls []string
 	for _, msg := range m.activeConv.Messages {
-		urls = append(urls, extractURLs(msg.Body)...)
+		urls = append(urls, messageURLs(msg)...)
 	}
 	return dedupeURLs(urls)
 }
@@ -509,8 +726,47 @@ func (m CMailModel) HasActiveConv() bool { return m.mode == cmailModeDetail }
 
 func (m CMailModel) Init() tea.Cmd { return textinput.Blink }
 
+// Update processes msg via updateInner, then (re)arms the style-animation
+// ticker if a loaded message needs one — same wrap-the-switch shape as
+// chatrooms.go's Update/maybeStartStyleAnim, chosen there to avoid a
+// cascading tea.Cmd-return change through refreshMessages' many call sites.
 func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
+	m, cmd := m.updateInner(msg)
+	var tickCmd tea.Cmd
+	m, tickCmd = m.maybeStartStyleAnim()
+	if tickCmd != nil {
+		cmd = tea.Batch(cmd, tickCmd)
+	}
+	return m, cmd
+}
+
+// maybeStartStyleAnim starts the slow/wave/glitch animation ticker if the
+// open conversation has a loaded message that needs one and it isn't already
+// running. Coarse-scoped: checks every loaded message in the conversation,
+// not just ones visible in the viewport — see the plan's Trade-offs section.
+func (m CMailModel) maybeStartStyleAnim() (CMailModel, tea.Cmd) {
+	if m.styleAnimRunning || m.mode != cmailModeDetail || m.activeConv == nil {
+		return m, nil
+	}
+	for _, msg := range m.activeConv.Messages {
+		if hasAnimatedStyle(msg.Style) {
+			m.styleAnimRunning = true
+			return m, styleAnimTickCmd()
+		}
+	}
+	return m, nil
+}
+
+func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case styleAnimTickMsg:
+		m.styleAnimFrame++
+		m.styleAnimRunning = false
+		if m.mode == cmailModeDetail && m.activeConv != nil {
+			m.viewport.SetContent(m.renderMessages())
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -566,6 +822,9 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 
 	case dmReceivedMsg:
 		m = m.AppendMessage(msg.msg)
+		if !m.focused {
+			m = m.bumpActiveConvUnread()
+		}
 		if m.dmSub != nil {
 			return m, waitForDM(m.dmSub)
 		}
@@ -625,6 +884,53 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 			m.viewport.SetContent(m.renderMessages())
 		}
 		return m, nil
+
+	// --- Account-wide conversation-list subscription lifecycle ---
+
+	case userConvsSubscribedMsg:
+		m.userConvsSub = msg.sub
+		return m, waitForUserConvs(m.userConvsSub)
+
+	case userConvsReceivedMsg:
+		m = m.SetConversations(msg.convs)
+		if m.userConvsSub != nil {
+			return m, waitForUserConvs(m.userConvsSub)
+		}
+		return m, nil
+
+	case userConvsStreamClosedMsg:
+		m.userConvsSub = nil
+		if m.userConvsReconnectCancel != nil {
+			m.userConvsReconnectCancel()
+		}
+		m.userConvsReconnectCtx, m.userConvsReconnectCancel = context.WithCancel(context.Background())
+		m.userConvsReconnecting = true
+		m.userConvsReconnectAttempt = 0
+		return m, m.reconnectUserConvsCmd(m.userConvsReconnectCtx, 0)
+
+	case userConvsReconnectFailedMsg:
+		if !m.userConvsReconnecting {
+			return m, nil // stale or cancelled sequence
+		}
+		next := msg.attempt + 1
+		if next >= maxReconnectAttempts {
+			m.userConvsReconnecting = false
+			return m, nil // give up silently — the list just stops updating live until next login
+		}
+		m.userConvsReconnectAttempt = next
+		return m, scheduleUserConvsReconnectRetryCmd(next)
+
+	case userConvsReconnectRetryDueMsg:
+		if !m.userConvsReconnecting {
+			return m, nil // stale or cancelled sequence
+		}
+		return m, m.reconnectUserConvsCmd(m.userConvsReconnectCtx, msg.attempt)
+
+	case userConvsReconnectedMsg:
+		m.userConvsSub = msg.sub
+		m.userConvsReconnecting = false
+		m.userConvsReconnectAttempt = 0
+		return m, waitForUserConvs(m.userConvsSub)
 
 	// --- Typing indicator lifecycle ---
 
@@ -929,7 +1235,7 @@ func (m CMailModel) renderMessages() string {
 		}
 		return theme.Subtle.Render("no messages")
 	}
-	return renderChatMessages(m.activeConv.Messages, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width)
+	return renderChatMessagesStyled(m.activeConv.Messages, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width, m.styleAnimFrame)
 }
 
 func (m CMailModel) location() *time.Location {

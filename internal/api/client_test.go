@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -457,6 +458,39 @@ func TestHTTPTokenRefresh_Failure(t *testing.T) {
 	}
 }
 
+func TestHTTPResendVerification_SendsIDTokenBody(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/auth/resend-verification" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			IDToken string `json:"idToken"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body.IDToken != "id-abc" {
+			t.Errorf("idToken = %q, want id-abc", body.IDToken)
+		}
+		writeOK(t, w, map[string]any{"sent": true})
+	}))
+
+	if err := c.ResendVerification("id-abc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHTTPResendVerification_RateLimited(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+
+	err := c.ResendVerification("id-abc")
+	if !errors.Is(err, api.ErrRateLimited) {
+		t.Errorf("expected ErrRateLimited, got %v", err)
+	}
+}
+
 func TestHTTPLoginWithRefreshToken_Success(t *testing.T) {
 	var capturedRefreshToken string
 	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -715,6 +749,38 @@ func TestHTTPSubscribeDMs_SanitizesControlChars(t *testing.T) {
 	}
 }
 
+// TestHTTPSubscribeDMs_ParsesAttachmentsAndStyle confirms the RTDB DM wire
+// struct decodes imageUrl/gifUrl/audioAttachment/style the same as the REST path.
+func TestHTTPSubscribeDMs_ParsesAttachmentsAndStyle(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/msg1","data":{"senderId":"u2","senderUsername":"molly","content":"hi","timestamp":1700000001000,`+
+			`"gifUrl":"https://cyberspace.online/a.gif","style":["wave","rainbow"]}}`)
+	}))
+
+	ch, cancel, err := c.SubscribeDMs(context.Background(), "conv1")
+	if err != nil {
+		t.Fatalf("SubscribeDMs error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if msg.GifUrl != "https://cyberspace.online/a.gif" {
+			t.Errorf("msg.GifUrl = %q", msg.GifUrl)
+		}
+		if len(msg.Style) != 2 || msg.Style[0] != "wave" || msg.Style[1] != "rainbow" {
+			t.Errorf("msg.Style = %v, want [wave rainbow]", msg.Style)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+}
+
 // TestHTTPSubscribeDMs_CancelClosesChannel verifies that calling cancel stops the stream.
 func TestHTTPSubscribeDMs_CancelClosesChannel(t *testing.T) {
 	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -827,6 +893,128 @@ func TestHTTPSubscribeRoom_SanitizesControlChars(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for message")
+	}
+}
+
+// TestHTTPSubscribeRoom_ParsesAttachmentsAndStyle confirms the RTDB cIRC wire
+// struct decodes imageUrl/gifUrl/audioAttachment/style the same as the REST path.
+func TestHTTPSubscribeRoom_ParsesAttachmentsAndStyle(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/msg1","data":{"userId":"u2","username":"molly","content":"hi","timestamp":1700000001000,`+
+			`"imageUrl":"https://cyberspace.online/img.png","style":"l33t"}}`)
+	}))
+
+	ch, cancel, err := c.SubscribeRoom(context.Background(), "zion")
+	if err != nil {
+		t.Fatalf("SubscribeRoom error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if msg.ImageUrl != "https://cyberspace.online/img.png" {
+			t.Errorf("msg.ImageUrl = %q", msg.ImageUrl)
+		}
+		if len(msg.Style) != 1 || msg.Style[0] != "l33t" {
+			t.Errorf("msg.Style = %v, want [l33t]", msg.Style)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+}
+
+// TestHTTPSubscribeRoom_PatchDeleteDeliversMergeSignal covers a delete
+// arriving as a partial "patch" event ({"content":"[DELETED]","deleted":true},
+// no sender/timestamp/etc.) — the delivered model.Message must carry only
+// {ID, Deleted}, never zeroed-out sender/body fields a caller could
+// mistake for a real (if empty) message.
+func TestHTTPSubscribeRoom_PatchDeleteDeliversMergeSignal(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "patch", `{"path":"/msg1","data":{"content":"[DELETED]","deleted":true}}`)
+	}))
+
+	ch, cancel, err := c.SubscribeRoom(context.Background(), "zion")
+	if err != nil {
+		t.Fatalf("SubscribeRoom error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if msg.ID != "msg1" {
+			t.Errorf("ID = %q, want msg1", msg.ID)
+		}
+		if !msg.Deleted {
+			t.Error("Deleted = false, want true")
+		}
+		if msg.From.Username != "" || msg.Body != "" {
+			t.Errorf("expected only {ID, Deleted} set, got From=%+v Body=%q", msg.From, msg.Body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+}
+
+// TestHTTPSubscribeRoom_PatchWithoutDeletedIgnored guards the defensive
+// branch for a patch event that isn't a delete (not documented as occurring
+// today, but nothing should crash or misdeliver if the server ever sends
+// one) — it must be skipped, not delivered as a zeroed-out message.
+func TestHTTPSubscribeRoom_PatchWithoutDeletedIgnored(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "patch", `{"path":"/msg1","data":{"isChatAdmin":true}}`)
+		writeSSEEvent(w, "put", `{"path":"/msg2","data":{"userId":"u2","username":"molly","content":"hi","timestamp":1700000001000}}`)
+	}))
+
+	ch, cancel, err := c.SubscribeRoom(context.Background(), "zion")
+	if err != nil {
+		t.Fatalf("SubscribeRoom error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering message")
+		}
+		if msg.ID != "msg2" {
+			t.Errorf("expected the non-delete patch to be skipped and msg2 delivered instead, got ID=%q", msg.ID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for message")
+	}
+}
+
+// TestHTTPDeleteRoomMessage_Success mirrors the other simple DELETE-verb
+// action tests (e.g. TestHTTPDeleteBookmark_Success).
+func TestHTTPDeleteRoomMessage_Success(t *testing.T) {
+	var gotMethod, gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		writeOK(t, w, map[string]any{"roomId": "zion", "messageId": "m1", "deleted": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.DeleteRoomMessage("zion", "m1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/v1/circ/zion/messages/m1" {
+		t.Errorf("path = %q, want /v1/circ/zion/messages/m1", gotPath)
 	}
 }
 
@@ -981,6 +1169,70 @@ func TestHTTPGetRoomMessages_ParsesIsAction(t *testing.T) {
 	}
 }
 
+// TestHTTPGetRoomMessages_ParsesAttachmentsAndStyle covers imageUrl, gifUrl,
+// audioAttachment, and both the single-string and array shapes of style.
+func TestHTTPGetRoomMessages_ParsesAttachmentsAndStyle(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "case", "content": "hi", "timestamp": 1700000001000,
+				"imageUrl": "https://cyberspace.online/img.png", "style": "blink"},
+			{"id": "m2", "userId": "u2", "username": "molly", "content": "hey", "timestamp": 1700000002000,
+				"gifUrl": "https://cyberspace.online/a.gif", "style": []string{"comic", "rainbow"}},
+			{"id": "m3", "userId": "u3", "username": "case", "content": "tune", "timestamp": 1700000003000,
+				"audioAttachment": map[string]any{"src": "https://cyberspace.online/song.mp3", "artist": "case", "title": "run", "genre": "synthwave"}},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("len(msgs) = %d, want 3", len(msgs))
+	}
+	if msgs[0].ImageUrl != "https://cyberspace.online/img.png" {
+		t.Errorf("msgs[0].ImageUrl = %q", msgs[0].ImageUrl)
+	}
+	if len(msgs[0].Style) != 1 || msgs[0].Style[0] != "blink" {
+		t.Errorf("msgs[0].Style = %v, want [blink]", msgs[0].Style)
+	}
+	if msgs[1].GifUrl != "https://cyberspace.online/a.gif" {
+		t.Errorf("msgs[1].GifUrl = %q", msgs[1].GifUrl)
+	}
+	if len(msgs[1].Style) != 2 || msgs[1].Style[0] != "comic" || msgs[1].Style[1] != "rainbow" {
+		t.Errorf("msgs[1].Style = %v, want [comic rainbow]", msgs[1].Style)
+	}
+	if msgs[2].AudioAttachment == nil {
+		t.Fatal("msgs[2].AudioAttachment is nil")
+	}
+	if msgs[2].AudioAttachment.Type != "audio" || msgs[2].AudioAttachment.Src != "https://cyberspace.online/song.mp3" ||
+		msgs[2].AudioAttachment.Artist != "case" || msgs[2].AudioAttachment.Title != "run" || msgs[2].AudioAttachment.Genre != "synthwave" {
+		t.Errorf("msgs[2].AudioAttachment = %+v", msgs[2].AudioAttachment)
+	}
+}
+
+// TestHTTPGetRoomMessages_DecodesArtBody covers the style:"art" special case
+// where content is base64-encoded ASCII art, plus the malformed-base64 fallback.
+func TestHTTPGetRoomMessages_DecodesArtBody(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "userId": "u1", "username": "case", "content": "aGVsbG8=", "timestamp": 1700000001000, "style": "art"},
+			{"id": "m2", "userId": "u1", "username": "case", "content": "not-base64!!", "timestamp": 1700000002000, "style": "art"},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetRoomMessages("general", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msgs[0].Body != "hello" {
+		t.Errorf("msgs[0].Body = %q, want decoded %q", msgs[0].Body, "hello")
+	}
+	if msgs[1].Body != "not-base64!!" {
+		t.Errorf("msgs[1].Body = %q, want raw fallback %q", msgs[1].Body, "not-base64!!")
+	}
+}
+
 // TestHTTPGetRoomMessages_SanitizesControlChars guards against a regression
 // of the 2026-07-24 review's sanitize-bypass finding for cIRC room history.
 func TestHTTPGetRoomMessages_SanitizesControlChars(t *testing.T) {
@@ -1069,6 +1321,33 @@ func TestHTTPGetMessages_ParsesIsAction(t *testing.T) {
 	}
 	if !msgs[0].IsAction || msgs[0].Body != "waves" {
 		t.Errorf("msgs[0] = %+v, want IsAction=true Body=waves", msgs[0])
+	}
+}
+
+// TestHTTPGetMessages_ParsesAttachmentsAndStyle covers imageUrl, gifUrl,
+// audioAttachment, and style on C-Mail messages.
+func TestHTTPGetMessages_ParsesAttachmentsAndStyle(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"id": "m1", "senderId": "u1", "senderUsername": "case", "content": "hi", "timestamp": 1700000001000,
+				"imageUrl": "https://cyberspace.online/img.png", "gifUrl": "https://cyberspace.online/a.gif",
+				"style": []string{"quiet"},
+				"audioAttachment": map[string]any{"src": "https://cyberspace.online/song.mp3", "artist": "case"}},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	msgs, err := c.GetMessages("c1", 50, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msgs[0].ImageUrl != "https://cyberspace.online/img.png" || msgs[0].GifUrl != "https://cyberspace.online/a.gif" {
+		t.Errorf("msgs[0] ImageUrl/GifUrl = %q/%q", msgs[0].ImageUrl, msgs[0].GifUrl)
+	}
+	if len(msgs[0].Style) != 1 || msgs[0].Style[0] != "quiet" {
+		t.Errorf("msgs[0].Style = %v, want [quiet]", msgs[0].Style)
+	}
+	if msgs[0].AudioAttachment == nil || msgs[0].AudioAttachment.Src != "https://cyberspace.online/song.mp3" {
+		t.Errorf("msgs[0].AudioAttachment = %+v", msgs[0].AudioAttachment)
 	}
 }
 
@@ -1194,15 +1473,42 @@ func TestHTTPGetRoomUsers_SanitizesControlChars(t *testing.T) {
 	}
 }
 
+// TestHTTPGetRoomUsers_LastActivityNilWhenAbsent guards against a nil
+// lastActivity being misread as "idle since the Unix epoch" (which would
+// wrongly flag an always-active user as idle) or causing a decode panic.
+func TestHTTPGetRoomUsers_LastActivityNilWhenAbsent(t *testing.T) {
+	activity := int64(1700000000500)
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{"userId": "u1", "username": "alwaysActive", "isChatAdmin": false, "lastSeen": 1700000001000},
+			{"userId": "u2", "username": "idle", "isChatAdmin": false, "lastSeen": 1700000001000, "lastActivity": activity},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	users, err := c.GetRoomUsers("general")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("len(users) = %d, want 2", len(users))
+	}
+	if users[0].LastActivity != nil {
+		t.Errorf("users[0].LastActivity = %v, want nil (field omitted)", users[0].LastActivity)
+	}
+	if users[1].LastActivity == nil || users[1].LastActivity.UnixMilli() != activity {
+		t.Errorf("users[1].LastActivity = %v, want %d", users[1].LastActivity, activity)
+	}
+}
+
 func TestHTTPAnnouncePresence_ParsesCadence(t *testing.T) {
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/circ/general/presence" || r.Method != http.MethodPost {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		writeOK(t, w, map[string]any{"roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000})
+		writeOK(t, w, map[string]any{"roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000, "idleAfterMs": 600000})
 	})))
 	c.LoginWithRefreshToken("tok")
-	heartbeatMs, staleAfterMs, err := c.AnnouncePresence("general")
+	heartbeatMs, staleAfterMs, idleAfterMs, err := c.AnnouncePresence("general", time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1211,6 +1517,29 @@ func TestHTTPAnnouncePresence_ParsesCadence(t *testing.T) {
 	}
 	if staleAfterMs != 180000 {
 		t.Errorf("staleAfterMs = %d, want 180000", staleAfterMs)
+	}
+	if idleAfterMs != 600000 {
+		t.Errorf("idleAfterMs = %d, want 600000", idleAfterMs)
+	}
+}
+
+func TestHTTPAnnouncePresence_SendsLastActivityBody(t *testing.T) {
+	want := time.Now().Add(-2 * time.Minute)
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			LastActivity int64 `json:"lastActivity"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body.LastActivity != want.UnixMilli() {
+			t.Errorf("lastActivity = %d, want %d", body.LastActivity, want.UnixMilli())
+		}
+		writeOK(t, w, map[string]any{"roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000, "idleAfterMs": 600000})
+	})))
+	c.LoginWithRefreshToken("tok")
+	if _, _, _, err := c.AnnouncePresence("general", want); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1293,6 +1622,86 @@ func TestHTTPSubscribeRoomPresence_InitialSnapshotFiltersOfflineAndStale(t *test
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for snapshot")
+	}
+}
+
+// TestHTTPSubscribeRoomPresence_IdleUserSurvivesFilteringButFlagged verifies
+// that an idle user (fresh lastSeen, but a stale-looking lastActivity) is
+// NOT dropped by the same filter that removes offline/stale users — idle is
+// a separate, render-time-only concept from staleness, and idleAfterMs plays
+// no part in filterFreshPresence/SubscribeRoomPresence's filtering.
+func TestHTTPSubscribeRoomPresence_IdleUserSurvivesFilteringButFlagged(t *testing.T) {
+	now := time.Now().UnixMilli()
+	idleSince := now - 700000
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		data := fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","isChatAdmin":false,"online":true,"lastSeen":%d,"lastActivity":%d},"u2":{"username":"bob","isChatAdmin":false,"online":false,"lastSeen":%d}}}`, now, idleSince, now)
+		writeSSEEvent(w, "put", data)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000, nil)
+	if err != nil {
+		t.Fatalf("SubscribeRoomPresence error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case users, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering a snapshot")
+		}
+		if len(users) != 1 {
+			t.Fatalf("len(users) = %d, want 1 (offline bob filtered, idle alice kept): %+v", len(users), users)
+		}
+		if users[0].Username != "alice" {
+			t.Fatalf("users[0] = %+v, want alice (idle but online/fresh)", users[0])
+		}
+		if users[0].LastActivity == nil || users[0].LastActivity.UnixMilli() != idleSince {
+			t.Errorf("LastActivity = %v, want %d", users[0].LastActivity, idleSince)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for snapshot")
+	}
+}
+
+// TestHTTPSubscribeRoomPresence_PatchPreservesLastActivity guards against a
+// patch-merge losing the lastActivity field (e.g. a struct-copy bug that
+// only copies the fields present before this feature was added).
+func TestHTTPSubscribeRoomPresence_PatchPreservesLastActivity(t *testing.T) {
+	now := time.Now().UnixMilli()
+	activity := now - 1000
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","isChatAdmin":false,"online":true,"lastSeen":%d}}}`, now))
+		writeSSEEvent(w, "patch", fmt.Sprintf(`{"path":"/","data":{"u1":{"username":"alice","isChatAdmin":false,"online":true,"lastSeen":%d,"lastActivity":%d}}}`, now, activity))
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeRoomPresence(context.Background(), "general", 180000, nil)
+	if err != nil {
+		t.Fatalf("SubscribeRoomPresence error: %v", err)
+	}
+	defer cancel()
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case users, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before delivering the post-patch snapshot")
+			}
+			if len(users) == 1 && users[0].LastActivity != nil {
+				if users[0].LastActivity.UnixMilli() != activity {
+					t.Errorf("LastActivity = %v, want %d", users[0].LastActivity, activity)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the patched lastActivity to appear")
+		}
 	}
 }
 
@@ -1530,6 +1939,134 @@ func TestHTTPSubscribeDMTyping_SingleKeyUpdateReplacesEntry(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatalf("timed out waiting for the updated entry, last snapshot: %+v", last)
+		}
+	}
+}
+
+// TestHTTPSubscribeUserConversations_DecodesAndSorts verifies the initial
+// snapshot decodes into model.Conversation and sorts unread-first, then
+// most-recently-active — matching GetConversations' REST ordering.
+func TestHTTPSubscribeUserConversations_DecodesAndSorts(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/","data":{"c1":{"otherUserId":"u1","otherUsername":"alice","lastMessage":"hi","lastMessageAt":1000,"unreadCount":0},"c2":{"otherUserId":"u2","otherUsername":"bob","lastMessage":"yo","lastMessageAt":2000,"unreadCount":3},"c3":{"unreadCount":0}}}`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeUserConversations(context.Background(), "uid-me", nil)
+	if err != nil {
+		t.Fatalf("SubscribeUserConversations error: %v", err)
+	}
+	defer cancel()
+
+	select {
+	case convs, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed before delivering a snapshot")
+		}
+		if len(convs) != 3 {
+			t.Fatalf("len(convs) = %d, want 3: %+v", len(convs), convs)
+		}
+		if convs[0].ID != "c2" || convs[0].UnreadCount != 3 {
+			t.Errorf("convs[0] = %+v, want the unread conversation (c2) first", convs[0])
+		}
+		if convs[0].Participants[0].Username != "bob" {
+			t.Errorf("convs[0].Participants[0].Username = %q, want bob", convs[0].Participants[0].Username)
+		}
+		// c1 (lastMessageAt 1000) and c3 (no lastMessageAt) are both unread=0;
+		// c1 must sort before c3's zero-value timestamp.
+		if convs[1].ID != "c1" || convs[2].ID != "c3" {
+			t.Errorf("read conversations not sorted most-recent-first: got order %s, %s", convs[1].ID, convs[2].ID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for snapshot")
+	}
+}
+
+// TestHTTPSubscribeUserConversations_RootPatchMergesInsteadOfReplacing is the
+// applyUserConversationsEvent counterpart of
+// TestHTTPSubscribeRoomPresence_RootPatchMergesInsteadOfReplacing — a root
+// "patch" event must merge the listed keys, not wipe every other conversation.
+func TestHTTPSubscribeUserConversations_RootPatchMergesInsteadOfReplacing(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/","data":{"c1":{"otherUserId":"u1","otherUsername":"alice","lastMessage":"hi","lastMessageAt":1000,"unreadCount":0},"c2":{"otherUserId":"u2","otherUsername":"bob","lastMessage":"yo","lastMessageAt":2000,"unreadCount":0}}}`)
+		writeSSEEvent(w, "patch", `{"path":"/","data":{"c2":null}}`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeUserConversations(context.Background(), "uid-me", nil)
+	if err != nil {
+		t.Fatalf("SubscribeUserConversations error: %v", err)
+	}
+	defer cancel()
+
+	var last []model.Conversation
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case convs, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before delivering the post-patch snapshot")
+			}
+			last = convs
+			if len(last) == 1 {
+				if last[0].ID != "c1" {
+					t.Fatalf("expected c1 to remain after c2's root-patch removal, got %+v", last)
+				}
+				return
+			}
+			if len(last) == 0 {
+				t.Fatal("root patch removing one conversation wiped the whole list")
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for the post-patch snapshot, last snapshot: %+v", last)
+		}
+	}
+}
+
+// TestHTTPSubscribeUserConversations_SingleConvPatchMergesPartialFields
+// verifies a "/<conversationId>" patch (the common case: a new message
+// updates lastMessage/lastMessageAt/unreadCount) merges onto the existing
+// entry instead of wiping fields the patch didn't mention — unlike presence,
+// where every write replaces the whole entry, a conversation's participant
+// info (otherUserId/otherUsername) usually isn't repeated on every message.
+func TestHTTPSubscribeUserConversations_SingleConvPatchMergesPartialFields(t *testing.T) {
+	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSEEvent(w, "put", `{"path":"/","data":{"c1":{"otherUserId":"u1","otherUsername":"alice","lastMessage":"hi","lastMessageAt":1000,"unreadCount":0}}}`)
+		writeSSEEvent(w, "patch", `{"path":"/c1","data":{"lastMessage":"new message","lastMessageAt":2000,"unreadCount":1}}`)
+		<-r.Context().Done()
+	}))
+
+	ch, cancel, err := c.SubscribeUserConversations(context.Background(), "uid-me", nil)
+	if err != nil {
+		t.Fatalf("SubscribeUserConversations error: %v", err)
+	}
+	defer cancel()
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case convs, ok := <-ch:
+			if !ok {
+				t.Fatal("channel closed before delivering the post-patch snapshot")
+			}
+			if len(convs) != 1 || convs[0].UnreadCount != 1 {
+				continue // saw the initial snapshot; wait for the patched one
+			}
+			if convs[0].LastMessage != "new message" {
+				t.Errorf("LastMessage = %q, want %q", convs[0].LastMessage, "new message")
+			}
+			if convs[0].Participants[0].Username != "alice" {
+				t.Errorf("Participants[0].Username = %q, want alice (must survive the partial patch)", convs[0].Participants[0].Username)
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for the post-patch snapshot")
 		}
 	}
 }
@@ -1951,6 +2488,120 @@ func TestHTTPCreateBookmark_Reply(t *testing.T) {
 	}
 }
 
+func TestHTTPFlagPost_SendsReasonAndParsesResponse(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"postId": "p1", "flagId": "flag-1", "flagged": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	flagID, alreadyFlagged, err := c.FlagPost("p1", "spam")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/posts/p1/flag" {
+		t.Errorf("path = %q, want /v1/posts/p1/flag", gotPath)
+	}
+	if gotBody["reason"] != "spam" {
+		t.Errorf("reason = %v, want spam", gotBody["reason"])
+	}
+	if flagID != "flag-1" {
+		t.Errorf("flagID = %q, want flag-1", flagID)
+	}
+	if alreadyFlagged {
+		t.Error("alreadyFlagged = true, want false")
+	}
+}
+
+func TestHTTPFlagPost_AlreadyFlagged(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{"postId": "p1", "flagged": true, "alreadyFlagged": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	_, alreadyFlagged, err := c.FlagPost("p1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !alreadyFlagged {
+		t.Error("alreadyFlagged = false, want true")
+	}
+}
+
+func TestHTTPFlagReply_SendsReasonAndParsesResponse(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"replyId": "r5", "flagId": "flag-2", "flagged": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	flagID, alreadyFlagged, err := c.FlagReply("r5", "harassment")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/replies/r5/flag" {
+		t.Errorf("path = %q, want /v1/replies/r5/flag", gotPath)
+	}
+	if gotBody["reason"] != "harassment" {
+		t.Errorf("reason = %v, want harassment", gotBody["reason"])
+	}
+	if flagID != "flag-2" {
+		t.Errorf("flagID = %q, want flag-2", flagID)
+	}
+	if alreadyFlagged {
+		t.Error("alreadyFlagged = true, want false")
+	}
+}
+
+func TestHTTPFlagRoomMessage_SendsReasonAndParsesResponse(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"roomId": "general", "messageId": "m1", "flagId": "flag-3", "flagged": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	flagID, alreadyFlagged, err := c.FlagRoomMessage("general", "m1", "spam")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/circ/general/messages/m1/flag" {
+		t.Errorf("path = %q, want /v1/circ/general/messages/m1/flag", gotPath)
+	}
+	if gotBody["reason"] != "spam" {
+		t.Errorf("reason = %v, want spam", gotBody["reason"])
+	}
+	if flagID != "flag-3" {
+		t.Errorf("flagID = %q, want flag-3", flagID)
+	}
+	if alreadyFlagged {
+		t.Error("alreadyFlagged = true, want false")
+	}
+}
+
+func TestHTTPFlagRoomMessage_AlreadyFlagged(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{"roomId": "general", "messageId": "m1", "flagged": true, "alreadyFlagged": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	_, alreadyFlagged, err := c.FlagRoomMessage("general", "m1", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !alreadyFlagged {
+		t.Error("alreadyFlagged = false, want true")
+	}
+}
+
 func TestHTTPDeleteBookmark_Success(t *testing.T) {
 	var gotPath string
 	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2171,6 +2822,29 @@ func TestHTTPGetOwnProfile_ParsesNewFields(t *testing.T) {
 	}
 	if user.LocationLongitude != 18.4241 {
 		t.Errorf("LocationLongitude = %v, want 18.4241", user.LocationLongitude)
+	}
+}
+
+func TestHTTPGetSettings_ParsesMutedUsersByRoom(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/settings" {
+			http.NotFound(w, r)
+			return
+		}
+		writeOK(t, w, map[string]any{
+			"mutedUsersByRoom": map[string][]string{
+				"general": {"alice", "bob"},
+			},
+		})
+	})))
+	c.Login("u@example.com", "pass")
+
+	settings, err := c.GetSettings()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := settings.MutedUsersByRoom["general"]; len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
+		t.Errorf("MutedUsersByRoom[general] = %v, want [alice bob]", got)
 	}
 }
 

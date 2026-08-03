@@ -376,6 +376,19 @@ func setupChatroomsDetailWithURL(a App) App {
 	return a
 }
 
+// setupCMailDetail opens a conversation in detail mode, so InputFocused()
+// is true — mirrors setupChatroomsDetailWithURL above.
+func setupCMailDetail(a App) App {
+	a.active = screenCMail
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "trinity"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	return a
+}
+
 func TestHandleKeys_CtrlO_ReachesOpenLink_WhileChatroomsInputFocused(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
 	if !a.chatrooms.InputFocused() {
@@ -547,6 +560,98 @@ func TestHandleKeys_Left_NotConsumed_WhileChatroomsInputFocusedAndComposeHasText
 	}
 }
 
+// TestHandleKeys_Left_NotConsumed_WhileChatroomsFlagPromptOpen guards a bug
+// found in manual testing: ComposeEmpty() only checked the compose box's own
+// value, so left/right escaped to tab-cycling while typing a flag/report
+// reason — even though focus was on the reason field, not the (empty)
+// compose box.
+func TestHandleKeys_Left_NotConsumed_WhileChatroomsFlagPromptOpen(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	cm, _ := a.chatrooms.Update(tea.KeyMsg{Type: tea.KeyUp}) // select the message
+	cm, _ = cm.Update(keyMsg("!"))                           // open the flag prompt
+	a.chatrooms = cm
+
+	if a.chatrooms.ComposeEmpty() {
+		t.Fatal("setup: expected ComposeEmpty() false while the flag prompt is open, even with an empty compose box")
+	}
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if consumed {
+		t.Error("expected plain left arrow to NOT be consumed while the flag/report reason box is focused — it must move the cursor instead")
+	}
+}
+
+// TestHandleKeys_Left_NotConsumed_WhileChatroomsDeleteConfirmOpen is the same
+// bug class as the flag-prompt case above, for the delete-confirm overlay:
+// ComposeEmpty() must also account for confirmingDeleteMsg, not just the
+// flag prompt.
+func TestHandleKeys_Left_NotConsumed_WhileChatroomsDeleteConfirmOpen(t *testing.T) {
+	a := loggedInApp()
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	cm = cm.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: ""}, Body: "mine", CreatedAt: time.Now()},
+	})
+	a.active = screenChatrooms
+	a.chatrooms = cm
+	cm, _ = a.chatrooms.Update(tea.KeyMsg{Type: tea.KeyUp}) // select the message
+	cm, _ = cm.Update(keyMsg("d"))                          // open the delete confirm
+	a.chatrooms = cm
+
+	if a.chatrooms.ComposeEmpty() {
+		t.Fatal("setup: expected ComposeEmpty() false while the delete-confirm overlay is open")
+	}
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if consumed {
+		t.Error("expected plain left arrow to NOT be consumed while the delete-confirm overlay is open")
+	}
+}
+
+// C-Mail's compose input is focused for the entire detail view exactly like
+// Chatrooms', and now gets the same background-resume treatment (see
+// TestActivateScreen_CMailConvSurvivesTabSwitch), so it needs the same
+// bare-arrow-escapes-empty-compose behavior.
+
+func TestHandleKeys_Left_CyclesTabs_WhileCMailInputFocusedAndComposeEmpty(t *testing.T) {
+	a := setupCMailDetail(loggedInApp())
+	if !a.cmail.ComposeEmpty() {
+		t.Fatal("setup: expected an empty compose box")
+	}
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if !consumed {
+		t.Error("expected plain left arrow to be consumed (tab-cycle) while the compose box is empty")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected plain left arrow to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_Right_CyclesTabs_WhileCMailInputFocusedAndComposeEmpty(t *testing.T) {
+	a := setupCMailDetail(loggedInApp())
+	before := tabIndexOf(a)
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyRight})
+	if !consumed {
+		t.Error("expected plain right arrow to be consumed (tab-cycle) while the compose box is empty")
+	}
+	if tabIndexOf(a2) == before {
+		t.Error("expected plain right arrow to cycle to a different tab")
+	}
+}
+
+func TestHandleKeys_Left_NotConsumed_WhileCMailInputFocusedAndComposeHasText(t *testing.T) {
+	a := setupCMailDetail(loggedInApp())
+	cm, _ := a.cmail.Update(keyMsg("h")) // types into the compose box, not a nav key
+	a.cmail = cm
+	if a.cmail.ComposeEmpty() {
+		t.Fatal("setup: expected a non-empty compose box")
+	}
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyLeft})
+	if consumed {
+		t.Error("expected plain left arrow to NOT be consumed while there's text in the compose box — it must move the cursor instead")
+	}
+}
+
 // --- Search shortcut ('/') ---
 
 func TestHandleKeys_Slash_OpensSearch(t *testing.T) {
@@ -582,6 +687,70 @@ func TestHandleKeys_Slash_NotConsumed_WhileChatroomsInputFocused(t *testing.T) {
 	_, _, consumed := a.handleKeys(keyMsg("/"))
 	if consumed {
 		t.Error("expected '/' to NOT be consumed while chatrooms input is focused — it must still type into the compose box (needed for /dice, /me, etc.)")
+	}
+}
+
+// --- Flag/report overlay: same input-focus bug class as chatrooms/cmail ---
+
+// setupFeedFlagPromptOpen opens the flag/report overlay on someone else's
+// post via FeedModel's own Update, mirroring setupChatroomsDetailWithURL
+// above (ComposeActive() must report true afterwards, or handleKeys will
+// treat later keys as global shortcuts instead of reason-box input).
+func setupFeedFlagPromptOpen(a App) App {
+	a.active = screenFeed
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "bob", Content: "not mine"},
+	}, "")
+	a.feed = a.feed.SetCurrentUsername("alice")
+	m, _ := a.feed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	a.feed = m
+	return a
+}
+
+func TestHandleKeys_Q_NotConsumed_WhileFeedFlagPromptOpen(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	if !a.feed.ComposeActive() {
+		t.Fatal("setup: expected flag prompt open (ComposeActive true) after '!'")
+	}
+	_, _, consumed := a.handleKeys(keyMsg("q"))
+	if consumed {
+		t.Error("expected plain 'q' to NOT be consumed while the flag/report reason box is focused — it must still type into the reason field")
+	}
+}
+
+func TestHandleKeys_Digit_NotConsumed_WhileFeedFlagPromptOpen(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	_, _, consumed := a.handleKeys(keyMsg("1"))
+	if consumed {
+		t.Error("expected digit '1' to NOT be consumed while the flag/report reason box is focused — it must still type into the reason field")
+	}
+}
+
+func TestHandleKeys_CtrlQ_QuitsWhileFeedFlagPromptOpen(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	_, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if !consumed {
+		t.Error("expected ctrl+q to be consumed even while the flag/report reason box is focused")
+	}
+	if cmd == nil {
+		t.Error("expected ctrl+q to fire a quit command")
+	}
+}
+
+func TestHandleKeys_Digit_NotConsumed_WhileFeedConfirmingDelete(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine"},
+	}, "")
+	a.feed = a.feed.SetCurrentUsername("alice")
+	m, _ := a.feed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	a.feed = m
+	if !a.feed.ComposeActive() {
+		t.Fatal("setup: expected delete-confirm overlay open (ComposeActive true) after 'd'")
+	}
+	_, _, consumed := a.handleKeys(keyMsg("1"))
+	if consumed {
+		t.Error("expected digit '1' to NOT be consumed while the delete-confirm overlay is open")
 	}
 }
 
@@ -1237,6 +1406,149 @@ func TestFriendlyErr_404IsSoftened(t *testing.T) {
 	}
 }
 
+// friendlyErr also softens EMAIL_NOT_VERIFIED — the one other error code the
+// app branches on by Code rather than Status, since it can surface from any
+// authenticated call, not just login.
+func TestFriendlyErr_EmailNotVerifiedIsSoftened(t *testing.T) {
+	got := friendlyErr(&api.APIError{Code: "EMAIL_NOT_VERIFIED", Status: 403, Message: "email not verified"})
+	if got != "Please verify your email — check your inbox for the verification link." {
+		t.Errorf("friendlyErr(EMAIL_NOT_VERIFIED) = %q, want softened message", got)
+	}
+}
+
+// loginErrMsgFor is what routes an EMAIL_NOT_VERIFIED profile-fetch failure
+// (login itself succeeded — an idToken is required to call
+// resend-verification) into a distinguishable LoginErrMsg the login screen
+// can offer a resend action from, instead of a generic error.
+func TestLoginErrMsgFor_EmailNotVerifiedCarriesIDToken(t *testing.T) {
+	err := &api.APIError{Code: "EMAIL_NOT_VERIFIED", Status: 403, Message: "email not verified"}
+	got := loginErrMsgFor(err, "id-abc")
+	if !got.EmailNotVerified {
+		t.Error("expected EmailNotVerified = true")
+	}
+	if got.IDToken != "id-abc" {
+		t.Errorf("IDToken = %q, want id-abc", got.IDToken)
+	}
+	if got.Err != err {
+		t.Errorf("Err = %v, want the original error", got.Err)
+	}
+}
+
+func TestLoginErrMsgFor_OtherErrorsDoNotSetEmailNotVerified(t *testing.T) {
+	got := loginErrMsgFor(&api.APIError{Code: "UNAUTHORIZED", Status: 401, Message: "bad credentials"}, "id-abc")
+	if got.EmailNotVerified {
+		t.Error("expected EmailNotVerified = false for an unrelated error")
+	}
+	if got.IDToken != "" {
+		t.Errorf("IDToken = %q, want empty for an unrelated error", got.IDToken)
+	}
+}
+
+// emailNotVerifiedClient simulates a login that succeeds but whose follow-up
+// profile fetch is rejected because the account's email isn't verified —
+// the actual failure point per the API docs (Login itself doesn't gate on
+// verification; an idToken is needed to call resend-verification).
+type emailNotVerifiedClient struct {
+	*api.MockClient
+}
+
+func (c *emailNotVerifiedClient) GetOwnProfile() (model.User, error) {
+	return model.User{}, &api.APIError{Code: "EMAIL_NOT_VERIFIED", Status: 403, Message: "email not verified"}
+}
+
+// TestLoginCmd_EmailNotVerified_ReturnsDistinguishableLoginErrMsg confirms
+// the end-to-end wiring: a real Login() success followed by an
+// EMAIL_NOT_VERIFIED profile-fetch failure produces a LoginErrMsg carrying
+// the idToken the login screen needs to offer a resend action, not a
+// generic error.
+func TestLoginCmd_EmailNotVerified_ReturnsDistinguishableLoginErrMsg(t *testing.T) {
+	a := NewApp(&emailNotVerifiedClient{MockClient: api.NewMockClient()})
+	msg := a.loginCmd("user@example.com", "secret")()
+	lem, ok := msg.(screens.LoginErrMsg)
+	if !ok {
+		t.Fatalf("expected LoginErrMsg, got %T", msg)
+	}
+	if !lem.EmailNotVerified {
+		t.Error("expected EmailNotVerified = true")
+	}
+	if lem.IDToken == "" {
+		t.Error("expected a non-empty IDToken carried over from the successful Login() call")
+	}
+}
+
+// resendVerificationSpyClient records the idToken ResendVerification was
+// called with, and returns a canned error.
+type resendVerificationSpyClient struct {
+	*api.MockClient
+	gotIDToken string
+	err        error
+}
+
+func (c *resendVerificationSpyClient) ResendVerification(idToken string) error {
+	c.gotIDToken = idToken
+	return c.err
+}
+
+func TestResendVerificationCmd_CallsClientAndWrapsResult(t *testing.T) {
+	spy := &resendVerificationSpyClient{MockClient: api.NewMockClient()}
+	a := NewApp(spy)
+
+	msg := a.resendVerificationCmd("id-abc")()
+	rvr, ok := msg.(screens.ResendVerificationResultMsg)
+	if !ok {
+		t.Fatalf("expected ResendVerificationResultMsg, got %T", msg)
+	}
+	if rvr.Err != nil {
+		t.Errorf("Err = %v, want nil", rvr.Err)
+	}
+	if spy.gotIDToken != "id-abc" {
+		t.Errorf("ResendVerification called with %q, want id-abc", spy.gotIDToken)
+	}
+}
+
+func TestResendVerificationCmd_PropagatesError(t *testing.T) {
+	wantErr := errors.New("rate limited")
+	spy := &resendVerificationSpyClient{MockClient: api.NewMockClient(), err: wantErr}
+	a := NewApp(spy)
+
+	msg := a.resendVerificationCmd("id-abc")()
+	rvr, ok := msg.(screens.ResendVerificationResultMsg)
+	if !ok {
+		t.Fatalf("expected ResendVerificationResultMsg, got %T", msg)
+	}
+	if rvr.Err != wantErr {
+		t.Errorf("Err = %v, want %v", rvr.Err, wantErr)
+	}
+}
+
+// flagErrorMsg softens the documented self-report 403 into a friendly banner;
+// anything else falls through to the normal actionErrMsg handling.
+func TestFlagErrorMsg_403IsSoftened(t *testing.T) {
+	got := flagErrorMsg(&api.APIError{Code: "FORBIDDEN", Status: 403, Message: "cannot flag own content"})
+	msg, ok := got.(notifyMsg)
+	if !ok {
+		t.Fatalf("flagErrorMsg(403) = %T, want notifyMsg", got)
+	}
+	if msg.level != notifyError {
+		t.Errorf("level = %v, want notifyError", msg.level)
+	}
+	if msg.text != "you can't report your own content" {
+		t.Errorf("text = %q, want friendly self-report message", msg.text)
+	}
+}
+
+func TestFlagErrorMsg_OtherErrorsFallThrough(t *testing.T) {
+	err := &api.APIError{Code: "RATE_LIMITED", Status: 429, Message: "too many requests"}
+	got := flagErrorMsg(err)
+	ae, ok := got.(actionErrMsg)
+	if !ok {
+		t.Fatalf("flagErrorMsg(429) = %T, want actionErrMsg", got)
+	}
+	if ae.err != err {
+		t.Errorf("actionErrMsg.err = %v, want the original error", ae.err)
+	}
+}
+
 // --- routeURL: ephemeral (SSH) sessions must not drive host side effects ---
 
 func TestRouteURL_EphemeralBlocksExternalOpen(t *testing.T) {
@@ -1666,6 +1978,40 @@ func TestActivateScreen_ChatroomsRoomSurvivesTabSwitch(t *testing.T) {
 	}
 }
 
+// TestActivateScreen_CMailConvSurvivesTabSwitch mirrors
+// TestActivateScreen_ChatroomsRoomSurvivesTabSwitch above — C-Mail's open
+// conversation now stays live in the background the same way, via
+// CMailModel.SetFocused and screens.IsDMStreamMsg routing in handleCMail.
+func TestActivateScreen_CMailConvSurvivesTabSwitch(t *testing.T) {
+	a := loggedInApp()
+	a, _ = activateScreen(a, screenCMail)
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "trinity"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	if !a.cmail.IsShowingDetail() {
+		t.Fatal("setup: expected entering a conversation via enter to reach detail mode")
+	}
+
+	a, _ = activateScreen(a, screenFeed) // switch away to another tab
+	if !a.cmail.IsShowingDetail() {
+		t.Error("expected the open conversation to stay open while another tab is active")
+	}
+	if !strings.Contains(a.cmail.View(), "trinity") {
+		t.Error("expected the same conversation (trinity) still shown after switching away")
+	}
+
+	a, _ = activateScreen(a, screenCMail) // switch back
+	if !a.cmail.IsShowingDetail() {
+		t.Error("expected switching back to C-Mail to resume the still-open conversation, not the conversation list")
+	}
+	if !strings.Contains(a.cmail.View(), "trinity") {
+		t.Error("expected the same conversation (trinity) still shown after switching back")
+	}
+}
+
 // --- Kitty image-modal cleanup survives a fast follow-up keystroke ---
 //
 // Reported behavior: typing while an image loads could leave the Kitty image
@@ -1856,7 +2202,7 @@ func TestUpdate_ImageModal_OtherKey_ClosesAndClearsCarousel(t *testing.T) {
 	a.imageModalOpen = true
 	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
 	a.imageCarouselIndex = 1
-	a.imageCache = map[string]image.Image{"https://x.com/a.jpg": image.NewRGBA(image.Rect(0, 0, 2, 2))}
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{image.NewRGBA(image.Rect(0, 0, 2, 2))}}}
 	genBefore := a.imageFetchGen
 
 	m, _ := a.Update(keyMsg("x"))
@@ -1881,7 +2227,7 @@ func TestOpenImageInTerminal_CacheHit_SkipsFetch(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolKitty
 	cachedImg := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	a.imageCache = map[string]image.Image{"https://x.com/a.jpg": cachedImg}
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{cachedImg}}}
 
 	_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
 	if cmd == nil {
@@ -1897,7 +2243,7 @@ func TestOpenImageInTerminal_CacheHit_SkipsFetch(t *testing.T) {
 	if fm.err != nil {
 		t.Errorf("expected no error on a cache hit, got %v", fm.err)
 	}
-	if fm.decoded != cachedImg {
+	if len(fm.frames) != 1 || fm.frames[0] != cachedImg {
 		t.Error("expected the cached image to be reused rather than re-fetched")
 	}
 	if fm.encoded == "" {
@@ -1909,11 +2255,12 @@ func TestHandleImageViewer_Success_PopulatesCache(t *testing.T) {
 	a := loggedInApp()
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 
-	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", decoded: img, encoded: "seq", cols: 2, rows: 2})
+	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", frames: []image.Image{img}, encoded: "seq", encodedFrames: []string{"seq"}, cols: 2, rows: 2})
 	if !ok {
 		t.Fatal("expected imageFetchedMsg to be handled")
 	}
-	if a2.imageCache["https://x.com/a.jpg"] != img {
+	cached := a2.imageCache["https://x.com/a.jpg"]
+	if len(cached.frames) != 1 || cached.frames[0] != img {
 		t.Error("expected the decoded image to be cached under its URL")
 	}
 }
@@ -1932,6 +2279,68 @@ func TestHandleImageViewer_StaleGeneration_Dropped(t *testing.T) {
 	}
 	if a2.imageModalEncoded != "current" {
 		t.Error("expected a stale (superseded) result to be dropped, not overwrite the current image")
+	}
+}
+
+func TestHandleImageViewer_GIFSuccess_StartsTicker(t *testing.T) {
+	a := loggedInApp()
+	a.imageFetchGen = 5
+
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{
+		rawURL:        "https://x.com/a.gif",
+		gen:           5,
+		encodedFrames: []string{"f0", "f1", "f2"},
+		delays:        []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond},
+		encoded:       "f0",
+		cols:          2, rows: 2,
+	})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if a2.imageModalEncoded != "f0" {
+		t.Errorf("imageModalEncoded = %q, want %q", a2.imageModalEncoded, "f0")
+	}
+	if cmd == nil {
+		t.Error("expected a cmd to schedule the next GIF frame")
+	}
+}
+
+func TestHandleImageViewer_GifFrameTick_AdvancesFrame(t *testing.T) {
+	a := loggedInApp()
+	a.imageFetchGen = 7
+
+	msg := gifFrameTickMsg{
+		gen:           7,
+		encodedFrames: []string{"f0", "f1", "f2"},
+		delays:        []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond},
+		idx:           1,
+	}
+	a2, cmd, ok := a.handleImageViewer(msg)
+	if !ok {
+		t.Fatal("expected gifFrameTickMsg to be handled")
+	}
+	if a2.imageModalEncoded != "f1" {
+		t.Errorf("imageModalEncoded = %q, want %q", a2.imageModalEncoded, "f1")
+	}
+	if cmd == nil {
+		t.Error("expected a cmd to schedule the next GIF frame")
+	}
+}
+
+func TestHandleImageViewer_GifFrameTick_StaleGenDropped(t *testing.T) {
+	a := loggedInApp()
+	a.imageFetchGen = 5
+	a.imageModalEncoded = "current"
+
+	a2, cmd, ok := a.handleImageViewer(gifFrameTickMsg{gen: 3, encodedFrames: []string{"f0", "f1"}, delays: []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}, idx: 1})
+	if !ok {
+		t.Fatal("expected gifFrameTickMsg to be handled (and dropped)")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd for a stale tick")
+	}
+	if a2.imageModalEncoded != "current" {
+		t.Error("expected a stale (superseded) tick to be dropped, not overwrite the current frame")
 	}
 }
 

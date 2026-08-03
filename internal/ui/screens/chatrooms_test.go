@@ -1,8 +1,10 @@
 package screens
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -56,7 +58,7 @@ func TestRenderRoomUsersPanel_OwnNameUsesMeHighlight(t *testing.T) {
 		{Username: "bob"},
 	}
 
-	out := renderRoomUsersPanel(users, "ragnar")
+	out := renderRoomUsersPanel(users, "ragnar", 0)
 
 	if !strings.Contains(out, theme.MeHighlight.Render("ragnar")) {
 		t.Errorf("expected own name styled with MeHighlight, got: %q", out)
@@ -78,7 +80,7 @@ func TestRenderRoomUsersPanel_AdminMarkerStaysHighlightRegardlessOfViewer(t *tes
 		{Username: "ragnar", IsChatAdmin: true}, // admin, and the viewer
 	}
 
-	out := renderRoomUsersPanel(users, "ragnar")
+	out := renderRoomUsersPanel(users, "ragnar", 0)
 
 	marker := theme.Highlight.Render("★ ")
 	if strings.Count(out, marker) != 2 {
@@ -89,6 +91,48 @@ func TestRenderRoomUsersPanel_AdminMarkerStaysHighlightRegardlessOfViewer(t *tes
 	}
 	if !strings.Contains(out, marker+theme.MeHighlight.Render("ragnar")) {
 		t.Errorf("expected the viewer's own admin name styled with MeHighlight (not Highlight), got: %q", out)
+	}
+}
+
+// TestRenderRoomUsersPanel_IdleBadge confirms a user whose LastActivity is
+// older than idleAfterMs gets the 💤 prefix, and one still within the window
+// does not.
+func TestRenderRoomUsersPanel_IdleBadge(t *testing.T) {
+	withTrueColor(t)
+	longIdle := time.Now().Add(-20 * time.Minute)
+	recentActivity := time.Now().Add(-1 * time.Minute)
+	users := []model.RoomUser{
+		{Username: "sleepy", LastActivity: &longIdle},
+		{Username: "awake", LastActivity: &recentActivity},
+	}
+
+	out := renderRoomUsersPanel(users, "", 600000) // idleAfterMs = 10min
+
+	lines := strings.Split(out, "\n")
+	badgeIdx := strings.Index(lines[0], "💤")
+	nameIdx := strings.Index(lines[0], "sleepy")
+	if badgeIdx == -1 {
+		t.Fatalf("expected sleepy's row to carry the idle badge, got: %q", lines[0])
+	}
+	if badgeIdx > nameIdx {
+		t.Errorf("expected the idle badge before the username, got badge at %d, name at %d: %q", badgeIdx, nameIdx, lines[0])
+	}
+	if strings.Contains(lines[1], "💤") {
+		t.Errorf("expected awake's row to have no idle badge, got: %q", lines[1])
+	}
+}
+
+// TestRenderRoomUsersPanel_NilLastActivityNeverIdle confirms a nil
+// LastActivity (client never reported one) always renders active, regardless
+// of idleAfterMs, and doesn't panic on the nil-dereference path.
+func TestRenderRoomUsersPanel_NilLastActivityNeverIdle(t *testing.T) {
+	withTrueColor(t)
+	users := []model.RoomUser{{Username: "mystery"}}
+
+	out := renderRoomUsersPanel(users, "", 1) // smallest possible idleAfterMs
+
+	if strings.Contains(out, "💤") {
+		t.Errorf("expected no idle badge for a nil LastActivity, got: %q", out)
 	}
 }
 
@@ -136,6 +180,15 @@ func TestPanelWidths_NeverBetweenZeroAndPreferred(t *testing.T) {
 		if usersW != 0 && usersW != roomUsersPanelPreferredWidth {
 			t.Fatalf("width=%d: usersW = %d, want 0 or exactly %d", width, usersW, roomUsersPanelPreferredWidth)
 		}
+	}
+}
+
+// TestRoomUsersPanelPreferredWidth_AccountsForIdleBadge guards the width bump
+// that came with the idle badge: admin marker(2) + username(20) + idle
+// badge(3) + padding(2) = 27.
+func TestRoomUsersPanelPreferredWidth_AccountsForIdleBadge(t *testing.T) {
+	if roomUsersPanelPreferredWidth != 27 {
+		t.Errorf("roomUsersPanelPreferredWidth = %d, want 27", roomUsersPanelPreferredWidth)
 	}
 }
 
@@ -196,6 +249,125 @@ func TestHeartbeatTick_ActiveRoomReschedules(t *testing.T) {
 	_, cmd := m.Update(roomHeartbeatTickMsg{roomID: "zion"})
 	if cmd == nil {
 		t.Fatal("expected a batch command (send heartbeat + reschedule tick)")
+	}
+}
+
+// --- own idle tracking (extra out-of-cycle heartbeat on a self idle/active flip) ---
+
+// presenceSpyClient counts AnnouncePresence calls so tests can verify an
+// extra out-of-cycle heartbeat actually fires (a returned tea.Cmd is lazy —
+// nothing runs until it's invoked).
+type presenceSpyClient struct {
+	*api.MockClient
+	calls int
+}
+
+func (c *presenceSpyClient) AnnouncePresence(roomID string, lastActivity time.Time) (int, int, int, error) {
+	c.calls++
+	return c.MockClient.AnnouncePresence(roomID, lastActivity)
+}
+
+// drainCmd recursively executes cmd (and, if it's a tea.Batch, every command
+// inside it) so a test can observe side effects of commands that would
+// otherwise only run once the Bubble Tea runtime gets around to them.
+func drainCmd(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			drainCmd(c)
+		}
+	}
+}
+
+// TestSelfShownIdle_MatchesPanelRendering exercises selfShownIdle's cases
+// directly: no self entry in the presence list, a fresh self entry, a stale
+// one, and idleAfterMs not yet known (<= 0, the pre-first-announce default).
+func TestSelfShownIdle_MatchesPanelRendering(t *testing.T) {
+	stale := time.Now().Add(-20 * time.Minute)
+	fresh := time.Now()
+
+	m := ChatroomsModel{currentUser: "neo", idleAfterMs: 600000}
+	if m.selfShownIdle() {
+		t.Error("expected false with no self entry in roomUsers")
+	}
+
+	m.roomUsers = []model.RoomUser{{Username: "neo", LastActivity: &fresh}}
+	if m.selfShownIdle() {
+		t.Error("expected false for a fresh self entry")
+	}
+
+	m.roomUsers = []model.RoomUser{{Username: "neo", LastActivity: &stale}}
+	if !m.selfShownIdle() {
+		t.Error("expected true for a stale self entry past idleAfterMs")
+	}
+
+	m.idleAfterMs = 0
+	if m.selfShownIdle() {
+		t.Error("expected false when idleAfterMs isn't known yet (<= 0)")
+	}
+}
+
+// TestChatroomsModel_KeyPressCorrectsStaleSelfIdleBadge confirms a keypress
+// while the panel currently shows our own entry as idle (a stale
+// server-recorded lastActivity, regardless of how recently we've actually
+// been typing) fires an immediate corrective heartbeat rather than waiting
+// for the next scheduled tick — this is the fix for the badge getting stuck
+// showing idle while the user keeps typing.
+func TestChatroomsModel_KeyPressCorrectsStaleSelfIdleBadge(t *testing.T) {
+	spy := &presenceSpyClient{MockClient: api.NewMockClient()}
+	m := chatroomsInRoom(spy, "zion")
+	m.idleAfterMs = 600000
+	stale := time.Now().Add(-20 * time.Minute)
+	m.roomUsers = []model.RoomUser{{Username: "neo", LastActivity: &stale}}
+	// lastHeartbeatSentAt left at its zero value — well outside the cooldown.
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+
+	if time.Since(m.lastActivityAt) > time.Second {
+		t.Errorf("expected lastActivityAt to be refreshed to now, got %v", m.lastActivityAt)
+	}
+	drainCmd(cmd)
+	if spy.calls != 1 {
+		t.Errorf("expected exactly one corrective heartbeat call, got %d", spy.calls)
+	}
+}
+
+// TestChatroomsModel_KeyPressWhileActiveDoesNotExtraBeat confirms a keypress
+// while the panel already shows us as active (no self entry, or a fresh one)
+// doesn't fire a spurious extra heartbeat.
+func TestChatroomsModel_KeyPressWhileActiveDoesNotExtraBeat(t *testing.T) {
+	spy := &presenceSpyClient{MockClient: api.NewMockClient()}
+	m := chatroomsInRoom(spy, "zion")
+	m.idleAfterMs = 600000
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	drainCmd(cmd)
+	if spy.calls != 0 {
+		t.Errorf("expected no extra heartbeat when the panel doesn't show us idle, got %d calls", spy.calls)
+	}
+}
+
+// TestChatroomsModel_KeyPressRespectsCorrectionCooldown guards the failure
+// mode a fast typing burst right after a correction could otherwise hit: the
+// panel's stale view of self won't clear until the corrective heartbeat
+// round-trips through the server and RTDB, so without a cooldown, every key
+// typed in that gap would fire another heartbeat — risking the 15/min-per-
+// room presence rate limit.
+func TestChatroomsModel_KeyPressRespectsCorrectionCooldown(t *testing.T) {
+	spy := &presenceSpyClient{MockClient: api.NewMockClient()}
+	m := chatroomsInRoom(spy, "zion")
+	m.idleAfterMs = 600000
+	stale := time.Now().Add(-20 * time.Minute)
+	m.roomUsers = []model.RoomUser{{Username: "neo", LastActivity: &stale}}
+	m.lastHeartbeatSentAt = time.Now() // a correction (or heartbeat) just fired
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	drainCmd(cmd)
+	if spy.calls != 0 {
+		t.Errorf("expected the cooldown to block a second correction so soon, got %d calls", spy.calls)
 	}
 }
 
@@ -855,6 +1027,122 @@ func TestMentionGhostText_RendersAdjacentToCursorAtConstantWidth(t *testing.T) {
 	}
 }
 
+// TestChatrooms_Esc_WhileBrowsing_ResetsViewportToBottom guards a real bug
+// found in manual testing: esc while browsing cleared the selection and
+// refocused the input, but — unlike the "down past the newest message"
+// exit path — left the viewport wherever browsing had scrolled it, instead
+// of also jumping back to the live tail.
+func TestChatrooms_Esc_WhileBrowsing_ResetsViewportToBottom(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	var msgs []model.Message
+	for i := 1; i <= 30; i++ {
+		msgs = append(msgs, model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "molly"},
+			Body:      fmt.Sprintf("message %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+	m = m.SetMessages("zion", msgs)
+	if !m.viewport.AtBottom() {
+		t.Fatal("setup: expected the viewport to start at the bottom after SetMessages")
+	}
+
+	for i := 0; i < len(msgs); i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q after paging all the way up, want m1", m.selectedMsgID)
+	}
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected paging up through browsing to leave the bottom")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.selectedMsgID != "" {
+		t.Errorf("selectedMsgID = %q, want cleared after esc", m.selectedMsgID)
+	}
+	if !m.viewport.AtBottom() {
+		t.Errorf("expected esc to reset the viewport to the bottom, YOffset=%d maxYOffset≈%d", m.viewport.YOffset, m.viewport.Height)
+	}
+}
+
+// TestChatrooms_SettingsRefresh_WhileTyping_ResetsViewportToBottom guards a
+// real bug: an incoming SharedConfigMsg (e.g. the settings refresh fired
+// after the user's own /mute or /unmute) re-filters and re-renders the
+// message list via refreshMessages(), which changes the rendered line count
+// but never touched viewport.YOffset — leaving the view pinned to a stale
+// raw line number that now maps to different content instead of following
+// the reload, the same class of bug the esc-while-browsing case above guards.
+func TestChatrooms_SettingsRefresh_WhileTyping_ResetsViewportToBottom(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	var msgs []model.Message
+	for i := 1; i <= 30; i++ {
+		msgs = append(msgs, model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "molly"},
+			Body:      fmt.Sprintf("message %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+	m = m.SetMessages("zion", msgs)
+	m.viewport.SetYOffset(0)
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected the viewport to start away from the bottom")
+	}
+
+	m, _ = m.Update(SharedConfigMsg{Settings: model.Settings{MutedUsersByRoom: map[string][]string{"zion": {"molly"}}}})
+
+	if !m.viewport.AtBottom() {
+		t.Errorf("expected a settings refresh to reset the viewport to the bottom while typing, YOffset=%d", m.viewport.YOffset)
+	}
+}
+
+// TestChatrooms_SettingsRefresh_WhileBrowsing_KeepsSelectionVisible mirrors
+// the above for the browsing-a-selected-message case: the selected message
+// should stay on screen (not necessarily at the bottom) after the reload.
+func TestChatrooms_SettingsRefresh_WhileBrowsing_KeepsSelectionVisible(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	var msgs []model.Message
+	for i := 1; i <= 30; i++ {
+		msgs = append(msgs, model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "molly"},
+			Body:      fmt.Sprintf("message %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+	m = m.SetMessages("zion", msgs)
+	for i := 0; i < len(msgs); i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q after paging all the way up, want m1", m.selectedMsgID)
+	}
+
+	m, _ = m.Update(SharedConfigMsg{Settings: model.Settings{MutedUsersByRoom: map[string][]string{"zion": {"someoneElse"}}}})
+
+	idx := -1
+	for i, msg := range m.messages {
+		if msg.ID == m.selectedMsgID {
+			idx = i
+		}
+	}
+	if idx == -1 {
+		t.Fatalf("selected message %q not found after refresh", m.selectedMsgID)
+	}
+	itemStart := m.msgOffsets[idx]
+	itemEnd := itemStart + m.msgHeights[idx] - 1
+	if itemStart < m.viewport.YOffset || itemEnd >= m.viewport.YOffset+m.viewport.Height {
+		t.Errorf("selected message (lines %d-%d) not visible in viewport window [%d, %d)",
+			itemStart, itemEnd, m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height)
+	}
+}
+
 // TestMentionGhostText_CursorOverlayUsesGhostColor guards against the
 // overlaid character rendering in normal text color during the cursor's
 // text-style blink phase, which would make it indistinguishable from
@@ -870,5 +1158,143 @@ func TestMentionGhostText_CursorOverlayUsesGhostColor(t *testing.T) {
 	wantChar := theme.Subtle.Inline(true).Render("i")
 	if !strings.Contains(view, wantChar) {
 		t.Errorf("expected the cursor-overlaid character styled in ghost color (%q) somewhere in the view, got:\n%s", wantChar, view)
+	}
+}
+
+// --- style animation ticker (coarse-scoped, see maybeStartStyleAnim) ---
+
+func TestUpdate_StartsStyleAnimTickerWhenAnimatedMessageArrives(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	m, cmd := m.Update(roomReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})
+
+	if !m.styleAnimRunning {
+		t.Error("expected styleAnimRunning = true after an animated-style message arrived")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd to start the animation ticker")
+	}
+}
+
+func TestUpdate_NoStyleAnimTickerForPlainMessage(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "m1", Body: "hi"}})
+
+	if m.styleAnimRunning {
+		t.Error("expected styleAnimRunning = false for a message with no animated style")
+	}
+}
+
+func TestUpdate_StyleAnimTick_AdvancesFrameAndRearms(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"glitch"}}})
+	if !m.styleAnimRunning {
+		t.Fatal("setup: expected styleAnimRunning = true")
+	}
+
+	m, cmd := m.Update(styleAnimTickMsg{})
+
+	if m.styleAnimFrame != 1 {
+		t.Errorf("styleAnimFrame = %d, want 1", m.styleAnimFrame)
+	}
+	if !m.styleAnimRunning {
+		t.Error("expected styleAnimRunning to stay true (rearmed) while the glitch message is still loaded")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd to rearm the ticker")
+	}
+}
+
+// --- spoiler reveal (see updateBrowsingKey's "enter" case) ---
+
+func TestBrowsing_Enter_TogglesSpoilerReveal(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "the ending is a twist", Style: []string{"spoiler"}, CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+	renderedWithReveal := func(m ChatroomsModel) string {
+		content, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil)
+		return content
+	}
+	if strings.Contains(renderedWithReveal(m), "the ending is a twist") {
+		t.Fatal("setup: expected spoiler body to start masked")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.revealed["m1"] {
+		t.Error("expected revealed[m1] = true after enter")
+	}
+	if !strings.Contains(renderedWithReveal(m), "the ending is a twist") {
+		t.Errorf("expected spoiler body revealed after enter, got: %q", renderedWithReveal(m))
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.revealed["m1"] {
+		t.Error("expected revealed[m1] = false after a second enter (toggle back off)")
+	}
+	if strings.Contains(renderedWithReveal(m), "the ending is a twist") {
+		t.Error("expected spoiler body masked again after toggling off")
+	}
+}
+
+func TestBrowsing_Enter_NoOpForNonSpoilerMessage(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.revealed["m1"] {
+		t.Error("expected enter on a non-spoiler message to be a no-op")
+	}
+}
+
+// TestBrowsing_Enter_TogglesL33tReveal confirms l33t-styled messages use the
+// same reveal toggle as spoiler: substituted text by default, enter reveals
+// the original unsubstituted text, a second enter re-obscures it.
+func TestBrowsing_Enter_TogglesL33tReveal(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "elite", Style: []string{"l33t"}, CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	renderedWithReveal := func(m ChatroomsModel) string {
+		content, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil)
+		return content
+	}
+	if !strings.Contains(renderedWithReveal(m), "3l173") {
+		t.Fatalf("setup: expected l33t-substituted text before reveal, got: %q", renderedWithReveal(m))
+	}
+	if strings.Contains(renderedWithReveal(m), "elite") {
+		t.Fatal("setup: did not expect original text visible before reveal")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.revealed["m1"] {
+		t.Error("expected revealed[m1] = true after enter")
+	}
+	if !strings.Contains(renderedWithReveal(m), "elite") {
+		t.Errorf("expected original text revealed after enter, got: %q", renderedWithReveal(m))
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.revealed["m1"] {
+		t.Error("expected revealed[m1] = false after a second enter (toggle back off)")
+	}
+	if !strings.Contains(renderedWithReveal(m), "3l173") {
+		t.Error("expected l33t-substituted text again after toggling off")
 	}
 }

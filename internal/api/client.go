@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +69,10 @@ type refreshResponseData struct {
 	RTDBUrl   string `json:"rtdbUrl"`
 }
 
+type resendVerificationRequest struct {
+	IDToken string `json:"idToken"`
+}
+
 type wireAttachment struct {
 	Type   string `json:"type"`
 	Src    string `json:"src"`
@@ -76,6 +82,36 @@ type wireAttachment struct {
 	Artist string `json:"artist,omitempty"`
 	Title  string `json:"title,omitempty"`
 	Genre  string `json:"genre,omitempty"`
+}
+
+// wireStyle decodes a message's `style` field, sent as either a single
+// string or an array of strings for chained styles (e.g. "rainbow" or
+// ["comic","rainbow"]).
+type wireStyle []string
+
+func (s *wireStyle) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*s = nil
+		return nil
+	}
+	if b[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal(b, &arr); err != nil {
+			return err
+		}
+		*s = arr
+		return nil
+	}
+	var str string
+	if err := json.Unmarshal(b, &str); err != nil {
+		return err
+	}
+	if str != "" {
+		*s = []string{str}
+	} else {
+		*s = nil
+	}
+	return nil
 }
 
 // apiTimestamp decodes a JSON value that may be an RFC3339 string (the
@@ -303,6 +339,15 @@ type createBookmarkResponseData struct {
 	BookmarkID string `json:"bookmarkId"`
 }
 
+type flagRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type flagResponseData struct {
+	FlagID         string `json:"flagId"`
+	AlreadyFlagged bool   `json:"alreadyFlagged"`
+}
+
 type createPostRequest struct {
 	Content  string   `json:"content"`
 	Title    string   `json:"title,omitempty"`
@@ -383,11 +428,13 @@ type wireSettings struct {
 	ImagePixelSize    string                `json:"imagePixelSize"`
 	TimeDisplayFormat string                `json:"timeDisplayFormat"`
 	DefaultPublicPost bool                  `json:"defaultPublicPost"`
+	MutedUsersByRoom  map[string][]string   `json:"mutedUsersByRoom"`
 }
 
 // wirePatchSettings is the PATCH /v1/settings payload — only the fields the
 // UI manages. Deferred fields (iconTheme, imagePixelSize, followedTopics,
-// mutedTopics) are intentionally excluded so the API never receives them.
+// mutedTopics, mutedUsersByRoom) are intentionally excluded so the API never
+// receives them — mutedUsersByRoom is server-managed via /mute commands, not PATCH.
 type wirePatchSettings struct {
 	Notifications     wireNotificationPrefs `json:"notifications"`
 	FilterNSFW        bool                  `json:"filterNSFW"`
@@ -411,10 +458,11 @@ type wireRoom struct {
 
 // wireRoomUser is a single entry from GET /v1/circ/:roomId/users.
 type wireRoomUser struct {
-	UserID      string `json:"userId"`
-	Username    string `json:"username"`
-	IsChatAdmin bool   `json:"isChatAdmin"`
-	LastSeen    int64  `json:"lastSeen"` // epoch ms
+	UserID       string `json:"userId"`
+	Username     string `json:"username"`
+	IsChatAdmin  bool   `json:"isChatAdmin"`
+	LastSeen     int64  `json:"lastSeen"`               // epoch ms
+	LastActivity *int64 `json:"lastActivity,omitempty"` // epoch ms, nil = always active
 }
 
 // wirePresenceResponse is returned by POST/DELETE /v1/circ/:roomId/presence.
@@ -423,26 +471,39 @@ type wirePresenceResponse struct {
 	Ok           bool   `json:"ok"`
 	HeartbeatMs  int    `json:"heartbeatMs"`
 	StaleAfterMs int    `json:"staleAfterMs"`
+	IdleAfterMs  int    `json:"idleAfterMs"`
+}
+
+// wirePresenceRequest is the optional POST /v1/circ/:roomId/presence body,
+// letting the caller report when they were last active.
+type wirePresenceRequest struct {
+	LastActivity int64 `json:"lastActivity"`
 }
 
 // wireRTDBPresenceEntry is the Firebase shape for one user's entry in
 // /chat_presence/<roomId>/<userId>.
 type wireRTDBPresenceEntry struct {
-	Username    string  `json:"username"`
-	IsChatAdmin bool    `json:"isChatAdmin"`
-	Online      bool    `json:"online"`
-	LastSeen    float64 `json:"lastSeen"` // epoch ms as a Firebase number
+	Username     string   `json:"username"`
+	IsChatAdmin  bool     `json:"isChatAdmin"`
+	Online       bool     `json:"online"`
+	LastSeen     float64  `json:"lastSeen"`               // epoch ms as a Firebase number
+	LastActivity *float64 `json:"lastActivity,omitempty"` // epoch ms, nil = always active
 }
 
 // wireCircMessage is a single message from GET /v1/circ/:roomId.
 type wireCircMessage struct {
-	ID          string `json:"id"`
-	UserID      string `json:"userId"`
-	Username    string `json:"username"`
-	IsChatAdmin bool   `json:"isChatAdmin"`
-	IsAction    bool   `json:"isAction"` // undocumented; true for /me and other emote commands
-	Content     string `json:"content"`
-	Timestamp   int64  `json:"timestamp"` // epoch ms
+	ID              string          `json:"id"`
+	UserID          string          `json:"userId"`
+	Username        string          `json:"username"`
+	IsChatAdmin     bool            `json:"isChatAdmin"`
+	IsAction        bool            `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content         string          `json:"content"`
+	Timestamp       int64           `json:"timestamp"` // epoch ms
+	Deleted         bool            `json:"deleted"`
+	ImageUrl        string          `json:"imageUrl,omitempty"`
+	GifUrl          string          `json:"gifUrl,omitempty"`
+	AudioAttachment *wireAttachment `json:"audioAttachment,omitempty"`
+	Style           wireStyle       `json:"style,omitempty"`
 }
 
 // --- C-Mail wire types ---
@@ -461,14 +522,31 @@ type wireCMailConversation struct {
 	UnreadCount    int                `json:"unreadCount"`
 }
 
+// wireRTDBUserConversationEntry is the Firebase shape for one conversation's
+// summary in /user_conversations/<uid>/<conversationId>. All fields except
+// UnreadCount are absent on some entries (older/stale conversations) — the
+// UI already falls back to "unknown" for a conversation with no participant
+// info, same as it does for the REST list.
+type wireRTDBUserConversationEntry struct {
+	OtherUserID   string `json:"otherUserId"`
+	OtherUsername string `json:"otherUsername"`
+	LastMessage   string `json:"lastMessage"`
+	LastMessageAt int64  `json:"lastMessageAt"` // epoch ms
+	UnreadCount   int    `json:"unreadCount"`
+}
+
 // wireCMailMessage is a single message from GET /v1/cmail/:id.
 type wireCMailMessage struct {
-	ID             string `json:"id"`
-	SenderID       string `json:"senderId"`
-	SenderUsername string `json:"senderUsername"`
-	IsAction       bool   `json:"isAction"` // undocumented; true for /me and other emote commands
-	Content        string `json:"content"`
-	Timestamp      int64  `json:"timestamp"` // epoch ms
+	ID              string          `json:"id"`
+	SenderID        string          `json:"senderId"`
+	SenderUsername  string          `json:"senderUsername"`
+	IsAction        bool            `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content         string          `json:"content"`
+	Timestamp       int64           `json:"timestamp"` // epoch ms
+	ImageUrl        string          `json:"imageUrl,omitempty"`
+	GifUrl          string          `json:"gifUrl,omitempty"`
+	AudioAttachment *wireAttachment `json:"audioAttachment,omitempty"`
+	Style           wireStyle       `json:"style,omitempty"`
 }
 
 // wireCMailStartResponse is returned by POST /v1/cmail.
@@ -495,23 +573,32 @@ type wireRTDBTypingEntry struct {
 
 // wireRTDBMessage is the Firebase shape for a DM message in /dm_messages/<convId>/<msgId>.
 type wireRTDBMessage struct {
-	SenderID       string  `json:"senderId"`
-	SenderUsername string  `json:"senderUsername"`
-	IsAction       bool    `json:"isAction"` // undocumented; true for /me and other emote commands
-	Content        string  `json:"content"`
-	Timestamp      float64 `json:"timestamp"` // epoch ms as a Firebase number
-	Read           bool    `json:"read"`
+	SenderID        string          `json:"senderId"`
+	SenderUsername  string          `json:"senderUsername"`
+	IsAction        bool            `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content         string          `json:"content"`
+	Timestamp       float64         `json:"timestamp"` // epoch ms as a Firebase number
+	Read            bool            `json:"read"`
+	ImageUrl        string          `json:"imageUrl,omitempty"`
+	GifUrl          string          `json:"gifUrl,omitempty"`
+	AudioAttachment *wireAttachment `json:"audioAttachment,omitempty"`
+	Style           wireStyle       `json:"style,omitempty"`
 }
 
 // wireRTDBCircMessage is the Firebase shape for a CIRC chatroom message in /chat_messages/<roomId>/<msgId>.
 // Field names differ from DM messages (userId/username vs senderId/senderUsername).
 type wireRTDBCircMessage struct {
-	UserID      string  `json:"userId"`
-	Username    string  `json:"username"`
-	IsChatAdmin bool    `json:"isChatAdmin"`
-	IsAction    bool    `json:"isAction"` // undocumented; true for /me and other emote commands
-	Content     string  `json:"content"`
-	Timestamp   float64 `json:"timestamp"` // epoch ms as a Firebase number
+	UserID          string          `json:"userId"`
+	Username        string          `json:"username"`
+	IsChatAdmin     bool            `json:"isChatAdmin"`
+	IsAction        bool            `json:"isAction"` // undocumented; true for /me and other emote commands
+	Content         string          `json:"content"`
+	Timestamp       float64         `json:"timestamp"` // epoch ms as a Firebase number
+	Deleted         bool            `json:"deleted"`
+	ImageUrl        string          `json:"imageUrl,omitempty"`
+	GifUrl          string          `json:"gifUrl,omitempty"`
+	AudioAttachment *wireAttachment `json:"audioAttachment,omitempty"`
+	Style           wireStyle       `json:"style,omitempty"`
 }
 
 // wireRTDBSSEData is the outer wrapper of a Firebase "put" SSE event's data field.
@@ -802,6 +889,39 @@ func wireAttachmentsToModel(ws []wireAttachment) []model.Attachment {
 	return out
 }
 
+// wireAudioAttachmentToModel converts a message's optional audioAttachment
+// object to the model type. Returns nil when w is nil.
+func wireAudioAttachmentToModel(w *wireAttachment) *model.Attachment {
+	if w == nil {
+		return nil
+	}
+	return &model.Attachment{
+		Type:   "audio",
+		Src:    w.Src,
+		Origin: w.Origin,
+		Artist: w.Artist,
+		Title:  w.Title,
+		Genre:  w.Genre,
+	}
+}
+
+// decodeArtBody base64-decodes content when styles contains "art" (the
+// /art command's response shape sends its ASCII art body base64-encoded).
+// Returns content unchanged otherwise. An undecodable payload falls back to
+// the raw string rather than dropping the message — same "never break the
+// rest of the decode" philosophy as apiTimestamp's unrecognized-shape fallback.
+func decodeArtBody(content string, styles []string) string {
+	if !slices.Contains(styles, "art") {
+		return content
+	}
+	decoded, err := base64.StdEncoding.DecodeString(content)
+	if err != nil {
+		log.Printf("api: decodeArtBody: bad base64 for art message")
+		return content
+	}
+	return string(decoded)
+}
+
 func wirePostToModel(w wirePost) model.Post {
 	sanitize.Strings(&w)
 	t := parseTime(string(w.CreatedAt))
@@ -919,6 +1039,7 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 		ImagePixelSize:    w.ImagePixelSize,
 		TimeDisplayFormat: w.TimeDisplayFormat,
 		DefaultPublicPost: w.DefaultPublicPost,
+		MutedUsersByRoom:  w.MutedUsersByRoom,
 	}
 }
 
@@ -1049,6 +1170,16 @@ func (c *HTTPClient) Login(email, password string) (model.Tokens, error) {
 	return t, nil
 }
 
+// ResendVerification requests a fresh verification email via
+// POST /v1/auth/resend-verification, for an account whose email isn't
+// verified yet (surfaced as a 403 EMAIL_NOT_VERIFIED on any authenticated
+// request). Rate limited server-side to 1/min, 5/hour — a RATE_LIMITED
+// APIError is returned as-is for the caller to display.
+func (c *HTTPClient) ResendVerification(idToken string) error {
+	_, err := c.doJSON("POST", "/v1/auth/resend-verification", resendVerificationRequest{IDToken: idToken})
+	return err
+}
+
 // LoginWithRefreshToken exchanges a saved refresh token for a fresh IDToken and
 // RTDBToken without requiring the user's password. On success the new tokens are
 // stored in the client and returned. On failure ErrUnauthorized is returned.
@@ -1167,6 +1298,30 @@ func (c *HTTPClient) DeletePost(postID string) error {
 func (c *HTTPClient) DeleteReply(replyID string) error {
 	_, err := c.doRequest("DELETE", "/v1/replies/"+url.PathEscape(replyID), nil)
 	return err
+}
+
+func (c *HTTPClient) FlagPost(postID, reason string) (string, bool, error) {
+	env, err := c.doJSON("POST", "/v1/posts/"+url.PathEscape(postID)+"/flag", flagRequest{Reason: reason})
+	if err != nil {
+		return "", false, err
+	}
+	var data flagResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", false, err
+	}
+	return data.FlagID, data.AlreadyFlagged, nil
+}
+
+func (c *HTTPClient) FlagReply(replyID, reason string) (string, bool, error) {
+	env, err := c.doJSON("POST", "/v1/replies/"+url.PathEscape(replyID)+"/flag", flagRequest{Reason: reason})
+	if err != nil {
+		return "", false, err
+	}
+	var data flagResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", false, err
+	}
+	return data.FlagID, data.AlreadyFlagged, nil
 }
 
 func (c *HTTPClient) GetReply(replyID string) (model.Reply, error) {
@@ -1587,12 +1742,17 @@ func (c *HTTPClient) GetRoomMessages(roomID string, limit int, before int64) ([]
 func wireCircMessageToModel(w wireCircMessage) model.Message {
 	sanitize.Strings(&w)
 	return model.Message{
-		ID:          w.ID,
-		From:        model.User{ID: w.UserID, Username: w.Username},
-		Body:        w.Content,
-		CreatedAt:   time.UnixMilli(w.Timestamp),
-		IsChatAdmin: w.IsChatAdmin,
-		IsAction:    w.IsAction,
+		ID:              w.ID,
+		From:            model.User{ID: w.UserID, Username: w.Username},
+		Body:            decodeArtBody(w.Content, w.Style),
+		CreatedAt:       time.UnixMilli(w.Timestamp),
+		IsChatAdmin:     w.IsChatAdmin,
+		IsAction:        w.IsAction,
+		Deleted:         w.Deleted,
+		ImageUrl:        w.ImageUrl,
+		GifUrl:          w.GifUrl,
+		AudioAttachment: wireAudioAttachmentToModel(w.AudioAttachment),
+		Style:           []string(w.Style),
 	}
 }
 
@@ -1614,6 +1774,24 @@ func (c *HTTPClient) SendRoomMessage(roomID, body string) (string, error) {
 // MarkRoomRead resets the unread indicator for roomID via POST /v1/circ/:roomId/read.
 func (c *HTTPClient) MarkRoomRead(roomID string) error {
 	_, err := c.doRequest("POST", "/v1/circ/"+url.PathEscape(roomID)+"/read", nil)
+	return err
+}
+
+func (c *HTTPClient) FlagRoomMessage(roomID, messageID, reason string) (string, bool, error) {
+	env, err := c.doJSON("POST", "/v1/circ/"+url.PathEscape(roomID)+"/messages/"+url.PathEscape(messageID)+"/flag", flagRequest{Reason: reason})
+	if err != nil {
+		return "", false, err
+	}
+	var data flagResponseData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", false, err
+	}
+	return data.FlagID, data.AlreadyFlagged, nil
+}
+
+// DeleteRoomMessage soft-deletes a message via DELETE /v1/circ/:roomId/messages/:messageId.
+func (c *HTTPClient) DeleteRoomMessage(roomID, messageID string) error {
+	_, err := c.doRequest("DELETE", "/v1/circ/"+url.PathEscape(roomID)+"/messages/"+url.PathEscape(messageID), nil)
 	return err
 }
 
@@ -1642,7 +1820,7 @@ func (c *HTTPClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 			if ev.Err != nil {
 				return
 			}
-			if ev.Event != "put" {
+			if ev.Event != "put" && ev.Event != "patch" {
 				continue
 			}
 			var d wireRTDBSSEData
@@ -1657,13 +1835,28 @@ func (c *HTTPClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 				// Deletion event — skip.
 				continue
 			}
+			msgID := strings.TrimPrefix(d.Path, "/")
 			var wm wireRTDBCircMessage
 			if err := json.Unmarshal(d.Data, &wm); err != nil {
 				continue
 			}
-			msgID := strings.TrimPrefix(d.Path, "/")
+			var msg model.Message
+			if ev.Event == "patch" {
+				// A patch on an existing message's path is currently only
+				// ever a delete ({"content":"[DELETED]","deleted":true}),
+				// which omits sender/timestamp/etc. entirely — unmarshaling
+				// it as a full message would zero those fields out. Send
+				// just {ID, Deleted}; callers must merge this onto the
+				// existing message by ID, never append it as new.
+				if !wm.Deleted {
+					continue
+				}
+				msg = model.Message{ID: msgID, Deleted: true}
+			} else {
+				msg = wireRTDBCircMessageToModel(msgID, wm)
+			}
 			select {
-			case out <- wireRTDBCircMessageToModel(msgID, wm):
+			case out <- msg:
 			case <-ctx.Done():
 				return
 			}
@@ -1687,28 +1880,50 @@ func (c *HTTPClient) GetRoomUsers(roomID string) ([]model.RoomUser, error) {
 	for i, w := range wire {
 		sanitize.Strings(&w)
 		out[i] = model.RoomUser{
-			UserID:      w.UserID,
-			Username:    w.Username,
-			IsChatAdmin: w.IsChatAdmin,
-			LastSeen:    time.UnixMilli(w.LastSeen),
+			UserID:       w.UserID,
+			Username:     w.Username,
+			IsChatAdmin:  w.IsChatAdmin,
+			LastSeen:     time.UnixMilli(w.LastSeen),
+			LastActivity: msPtrToTime(w.LastActivity),
 		}
 	}
 	return out, nil
 }
 
-// AnnouncePresence announces the caller's presence in roomID via POST
-// /v1/circ/:roomId/presence. Returns the heartbeat cadence and staleness
-// window (both ms) the caller should honor.
-func (c *HTTPClient) AnnouncePresence(roomID string) (heartbeatMs, staleAfterMs int, err error) {
-	env, err := c.doRequest("POST", "/v1/circ/"+url.PathEscape(roomID)+"/presence", nil)
+// msPtrToTime converts a nullable epoch-ms wire field to *time.Time, keeping
+// the null/absent distinction (nil in, nil out) rather than defaulting to the
+// Unix epoch — the API treats a nil lastActivity as "always active".
+func msPtrToTime(ms *int64) *time.Time {
+	if ms == nil {
+		return nil
+	}
+	t := time.UnixMilli(*ms)
+	return &t
+}
+
+// msPtrFloatToTime is msPtrToTime for RTDB's float64-typed epoch-ms fields.
+func msPtrFloatToTime(ms *float64) *time.Time {
+	if ms == nil {
+		return nil
+	}
+	t := time.UnixMilli(int64(*ms))
+	return &t
+}
+
+// AnnouncePresence announces the caller's presence (and, per lastActivity,
+// when they were last active) in roomID via POST /v1/circ/:roomId/presence.
+// Returns the heartbeat cadence, staleness window, and idle threshold (all
+// ms) the caller should honor.
+func (c *HTTPClient) AnnouncePresence(roomID string, lastActivity time.Time) (heartbeatMs, staleAfterMs, idleAfterMs int, err error) {
+	env, err := c.doJSON("POST", "/v1/circ/"+url.PathEscape(roomID)+"/presence", wirePresenceRequest{LastActivity: lastActivity.UnixMilli()})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	var data wirePresenceResponse
 	if err := json.Unmarshal(env.Data, &data); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	return data.HeartbeatMs, data.StaleAfterMs, nil
+	return data.HeartbeatMs, data.StaleAfterMs, data.IdleAfterMs, nil
 }
 
 // LeaveRoomPresence removes the caller from roomID's presence list immediately
@@ -1799,10 +2014,11 @@ func filterFreshPresence(state map[string]wireRTDBPresenceEntry, staleAfterMs in
 			continue
 		}
 		out = append(out, model.RoomUser{
-			UserID:      userID,
-			Username:    e.Username,
-			IsChatAdmin: e.IsChatAdmin,
-			LastSeen:    time.UnixMilli(int64(e.LastSeen)),
+			UserID:       userID,
+			Username:     e.Username,
+			IsChatAdmin:  e.IsChatAdmin,
+			LastSeen:     time.UnixMilli(int64(e.LastSeen)),
+			LastActivity: msPtrFloatToTime(e.LastActivity),
 		})
 	}
 	return out
@@ -1847,11 +2063,17 @@ func (c *HTTPClient) SubscribeRoomPresence(ctx context.Context, roomID string, s
 		defer close(out)
 		state := make(map[string]wireRTDBPresenceEntry, len(initial))
 		for _, u := range initial {
+			var lastActivity *float64
+			if u.LastActivity != nil {
+				v := float64(u.LastActivity.UnixMilli())
+				lastActivity = &v
+			}
 			state[u.UserID] = wireRTDBPresenceEntry{
-				Username:    u.Username,
-				IsChatAdmin: u.IsChatAdmin,
-				Online:      true,
-				LastSeen:    float64(u.LastSeen.UnixMilli()),
+				Username:     u.Username,
+				IsChatAdmin:  u.IsChatAdmin,
+				Online:       true,
+				LastSeen:     float64(u.LastSeen.UnixMilli()),
+				LastActivity: lastActivity,
 			}
 		}
 		if len(state) > 0 {
@@ -1914,11 +2136,15 @@ func (c *HTTPClient) rtdbOrErr() (*rtdb.Client, error) {
 func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
 	sanitize.Strings(&wm)
 	return model.Message{
-		ID:        id,
-		From:      model.User{ID: wm.SenderID, Username: wm.SenderUsername},
-		Body:      wm.Content,
-		CreatedAt: time.UnixMilli(int64(wm.Timestamp)),
-		IsAction:  wm.IsAction,
+		ID:              id,
+		From:            model.User{ID: wm.SenderID, Username: wm.SenderUsername},
+		Body:            decodeArtBody(wm.Content, wm.Style),
+		CreatedAt:       time.UnixMilli(int64(wm.Timestamp)),
+		IsAction:        wm.IsAction,
+		ImageUrl:        wm.ImageUrl,
+		GifUrl:          wm.GifUrl,
+		AudioAttachment: wireAudioAttachmentToModel(wm.AudioAttachment),
+		Style:           []string(wm.Style),
 	}
 }
 
@@ -1926,12 +2152,17 @@ func wireRTDBMessageToModel(id string, wm wireRTDBMessage) model.Message {
 func wireRTDBCircMessageToModel(id string, wm wireRTDBCircMessage) model.Message {
 	sanitize.Strings(&wm)
 	return model.Message{
-		ID:          id,
-		From:        model.User{ID: wm.UserID, Username: wm.Username},
-		Body:        wm.Content,
-		CreatedAt:   time.UnixMilli(int64(wm.Timestamp)),
-		IsChatAdmin: wm.IsChatAdmin,
-		IsAction:    wm.IsAction,
+		ID:              id,
+		From:            model.User{ID: wm.UserID, Username: wm.Username},
+		Body:            decodeArtBody(wm.Content, wm.Style),
+		CreatedAt:       time.UnixMilli(int64(wm.Timestamp)),
+		IsChatAdmin:     wm.IsChatAdmin,
+		IsAction:        wm.IsAction,
+		Deleted:         wm.Deleted,
+		ImageUrl:        wm.ImageUrl,
+		GifUrl:          wm.GifUrl,
+		AudioAttachment: wireAudioAttachmentToModel(wm.AudioAttachment),
+		Style:           []string(wm.Style),
 	}
 }
 
@@ -1960,6 +2191,190 @@ func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
 	return out, nil
 }
 
+// applyUserConversationsEvent merges one RTDB event into state, keyed by
+// conversationId. Root ("/") put-vs-patch semantics match applyPresenceEvent:
+// a "put" is a full-snapshot replace, a "patch" merges only the listed keys
+// (null deletes). Unlike presence — where a per-user write always rewrites
+// the whole entry — a conversation summary is commonly updated with only a
+// few fields at once (a new message touches lastMessage/lastMessageAt/
+// unreadCount, not otherUserId/otherUsername), so both the root-patch
+// per-key values and a single "/<conversationId>" patch are merged onto the
+// existing entry rather than replacing it outright; only a "put" (root or
+// single-path) fully replaces an entry.
+func applyUserConversationsEvent(state map[string]wireRTDBUserConversationEntry, event string, d wireRTDBSSEData) {
+	empty := len(d.Data) == 0 || string(d.Data) == "null"
+	if d.Path == "/" {
+		if event != "put" {
+			if empty {
+				return
+			}
+			var patch map[string]json.RawMessage
+			if err := json.Unmarshal(d.Data, &patch); err != nil {
+				return
+			}
+			for k, raw := range patch {
+				if len(raw) == 0 || string(raw) == "null" {
+					delete(state, k)
+					continue
+				}
+				v := state[k]
+				if err := json.Unmarshal(raw, &v); err != nil {
+					continue
+				}
+				sanitize.Strings(&v)
+				state[k] = v
+			}
+			return
+		}
+		for k := range state {
+			delete(state, k)
+		}
+		if empty {
+			return
+		}
+		var full map[string]wireRTDBUserConversationEntry
+		if err := json.Unmarshal(d.Data, &full); err != nil {
+			return
+		}
+		for k, v := range full {
+			sanitize.Strings(&v)
+			state[k] = v
+		}
+		return
+	}
+	convID := strings.TrimPrefix(d.Path, "/")
+	if strings.ContainsRune(convID, '/') {
+		return // deeper nested field patch (e.g. "/<id>/unreadCount") — not specially handled
+	}
+	if empty {
+		delete(state, convID)
+		return
+	}
+	entry := wireRTDBUserConversationEntry{}
+	if event == "patch" {
+		entry = state[convID]
+	}
+	if err := json.Unmarshal(d.Data, &entry); err != nil {
+		return
+	}
+	sanitize.Strings(&entry)
+	state[convID] = entry
+}
+
+// buildUserConversations converts merge state into a slice sorted to match
+// GetConversations' REST ordering: unread first, then most recently active.
+func buildUserConversations(state map[string]wireRTDBUserConversationEntry) []model.Conversation {
+	out := make([]model.Conversation, 0, len(state))
+	for id, e := range state {
+		out = append(out, model.Conversation{
+			ID:            id,
+			Participants:  []model.User{{ID: e.OtherUserID, Username: e.OtherUsername}},
+			UnreadCount:   e.UnreadCount,
+			LastMessage:   e.LastMessage,
+			LastMessageAt: time.UnixMilli(e.LastMessageAt),
+		})
+	}
+	slices.SortFunc(out, func(a, b model.Conversation) int {
+		aUnread, bUnread := a.UnreadCount > 0, b.UnreadCount > 0
+		if aUnread != bUnread {
+			if aUnread {
+				return -1
+			}
+			return 1
+		}
+		return b.LastMessageAt.Compare(a.LastMessageAt)
+	})
+	return out
+}
+
+// SubscribeUserConversations opens a live RTDB SSE stream for uid's
+// conversation-list summary node. Like SubscribeRoomPresence, each receive
+// is the full converted+sorted list rather than a single incremental event,
+// since a conversation summary mutates in place (unlike the append-only
+// dm_messages stream).
+//
+// initial seeds the merge state so a resubscribe (reconnect after a dropped
+// stream) doesn't render an empty list until the first event arrives —
+// callers should pass the last known-good conversation list on reconnect,
+// or nil for a brand-new subscription.
+func (c *HTTPClient) SubscribeUserConversations(ctx context.Context, uid string, initial []model.Conversation) (<-chan []model.Conversation, context.CancelFunc, error) {
+	r, err := c.rtdbOrErr()
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	sseEvents := r.Subscribe(ctx, "/user_conversations/"+uid, nil)
+	out := make(chan []model.Conversation, 1)
+	send := func(convs []model.Conversation) {
+		select {
+		case out <- convs:
+		default:
+			select {
+			case <-out:
+			default:
+			}
+			select {
+			case out <- convs:
+			case <-ctx.Done():
+			}
+		}
+	}
+	go func() {
+		defer close(out)
+		state := make(map[string]wireRTDBUserConversationEntry, len(initial))
+		for _, conv := range initial {
+			var otherID, otherUsername string
+			if len(conv.Participants) > 0 {
+				otherID, otherUsername = conv.Participants[0].ID, conv.Participants[0].Username
+			}
+			state[conv.ID] = wireRTDBUserConversationEntry{
+				OtherUserID:   otherID,
+				OtherUsername: otherUsername,
+				LastMessage:   conv.LastMessage,
+				LastMessageAt: conv.LastMessageAt.UnixMilli(),
+				UnreadCount:   conv.UnreadCount,
+			}
+		}
+		if len(state) > 0 {
+			// Make the seeded (last known-good) list visible right away, rather
+			// than leaving the list empty until the first live event arrives.
+			send(buildUserConversations(state))
+		}
+		for {
+			select {
+			case ev, ok := <-sseEvents:
+				if !ok {
+					if c.isDebug() {
+						log.Printf("[user_conversations %s] stream channel closed", uid)
+					}
+					return
+				}
+				if ev.Err != nil {
+					if c.isDebug() {
+						log.Printf("[user_conversations %s] stream error: %v", uid, ev.Err)
+					}
+					return
+				}
+				if c.isDebug() {
+					log.Printf("[user_conversations %s] event=%q data=%s", uid, ev.Event, ev.Data)
+				}
+				if ev.Event != "put" && ev.Event != "patch" {
+					continue
+				}
+				var d wireRTDBSSEData
+				if err := json.Unmarshal(ev.Data, &d); err != nil {
+					continue
+				}
+				applyUserConversationsEvent(state, ev.Event, d)
+				send(buildUserConversations(state))
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, cancel, nil
+}
+
 // GetMessages returns history for a conversation via GET /v1/cmail/:id.
 // Messages are returned oldest-first.
 func (c *HTTPClient) GetMessages(conversationID string, limit int, before int64) ([]model.Message, error) {
@@ -1986,11 +2401,15 @@ func (c *HTTPClient) GetMessages(conversationID string, limit int, before int64)
 func wireCMailMessageToModel(w wireCMailMessage) model.Message {
 	sanitize.Strings(&w)
 	return model.Message{
-		ID:        w.ID,
-		From:      model.User{ID: w.SenderID, Username: w.SenderUsername},
-		Body:      w.Content,
-		CreatedAt: time.UnixMilli(w.Timestamp),
-		IsAction:  w.IsAction,
+		ID:              w.ID,
+		From:            model.User{ID: w.SenderID, Username: w.SenderUsername},
+		Body:            decodeArtBody(w.Content, w.Style),
+		CreatedAt:       time.UnixMilli(w.Timestamp),
+		IsAction:        w.IsAction,
+		ImageUrl:        w.ImageUrl,
+		GifUrl:          w.GifUrl,
+		AudioAttachment: wireAudioAttachmentToModel(w.AudioAttachment),
+		Style:           []string(w.Style),
 	}
 }
 

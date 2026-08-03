@@ -60,6 +60,52 @@ func attachmentURLs(attachments []model.Attachment) []string {
 	return out
 }
 
+// messageAttachments builds a []model.Attachment from a chat message's flat
+// ImageUrl/GifUrl/AudioAttachment fields, so the existing renderAttachments
+// (used for post/reply attachments) can render them too.
+func messageAttachments(msg model.Message) []model.Attachment {
+	var out []model.Attachment
+	if msg.ImageUrl != "" {
+		out = append(out, model.Attachment{Type: "image", Src: msg.ImageUrl})
+	}
+	if msg.GifUrl != "" {
+		out = append(out, model.Attachment{Type: "gif", Src: msg.GifUrl})
+	}
+	if msg.AudioAttachment != nil {
+		out = append(out, *msg.AudioAttachment)
+	}
+	return out
+}
+
+// messageURLs returns every openable URL in msg: links in the body plus
+// ImageUrl/GifUrl/AudioAttachment.Src. Not normalized via urlutil.NormalizeURL —
+// matches attachmentURLs' existing behavior for Attachment.Src, which is
+// already an absolute URL per the API spec.
+func messageURLs(msg model.Message) []string {
+	urls := extractURLs(msg.Body)
+	if msg.ImageUrl != "" {
+		urls = append(urls, msg.ImageUrl)
+	}
+	if msg.GifUrl != "" {
+		urls = append(urls, msg.GifUrl)
+	}
+	if msg.AudioAttachment != nil && msg.AudioAttachment.Src != "" {
+		urls = append(urls, msg.AudioAttachment.Src)
+	}
+	return urls
+}
+
+// messageDisplayBody returns "" when Body merely duplicates ImageUrl or
+// GifUrl (an attachment-only message posted with no text), so callers can
+// skip printing a redundant line of URL text next to the attachment badge
+// rendered separately via messageAttachments. Returns Body unchanged otherwise.
+func messageDisplayBody(msg model.Message) string {
+	if msg.Body != "" && (msg.Body == msg.ImageUrl || msg.Body == msg.GifUrl) {
+		return ""
+	}
+	return msg.Body
+}
+
 // dedupeURLs removes repeated URLs while preserving first-seen order. Used by
 // URLProvider implementations that aggregate across many items (e.g. an
 // entire loaded chat history) rather than a single focused one, where the

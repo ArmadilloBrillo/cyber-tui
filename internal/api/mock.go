@@ -110,6 +110,10 @@ func (m *MockClient) Logout() error {
 	return nil
 }
 
+func (m *MockClient) ResendVerification(idToken string) error {
+	return nil
+}
+
 func (m *MockClient) RefreshSession() error {
 	return nil
 }
@@ -246,6 +250,14 @@ func (m *MockClient) DeletePost(postID string) error {
 
 func (m *MockClient) DeleteReply(replyID string) error {
 	return nil // no-op: in-memory replies are rebuilt on each GetPostReplies call
+}
+
+func (m *MockClient) FlagPost(postID, reason string) (string, bool, error) {
+	return "flag-mock-" + postID, false, nil
+}
+
+func (m *MockClient) FlagReply(replyID, reason string) (string, bool, error) {
+	return "flag-mock-" + replyID, false, nil
 }
 
 func (m *MockClient) GetPost(postID string) (model.Post, error) {
@@ -436,6 +448,14 @@ func (m *MockClient) MarkRoomRead(roomID string) error {
 	return nil
 }
 
+func (m *MockClient) FlagRoomMessage(roomID, messageID, reason string) (string, bool, error) {
+	return "flag-mock-" + messageID, false, nil
+}
+
+func (m *MockClient) DeleteRoomMessage(roomID, messageID string) error {
+	return nil
+}
+
 // SubscribeRoom returns a channel that delivers one fake incoming message after
 // 2 seconds (to exercise the live-stream UI path), then closes.
 func (m *MockClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error) {
@@ -446,8 +466,13 @@ func (m *MockClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 		select {
 		case <-time.After(2 * time.Second):
 			select {
+			// A fresh, unique ID each delivery: the app reconnects and
+			// re-subscribes whenever this mock channel closes (below), which
+			// would otherwise repeatedly deliver messages sharing one
+			// hardcoded ID — harmless for rendering, but breaks anything
+			// keyed by message ID (selection, flag/delete).
 			case ch <- model.Message{
-				ID:        "mock-room-live-1",
+				ID:        fmt.Sprintf("mock-room-live-%d", time.Now().UnixNano()),
 				From:      mockUsers[1],
 				Body:      "incoming mock room message",
 				CreatedAt: time.Now(),
@@ -460,17 +485,21 @@ func (m *MockClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan m
 	return ch, cancel, nil
 }
 
-// GetRoomUsers returns a couple of canned users, one flagged as admin.
+// GetRoomUsers returns a couple of canned users, one flagged as admin and one
+// idle (LastActivity well past the canned idleAfterMs), plus one with no
+// LastActivity reported at all (always active).
 func (m *MockClient) GetRoomUsers(roomID string) ([]model.RoomUser, error) {
+	idleSince := time.Now().Add(-10 * time.Minute)
 	return []model.RoomUser{
 		{UserID: "2", Username: mockUsers[1].Username, IsChatAdmin: true, LastSeen: time.Now()},
 		{UserID: "1", Username: mockUsers[0].Username, LastSeen: time.Now().Add(-30 * time.Second)},
+		{UserID: "3", Username: "sleepyhead", LastSeen: time.Now(), LastActivity: &idleSince},
 	}, nil
 }
 
-// AnnouncePresence returns a fixed 30s heartbeat / 3min staleness window.
-func (m *MockClient) AnnouncePresence(roomID string) (heartbeatMs, staleAfterMs int, err error) {
-	return 30000, 180000, nil
+// AnnouncePresence returns a fixed 30s heartbeat / 3min staleness / 10min idle window.
+func (m *MockClient) AnnouncePresence(roomID string, lastActivity time.Time) (heartbeatMs, staleAfterMs, idleAfterMs int, err error) {
+	return 30000, 180000, 600000, nil
 }
 
 func (m *MockClient) LeaveRoomPresence(roomID string) error {
@@ -569,6 +598,27 @@ func (m *MockClient) SubscribeDMTyping(ctx context.Context, conversationID strin
 		case <-time.After(2 * time.Second):
 			select {
 			case ch <- []model.TypingUser{{UserID: mockUsers[1].ID, Username: mockUsers[1].Username, Timestamp: time.Now()}}:
+			case <-ctx.Done():
+			}
+		case <-ctx.Done():
+		}
+	}()
+	return ch, cancel, nil
+}
+
+// SubscribeUserConversations returns a channel that delivers the same canned
+// GetConversations snapshot once after 1 second, then closes — mirrors
+// SubscribeRoomPresence's mock.
+func (m *MockClient) SubscribeUserConversations(ctx context.Context, uid string, initial []model.Conversation) (<-chan []model.Conversation, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	ch := make(chan []model.Conversation, 1)
+	go func() {
+		defer close(ch)
+		convs, _ := m.GetConversations()
+		select {
+		case <-time.After(1 * time.Second):
+			select {
+			case ch <- convs:
 			case <-ctx.Done():
 			}
 		case <-ctx.Done():

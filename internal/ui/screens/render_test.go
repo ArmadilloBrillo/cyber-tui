@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
@@ -38,7 +39,7 @@ func circMsg(username, body string) model.Message {
 func TestRenderCircMessages_WrapsLongBodyWithinWidth(t *testing.T) {
 	const width = 60
 	body := strings.Repeat("a very long word soup that keeps going and going ", 5)
-	out := renderCircMessages([]model.Message{circMsg("alice", body)}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{circMsg("alice", body)}, time.UTC, "datetime", width, "", nil)
 
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) < 2 {
@@ -61,7 +62,7 @@ func TestRenderCircMessages_WrapsLongBodyWithinWidth(t *testing.T) {
 // when the last wrapped line runs close to the viewport edge.
 func TestRenderCircMessages_TimestampHasGapFromText(t *testing.T) {
 	const width = 60
-	out := renderCircMessages([]model.Message{circMsg("bob", "short reply")}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{circMsg("bob", "short reply")}, time.UTC, "datetime", width, "", nil)
 
 	line := strings.TrimRight(out, "\n")
 	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
@@ -92,7 +93,7 @@ func TestRenderCircMessages_SystemNotice(t *testing.T) {
 	}
 	regular := circMsg("bob", "hi")
 
-	out := renderCircMessages([]model.Message{sys, regular}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{sys, regular}, time.UTC, "datetime", width, "", nil)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
 	if !strings.HasPrefix(lines[0], "***") {
@@ -114,6 +115,64 @@ func TestRenderCircMessages_SystemNotice(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected the regular message after the system notice to still render")
+	}
+}
+
+// TestRenderCircMessages_DeletedTombstone confirms a soft-deleted message
+// renders as a muted "[DELETED]" tombstone, keeping the author and
+// timestamp (per the API's "your name and the original timestamp stay"),
+// but never the original body text.
+func TestRenderCircMessages_DeletedTombstone(t *testing.T) {
+	const width = 60
+	deleted := model.Message{
+		ID:        "m1",
+		From:      model.User{Username: "molly"},
+		Body:      "this secret sauce recipe leaked",
+		Deleted:   true,
+		CreatedAt: circMsgTime,
+	}
+
+	out := renderCircMessages([]model.Message{deleted}, time.UTC, "datetime", width, "", nil)
+
+	if !strings.Contains(out, "<molly>") {
+		t.Errorf("expected the author to still be shown, got: %q", out)
+	}
+	if !strings.Contains(out, "[DELETED]") {
+		t.Errorf("expected a [DELETED] marker, got: %q", out)
+	}
+	if strings.Contains(out, "secret sauce") {
+		t.Errorf("expected the original body to NOT appear, got: %q", out)
+	}
+}
+
+// TestRenderCircMessages_DeletedTombstone_TimestampAlignsWithNormalMessage
+// guards a real bug found in manual testing: the tombstone's timestamp
+// landed two columns left of where every other message's timestamp sits,
+// because its gap math used the "[DELETED]" marker's own short width
+// instead of the same elastic body-field width renderCircMessages reserves
+// for normal messages.
+func TestRenderCircMessages_DeletedTombstone_TimestampAlignsWithNormalMessage(t *testing.T) {
+	const width = 60
+	normal := circMsg("molly", "hello there")
+	deleted := model.Message{
+		ID:        "m1",
+		From:      model.User{Username: "molly"},
+		Body:      "irrelevant once deleted",
+		Deleted:   true,
+		CreatedAt: circMsgTime,
+	}
+
+	normalLine := strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{normal}, time.UTC, "datetime", width, "", nil)), "\n")
+	deletedLine := strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{deleted}, time.UTC, "datetime", width, "", nil)), "\n")
+
+	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
+	normalIdx := strings.Index(normalLine, ts)
+	deletedIdx := strings.Index(deletedLine, ts)
+	if normalIdx == -1 || deletedIdx == -1 {
+		t.Fatalf("timestamp %q not found: normal=%q deleted=%q", ts, normalLine, deletedLine)
+	}
+	if normalIdx != deletedIdx {
+		t.Errorf("tombstone timestamp starts at column %d, want %d (same as a normal message)", deletedIdx, normalIdx)
 	}
 }
 
@@ -143,7 +202,7 @@ func TestRenderCircMessages_ActionLine(t *testing.T) {
 	action.IsAction = true
 	regular := circMsg("bob", "hi there")
 
-	out := renderCircMessages([]model.Message{action, regular}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{action, regular}, time.UTC, "datetime", width, "", nil)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
 	if !strings.HasPrefix(lines[0], "* ragnar tests the plumbing") {
@@ -186,7 +245,7 @@ func TestRenderCircMessages_ActionLineWrapsCorrectly(t *testing.T) {
 	action := circMsg("ragnar", strings.Repeat("does a very long dramatic action sequence ", 5))
 	action.IsAction = true
 
-	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width, "", nil)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("expected the long action to wrap onto multiple lines, got %d line(s)", len(lines))
@@ -219,7 +278,7 @@ func TestRenderCircMessages_MarkdownEmphasisBoldCode(t *testing.T) {
 		circMsg("bob", "this is **bold** text"),
 		circMsg("carol", "run `go test` please"),
 	}
-	out := renderCircMessages(msgs, time.UTC, "datetime", width, "")
+	out := renderCircMessages(msgs, time.UTC, "datetime", width, "", nil)
 
 	if !strings.Contains(out, "emphasis") || strings.Contains(out, "*emphasis*") {
 		t.Errorf("expected *emphasis* to be styled, not left as raw markdown: %q", out)
@@ -240,7 +299,7 @@ func TestRenderCircMessages_MarkdownLinkAndBareURL(t *testing.T) {
 		circMsg("alice", "see [the docs](https://example.com/docs)"),
 		circMsg("bob", "check https://example.com/path for details"),
 	}
-	out := renderCircMessages(msgs, time.UTC, "datetime", width, "")
+	out := renderCircMessages(msgs, time.UTC, "datetime", width, "", nil)
 
 	if !strings.Contains(out, "the docs") || strings.Contains(out, "[the docs](") {
 		t.Errorf("expected markdown link syntax to be rendered, not left raw: %q", out)
@@ -262,7 +321,7 @@ func TestRenderCircMessages_LeadingBlockCharsStayLiteral(t *testing.T) {
 		circMsg("bob", "# thoughts for today"),
 		circMsg("carol", "> what did you say"),
 	}
-	out := renderCircMessages(msgs, time.UTC, "datetime", width, "")
+	out := renderCircMessages(msgs, time.UTC, "datetime", width, "", nil)
 
 	for _, want := range []string{"- get milk", "# thoughts for today", "> what did you say"} {
 		if !strings.Contains(out, want) {
@@ -281,7 +340,7 @@ func TestRenderCircMessages_ActionLineWithAsteriskBody(t *testing.T) {
 	action := circMsg("ragnar", "throws a *loud* party")
 	action.IsAction = true
 
-	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width, "")
+	out := renderCircMessages([]model.Message{action}, time.UTC, "datetime", width, "", nil)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 
 	if !strings.HasPrefix(lines[0], "* ragnar throws a ") {
@@ -330,7 +389,7 @@ func TestRenderCircMessages_OwnUsernameUsesMeHighlight(t *testing.T) {
 	mine := circMsg("ragnar", "hi all")
 	other := circMsg("bob", "hello")
 
-	out := renderCircMessages([]model.Message{mine, other}, time.UTC, "datetime", width, "ragnar")
+	out := renderCircMessages([]model.Message{mine, other}, time.UTC, "datetime", width, "ragnar", nil)
 
 	if !strings.Contains(out, "<"+theme.MeHighlight.Render("ragnar")+">") {
 		t.Errorf("expected own username styled with MeHighlight, got: %q", out)
@@ -352,7 +411,7 @@ func TestRenderCircMessages_MentionHighlighted(t *testing.T) {
 	const width = 60
 	msg := circMsg("bob", "hey @Ragnar and ragnarwessels, is ragnar around?")
 
-	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "ragnar")
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "ragnar", nil)
 
 	if !strings.Contains(out, theme.MeHighlight.Render("@Ragnar")) {
 		t.Errorf("expected case-insensitive @mention to be highlighted, got: %q", out)
@@ -379,7 +438,7 @@ func TestRenderCircMessages_MentionStyleContinuesAfterMultipleWords(t *testing.T
 	const width = 60
 	msg := circMsg("bob", "@ragnar 1 2")
 
-	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "ragnar")
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "ragnar", nil)
 
 	if !strings.Contains(out, theme.MeHighlight.Render("@ragnar")) {
 		t.Errorf("expected @ragnar to be highlighted, got: %q", out)
@@ -389,5 +448,244 @@ func TestRenderCircMessages_MentionStyleContinuesAfterMultipleWords(t *testing.T
 	}
 	if !strings.Contains(out, theme.Base.Render(" 2")) {
 		t.Errorf("expected '2' to also keep theme.Base styling, not left unstyled by a broken reset, got: %q", out)
+	}
+}
+
+// TestRenderAttachments_GifBadge confirms a "gif" attachment gets its own
+// [gif] badge rather than falling into the generic [attachment] default.
+func TestRenderAttachments_GifBadge(t *testing.T) {
+	out := renderAttachments([]model.Attachment{{Type: "gif", Src: "https://cyberspace.online/a.gif"}})
+	if !strings.Contains(out, "[gif]") {
+		t.Errorf("expected [gif] badge, got: %q", out)
+	}
+	if !strings.Contains(out, "https://cyberspace.online/a.gif") {
+		t.Errorf("expected gif URL in output, got: %q", out)
+	}
+}
+
+// TestRenderCircMessages_AttachmentOnlyBodySkipsDuplicateURL confirms that
+// when Body merely duplicates ImageUrl (an attachment-only message), the URL
+// is shown once via the attachment badge, not a second time as wrapped body text.
+func TestRenderCircMessages_AttachmentOnlyBodySkipsDuplicateURL(t *testing.T) {
+	msg := circMsg("case", "https://cyberspace.online/img.png")
+	msg.ImageUrl = "https://cyberspace.online/img.png"
+
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 60, "", nil)
+
+	if n := strings.Count(out, "https://cyberspace.online/img.png"); n != 1 {
+		t.Errorf("expected the image URL to appear exactly once, got %d times in: %q", n, out)
+	}
+	if !strings.Contains(out, "[image]") {
+		t.Errorf("expected [image] attachment badge, got: %q", out)
+	}
+}
+
+// TestRenderCircMessages_AttachmentOnlyHasNoBlankLine guards against a
+// regression where an attachment-only message (empty display body) rendered
+// a blank-looking line — just the username prefix and timestamp, no visible
+// content — before the attachment badge. The username/timestamp should land
+// directly on the attachment line instead.
+func TestRenderCircMessages_AttachmentOnlyHasNoBlankLine(t *testing.T) {
+	msg := circMsg("case", "https://cyberspace.online/img.png")
+	msg.Body = ""
+	msg.ImageUrl = "https://cyberspace.online/img.png"
+
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 60, "", nil)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly 1 line for a single attachment-only message, got %d: %q", len(lines), out)
+	}
+	if !strings.Contains(lines[0], "<case>") || !strings.Contains(lines[0], "[image]") {
+		t.Errorf("expected username and [image] badge on the same line, got: %q", lines[0])
+	}
+}
+
+// TestRenderCircMessages_AttachmentOnlyLongURL_TimestampStaysInBounds guards
+// against a regression where an attachment-only message's URL, merged onto
+// the username/timestamp line without going through the same
+// Width(bodyWidth).Render wrapping normal text bodies use, could run well
+// past viewportWidth for a long URL — pushing the timestamp far to the
+// right instead of wrapping the URL underneath it.
+func TestRenderCircMessages_AttachmentOnlyLongURL_TimestampStaysInBounds(t *testing.T) {
+	const width = 60
+	msg := circMsg("case", "")
+	msg.GifUrl = "https://cyberspace.online/uploads/reactions/mind-blown-reaction.gif"
+
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", width, "", nil)
+	plain := ansi.Strip(out)
+
+	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
+	for _, line := range strings.Split(strings.TrimRight(plain, "\n"), "\n") {
+		if lipgloss.Width(line) > width {
+			t.Errorf("line exceeds viewportWidth %d: %q (%d cols)", width, line, lipgloss.Width(line))
+		}
+	}
+	if !strings.Contains(plain, ts) {
+		t.Fatalf("timestamp %q not found anywhere in output: %q", ts, plain)
+	}
+	lastLine := strings.Split(strings.TrimRight(plain, "\n"), "\n")
+	last := lastLine[len(lastLine)-1]
+	if !strings.HasSuffix(strings.TrimRight(last, " "), ts) {
+		t.Errorf("expected the timestamp flush right on the last line, got: %q", last)
+	}
+}
+
+// TestRenderChatMessages_AttachmentOnlyHasNoBlankLine is the C-Mail
+// equivalent of TestRenderCircMessages_AttachmentOnlyHasNoBlankLine: the
+// bordered bubble must not contain a blank row between the header and the
+// attachment block for an attachment-only message.
+func TestRenderChatMessages_AttachmentOnlyHasNoBlankLine(t *testing.T) {
+	msg := circMsg("case", "")
+	msg.ImageUrl = "https://cyberspace.online/img.png"
+
+	out := renderChatMessages([]model.Message{msg}, "", time.UTC, "datetime", 60)
+	plain := ansi.Strip(out)
+
+	// A blank content row inside the bubble would sit between the header
+	// line (contains "case") and the attachment line (contains "[image]");
+	// check there's no all-whitespace line between them.
+	lines := strings.Split(plain, "\n")
+	headerIdx, attIdx := -1, -1
+	for i, line := range lines {
+		if strings.Contains(line, "case") && headerIdx == -1 {
+			headerIdx = i
+		}
+		if strings.Contains(line, "[image]") {
+			attIdx = i
+		}
+	}
+	if headerIdx == -1 || attIdx == -1 {
+		t.Fatalf("expected both a header line and an [image] line, got: %q", plain)
+	}
+	if attIdx != headerIdx+1 {
+		t.Errorf("expected the attachment line immediately after the header with no blank line between, got lines:\n%q", lines[headerIdx:attIdx+1])
+	}
+}
+
+// TestRenderCircMessages_ArtStyleSkipsWrapAndMarkdown confirms a style:"art"
+// message's body is printed verbatim, line for line, with no word-wrap and
+// no markdown reinterpretation of leading spaces (which would otherwise be
+// read as an indented code block and mangle the picture).
+func TestRenderCircMessages_ArtStyleSkipsWrapAndMarkdown(t *testing.T) {
+	art := "  /\\_/\\\n ( o.o )\n  > ^ <"
+	msg := circMsg("case", art)
+	msg.Style = []string{"art"}
+
+	out := renderCircMessages([]model.Message{msg}, time.UTC, "datetime", 20, "", nil)
+
+	for _, line := range strings.Split(art, "\n") {
+		if !strings.Contains(out, line) {
+			t.Errorf("expected art line %q preserved verbatim, got: %q", line, out)
+		}
+	}
+}
+
+// TestRenderCircMessages_ArtStyle_TimestampAlignsWithNormalMessage guards
+// against a regression where renderArtMessage's header-line width
+// calculation came up 2 columns short of viewportWidth, shifting the
+// timestamp left of where every other message type right-aligns it.
+func TestRenderCircMessages_ArtStyle_TimestampAlignsWithNormalMessage(t *testing.T) {
+	const width = 60
+	normal := circMsg("molly", "hello there")
+	art := circMsg("molly", "  /\\_/\\\n ( o.o )")
+	art.Style = []string{"art"}
+
+	normalLine := strings.Split(strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{normal}, time.UTC, "datetime", width, "", nil)), "\n"), "\n")[0]
+	artLines := strings.Split(strings.TrimRight(ansi.Strip(renderCircMessages([]model.Message{art}, time.UTC, "datetime", width, "", nil)), "\n"), "\n")
+	artHeader := artLines[0]
+
+	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
+	normalIdx := strings.Index(normalLine, ts)
+	artIdx := strings.Index(artHeader, ts)
+	if normalIdx == -1 || artIdx == -1 {
+		t.Fatalf("timestamp %q not found: normal=%q art=%q", ts, normalLine, artHeader)
+	}
+	if normalIdx != artIdx {
+		t.Errorf("art header timestamp starts at column %d, want %d (same as a normal message)", artIdx, normalIdx)
+	}
+}
+
+// TestRenderCircMessagesStyled_Blink_HidesAndShowsWithoutChangingLineCount
+// confirms blink toggles the body's visibility across animation frames while
+// keeping the same line count and per-line width — blanking must happen
+// after word-wrap, not before, or an all-space string could rewrap to fewer
+// lines than the real text did (see the comment at the blink toggle site).
+func TestRenderCircMessagesStyled_Blink_HidesAndShowsWithoutChangingLineCount(t *testing.T) {
+	const width = 60
+	msg := circMsg("molly", "hello there")
+	msg.Style = []string{"blink"}
+
+	visible := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, 0, nil)
+	hidden := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, blinkPhaseFrames, nil)
+
+	if !strings.Contains(ansi.Strip(visible), "hello there") {
+		t.Errorf("expected the visible phase to contain the body text, got: %q", visible)
+	}
+	plainHidden := ansi.Strip(hidden)
+	if strings.Contains(plainHidden, "hello") || strings.Contains(plainHidden, "there") {
+		t.Errorf("expected the hidden phase to blank the body text, got: %q", hidden)
+	}
+
+	visibleLines := strings.Split(strings.TrimRight(ansi.Strip(visible), "\n"), "\n")
+	hiddenLines := strings.Split(strings.TrimRight(plainHidden, "\n"), "\n")
+	if len(visibleLines) != len(hiddenLines) {
+		t.Fatalf("line count changed across blink phases: visible=%d hidden=%d", len(visibleLines), len(hiddenLines))
+	}
+	for i := range visibleLines {
+		if lipgloss.Width(visibleLines[i]) != lipgloss.Width(hiddenLines[i]) {
+			t.Errorf("line %d width changed across blink phases: visible=%d hidden=%d", i, lipgloss.Width(visibleLines[i]), lipgloss.Width(hiddenLines[i]))
+		}
+	}
+
+	ts := displayTime(circMsgTime, time.UTC, "datetime", true)
+	if !strings.Contains(plainHidden, ts) {
+		t.Errorf("expected the timestamp to stay visible during the hidden phase, got: %q", hidden)
+	}
+}
+
+// TestRenderCircMessages_MutedSenderHidden confirms a muted sender's messages
+// are dropped entirely from output, while other senders' messages still render.
+func TestRenderCircMessages_MutedSenderHidden(t *testing.T) {
+	const width = 60
+	msgs := []model.Message{circMsg("alice", "hi from alice"), circMsg("bob", "hi from bob")}
+	muted := map[string]bool{"alice": true}
+
+	out := renderCircMessages(msgs, time.UTC, "datetime", width, "", muted)
+
+	if strings.Contains(out, "hi from alice") {
+		t.Errorf("expected alice's message to be hidden, got: %q", out)
+	}
+	if !strings.Contains(out, "hi from bob") {
+		t.Errorf("expected bob's message to still render, got: %q", out)
+	}
+}
+
+// TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned confirms
+// a muted sender's message contributes zero-height output but the
+// offsets/heights slices stay 1:1 with msgs, matching the invariant relied on
+// by selection/scrolling code.
+func TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned(t *testing.T) {
+	const width = 60
+	muted := circMsg("alice", "hi from alice")
+	muted.ID = "m1"
+	visible := circMsg("bob", "hi from bob")
+	visible.ID = "m2"
+	msgs := []model.Message{muted, visible}
+
+	content, offsets, heights := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "", "", nil, 0,
+		map[string]bool{"alice": true})
+
+	if len(offsets) != len(msgs) || len(heights) != len(msgs) {
+		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
+	}
+	if heights[0] != 0 {
+		t.Errorf("expected muted message's height to be 0, got %d", heights[0])
+	}
+	if strings.Contains(content, "hi from alice") {
+		t.Errorf("expected alice's message to be hidden, got: %q", content)
+	}
+	if !strings.Contains(content, "hi from bob") {
+		t.Errorf("expected bob's message to still render, got: %q", content)
 	}
 }

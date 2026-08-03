@@ -241,3 +241,136 @@ func TestPostDetail_DepthCap(t *testing.T) {
 		}
 	}
 }
+
+// --- Flag / report ---
+
+func TestPostDetail_FlagKey_OnOwnPost_DoesNothing(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op")
+	m = m.SetPost(pdPost("p1")) // pdPost author is "op"
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	if cmd != nil {
+		t.Fatal("expected no cmd when flagging own post")
+	}
+}
+
+func TestPostDetail_FlagKey_OnOtherPost_EmitsFlagPostMsg(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice")
+	m = m.SetPost(pdPost("p1")) // author "op" != "alice"
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	if cmd == nil {
+		t.Fatal("expected a focus cmd from opening the flag prompt")
+	}
+	for _, r := range "bad take" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(string(r))})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd == nil {
+		t.Fatal("expected a cmd after confirming")
+	}
+	_, cmd = m.Update(cmd())
+	if cmd == nil {
+		t.Fatal("expected a cmd after routing FlagSubmitMsg through Update")
+	}
+	msg, ok := cmd().(screens.FlagPostMsg)
+	if !ok {
+		t.Fatalf("expected FlagPostMsg, got %T", cmd())
+	}
+	if msg.PostID != "p1" {
+		t.Errorf("PostID = %q, want p1", msg.PostID)
+	}
+	if msg.Reason != "bad take" {
+		t.Errorf("Reason = %q, want %q", msg.Reason, "bad take")
+	}
+}
+
+func TestPostDetail_FlagKey_OnOwnReply_DoesNothing(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice")
+	m = m.SetPost(pdPost("p1"))
+	m = m.SetReplies([]model.Reply{pdReply("r1", "", "alice", time.Now())})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select r1 (own reply)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	if cmd != nil {
+		t.Fatal("expected no cmd when flagging own reply")
+	}
+}
+
+func TestPostDetail_FlagKey_OnOtherReply_EmitsFlagReplyMsg(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice")
+	m = m.SetPost(pdPost("p1"))
+	m = m.SetReplies([]model.Reply{pdReply("r1", "", "bob", time.Now())})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select r1 (bob's reply)
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	if cmd == nil {
+		t.Fatal("expected a focus cmd from opening the flag prompt")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // empty reason
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd == nil {
+		t.Fatal("expected a cmd after confirming")
+	}
+	_, cmd = m.Update(cmd())
+	if cmd == nil {
+		t.Fatal("expected a cmd after routing FlagSubmitMsg through Update")
+	}
+	msg, ok := cmd().(screens.FlagReplyMsg)
+	if !ok {
+		t.Fatalf("expected FlagReplyMsg, got %T", cmd())
+	}
+	if msg.ReplyID != "r1" {
+		t.Errorf("ReplyID = %q, want r1", msg.ReplyID)
+	}
+	if msg.PostID != "p1" {
+		t.Errorf("PostID = %q, want p1", msg.PostID)
+	}
+	if msg.Reason != "" {
+		t.Errorf("Reason = %q, want empty", msg.Reason)
+	}
+}
+
+func TestPostDetail_FlagKey_Cancel_EmitsNoFlagMsg(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice")
+	m = m.SetPost(pdPost("p1"))
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		if _, ok := cmd().(screens.FlagPostMsg); ok {
+			t.Fatal("esc should not emit FlagPostMsg")
+		}
+	}
+}
+
+func TestPostDetail_ComposeActive_TrueWhileFlagPromptOpen(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice")
+	m = m.SetPost(pdPost("p1")) // author "op" != "alice"
+
+	if m.ComposeActive() {
+		t.Fatal("setup: expected ComposeActive false before opening the flag prompt")
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!")})
+	if !m.ComposeActive() {
+		t.Error("expected ComposeActive to report true while the flag/report overlay is open")
+	}
+}
+
+func TestPostDetail_ComposeActive_TrueWhileConfirmingDelete(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op")
+	m = m.SetPost(pdPost("p1")) // author "op" == "op", so delete is allowed
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if !m.ComposeActive() {
+		t.Error("expected ComposeActive to report true while the delete-confirm overlay is open")
+	}
+}
