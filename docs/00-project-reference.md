@@ -595,7 +595,7 @@ Time formatting helpers used by all screens.
 
 #### `theme.go`
 
-Color palettes and Lip Gloss style objects for three retro themes.
+Color palettes and Lip Gloss style objects for four retro themes.
 
 **Layout constants:**
 
@@ -616,7 +616,7 @@ Color palettes and Lip Gloss style objects for three retro themes.
 
 | Function | Purpose |
 |---|---|
-| `Set(name string)` | Applies a theme by name ("cyber", "c64", "vt320"); defaults to "cyber" |
+| `Set(name string)` | Applies a theme by name ("cyber", "c64", "vt320", "bland"); defaults to "cyber" |
 | `CurrentName() string` | Returns the active theme name |
 
 **Themes:**
@@ -626,6 +626,7 @@ Color palettes and Lip Gloss style objects for three retro themes.
 | **cyber** | Bright green-on-black (#00FF41) with cyan accents (#00FFFF) — default |
 | **c64** | Commodore 64 purple background with cyan and bright magenta |
 | **vt320** | VT320 terminal dim green with amber accents |
+| **bland** | No forced colors — renders in the terminal's own default palette; active/selected states use bold/underline and a thicker active-pane border instead of color |
 
 Because all colors are package variables, styles automatically inherit the new palette when `Set()` is called — no re-initialization needed.
 
