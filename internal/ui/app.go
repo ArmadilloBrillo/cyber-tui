@@ -51,7 +51,7 @@ const (
 )
 
 // availableThemes is the ordered list of selectable themes shown in the picker.
-var availableThemes = []string{"cyber", "c64", "vt320"}
+var availableThemes = []string{"cyber", "c64", "vt320", "bland"}
 
 const (
 	logoOrig          = "ᑕ¥βєяรקค¢є"
