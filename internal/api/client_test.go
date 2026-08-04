@@ -1057,6 +1057,38 @@ func TestHTTPGetConversations_ParsesList(t *testing.T) {
 	}
 }
 
+// TestHTTPGetConversations_DropsEmptyStubEntries guards against corrupted/
+// orphaned conversation records — no other-user identity, no message, no
+// timestamp — showing up as blank "@unknown" rows in the list.
+func TestHTTPGetConversations_DropsEmptyStubEntries(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{
+				"conversationId": "empty1",
+				"otherUser":      map[string]any{"userId": "", "username": ""},
+				"lastMessage":    "",
+				"lastMessageAt":  0,
+				"unreadCount":    0,
+			},
+			{
+				"conversationId": "c1",
+				"otherUser":      map[string]any{"userId": "u2", "username": "molly_millions"},
+				"lastMessage":    "we need to talk",
+				"lastMessageAt":  1700000000000,
+				"unreadCount":    2,
+			},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	convs, err := c.GetConversations()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(convs) != 1 || convs[0].ID != "c1" {
+		t.Fatalf("GetConversations() = %+v, want only c1", convs)
+	}
+}
+
 // TestHTTPGetConversations_SanitizesControlChars guards against a regression
 // of the 2026-07-24 review's sanitize-bypass finding for the C-Mail
 // conversation list (other-user username and last-message preview).
@@ -1950,7 +1982,7 @@ func TestHTTPSubscribeUserConversations_DecodesAndSorts(t *testing.T) {
 	c, _ := newClientWithRTDB(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		writeSSEEvent(w, "put", `{"path":"/","data":{"c1":{"otherUserId":"u1","otherUsername":"alice","lastMessage":"hi","lastMessageAt":1000,"unreadCount":0},"c2":{"otherUserId":"u2","otherUsername":"bob","lastMessage":"yo","lastMessageAt":2000,"unreadCount":3},"c3":{"unreadCount":0}}}`)
+		writeSSEEvent(w, "put", `{"path":"/","data":{"c1":{"otherUserId":"u1","otherUsername":"alice","lastMessage":"hi","lastMessageAt":1000,"unreadCount":0},"c2":{"otherUserId":"u2","otherUsername":"bob","lastMessage":"yo","lastMessageAt":2000,"unreadCount":3},"c3":{"otherUserId":"u3","otherUsername":"carol","unreadCount":0},"c4":{"unreadCount":0}}}`)
 		<-r.Context().Done()
 	}))
 
@@ -1965,6 +1997,8 @@ func TestHTTPSubscribeUserConversations_DecodesAndSorts(t *testing.T) {
 		if !ok {
 			t.Fatal("channel closed before delivering a snapshot")
 		}
+		// c4 is a fully-empty stub (no identity, no message, no timestamp) and
+		// must be dropped rather than shown as a blank "@unknown" row.
 		if len(convs) != 3 {
 			t.Fatalf("len(convs) = %d, want 3: %+v", len(convs), convs)
 		}
@@ -1974,8 +2008,8 @@ func TestHTTPSubscribeUserConversations_DecodesAndSorts(t *testing.T) {
 		if convs[0].Participants[0].Username != "bob" {
 			t.Errorf("convs[0].Participants[0].Username = %q, want bob", convs[0].Participants[0].Username)
 		}
-		// c1 (lastMessageAt 1000) and c3 (no lastMessageAt) are both unread=0;
-		// c1 must sort before c3's zero-value timestamp.
+		// c1 (lastMessageAt 1000) and c3 (no lastMessageAt, but has an identity)
+		// are both unread=0; c1 must sort before c3's zero-value timestamp.
 		if convs[1].ID != "c1" || convs[2].ID != "c3" {
 			t.Errorf("read conversations not sorted most-recent-first: got order %s, %s", convs[1].ID, convs[2].ID)
 		}

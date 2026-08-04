@@ -2166,6 +2166,16 @@ func wireRTDBCircMessageToModel(id string, wm wireRTDBCircMessage) model.Message
 	}
 }
 
+// isEmptyConversation reports whether a conversation carries no information
+// at all — no other-user identity, no message, no timestamp. The server
+// returns entries like this for some accounts (corrupted/orphaned stubs);
+// there's nothing useful to show for them, so callers drop them rather than
+// rendering a blank "@unknown" row.
+func isEmptyConversation(c model.Conversation) bool {
+	other := c.Participants[0]
+	return other.ID == "" && other.Username == "" && c.LastMessage == "" && c.LastMessageAt.Unix() == 0
+}
+
 // GetConversations lists the caller's C-Mail conversations via GET /v1/cmail.
 // Sorted: unread first, then most recently active.
 func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
@@ -2177,15 +2187,18 @@ func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
 	if err := json.Unmarshal(env.Data, &wire); err != nil {
 		return nil, err
 	}
-	out := make([]model.Conversation, len(wire))
-	for i, w := range wire {
+	out := make([]model.Conversation, 0, len(wire))
+	for _, w := range wire {
 		sanitize.Strings(&w)
-		out[i] = model.Conversation{
+		conv := model.Conversation{
 			ID:            w.ConversationID,
 			Participants:  []model.User{{ID: w.OtherUser.UserID, Username: w.OtherUser.Username}},
 			UnreadCount:   w.UnreadCount,
 			LastMessage:   w.LastMessage,
 			LastMessageAt: time.UnixMilli(w.LastMessageAt),
+		}
+		if !isEmptyConversation(conv) {
+			out = append(out, conv)
 		}
 	}
 	return out, nil
@@ -2266,13 +2279,16 @@ func applyUserConversationsEvent(state map[string]wireRTDBUserConversationEntry,
 func buildUserConversations(state map[string]wireRTDBUserConversationEntry) []model.Conversation {
 	out := make([]model.Conversation, 0, len(state))
 	for id, e := range state {
-		out = append(out, model.Conversation{
+		conv := model.Conversation{
 			ID:            id,
 			Participants:  []model.User{{ID: e.OtherUserID, Username: e.OtherUsername}},
 			UnreadCount:   e.UnreadCount,
 			LastMessage:   e.LastMessage,
 			LastMessageAt: time.UnixMilli(e.LastMessageAt),
-		})
+		}
+		if !isEmptyConversation(conv) {
+			out = append(out, conv)
+		}
 	}
 	slices.SortFunc(out, func(a, b model.Conversation) int {
 		aUnread, bUnread := a.UnreadCount > 0, b.UnreadCount > 0
