@@ -350,6 +350,7 @@ Email + password login form.
 
 - Two `textinput` fields (email, password)
 - Tab/Up/Down navigate between fields; Enter on the password field emits `SubmitLoginMsg` (picked up by App)
+- Esc quits the app (handled globally in `app.go`'s `handleKeys`, gated to `screenLogin`)
 - Supports email prefill from config
 - Shows loading spinner and error messages
 - Renders a retro ASCII banner

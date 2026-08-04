@@ -219,6 +219,29 @@ func TestHandleKeys_Leader_G_LoginScreen_NoOp(t *testing.T) {
 	}
 }
 
+func TestHandleKeys_Esc_QuitsOnLoginScreen(t *testing.T) {
+	a := newTestApp() // active == screenLogin
+	_, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	if !consumed {
+		t.Error("expected esc to be consumed on login screen")
+	}
+	if cmd == nil {
+		t.Error("expected esc to fire a quit command on login screen")
+	}
+}
+
+func TestHandleKeys_Esc_NotConsumed_OffLoginScreen(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenProfile
+	_, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	if consumed {
+		t.Error("expected esc to NOT be consumed by the global quit handler off the login screen")
+	}
+	if cmd != nil {
+		t.Error("expected no quit command from esc off the login screen")
+	}
+}
+
 func TestHandleKeys_Leader_MappedChord_Navigates(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenProfile
