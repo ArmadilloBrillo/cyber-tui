@@ -832,6 +832,9 @@ func (c *HTTPClient) refresh() error {
 	}
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("refresh: server returned %d: %.200s", resp.StatusCode, bytes.TrimSpace(raw))
+		}
 		return fmt.Errorf("refresh: decode response: %w", err)
 	}
 
