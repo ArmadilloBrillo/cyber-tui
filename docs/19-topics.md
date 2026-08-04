@@ -9,6 +9,7 @@
 ## Curl Commands to Verify API Responses
 
 ```bash
+# threatcrush-disable-next-line secret-generic-credential  docs placeholder, not a credential
 REFRESH_TOKEN="your_refresh_token_here"
 
 ID_TOKEN=$(curl -s -X POST https://api.cyberspace.online/v1/auth/refresh \
