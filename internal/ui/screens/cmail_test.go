@@ -29,6 +29,37 @@ func TestCMailTotalUnread(t *testing.T) {
 	}
 }
 
+// TestOtherParticipant_EmptyUsernameFallsBackToUnknown guards against a stale
+// RTDB conversation entry with a blank otherUsername rendering as "@" instead
+// of the "unknown" fallback.
+func TestOtherParticipant_EmptyUsernameFallsBackToUnknown(t *testing.T) {
+	m := NewCMailModel("me", "", nil)
+	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: ""}}}
+
+	if got := m.otherParticipant(conv); got != "unknown" {
+		t.Fatalf("otherParticipant() with blank username = %q, want %q", got, "unknown")
+	}
+}
+
+// TestRenderConvCards_EpochZeroLastMessageAtHidesDate guards against a stale
+// conversation with a missing lastMessageAt (converted to epoch 1970-01-01,
+// not Go's zero time.Time) rendering a bogus "01-Jan-1970" date.
+func TestRenderConvCards_EpochZeroLastMessageAtHidesDate(t *testing.T) {
+	m := NewCMailModel("me", "", nil)
+	m.width = 80
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: ""}}, LastMessageAt: time.UnixMilli(0)},
+	})
+
+	out := m.renderConvCards()
+	if strings.Contains(out, "1970") {
+		t.Fatalf("renderConvCards() rendered epoch-0 date, want it hidden:\n%s", out)
+	}
+	if !strings.Contains(out, "@unknown") {
+		t.Fatalf("renderConvCards() = %q, want it to contain %q", out, "@unknown")
+	}
+}
+
 // TestCMailDetailView_HeaderHasDividerBeforeMessages guards against the
 // divider row (mirrors the same fix in chatrooms.go — the header shouldn't
 // float with no visual bottom edge, unlike the bordered input box below it)
