@@ -1206,6 +1206,29 @@ func TestUpdate_StyleAnimTick_AdvancesFrameAndRearms(t *testing.T) {
 	}
 }
 
+func TestSetFocused_ResumesStyleAnimAfterBackgroundedTickIsDropped(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})
+	if !m.styleAnimRunning {
+		t.Fatal("setup: expected styleAnimRunning = true")
+	}
+
+	// Simulate switching away: the in-flight styleAnimTickMsg is dropped by
+	// App's message routing (it's not an IsRoomStreamMsg), so updateInner
+	// never runs to clear styleAnimRunning. Switching back must still be
+	// able to restart the ticker.
+	m = m.SetFocused(false)
+	m = m.SetFocused(true)
+
+	m, cmd := m.maybeStartStyleAnim()
+	if !m.styleAnimRunning {
+		t.Error("expected styleAnimRunning = true after resuming")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd restarting the ticker after refocusing")
+	}
+}
+
 // --- spoiler reveal (see updateBrowsingKey's "enter" case) ---
 
 func TestBrowsing_Enter_TogglesSpoilerReveal(t *testing.T) {

@@ -636,11 +636,17 @@ func (m CMailModel) TotalUnread() int {
 // SetFocused marks whether the C-Mail tab is the one currently on screen.
 // Becoming focused clears the currently-open conversation's local unread
 // count (mirroring ChatroomsModel.SetFocused), so TotalUnread() doesn't keep
-// counting messages the user is now actively viewing.
+// counting messages the user is now actively viewing. It also clears
+// styleAnimRunning: styleAnimTickMsg isn't in IsDMStreamMsg, so a tick that
+// fires while this tab is backgrounded is dropped before updateInner ever
+// resets the flag, permanently blocking maybeStartStyleAnim from restarting
+// the ticker. Regaining focus is the point where any prior ticker is known
+// to be dead, so it's safe to clear the flag here.
 func (m CMailModel) SetFocused(focused bool) CMailModel {
 	m.focused = focused
 	if focused {
 		m = m.zeroActiveConvUnread()
+		m.styleAnimRunning = false
 	}
 	return m
 }
