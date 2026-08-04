@@ -302,6 +302,27 @@ var knownCircCommands = map[string]bool{
 	"/me": true, "/poke": true, "/hug": true, "/hi5": true, "/slap": true,
 	"/dice": true, "/8ball": true, "/fortune": true, "/help": true,
 	"/mute": true, "/unmute": true, "/muted": true, "/unmuteall": true,
+	"/gif": true, "/song": true, "/art": true,
+}
+
+// knownCircStyles are the text-style command names (see chatstyle.go) that
+// can appear alone or chained with "+" (e.g. "/comic+rainbow"), so they're
+// checked separately from the exact-match knownCircCommands lookup.
+var knownCircStyles = map[string]bool{
+	styleBlink: true, styleL33t: true, styleComic: true, styleCursive: true,
+	styleTimes: true, styleRainbow: true, styleFlip: true, styleQuiet: true,
+	styleSlow: true, styleGlitch: true, styleSpoiler: true, styleWave: true,
+}
+
+// isKnownCircStyleCombo reports whether cmd is a "/"-prefixed, "+"-joined
+// combination of known style names, e.g. "/comic+rainbow".
+func isKnownCircStyleCombo(cmd string) bool {
+	for p := range strings.SplitSeq(strings.TrimPrefix(cmd, "/"), "+") {
+		if !knownCircStyles[p] {
+			return false
+		}
+	}
+	return true
 }
 
 // RoomOpenedMsg is emitted when the user enters a chatroom. App uses it to call MarkRoomRead.
@@ -1281,7 +1302,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 						roomID := m.activeRoom.Slug
 						if strings.HasPrefix(val, "/") {
 							cmd := strings.ToLower(strings.Fields(val)[0])
-							if !knownCircCommands[cmd] {
+							if !knownCircCommands[cmd] && !isKnownCircStyleCombo(cmd) {
 								m.input.Reset()
 								return m.AppendSystemMessage(roomID, "*** unknown command: "+cmd), nil
 							}
