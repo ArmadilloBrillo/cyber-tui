@@ -537,3 +537,26 @@ func TestCMailUpdate_StyleAnimTick_AdvancesFrameAndRearms(t *testing.T) {
 		t.Error("expected a non-nil tea.Cmd to rearm the ticker")
 	}
 }
+
+func TestSetFocusedCMail_ResumesStyleAnimAfterBackgroundedTickIsDropped(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})
+	if !m.styleAnimRunning {
+		t.Fatal("setup: expected styleAnimRunning = true")
+	}
+
+	// Simulate switching away: the in-flight styleAnimTickMsg is dropped by
+	// App's message routing (it's not an IsDMStreamMsg), so updateInner
+	// never runs to clear styleAnimRunning. Switching back must still be
+	// able to restart the ticker.
+	m = m.SetFocused(false)
+	m = m.SetFocused(true)
+
+	m, cmd := m.maybeStartStyleAnim()
+	if !m.styleAnimRunning {
+		t.Error("expected styleAnimRunning = true after resuming")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd restarting the ticker after refocusing")
+	}
+}

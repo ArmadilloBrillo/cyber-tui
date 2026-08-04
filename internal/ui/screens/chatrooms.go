@@ -388,11 +388,17 @@ func (m ChatroomsModel) CancelSubscription() ChatroomsModel {
 }
 
 // SetFocused marks whether the Chatrooms tab is the one currently on screen.
-// Becoming focused clears unreadCount for the tab-bar badge.
+// Becoming focused clears unreadCount for the tab-bar badge. It also clears
+// styleAnimRunning: styleAnimTickMsg isn't in IsRoomStreamMsg, so a tick that
+// fires while this tab is backgrounded is dropped before updateInner ever
+// resets the flag, permanently blocking maybeStartStyleAnim from restarting
+// the ticker. Regaining focus is the point where any prior ticker is known
+// to be dead, so it's safe to clear the flag here.
 func (m ChatroomsModel) SetFocused(focused bool) ChatroomsModel {
 	m.focused = focused
 	if focused {
 		m.unreadCount = 0
+		m.styleAnimRunning = false
 	}
 	return m
 }
