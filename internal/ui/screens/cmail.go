@@ -1146,7 +1146,7 @@ func (m CMailModel) handleTypingInputChanged(newVal string) (CMailModel, tea.Cmd
 
 func (m CMailModel) otherParticipant(conv model.Conversation) string {
 	for _, u := range conv.Participants {
-		if u.Username != m.currentUser {
+		if u.Username != "" && u.Username != m.currentUser {
 			return u.Username
 		}
 	}
@@ -1191,7 +1191,7 @@ func (m CMailModel) renderConvCards() string {
 
 		// Right side: date  (N)
 		var rightParts []string
-		if !c.LastMessageAt.IsZero() {
+		if !c.LastMessageAt.IsZero() && c.LastMessageAt.Unix() != 0 {
 			rightParts = append(rightParts, theme.Subtle.Render(displayTime(c.LastMessageAt, m.location(), m.timeDisplayFormat, true)))
 		}
 		if c.UnreadCount > 0 {

@@ -30,7 +30,7 @@ type Config struct {
 	Timezone string `json:"timezone,omitempty"`
 
 	// App settings — edit manually in ~/.cyber-tui.json.
-	// Theme selects the color palette: "cyber" (default), "c64", "vt320".
+	// Theme selects the color palette: "cyber" (default), "c64", "vt320", "bland".
 	Theme string `json:"theme,omitempty"`
 	// APIBaseURL overrides the default API endpoint (https://api.cyberspace.online).
 	APIBaseURL string `json:"apiBaseURL,omitempty"`

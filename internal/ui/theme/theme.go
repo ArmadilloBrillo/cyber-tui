@@ -123,7 +123,7 @@ var (
 )
 
 // Set applies the named theme by reassigning all color and style vars.
-// Valid names: "cyber" (default), "c64", "vt320".
+// Valid names: "cyber" (default), "c64", "vt320", "bland".
 // Unknown or empty names fall back to "cyber".
 func Set(name string) {
 	switch name {
@@ -133,6 +133,9 @@ func Set(name string) {
 	case "vt320":
 		currentName = "vt320"
 		setVT320()
+	case "bland":
+		currentName = "bland"
+		setBland()
 	default:
 		currentName = "cyber"
 		setCyber()
@@ -176,6 +179,28 @@ func setVT320() {
 	ColorMuted = lipgloss.Color("#6B4800")      // very dim amber (subtle text)
 	ColorWhite = lipgloss.Color("#FFECB3")      // cream
 	applyStyles()
+}
+
+// setBland applies no color at all: every style renders in the terminal's
+// own default foreground/background, so the theme always matches whatever
+// palette the user's terminal is configured with. Active/selected states
+// fall back to Bold/Underline and (for the active border) a heavier border
+// glyph, since no background or foreground color is forced.
+func setBland() {
+	ColorGreen = lipgloss.Color("")
+	ColorDimGreen = lipgloss.Color("")
+	ColorCyan = lipgloss.Color("")
+	ColorYellow = lipgloss.Color("")
+	ColorRed = lipgloss.Color("")
+	ColorBackground = lipgloss.Color("")
+	ColorMuted = lipgloss.Color("")
+	ColorWhite = lipgloss.Color("")
+	applyStyles()
+
+	ActiveBorder = ActiveBorder.BorderStyle(lipgloss.ThickBorder())
+	TabMnemonic = TabMnemonic.Underline(true)
+	ActiveTabMnemonic = ActiveTabMnemonic.Underline(true)
+	NavMnemonic = NavMnemonic.Underline(true)
 }
 
 // applyStyles rebuilds all style vars from the current color vars.
