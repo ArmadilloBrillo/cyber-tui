@@ -18,7 +18,7 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh | sh
 ```
 
 Downloads the latest release binary for your platform, verifies it against the published `SHA256SUMS`, and installs it to `/usr/local/bin` (falling back to `~/.local/bin` when that is not writable). Then run:
@@ -35,10 +35,10 @@ The same script handles updates and removal. Through a pipe, pass the command af
 
 ```bash
 # update to the latest release, in place
-curl -fsSL https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh | sh -s -- update
+curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh | sh -s -- update
 
 # uninstall
-curl -fsSL https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh | sh -s -- remove
+curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh | sh -s -- remove
 ```
 
 | Command | Aliases | Description |
@@ -59,7 +59,7 @@ Overrides:
 | `CYBER_TUI_REPO` | Install from a fork, e.g. `you/cyber-tui` |
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh \
+curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh \
   | CYBER_TUI_INSTALL_DIR="$HOME/bin" sh
 ```
 
@@ -102,7 +102,7 @@ Prefer not to pipe to a shell? Download [`install.sh`](install.sh), read it, the
 Clone the repository and run directly:
 
 ```bash
-git clone https://github.com/ralyodio/cyber-tui.git
+git clone https://github.com/ArmadilloBrillo/cyber-tui.git
 cd cyber-tui
 go run ./cmd/cyber-tui
 ```

@@ -1,7 +1,7 @@
 #!/bin/sh
 # cyber-tui installer
 #
-#   curl -fsSL https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh | sh
 #
 # Commands (pass through a pipe with `sh -s -- <command>`):
 #   install              install cyber-tui (default)
@@ -20,7 +20,7 @@ set -eu
 # and the source fallback are fetched from. The script itself is served from the
 # repo below, which is why the two can differ.
 REPO="${CYBER_TUI_REPO:-ArmadilloBrillo/cyber-tui}"
-SCRIPT_URL="https://raw.githubusercontent.com/ralyodio/cyber-tui/dev/install.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/install.sh"
 BINARY="cyber-tui"
 
 # Everything lives in main() so a truncated download can never execute a
