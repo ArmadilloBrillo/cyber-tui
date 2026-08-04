@@ -543,6 +543,22 @@ func TestHTTPLoginWithRefreshToken_Failure(t *testing.T) {
 	}
 }
 
+func TestHTTPLoginWithRefreshToken_NonJSONServerError(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("A server error has occurred\n\nFUNCTION_INVOCATION_FAILED"))
+	}))
+
+	_, err := c.LoginWithRefreshToken("some-token")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("expected error to mention status code 500, got: %v", err)
+	}
+}
+
 func TestHTTPUpdateProfile_OmitsNilFields(t *testing.T) {
 	var capturedBody []byte
 	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
