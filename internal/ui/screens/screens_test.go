@@ -357,24 +357,36 @@ func TestChatrooms_Send_UnknownCommandIsRejected(t *testing.T) {
 }
 
 func TestChatrooms_Send_KnownCommandStillSends(t *testing.T) {
-	m := screens.NewChatroomsModel("neuromancer", nil)
-	m = m.SetRooms(sampleRooms())
-	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // open room
+	cases := []string{
+		"/me waves",
+		"/blink hello",
+		"/comic+rainbow hi",
+		"/gif https://example.com/a.gif",
+		"/song https://youtu.be/x | artist | title",
+		"/art",
+	}
+	for _, body := range cases {
+		t.Run(body, func(t *testing.T) {
+			m := screens.NewChatroomsModel("neuromancer", nil)
+			m = m.SetRooms(sampleRooms())
+			m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // open room
 
-	for _, r := range "/me waves" {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-	}
-	_, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
-	if cmd == nil {
-		t.Fatal("expected a command for a known slash command")
-	}
-	msg := cmd()
-	sendMsg, ok := msg.(screens.SendRoomMessageMsg)
-	if !ok {
-		t.Fatalf("expected SendRoomMessageMsg, got %T", msg)
-	}
-	if sendMsg.Body != "/me waves" {
-		t.Errorf("expected body='/me waves', got %q", sendMsg.Body)
+			for _, r := range body {
+				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			}
+			_, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+			if cmd == nil {
+				t.Fatalf("expected a command for known slash command %q", body)
+			}
+			msg := cmd()
+			sendMsg, ok := msg.(screens.SendRoomMessageMsg)
+			if !ok {
+				t.Fatalf("expected SendRoomMessageMsg, got %T", msg)
+			}
+			if sendMsg.Body != body {
+				t.Errorf("expected body=%q, got %q", body, sendMsg.Body)
+			}
+		})
 	}
 }
 
