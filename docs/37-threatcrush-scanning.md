@@ -14,7 +14,7 @@ that neither of those look for.
 
 | Step | Purpose |
 |---|---|
-| Install ThreatCrush | `npm i -g @profullstack/threatcrush@latest`, retried 3× with backoff |
+| Install ThreatCrush | `npm i -g @profullstack/threatcrush@0.3.0`, retried 3× with backoff |
 | Record the CLI interface | Logs `--version` and `scan --help` into every run |
 | Detect the CLI output interface | Aborts if the CLI cannot emit SARIF |
 | Scan | `threatcrush scan . --format sarif --fail-on critical,high` |
