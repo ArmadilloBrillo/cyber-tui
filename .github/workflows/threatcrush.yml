@@ -40,7 +40,7 @@ jobs:
       - name: Install ThreatCrush
         run: |
           for attempt in 1 2 3; do
-            if npm install -g "@profullstack/threatcrush@latest"; then
+            if npm install -g "@profullstack/threatcrush@0.3.0"; then
               exit 0
             fi
             delay=$((attempt * 10))
