@@ -647,6 +647,10 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			return a, tea.Quit, true
 		}
+	case "esc":
+		if a.active == screenLogin {
+			return a, tea.Quit, true
+		}
 	}
 	return a.layout.HandleNav(m, a)
 }
