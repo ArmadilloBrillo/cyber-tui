@@ -828,6 +828,65 @@ func TestShowSearchReplyMsg_NavigatesToPostDetailAndScrollsToReply(t *testing.T)
 	}
 }
 
+// --- Newly posted reply is selected and scrolled into view ---
+
+// TestCreateReplyCmd_ReturnsReplyID guards against the reply ID being
+// silently discarded — without it, nothing downstream can select or scroll
+// to the reply that was just posted.
+func TestCreateReplyCmd_ReturnsReplyID(t *testing.T) {
+	a := loggedInApp()
+
+	cmd := a.createReplyCmd("p1", "nice post", "")
+	msg := cmd()
+
+	created, ok := msg.(replyCreatedMsg)
+	if !ok {
+		t.Fatalf("expected replyCreatedMsg, got %T", msg)
+	}
+	if created.postID != "p1" {
+		t.Errorf("postID = %q, want %q", created.postID, "p1")
+	}
+	if created.replyID == "" {
+		t.Error("expected a non-empty replyID from CreateReply's response")
+	}
+}
+
+// TestReplyCreatedMsg_SetsPendingReplyID verifies that handling
+// replyCreatedMsg sets pendingReplyID to the new reply's ID before
+// reloading — the same field the notification/search deep-link path uses
+// (TestShowSearchReplyMsg_NavigatesToPostDetailAndScrollsToReply) to make
+// repliesLoadedMsg call ScrollToReply. Posting a reply must feed that same
+// pipeline instead of leaving the new reply unselected after reload.
+func TestReplyCreatedMsg_SetsPendingReplyID(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+
+	m, cmd := a.Update(replyCreatedMsg{postID: "p1", replyID: "reply-new-1"})
+	a2 := m.(App)
+
+	if a2.pendingReplyID != "reply-new-1" {
+		t.Fatalf("expected pendingReplyID = reply-new-1, got %q", a2.pendingReplyID)
+	}
+
+	// The reload-then-scroll half of the pipeline (repliesLoadedMsg calling
+	// ScrollToReply and clearing pendingReplyID) is already covered by
+	// TestShowSearchReplyMsg_NavigatesToPostDetailAndScrollsToReply and
+	// PostDetailModel's own TestPostDetail_ScrollToReply_AfterTree — this
+	// just confirms the reply-create path feeds pendingReplyID the same way.
+	msgs := resolveMsgs(cmd)
+	if len(msgs) == 0 {
+		t.Fatal("expected a resolved message from the replies reload")
+	}
+	for _, msg := range msgs {
+		var model tea.Model
+		model, _ = a2.Update(msg)
+		a2 = model.(App)
+	}
+	if a2.pendingReplyID != "" {
+		t.Errorf("expected pendingReplyID cleared after replies loaded, got %q", a2.pendingReplyID)
+	}
+}
+
 // --- PostDetail persists across tab switches ---
 //
 // Mirrors Circ's background-room persistence (PR #58): a post left open
