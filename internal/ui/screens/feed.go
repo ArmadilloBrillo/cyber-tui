@@ -1,6 +1,8 @@
 package screens
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +55,13 @@ type FeedDetailDebounceMsg struct{ PostID string }
 
 const feedDetailDebounceDelay = time.Second
 
+// mergePendingTickMsg fires after feedMergeAnimDelay to complete a pending-new
+// merge, giving the local merge (no network round-trip) the same brief
+// "fetching new posts..." transition as a real refresh.
+type mergePendingTickMsg struct{}
+
+const feedMergeAnimDelay = 200 * time.Millisecond
+
 // SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
 type SubmitNewPostMsg struct {
 	Content  string
@@ -78,6 +87,8 @@ type FeedModel struct {
 	loading           bool
 	fetching          bool           // true while the initial (or tab-switch) load is in flight
 	refreshing        bool           // true while re-fetching newest posts (up at top)
+	pendingNew        []model.Post   // new posts detected by the background poll, staged but not yet merged into posts
+	pendingCapped     bool           // true when pendingNew hit the single-page poll limit — count is a floor, not exact
 	loaded            bool           // true once the first page has successfully loaded
 	exhausted         bool           // true once API returned an empty cursor
 	relaxed           bool           // true = blank line between posts (relaxed density)
@@ -128,7 +139,8 @@ func ParseTopics(s string) []string {
 	return out
 }
 
-func (m FeedModel) IsLoaded() bool { return m.loaded }
+func (m FeedModel) IsLoaded() bool     { return m.loaded }
+func (m FeedModel) IsRefreshing() bool { return m.refreshing }
 
 func (m FeedModel) SetFetching() FeedModel {
 	m.fetching = true
@@ -152,6 +164,8 @@ func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	m.pendingNew = nil
+	m.pendingCapped = false
 	m.loaded = true
 	m.selectedIndex = 0
 	if prevID != "" {
@@ -181,6 +195,61 @@ func (m FeedModel) AppendPosts(posts []model.Post, cursor string) FeedModel {
 	m.fetching = false
 	if m.ready {
 		m = m.refreshContent() // selectedIndex preserved; scroll position preserved
+	}
+	return m
+}
+
+// feedPeekPageSize is the page size the background poll fetches (GetFeed("")
+// always requests limit=20). Used to detect when a peek page is entirely new
+// posts — meaning the real count may exceed what this one page can show.
+const feedPeekPageSize = 20
+
+// SetPendingNew stages newly-detected posts (from the background feed poll)
+// without inserting them into the viewport. Posts already present in m.posts
+// are filtered out. Call MergePendingNew to bring them into view.
+//
+// If every post in the fetched page turns out to be new, the previously-known
+// top post wasn't found within one page — the real count could be higher than
+// what this single-request poll can see, so pendingCapped is set and the
+// count is displayed as a floor ("20+") rather than an exact (and likely
+// wrong) number.
+func (m FeedModel) SetPendingNew(posts []model.Post) FeedModel {
+	existing := make(map[string]struct{}, len(m.posts))
+	for _, p := range m.posts {
+		existing[p.ID] = struct{}{}
+	}
+	var fresh []model.Post
+	for _, p := range posts {
+		if _, ok := existing[p.ID]; !ok {
+			fresh = append(fresh, p)
+		}
+	}
+	m.pendingNew = fresh
+	m.pendingCapped = len(posts) == feedPeekPageSize && len(fresh) == len(posts)
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
+// PendingNewCount reports how many staged-but-unmerged posts are pending,
+// for the tab-bar badge.
+func (m FeedModel) PendingNewCount() int { return len(m.pendingNew) }
+
+// MergePendingNew prepends the staged posts onto the visible list and clears
+// the pending count. Called when the user presses up at the top of the feed
+// while entries are pending.
+func (m FeedModel) MergePendingNew() FeedModel {
+	if len(m.pendingNew) == 0 {
+		return m
+	}
+	m.posts = append(append([]model.Post{}, m.pendingNew...), m.posts...)
+	m.pendingNew = nil
+	m.pendingCapped = false
+	m.selectedIndex = 0
+	if m.ready {
+		m = m.refreshContent()
+		m.viewport.GotoTop()
 	}
 	return m
 }
@@ -373,6 +442,11 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case mergePendingTickMsg:
+		m.refreshing = false
+		m = m.MergePendingNew()
+		return m, nil
+
 	case FeedDetailNavMsg:
 		if msg.PaneHeight > 0 && msg.PaneWidth > 0 {
 			m = m.pageDetailNav(msg.Delta, msg.PaneHeight, msg.PaneWidth)
@@ -465,6 +539,10 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				var detailCmd tea.Cmd
 				m, detailCmd = m.currentDetailCmd()
 				return m, detailCmd
+			} else if len(m.pendingNew) > 0 && !m.refreshing {
+				m.refreshing = true
+				m = m.refreshContent()
+				return m, tea.Tick(feedMergeAnimDelay, func(time.Time) tea.Msg { return mergePendingTickMsg{} })
 			} else if !m.loading && !m.refreshing {
 				m.refreshing = true
 				m = m.refreshContent()
@@ -606,6 +684,13 @@ func (m FeedModel) buildContent() (string, []int) {
 	startLine := 0
 	if m.refreshing {
 		prefix = theme.Subtle.Render("  fetching new posts...") + "\n"
+		startLine = 1
+	} else if n := len(m.pendingNew); n > 0 {
+		label := strconv.Itoa(n)
+		if m.pendingCapped {
+			label = strconv.Itoa(n) + "+"
+		}
+		prefix = theme.Subtle.Render(fmt.Sprintf("  ↑ load %s new entries ↑", label)) + "\n"
 		startLine = 1
 	}
 	if len(m.posts) == 0 {

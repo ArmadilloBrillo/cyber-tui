@@ -28,3 +28,6 @@ App.Update
 | `internal/ui/screens/feed.go` | `buildContent()` | Prepends the fetching line and shifts post offsets by 1 when `refreshing` |
 | `internal/ui/screens/feed.go` | `SetPosts()` | Clears `refreshing` on completion |
 | `internal/ui/app.go` | `case screens.RefreshFeedMsg` | Calls `loadFeedCmd()` |
+
+## See also
+[`docs/39-feed-background-poll.md`](./39-feed-background-poll.md) — a passive 15s background poll that detects new posts and stages them (tab badge + banner) without disturbing the viewport. Pressing `Up`/`k` at the top merges staged posts locally when any are pending, instead of the network round-trip described above.

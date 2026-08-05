@@ -362,7 +362,8 @@ Key types: `LoginModel`, `SubmitLoginMsg` (email + password), `LoginErrMsg` (err
 Home feed of posts from followed users.
 
 - Cursor-based pagination: emits `LoadMoreFeedMsg` when viewport reaches the bottom; App appends new posts
-- Emits `RefreshFeedMsg` when pressing Up at the top
+- Emits `RefreshFeedMsg` when pressing Up at the top (no entries pending) — see `docs/13-feed-refresh.md`
+- Background poll every 15s stages newly-seen posts (`pendingNew`) without touching the viewport; shows a "load N new entries" banner and a Feed-tab badge. Pressing Up at the top with entries pending merges them locally instead of emitting `RefreshFeedMsg` — see `docs/39-feed-background-poll.md`
 - Emits `ShowPostMsg` on Enter → App navigates to PostDetail
 - Emits `SubmitNewPostMsg` on compose submit (content + topics)
 - `n` opens compose for a new post (with topics input); `r` opens compose for a reply
