@@ -788,6 +788,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.broadcastWatchedIDs()
 			}
 		}
+		a.pendingReplyID = msg.replyID
 		return a, a.loadRepliesCmd(msg.postID), true
 	case screens.BackToFeedMsg:
 		a.active = a.postDetailReturn
@@ -2338,7 +2339,7 @@ type userProfileLoadedMsg struct {
 type followResultMsg struct{ followID string }
 type unfollowResultMsg struct{}
 type repliesLoadedMsg struct{ replies []model.Reply }
-type replyCreatedMsg struct{ postID string }
+type replyCreatedMsg struct{ postID, replyID string }
 type replyDeletedMsg struct{ replyID string }
 type postCreatedMsg struct{}
 type postDeletedMsg struct {
@@ -2852,11 +2853,11 @@ func (a *App) loadTopicThreadCmd(postID string) tea.Cmd {
 
 func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreateReply(postID, content, parentReplyID)
+		reply, err := a.client.CreateReply(postID, content, parentReplyID)
 		if err != nil {
 			return actionErrMsg{err}
 		}
-		return replyCreatedMsg{postID: postID}
+		return replyCreatedMsg{postID: postID, replyID: reply.ID}
 	}
 }
 
