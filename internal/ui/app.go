@@ -2301,6 +2301,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		cmailCmd,
 		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
+		a.scheduleFeedPollCmd(),
 		a.loadSettingsCmd(),
 		a.scheduleWanderCmd(),
 		a.checkAndWanderCmd(),
@@ -2609,6 +2610,8 @@ type notifPostLoadedMsg struct{ post model.Post }
 type profilePostLoadedMsg struct{ post model.Post }
 type pollUnreadTickMsg struct{}
 type unreadCountMsg struct{ count int }
+type feedPollTickMsg struct{}
+type feedPeekMsg struct{ posts []model.Post }
 type logoAnimTickMsg struct{}  // 30s idle trigger — begins the scramble animation
 type logoFrameTickMsg struct{} // 60ms per-frame tick during scramble/hold/unscramble
 
@@ -2620,6 +2623,23 @@ func (a *App) loadFeedCmd() tea.Cmd {
 		}
 		return feedLoadedMsg{posts: posts, cursor: cursor}
 	}
+}
+
+// fetchFeedPeekCmd fetches the newest page of the feed for the background
+// poll to diff against the currently loaded posts. Errors are swallowed
+// (nil msg) — a missed poll just tries again on the next tick.
+func (a *App) fetchFeedPeekCmd() tea.Cmd {
+	return func() tea.Msg {
+		posts, _, err := a.client.GetFeed("")
+		if err != nil {
+			return nil
+		}
+		return feedPeekMsg{posts: posts}
+	}
+}
+
+func (a *App) scheduleFeedPollCmd() tea.Cmd {
+	return tea.Tick(15*time.Second, func(time.Time) tea.Msg { return feedPollTickMsg{} })
 }
 
 func (a *App) loadFeedPageCmd(cursor string) tea.Cmd {
@@ -2986,6 +3006,14 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		if msg.count > prev && !a.notifications.HasPaginated() {
 			return a, a.loadNotifsCmd(), true
 		}
+		return a, nil, true
+	case feedPollTickMsg:
+		if !a.feed.IsLoaded() || a.feed.IsRefreshing() {
+			return a, a.scheduleFeedPollCmd(), true
+		}
+		return a, tea.Batch(a.fetchFeedPeekCmd(), a.scheduleFeedPollCmd()), true
+	case feedPeekMsg:
+		a.feed = a.feed.SetPendingNew(msg.posts)
 		return a, nil, true
 	}
 	return a, nil, false

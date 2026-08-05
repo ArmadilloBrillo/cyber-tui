@@ -1,6 +1,8 @@
 package screens_test
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -197,5 +199,155 @@ func TestFeed_ComposeActive_TrueWhileConfirmingDelete(t *testing.T) {
 	m, _ = m.Update(keyRune("d"))
 	if !m.ComposeActive() {
 		t.Error("expected ComposeActive to report true while the delete-confirm overlay is open")
+	}
+}
+
+// --- Background poll: pending new entries ---
+
+func TestFeed_SetPendingNew_FiltersAlreadyPresentPosts(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "existing"},
+	}, "")
+
+	m = m.SetPendingNew([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "existing"}, // already present, filtered
+		{ID: "p2", AuthorUsername: "bob", Content: "new"},
+		{ID: "p3", AuthorUsername: "carol", Content: "also new"},
+	})
+
+	if got := m.PendingNewCount(); got != 2 {
+		t.Fatalf("PendingNewCount() = %d, want 2", got)
+	}
+}
+
+func TestFeed_MergePendingNew_PrependsAndClears(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "existing"},
+	}, "")
+	m = m.SetPendingNew([]model.Post{
+		{ID: "p2", AuthorUsername: "bob", Content: "new"},
+	})
+
+	m = m.MergePendingNew()
+
+	if got := m.PendingNewCount(); got != 0 {
+		t.Fatalf("PendingNewCount() after merge = %d, want 0", got)
+	}
+
+	// Enter on the (now first, selected) post should be the merged post.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	sp, ok := cmd().(screens.ShowPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowPostMsg, got %T", cmd())
+	}
+	if sp.Post.ID != "p2" {
+		t.Errorf("expected merged post p2 to be selected, got %s", sp.Post.ID)
+	}
+}
+
+func TestFeed_MergePendingNew_NoOpWhenNothingPending(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "existing"},
+	}, "")
+
+	m2 := m.MergePendingNew()
+	if m2.PendingNewCount() != 0 {
+		t.Fatalf("PendingNewCount() = %d, want 0", m2.PendingNewCount())
+	}
+}
+
+// If a peek page comes back entirely new (no overlap with known posts), the
+// real new-post count could exceed what one 20-post page can show — the
+// banner should read "20+" rather than assert a specific, likely-wrong number.
+func TestFeed_SetPendingNew_FullPageAllNew_ShowsCappedLabel(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24}) // mark ready so View() renders content
+	m = m.SetPosts([]model.Post{
+		{ID: "known", AuthorUsername: "alice", Content: "existing"},
+	}, "")
+
+	full := make([]model.Post, 20)
+	for i := range full {
+		full[i] = model.Post{ID: "new" + strconv.Itoa(i), AuthorUsername: "bob", Content: "new"}
+	}
+	m = m.SetPendingNew(full)
+
+	if got := m.PendingNewCount(); got != 20 {
+		t.Fatalf("PendingNewCount() = %d, want 20", got)
+	}
+	if !strings.Contains(m.PendingNewLabel(), "20+") {
+		t.Errorf("PendingNewLabel() = %q, want it to contain \"20+\"", m.PendingNewLabel())
+	}
+}
+
+// A partial-overlap peek page (some posts already known) is not capped — the
+// count is exact and the banner should show the plain number, not "N+".
+func TestFeed_SetPendingNew_PartialOverlap_ShowsExactLabel(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPosts([]model.Post{
+		{ID: "known", AuthorUsername: "alice", Content: "existing"},
+	}, "")
+
+	m = m.SetPendingNew([]model.Post{
+		{ID: "n1", AuthorUsername: "bob", Content: "new"},
+		{ID: "n2", AuthorUsername: "carol", Content: "new"},
+		{ID: "known", AuthorUsername: "alice", Content: "existing"}, // overlap found within the page
+	})
+
+	if got := m.PendingNewCount(); got != 2 {
+		t.Fatalf("PendingNewCount() = %d, want 2", got)
+	}
+	label := m.PendingNewLabel()
+	if !strings.Contains(label, "load 2 new entries") {
+		t.Errorf("PendingNewLabel() = %q, want it to contain \"load 2 new entries\"", label)
+	}
+	if strings.Contains(label, "2+") {
+		t.Errorf("PendingNewLabel() = %q, should not show a capped label when count is exact", label)
+	}
+}
+
+// Pressing up at the top of the feed with entries pending should play the
+// same brief "fetching new posts..." transition as a real refresh (via a
+// short tea.Tick) before merging locally, rather than firing a
+// RefreshFeedMsg network round-trip or merging instantly with no feedback.
+func TestFeed_UpAtTop_WithPendingNew_AnimatesThenMergesLocally(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "existing"},
+	}, "")
+	m = m.SetPendingNew([]model.Post{
+		{ID: "p2", AuthorUsername: "bob", Content: "new"},
+	})
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+
+	// Not merged yet — the tick hasn't fired.
+	if m.PendingNewCount() != 1 {
+		t.Fatalf("PendingNewCount() = %d, want 1 (not yet merged)", m.PendingNewCount())
+	}
+	if !strings.Contains(m.View(), "fetching new posts...") {
+		t.Errorf("View() = %q, want the transitional banner while the merge tick is pending", m.View())
+	}
+	if cmd == nil {
+		t.Fatal("expected a cmd (the merge-delay tea.Tick)")
+	}
+	tickMsg := cmd() // tea.Tick's cmd reads its timer channel once — call it exactly once
+	if _, ok := tickMsg.(screens.RefreshFeedMsg); ok {
+		t.Fatal("expected the local merge path, not a RefreshFeedMsg network round-trip")
+	}
+
+	// Feed the tick's message back through Update to complete the merge.
+	m, _ = m.Update(tickMsg)
+
+	if m.PendingNewCount() != 0 {
+		t.Errorf("PendingNewCount() = %d, want 0 after the merge tick fires", m.PendingNewCount())
 	}
 }

@@ -288,6 +288,11 @@ func (l MillerLayout) renderNav(a App) string {
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			badge = fmt.Sprintf(" ●%d", a.polledUnreadCount)
 		}
+		if t.s == screenFeed {
+			if n := a.feed.PendingNewCount(); n > 0 {
+				badge = fmt.Sprintf(" ●%d", n)
+			}
+		}
 		if t.s == screenCMail {
 			if n := a.cmail.TotalUnread(); n > 0 {
 				badge = fmt.Sprintf(" ●%d", n)
