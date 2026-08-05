@@ -137,6 +137,85 @@ func cmailInConversation(client api.Client, convID string) CMailModel {
 	return m
 }
 
+// --- slash commands ---
+
+func TestCMail_Send_UnknownCommandIsRejected(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.input.SetValue("/bogus")
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected no command for an unknown slash command")
+	}
+	if view := m.View(); !strings.Contains(view, "unknown command: /bogus") {
+		t.Errorf("expected an unknown-command notice in the view, got: %q", view)
+	}
+}
+
+func TestCMail_Send_KnownCommandStillSends(t *testing.T) {
+	cases := []string{
+		"/me waves",
+		"/comic+rainbow hi",
+		"/spoiler secret",
+		"/gif https://example.com/a.gif",
+		"/song https://youtu.be/x | artist | title",
+	}
+	for _, body := range cases {
+		t.Run(body, func(t *testing.T) {
+			m := cmailInConversation(api.NewMockClient(), "c1")
+			m.input.SetValue(body)
+
+			m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if cmd == nil {
+				t.Fatalf("expected a send command for known slash command %q", body)
+			}
+			msg, ok := cmd().(SendCMailMsg)
+			if !ok {
+				t.Fatalf("expected SendCMailMsg, got %T", cmd())
+			}
+			if msg.Body != body {
+				t.Errorf("Body = %q, want %q", msg.Body, body)
+			}
+		})
+	}
+}
+
+// TestCMail_Send_CircOnlyCommandsRejected guards against C-Mail accepting
+// /mute-family or /art commands — the server only supports those in CIRC
+// (docs/00-latest-api-reference.md).
+func TestCMail_Send_CircOnlyCommandsRejected(t *testing.T) {
+	for _, body := range []string{"/mute someone", "/art"} {
+		t.Run(body, func(t *testing.T) {
+			m := cmailInConversation(api.NewMockClient(), "c1")
+			m.input.SetValue(body)
+
+			m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if cmd != nil {
+				t.Fatalf("expected no command for CIRC-only command %q in C-Mail", body)
+			}
+			cmdWord := strings.Fields(body)[0]
+			if view := m.View(); !strings.Contains(view, "unknown command: "+cmdWord) {
+				t.Errorf("expected an unknown-command notice in the view, got: %q", view)
+			}
+		})
+	}
+}
+
+// TestCMail_Send_SpoilerCannotChain mirrors the same CIRC fix — /spoiler is
+// a known style but the server rejects it chained with any other style.
+func TestCMail_Send_SpoilerCannotChain(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.input.SetValue("/spoiler+rainbow hi")
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected no command for /spoiler+rainbow (spoiler cannot be chained)")
+	}
+	if view := m.View(); !strings.Contains(view, "unknown command: /spoiler+rainbow") {
+		t.Errorf("expected an unknown-command notice in the view, got: %q", view)
+	}
+}
+
 // --- background-tab persistence ---
 
 func TestDMReceived_BumpsUnreadWhileUnfocused(t *testing.T) {

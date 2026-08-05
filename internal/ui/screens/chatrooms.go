@@ -295,34 +295,52 @@ type SendRoomMessageMsg struct {
 	Body   string
 }
 
-// knownCircCommands are the slash commands the server recognizes. Checked
-// client-side so a typo'd command shows a local error instead of being sent
-// as a literal chat message. Command *syntax* validation stays server-side.
-var knownCircCommands = map[string]bool{
+// baseSlashCommands are the slash commands the server recognizes for both
+// CIRC and C-Mail. Checked client-side so a typo'd command shows a local
+// error instead of being sent as a literal chat message. Command *syntax*
+// validation stays server-side.
+var baseSlashCommands = map[string]bool{
 	"/me": true, "/poke": true, "/hug": true, "/hi5": true, "/slap": true,
 	"/dice": true, "/8ball": true, "/fortune": true, "/help": true,
-	"/mute": true, "/unmute": true, "/muted": true, "/unmuteall": true,
-	"/gif": true, "/song": true, "/art": true,
+	"/gif": true, "/song": true,
+}
+
+// circOnlySlashCommands are additionally recognized in CIRC only — C-Mail's
+// server rejects them (see docs/00-latest-api-reference.md).
+var circOnlySlashCommands = map[string]bool{
+	"/mute": true, "/unmute": true, "/muted": true, "/unmuteall": true, "/art": true,
 }
 
 // knownCircStyles are the text-style command names (see chatstyle.go) that
 // can appear alone or chained with "+" (e.g. "/comic+rainbow"), so they're
-// checked separately from the exact-match knownCircCommands lookup.
+// checked separately from the exact-match baseSlashCommands lookup. Shared
+// by both CIRC and C-Mail — styles work identically in either.
 var knownCircStyles = map[string]bool{
 	styleBlink: true, styleL33t: true, styleComic: true, styleCursive: true,
 	styleTimes: true, styleRainbow: true, styleFlip: true, styleQuiet: true,
 	styleSlow: true, styleGlitch: true, styleSpoiler: true, styleWave: true,
 }
 
-// isKnownCircStyleCombo reports whether cmd is a "/"-prefixed, "+"-joined
-// combination of known style names, e.g. "/comic+rainbow".
-func isKnownCircStyleCombo(cmd string) bool {
-	for p := range strings.SplitSeq(strings.TrimPrefix(cmd, "/"), "+") {
+// isKnownStyleCombo reports whether cmd is a "/"-prefixed, "+"-joined
+// combination of known style names, e.g. "/comic+rainbow". "/spoiler" is a
+// known style but cannot be chained with any other (server-enforced, see
+// the "/help" command text), so a combo containing it alongside another
+// style is rejected even though each individual part is valid.
+func isKnownStyleCombo(cmd string) bool {
+	parts := strings.Split(strings.TrimPrefix(cmd, "/"), "+")
+	for _, p := range parts {
 		if !knownCircStyles[p] {
 			return false
 		}
 	}
-	return true
+	return len(parts) == 1 || !slices.Contains(parts, styleSpoiler)
+}
+
+// isKnownSlashCommand reports whether cmd (lowercased, "/"-prefixed) is a
+// command the server accepts for the calling screen. extra carries any
+// screen-specific commands on top of the common set (e.g. circOnlySlashCommands).
+func isKnownSlashCommand(cmd string, extra map[string]bool) bool {
+	return baseSlashCommands[cmd] || extra[cmd] || isKnownStyleCombo(cmd)
 }
 
 // RoomOpenedMsg is emitted when the user enters a chatroom. App uses it to call MarkRoomRead.
@@ -1308,7 +1326,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 						roomID := m.activeRoom.Slug
 						if strings.HasPrefix(val, "/") {
 							cmd := strings.ToLower(strings.Fields(val)[0])
-							if !knownCircCommands[cmd] && !isKnownCircStyleCombo(cmd) {
+							if !isKnownSlashCommand(cmd, circOnlySlashCommands) {
 								m.input.Reset()
 								return m.AppendSystemMessage(roomID, "*** unknown command: "+cmd), nil
 							}
