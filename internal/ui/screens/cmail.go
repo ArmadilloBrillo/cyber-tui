@@ -1078,9 +1078,16 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 				if m.activeConv != nil {
 					val := m.input.Value()
 					if val != "" {
+						convID := m.activeConv.ID
+						if strings.HasPrefix(val, "/") {
+							cmd := strings.ToLower(strings.Fields(val)[0])
+							if !isKnownSlashCommand(cmd, nil) {
+								m.input.Reset()
+								return m.AppendSystemMessage(convID, "*** unknown command: "+cmd), nil
+							}
+						}
 						m.input.Reset()
 						m.announcingTyping = false // server auto-clears typing on send; no DELETE needed
-						convID := m.activeConv.ID
 						return m, func() tea.Msg {
 							return SendCMailMsg{ConversationID: convID, Body: val}
 						}
