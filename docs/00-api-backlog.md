@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.8.2) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.8.3) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -24,6 +24,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `/v1/search` | GET | **Open** | Returns `502 BAD_GATEWAY` / "Search is temporarily unavailable" for every query (e.g. `GET /v1/search?q=test&type=all`). Reproduced outside the TUI via `apifetch`, ruling out client-side request construction — the search backend behind the API is down or erroring. No client-side fix possible; re-check whether this has cleared before assuming it's still broken. | 2026-08-04 |
 | `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8.2 live. `docs/00-latest-api-reference.md` re-fetched and diffed — only change is a newly-documented rate limit (10/min, 60/hour per IP) on `POST /v1/auth/check-username`, which is already out of scope for this client (web-only registration flow). No code changes needed. | 2026-08-03 |
 | `/v1/auth/refresh` | POST | **Open** | Returns `500 FUNCTION_INVOCATION_FAILED` (a Vercel serverless crash, plain-text body: "A server error has occurred") for every refresh token tried, valid or garbage. Reproduced directly via `curl` against `https://api.cyberspace.online`, bypassing the TUI entirely, so it's not a client bug or a misconfigured `apiBaseURL`. Breaks auto-login/session-resume for all users until fixed upstream; a fresh email/password login through `/v1/auth/login` is unaffected. Client-side, `refresh()` (`internal/api/client.go`) previously tried to JSON-decode this plain-text body before checking the status code, surfacing a confusing `invalid character 'A' looking for beginning of value` error; it now checks `resp.StatusCode` first and reports the real status + body snippet instead. | 2026-08-04 |
+| `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8.3 live. `docs/00-latest-api-reference.md` re-fetched and diffed byte-for-byte (UTF-8) against the previous v0.8.2 snapshot — only the version header changed, no endpoint, field, rate-limit, or content-limit differences. No code changes needed. | 2026-08-05 |
 
 ---
 
