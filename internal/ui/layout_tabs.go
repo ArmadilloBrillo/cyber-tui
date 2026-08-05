@@ -42,7 +42,7 @@ func (l TabsLayout) View(a App) string {
 	content := lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(l.renderActiveScreen(a))
 	base := lipgloss.JoinVertical(lipgloss.Left,
 		l.renderTabBar(a),
-		"",
+		l.renderFeedPendingBar(a),
 		content,
 		l.renderBottomBar(a),
 	)
@@ -224,6 +224,20 @@ func (l TabsLayout) renderTabBar(a App) string {
 		Render(a.logoText)
 	spacer := strings.Repeat(" ", max(0, a.width-lipgloss.Width(tabs)-lipgloss.Width(logo)))
 	return tabs + spacer + logo
+}
+
+// renderFeedPendingBar fills the blank separator row below the tab bar with
+// the "N new entries" message while posts are staged from the background
+// feed poll. Hidden during an active refresh so it doesn't sit alongside the
+// viewport's own "fetching new posts..." message for that instant.
+func (l TabsLayout) renderFeedPendingBar(a App) string {
+	if a.active != screenFeed || a.feed.IsRefreshing() {
+		return ""
+	}
+	if label := a.feed.PendingNewLabel(); label != "" {
+		return theme.Subtle.Render(label)
+	}
+	return ""
 }
 
 func (l TabsLayout) renderActiveScreen(a App) string {

@@ -236,6 +236,21 @@ func (m FeedModel) SetPendingNew(posts []model.Post) FeedModel {
 // for the tab-bar badge.
 func (m FeedModel) PendingNewCount() int { return len(m.pendingNew) }
 
+// PendingNewLabel returns the "↑ load N new entries ↑" chrome message for
+// the separator bar, or "" if nothing is pending. N is a floor ("N+") when
+// pendingCapped is set — see SetPendingNew.
+func (m FeedModel) PendingNewLabel() string {
+	n := len(m.pendingNew)
+	if n == 0 {
+		return ""
+	}
+	label := strconv.Itoa(n)
+	if m.pendingCapped {
+		label += "+"
+	}
+	return fmt.Sprintf("  ↑ load %s new entries ↑", label)
+}
+
 // MergePendingNew prepends the staged posts onto the visible list and clears
 // the pending count. Called when the user presses up at the top of the feed
 // while entries are pending.
@@ -684,13 +699,6 @@ func (m FeedModel) buildContent() (string, []int) {
 	startLine := 0
 	if m.refreshing {
 		prefix = theme.Subtle.Render("  fetching new posts...") + "\n"
-		startLine = 1
-	} else if n := len(m.pendingNew); n > 0 {
-		label := strconv.Itoa(n)
-		if m.pendingCapped {
-			label = strconv.Itoa(n) + "+"
-		}
-		prefix = theme.Subtle.Render(fmt.Sprintf("  ↑ load %s new entries ↑", label)) + "\n"
 		startLine = 1
 	}
 	if len(m.posts) == 0 {

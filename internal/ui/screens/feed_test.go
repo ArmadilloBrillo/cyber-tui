@@ -281,8 +281,8 @@ func TestFeed_SetPendingNew_FullPageAllNew_ShowsCappedLabel(t *testing.T) {
 	if got := m.PendingNewCount(); got != 20 {
 		t.Fatalf("PendingNewCount() = %d, want 20", got)
 	}
-	if !strings.Contains(m.View(), "20+") {
-		t.Errorf("View() = %q, want it to contain \"20+\"", m.View())
+	if !strings.Contains(m.PendingNewLabel(), "20+") {
+		t.Errorf("PendingNewLabel() = %q, want it to contain \"20+\"", m.PendingNewLabel())
 	}
 }
 
@@ -304,12 +304,12 @@ func TestFeed_SetPendingNew_PartialOverlap_ShowsExactLabel(t *testing.T) {
 	if got := m.PendingNewCount(); got != 2 {
 		t.Fatalf("PendingNewCount() = %d, want 2", got)
 	}
-	view := m.View()
-	if !strings.Contains(view, "load 2 new entries") {
-		t.Errorf("View() = %q, want it to contain \"load 2 new entries\"", view)
+	label := m.PendingNewLabel()
+	if !strings.Contains(label, "load 2 new entries") {
+		t.Errorf("PendingNewLabel() = %q, want it to contain \"load 2 new entries\"", label)
 	}
-	if strings.Contains(view, "2+") {
-		t.Errorf("View() = %q, should not show a capped label when count is exact", view)
+	if strings.Contains(label, "2+") {
+		t.Errorf("PendingNewLabel() = %q, should not show a capped label when count is exact", label)
 	}
 }
 

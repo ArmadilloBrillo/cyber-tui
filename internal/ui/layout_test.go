@@ -33,6 +33,34 @@ func TestRenderTabBar_DoesNotShowSearch(t *testing.T) {
 	}
 }
 
+// --- renderFeedPendingBar: background-poll indicator lives in the separator
+// row, not pushed into the feed viewport (see FeedModel.buildContent) ---
+
+func TestRenderFeedPendingBar_ShowsLabelWhenPending(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts(nil, "")
+	a.feed = a.feed.SetPendingNew([]model.Post{{ID: "p1"}, {ID: "p2"}})
+
+	out := ansi.Strip(TabsLayout{}.renderFeedPendingBar(a))
+	if !strings.Contains(out, "load 2 new entries") {
+		t.Errorf("renderFeedPendingBar() = %q, want it to contain \"load 2 new entries\"", out)
+	}
+}
+
+func TestRenderFeedPendingBar_BlankWhenNoneOrNotOnFeed(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts(nil, "")
+	if out := (TabsLayout{}).renderFeedPendingBar(a); out != "" {
+		t.Errorf("renderFeedPendingBar() = %q, want blank with nothing pending", out)
+	}
+
+	a.feed = a.feed.SetPendingNew([]model.Post{{ID: "p1"}})
+	a.active = screenNotifications
+	if out := (TabsLayout{}).renderFeedPendingBar(a); out != "" {
+		t.Errorf("renderFeedPendingBar() = %q, want blank on a non-feed tab", out)
+	}
+}
+
 func TestRenderNav_DoesNotShowSearch(t *testing.T) {
 	a := loggedInApp()
 	out := ansi.Strip(MillerLayout{}.renderNav(a))
