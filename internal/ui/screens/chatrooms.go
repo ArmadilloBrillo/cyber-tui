@@ -1745,9 +1745,40 @@ func mentionQueryAt(value string, cursor int) (query string, atPos int, ok bool)
 	return string(runes[i+1 : cursor]), i, true
 }
 
-// matchMentionCandidates returns the online users whose username starts with
-// query (case-insensitive), in the same admins-first/alphabetical order
-// SetRoomUsers already sorts m.roomUsers into.
+// mentionCandidatePool returns the users eligible for @-mention completion:
+// everyone currently online (m.roomUsers, admins-first/alphabetical) plus
+// anyone else who has a message in the currently loaded history — every
+// page pulled in so far via scroll-to-top pagination, not just what's
+// visible in the viewport right now — so a since-departed poster can still
+// be completed. History-only users are appended after the online ones
+// (alphabetical, deduped case-insensitively) so Tab-cycling still prefers
+// present users first when names collide by prefix.
+func (m ChatroomsModel) mentionCandidatePool() []model.RoomUser {
+	seen := make(map[string]bool, len(m.roomUsers))
+	for _, u := range m.roomUsers {
+		seen[strings.ToLower(u.Username)] = true
+	}
+	var extra []model.RoomUser
+	for _, msg := range m.messages {
+		name := msg.From.Username
+		if name == "" || msg.IsSystem {
+			continue
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		extra = append(extra, model.RoomUser{Username: name})
+	}
+	sort.Slice(extra, func(i, j int) bool {
+		return strings.ToLower(extra[i].Username) < strings.ToLower(extra[j].Username)
+	})
+	return append(append([]model.RoomUser(nil), m.roomUsers...), extra...)
+}
+
+// matchMentionCandidates returns the users whose username starts with query
+// (case-insensitive), preserving the input slice's order.
 func matchMentionCandidates(users []model.RoomUser, query string) []model.RoomUser {
 	q := strings.ToLower(query)
 	var out []model.RoomUser
@@ -1796,7 +1827,7 @@ func (m ChatroomsModel) mentionActiveCandidate() (atPos, cursor int, query, cand
 	if !mok {
 		return 0, 0, "", "", false
 	}
-	matches := matchMentionCandidates(m.roomUsers, q)
+	matches := matchMentionCandidates(m.mentionCandidatePool(), q)
 	if len(matches) == 0 {
 		return 0, 0, "", "", false
 	}
