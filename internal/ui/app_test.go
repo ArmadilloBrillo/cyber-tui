@@ -2548,6 +2548,69 @@ func TestHandleThemeEditor_Close_RestoresSavedCustomPalette_NotAbandonedEdit(t *
 	}
 }
 
+// --- Theme editor preview from a detected post theme: covers the one link
+// (App.handleThemeEditor's PreviewPostThemeMsg case) that postdetail_test.go
+// and theme_test.go don't touch, since they test ParsePost and the T-key
+// handler in isolation from the App-level wiring. ---
+
+func TestHandleThemeEditor_PreviewPostThemeMsg_AppliesPostPaletteNotCurrent(t *testing.T) {
+	current := theme.Palette{
+		Foreground: "#111111", Dimmed: "#222222", Border: "#333333", Accent: "#444444",
+		Highlight: "#555555", Error: "#666666", BarText: "#777777", Self: "#888888", Meta: "#999999",
+	}
+	theme.SetCustomPalette(current)
+	theme.Set("custom")
+
+	postBody := `Check out my new theme!
+
+/* Cyberspace Custom Theme */
+Base Theme: dark
+/* Colors */
+Foreground: #ff5d00
+Background: #131313
+Dimmed: #c1c1c1
+Border: #393939
+Code: #f5f5f5
+Code BG: #393939
+`
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: postBody})
+
+	_, cmd := a.postDetail.Update(keyMsg("T"))
+	if cmd == nil {
+		t.Fatal("expected a cmd from T with a theme block detected")
+	}
+	msg, ok := cmd().(screens.PreviewPostThemeMsg)
+	if !ok {
+		t.Fatalf("expected PreviewPostThemeMsg, got %T", cmd())
+	}
+
+	a2, _, ok := a.handleThemeEditor(msg)
+	if !ok {
+		t.Fatal("expected PreviewPostThemeMsg to be handled")
+	}
+	if !a2.themeEditorOpen {
+		t.Error("expected the theme editor to open")
+	}
+	got := theme.CurrentPalette()
+	if got.Foreground != "#ff5d00" || got.Dimmed != "#c1c1c1" || got.Border != "#393939" {
+		t.Errorf("CurrentPalette() = %+v, want the post's fg/dimmed/border (#ff5d00/#c1c1c1/#393939), not current theme's (%+v)", got, current)
+	}
+
+	view := a2.themeEditor.View()
+	for _, want := range []string{"FF5D00", "C1C1C1", "393939"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("editor View() missing %q from the post's palette; got:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"111111", "222222", "333333"} {
+		if strings.Contains(view, unwanted) {
+			t.Errorf("editor View() still shows the current theme's %q instead of the post's palette; got:\n%s", unwanted, view)
+		}
+	}
+}
+
 // --- Theme export / import ---
 
 func testThemePalette() theme.Palette {

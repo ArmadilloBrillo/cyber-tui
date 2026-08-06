@@ -212,6 +212,32 @@ Enable Ligatures: false
 Base Font Size: normal
 `
 
+// TestPostFieldLineRe_IgnoresSurroundingDecoration guards the property that
+// makes ParsePost tolerant of however a client's composer wraps a field
+// line: the regex isn't anchored to the line, so decoration on either side
+// is simply outside the match, regardless of what it is.
+func TestPostFieldLineRe_IgnoresSurroundingDecoration(t *testing.T) {
+	cases := map[string]string{
+		"Foreground: #ff5d00":     "#ff5d00",
+		"`Foreground: #ff5d00`":   "#ff5d00",
+		"> Foreground: #f4a4c0":   "#f4a4c0",
+		">> Foreground: #f4a4c0":  "#f4a4c0",
+		"> `Foreground: #ff5d00`": "#ff5d00",
+		"- Foreground: #ff5d00":   "#ff5d00",
+		"**Foreground: #ff5d00**": "#ff5d00",
+	}
+	for in, want := range cases {
+		m := postFieldLineRe.FindStringSubmatch(in)
+		if m == nil {
+			t.Errorf("postFieldLineRe.FindStringSubmatch(%q) = no match, want value %q", in, want)
+			continue
+		}
+		if m[2] != want {
+			t.Errorf("postFieldLineRe.FindStringSubmatch(%q) value = %q, want %q", in, m[2], want)
+		}
+	}
+}
+
 func TestParsePost_NoMarker_NotDetected(t *testing.T) {
 	_, ok := ParsePost("just a regular post with no theme in it")
 	if ok {
@@ -293,6 +319,57 @@ Foreground: #ABCDEF
 	}
 	if p.Foreground != "#ABCDEF" {
 		t.Errorf("Foreground = %q, want overlaid #ABCDEF", p.Foreground)
+	}
+}
+
+// TestParsePost_BacktickWrappedFields_StillOverlay covers the actual format
+// cyberspace.online's web UI posts in: each field line wrapped in markdown
+// backticks (e.g. "`Foreground: #ff5d00`"), which the field regex doesn't
+// match unless the backticks are stripped first.
+func TestParsePost_BacktickWrappedFields_StillOverlay(t *testing.T) {
+	body := "oooooraaaange\n\n\n\n" +
+		"`/* Cyberspace Custom Theme */`\n\n" +
+		"`Base Theme: dark`\n\n" +
+		"`/* Colors */`\n\n" +
+		"`Foreground: #ff5d00`\n\n" +
+		"`Background: #131313`\n\n" +
+		"`Dimmed: #c1c1c1`\n\n" +
+		"`Border: #393939`\n\n" +
+		"`Code: #f5f5f5`\n\n" +
+		"`Code BG: #393939`\n"
+
+	p, ok := ParsePost(body)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if p.Foreground != "#ff5d00" || p.Background != "#131313" || p.Dimmed != "#c1c1c1" ||
+		p.Border != "#393939" || p.Highlight != "#f5f5f5" || p.CodeBackground != "#393939" {
+		t.Errorf("backtick-wrapped fields not overlaid correctly: %+v", p)
+	}
+}
+
+// TestParsePost_BlockquoteWrappedFields_StillOverlay covers another real
+// posted format: the block quoted with markdown blockquote "> " markers
+// instead of backticks (e.g. "> Foreground: #f4a4c0").
+func TestParsePost_BlockquoteWrappedFields_StillOverlay(t *testing.T) {
+	body := "I was testing palettes for my ui.\n\n" +
+		"> /* Cyberspace Custom Theme */\n>\n" +
+		"> Base Theme: vt320\n>\n" +
+		"> /* Colors */\n>\n" +
+		"> Foreground: #f4a4c0\n>\n" +
+		"> Background: #450d59\n>\n" +
+		"> Dimmed: #ee719e\n>\n" +
+		"> Border: #e63b7a\n>\n" +
+		"> Code: #c3d117\n>\n" +
+		"> Code BG: #6f760a\n"
+
+	p, ok := ParsePost(body)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if p.Foreground != "#f4a4c0" || p.Background != "#450d59" || p.Dimmed != "#ee719e" ||
+		p.Border != "#e63b7a" || p.Highlight != "#c3d117" || p.CodeBackground != "#6f760a" {
+		t.Errorf("blockquote-wrapped fields not overlaid correctly: %+v", p)
 	}
 }
 
