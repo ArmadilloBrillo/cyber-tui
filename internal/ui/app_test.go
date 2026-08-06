@@ -13,6 +13,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 func keyMsg(key string) tea.KeyMsg {
@@ -2500,5 +2501,47 @@ func TestHandleImageViewer_SingleImageSuccess_NoClearScreen(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("expected no ClearScreen outside a carousel")
+	}
+}
+
+// --- Theme editor revert: cancel while "custom" was already active must
+// restore the saved custom palette, not whatever the abandoned edit left in
+// theme's shared package-level customPalette. ---
+
+func TestHandleThemeEditor_Close_RestoresSavedCustomPalette_NotAbandonedEdit(t *testing.T) {
+	saved := theme.Palette{
+		Foreground: "#111111", Dimmed: "#222222", Border: "#333333", Accent: "#444444",
+		Highlight: "#555555", Error: "#666666", BarText: "#777777", Self: "#888888", Meta: "#999999",
+	}
+	theme.SetCustomPalette(saved)
+	theme.Set("custom")
+
+	a := loggedInApp()
+	a.customPalette = &saved
+	a.themeEditorOpen = true
+	a.themeEditorOrig = "custom"
+	a.themeEditorOrigPalette = theme.CurrentPalette() // snapshot, as the 'e' handler now does
+
+	// Simulate an abandoned mid-edit: a keystroke's PreviewPaletteMsg
+	// diverges the live custom palette from the saved one.
+	dirty := saved
+	dirty.Foreground = "#ABCDEF"
+	a2, _, ok := a.handleThemeEditor(screens.PreviewPaletteMsg{Palette: dirty})
+	if !ok {
+		t.Fatal("expected PreviewPaletteMsg to be handled")
+	}
+	if theme.CurrentPalette().Foreground != "#ABCDEF" {
+		t.Fatal("expected the live preview to apply the dirty edit")
+	}
+
+	a3, _, ok := a2.handleThemeEditor(screens.CloseThemeEditorMsg{})
+	if !ok {
+		t.Fatal("expected CloseThemeEditorMsg to be handled")
+	}
+	if a3.themeEditorOpen {
+		t.Error("expected the editor to close")
+	}
+	if got := theme.CurrentPalette(); got != saved {
+		t.Errorf("CurrentPalette() after cancel = %+v, want the saved palette %+v", got, saved)
 	}
 }

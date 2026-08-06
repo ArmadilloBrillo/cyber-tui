@@ -378,7 +378,11 @@ func (l TabsLayout) screenHints(a App) []hint {
 		if a.postDetail.ComposeActive() {
 			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}, {"esc", "back"}, more}
+		hints := []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}}
+		if a.postDetail.HasThemeInPost() {
+			hints = append(hints, hint{"T", "try theme"})
+		}
+		return append(hints, hint{"esc", "back"}, more)
 	case screenProfile:
 		if a.profile.ComposeActive() {
 			return []hint{{"Ctrl+s", "save"}, {"Esc", "cancel"}, {"tab", "cycle"}}

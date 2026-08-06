@@ -439,7 +439,11 @@ func (l MillerLayout) screenHints(a App) []hint {
 	case focusMenu:
 		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-9 / g+", "jump"}, {"?", "more"}}
 	case focusDetail:
-		return []hint{{"h/←", "list"}, {"j/k", "replies"}, {"↵", "thread"}, {"r", "reply"}}
+		hints := []hint{{"h/←", "list"}, {"j/k", "replies"}, {"↵", "thread"}, {"r", "reply"}}
+		if a.active == screenPostDetail && a.postDetail.HasThemeInPost() {
+			hints = append(hints, hint{"T", "try theme"})
+		}
+		return hints
 	default: // focusList
 		return append([]hint{{"h/←", "menu"}, {"→/↵", "preview"}}, TabsLayout{}.screenHints(a)...)
 	}

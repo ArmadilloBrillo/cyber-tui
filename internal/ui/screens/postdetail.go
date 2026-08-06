@@ -134,6 +134,11 @@ type PostDetailModel struct {
 	bookmarkedPostIDs  map[string]struct{}
 	bookmarkedReplyIDs map[string]struct{}
 	watchedPostIDs     map[string]struct{}
+
+	// postTheme is the parsed theme block from the post's body, if any —
+	// computed once in SetPost rather than on every keystroke/render. Nil
+	// means no theme block was detected.
+	postTheme *theme.Palette
 }
 
 func NewPostDetailModel() PostDetailModel {
@@ -152,12 +157,21 @@ func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 	m.selectedReply = -1 // post itself is selected by default
 	m.loading = true
 	m.err = nil
+	if p, ok := theme.ParsePost(post.Content); ok {
+		m.postTheme = &p
+	} else {
+		m.postTheme = nil
+	}
 	if m.ready {
 		m = m.refreshContent()
 		m.viewport.GotoTop()
 	}
 	return m
 }
+
+// HasThemeInPost reports whether the currently open post's body contains a
+// detected custom-theme block (see docs/40-custom-themes.md).
+func (m PostDetailModel) HasThemeInPost() bool { return m.postTheme != nil }
 
 // HasPost reports whether a post is currently open or persisted in the
 // background — used by activateScreen to decide whether returning to the
@@ -578,6 +592,14 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			var cmd tea.Cmd
 			m, cmd = m.OpenCompose()
 			return m, cmd
+		case "T":
+			// Post-only (not replies) — matches how these theme blocks are
+			// actually shared, and keeps detection a one-time SetPost cost.
+			if m.selectedReply < 0 && m.postTheme != nil {
+				p := *m.postTheme
+				return m, func() tea.Msg { return PreviewPostThemeMsg{Palette: p} }
+			}
+			return m, nil
 		case "p":
 			if m.post.ID == "" {
 				return m, nil
