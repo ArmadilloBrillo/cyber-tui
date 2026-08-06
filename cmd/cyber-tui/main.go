@@ -32,6 +32,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
+	if cfg.CustomPalette != nil {
+		theme.SetCustomPalette(*cfg.CustomPalette)
+	}
 	theme.Set(cfg.Theme)
 	gfxProto := imgview.DetectProtocol()
 

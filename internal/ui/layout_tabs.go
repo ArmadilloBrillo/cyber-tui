@@ -49,6 +49,9 @@ func (l TabsLayout) View(a App) string {
 	if a.themePickerOpen {
 		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
 	}
+	if a.themeEditorOpen {
+		return overlayCenter(base, l.renderThemeEditor(a), a.width, a.height)
+	}
 	if a.helpModalOpen {
 		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
 	}
@@ -302,7 +305,7 @@ func (l TabsLayout) renderNotification(a App) string {
 
 func (l TabsLayout) renderStatusBar(a App) string {
 	user := sbStyle().Foreground(theme.ColorCyan).Bold(true)
-	meta := sbStyle().Foreground(theme.ColorWhite)
+	meta := sbStyle().Foreground(theme.ColorMeta)
 	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
 
 	densityLabel := "dense"
@@ -461,7 +464,7 @@ func (l TabsLayout) renderThemePicker(a App) string {
 			items = append(items, theme.Subtle.Render("  "+name))
 		}
 	}
-	hint := theme.Subtle.Render("↑↓ preview   enter save   esc cancel")
+	hint := theme.Subtle.Render("↑↓ preview   enter save   e edit custom   esc cancel")
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
@@ -470,6 +473,11 @@ func (l TabsLayout) renderThemePicker(a App) string {
 		hint,
 	)
 	return theme.ActiveBorder.Render(body)
+}
+
+// renderThemeEditor renders the "custom" theme color editor modal.
+func (l TabsLayout) renderThemeEditor(a App) string {
+	return a.themeEditor.View()
 }
 
 func (l TabsLayout) renderHelpModal(a App) string {
@@ -488,6 +496,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		row("← →", "cycle tabs"),
 		row("/", "search"),
 		row("t", "theme"),
+		row("e", "edit custom theme (in theme picker)"),
 		row("v", "density"),
 		row("o", "open url"),
 		row("q", "quit"),

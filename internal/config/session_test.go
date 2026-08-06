@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ragnar/cyber-tui/internal/config"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 // withTempHome redirects os.UserHomeDir to a temp directory for the duration
@@ -65,6 +66,50 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
+
+func TestSaveAndLoad_CustomPalette(t *testing.T) {
+	withTempHome(t)
+
+	want := config.Config{
+		Theme: "custom",
+		CustomPalette: &theme.Palette{
+			Foreground: "#111111", Dimmed: "#222222", Border: "#333333", Accent: "#444444",
+			Highlight: "#555555", Error: "#666666", BarText: "#777777", Self: "#888888", Meta: "#999999",
+		},
+	}
+	if err := config.Save(want); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Theme != "custom" {
+		t.Errorf("Theme = %q, want custom", got.Theme)
+	}
+	if got.CustomPalette == nil {
+		t.Fatal("CustomPalette = nil, want saved palette")
+	}
+	if *got.CustomPalette != *want.CustomPalette {
+		t.Errorf("CustomPalette = %+v, want %+v", *got.CustomPalette, *want.CustomPalette)
+	}
+}
+
+func TestLoad_CustomPaletteAbsentIsNil(t *testing.T) {
+	home := withTempHome(t)
+	path := filepath.Join(home, ".cyber-tui.json")
+	if err := os.WriteFile(path, []byte(`{"theme":"cyber"}`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CustomPalette != nil {
+		t.Errorf("expected CustomPalette nil when absent from JSON, got %+v", cfg.CustomPalette)
+	}
+}
 
 // --- Wander mode ---
 
