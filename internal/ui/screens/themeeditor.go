@@ -155,6 +155,20 @@ func (m ThemeEditorModel) Update(msg tea.Msg) (ThemeEditorModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// ctrl+s always attempts to save, whether or not a field is
+		// currently focused — currentPalette() already reads the live
+		// buffer, so there's nothing to "flush" first. Checked ahead of the
+		// editing/nav split so it can't be silently swallowed mid-edit.
+		if msg.String() == "ctrl+s" {
+			m.editing = false
+			if !m.IsValid() {
+				m.err = "all colors must be #RRGGBB"
+				return m, nil
+			}
+			p := m.currentPalette()
+			return m, func() tea.Msg { return SaveThemeMsg{Palette: p} }
+		}
+
 		if m.editing {
 			return m.updateEditingKey(msg)
 		}
@@ -168,15 +182,6 @@ func (m ThemeEditorModel) Update(msg tea.Msg) (ThemeEditorModel, tea.Cmd) {
 			m.editing = true
 			m.charCursor = 0
 			return m, nil
-		case "ctrl+s":
-			if m.IsDirty() {
-				if !m.IsValid() {
-					m.err = "all colors must be #RRGGBB"
-					return m, nil
-				}
-				p := m.currentPalette()
-				return m, func() tea.Msg { return SaveThemeMsg{Palette: p} }
-			}
 		case "esc":
 			return m, func() tea.Msg { return CloseThemeEditorMsg{} }
 		}
@@ -280,11 +285,9 @@ func (m ThemeEditorModel) View() string {
 	case m.saved:
 		footer = theme.Highlight.Render("saved!")
 	case m.editing:
-		footer = theme.Subtle.Render("type · overwrite & advance   ←→ · move   enter/esc · commit")
-	case m.IsDirty():
-		footer = theme.Subtle.Render("ctrl+s · save   esc · close")
+		footer = theme.Subtle.Render("type · overwrite & advance   ←→ · move   ctrl+s · save   enter/esc · commit")
 	default:
-		footer = theme.Subtle.Render("enter · edit field   j/k · move   esc · close")
+		footer = theme.Subtle.Render("enter · edit field   j/k · move   ctrl+s · save   esc · close")
 	}
 	rows = append(rows, "", footer)
 
