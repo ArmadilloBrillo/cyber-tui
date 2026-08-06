@@ -147,6 +147,62 @@ func TestThemeEditorModel_CtrlS_NoOp_WhenInvalid(t *testing.T) {
 	}
 }
 
+func TestThemeEditorModel_CtrlS_WorksWhileMidFieldEdit(t *testing.T) {
+	m := NewThemeEditorModel(testPalette())
+	m, _ = m.Update(keyMsg("enter")) // focus row 0, still editing — no commit
+	m, _ = m.Update(runeMsg("9"))
+	if !m.editing {
+		t.Fatal("expected to still be mid-edit before ctrl+s")
+	}
+
+	m, cmd := m.Update(keyMsg("ctrl+s"))
+	if cmd == nil {
+		t.Fatal("expected ctrl+s to save even while a field is focused")
+	}
+	if _, ok := cmd().(SaveThemeMsg); !ok {
+		t.Errorf("expected SaveThemeMsg, got %T", cmd())
+	}
+	if m.editing {
+		t.Error("expected ctrl+s to close the focused field")
+	}
+}
+
+func TestThemeEditorModel_CtrlS_SavesUnchangedPrefill_NotDirty(t *testing.T) {
+	// Mirrors opening the editor via T (post-theme preview) or file import:
+	// the prefill IS the palette to keep, so ctrl+s must work with zero edits.
+	p := testPalette()
+	m := NewThemeEditorModel(p)
+	if m.IsDirty() {
+		t.Fatal("expected a fresh editor to not be dirty")
+	}
+
+	_, cmd := m.Update(keyMsg("ctrl+s"))
+	if cmd == nil {
+		t.Fatal("expected ctrl+s to save an unmodified (but valid) prefill")
+	}
+	msg, ok := cmd().(SaveThemeMsg)
+	if !ok {
+		t.Fatalf("expected SaveThemeMsg, got %T", cmd())
+	}
+	if msg.Palette != p {
+		t.Errorf("saved palette = %+v, want the unmodified prefill %+v", msg.Palette, p)
+	}
+}
+
+func TestThemeEditorModel_CtrlS_MidFieldEdit_InvalidStillBlocks(t *testing.T) {
+	m := NewThemeEditorModel(testPalette())
+	m, _ = m.Update(keyMsg("enter"))
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace}) // clears slot 0 — malformed hex, still mid-edit
+
+	m, cmd := m.Update(keyMsg("ctrl+s"))
+	if cmd != nil {
+		t.Error("expected no cmd from ctrl+s with invalid input, even mid-edit")
+	}
+	if m.err == "" {
+		t.Error("expected err to be set")
+	}
+}
+
 func TestThemeEditorModel_Esc_EmitsCloseThemeEditorMsg(t *testing.T) {
 	m := NewThemeEditorModel(testPalette())
 	_, cmd := m.Update(keyMsg("esc"))
