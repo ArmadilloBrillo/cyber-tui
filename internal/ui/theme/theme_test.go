@@ -166,3 +166,110 @@ func TestCurrentPalette_RoundTrips(t *testing.T) {
 		t.Errorf("CurrentPalette() = %+v, want cyber's literal hex values", p)
 	}
 }
+
+const examplePostBody = `Check out my new theme!
+
+/* Cyberspace Custom Theme */
+Base Theme: vt320
+/* Colors */
+Foreground: #d000ff
+Background: #000000
+Dimmed: #270082
+Border: #270082
+Code: #7A5DFF
+Code BG: #5100ff
+/* Fonts */
+Main Font: geist-mono
+Code Font: geist-mono
+/* Options */
+Disable Text Glow: true
+Disable Anti-aliasing: false
+Enable Noise: false
+Enable CRT Box: false
+Enable Ligatures: false
+Base Font Size: normal
+`
+
+func TestParsePost_NoMarker_NotDetected(t *testing.T) {
+	_, ok := ParsePost("just a regular post with no theme in it")
+	if ok {
+		t.Error("expected ok=false when the marker is absent")
+	}
+}
+
+func TestParsePost_KnownBaseTheme_FillsUnmappedFromIt(t *testing.T) {
+	p, ok := ParsePost(examplePostBody)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	vt320 := builtinPalettes["vt320"]
+	if p.Accent != vt320.Accent || p.Error != vt320.Error || p.BarText != vt320.BarText ||
+		p.Self != vt320.Self || p.Meta != vt320.Meta {
+		t.Errorf("unmapped fields = %+v, want vt320's values %+v", p, vt320)
+	}
+	if p.Foreground != "#d000ff" || p.Background != "#000000" || p.Dimmed != "#270082" ||
+		p.Border != "#270082" || p.Highlight != "#7A5DFF" || p.CodeBackground != "#5100ff" {
+		t.Errorf("explicit post fields not overlaid correctly: %+v", p)
+	}
+}
+
+func TestParsePost_UnknownBaseTheme_FallsBackToCurrentPalette(t *testing.T) {
+	Set("c64")
+	current := CurrentPalette()
+
+	body := `/* Cyberspace Custom Theme */
+Base Theme: not-a-real-theme
+/* Colors */
+Foreground: #123456
+`
+	p, ok := ParsePost(body)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if p.Accent != current.Accent || p.Self != current.Self {
+		t.Errorf("unmapped fields = %+v, want current active theme's values %+v", p, current)
+	}
+	if p.Foreground != "#123456" {
+		t.Errorf("Foreground = %q, want overlaid #123456", p.Foreground)
+	}
+}
+
+func TestParsePost_MalformedField_FallsBackToBaseForThatFieldOnly(t *testing.T) {
+	body := `/* Cyberspace Custom Theme */
+Base Theme: vt320
+/* Colors */
+Foreground: not-a-color
+Border: #270082
+`
+	p, ok := ParsePost(body)
+	if !ok {
+		t.Fatal("expected ok=true even with a malformed field")
+	}
+	vt320 := builtinPalettes["vt320"]
+	if p.Foreground != vt320.Foreground {
+		t.Errorf("Foreground = %q, want base fallback %q", p.Foreground, vt320.Foreground)
+	}
+	if p.Border != "#270082" {
+		t.Errorf("Border = %q, want overlaid #270082", p.Border)
+	}
+}
+
+func TestParsePost_NoBaseThemeLine_FallsBackToCurrentPalette(t *testing.T) {
+	Set("cyber")
+	current := CurrentPalette()
+
+	body := `/* Cyberspace Custom Theme */
+/* Colors */
+Foreground: #ABCDEF
+`
+	p, ok := ParsePost(body)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if p.Border != current.Border {
+		t.Errorf("Border = %q, want current theme's %q", p.Border, current.Border)
+	}
+	if p.Foreground != "#ABCDEF" {
+		t.Errorf("Foreground = %q, want overlaid #ABCDEF", p.Foreground)
+	}
+}

@@ -236,3 +236,10 @@ type SaveThemeMsg struct{ Palette theme.Palette }
 // CloseThemeEditorMsg is emitted by ThemeEditorModel on esc (row-nav mode,
 // not mid-field-edit) to close without saving.
 type CloseThemeEditorMsg struct{}
+
+// PreviewPostThemeMsg is emitted by PostDetailModel when the user presses
+// the try-theme key on a post with a detected theme block. App opens the
+// theme editor prefilled with Palette, exactly as if the user had pressed
+// 'e' on the picker's "custom" row but starting from the post's colors
+// instead of the current theme's.
+type PreviewPostThemeMsg struct{ Palette theme.Palette }

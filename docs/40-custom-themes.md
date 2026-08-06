@@ -2,9 +2,9 @@
 
 ## Overview
 
-Alongside the 4 built-in themes (cyber, c64, vt320, bland), users can build and save their own "custom" theme from inside the TUI. The custom theme is an 8-color palette, edited via a modal opened from the existing theme picker (`t`), and persisted to `~/.cyber-tui.json`.
+Alongside the 4 built-in themes (cyber, c64, vt320, bland), users can build and save their own "custom" theme from inside the TUI. The custom theme is a palette edited via a modal opened from the existing theme picker (`t`), and persisted to `~/.cyber-tui.json`.
 
-This is out of scope but adjacent: users on cyberspace.online post custom themes as formatted text blocks (base theme + hex colors + some webui-only font/effect fields). A future feature will detect one of these blocks in a post (post detail screen) and apply it via a shortcut. `theme.SetCustomPalette`/`theme.CurrentPalette` are the intended entry point for that feature — see Design Notes below.
+Users on cyberspace.online also post custom themes as formatted text blocks (base theme + hex colors + some webui-only font/effect fields). Post Detail's `T` key detects one of these blocks and opens the same theme editor prefilled from it, so trying it out and saving/canceling both reuse the manual editor's existing preview/save/revert contract — see Post Theme Import below.
 
 ---
 
@@ -26,9 +26,18 @@ theme.Set(cfg.Theme)
 1. `t` opens the theme picker (`App.themePickerOpen`), listing `availableThemes = []string{"cyber", "c64", "vt320", "bland", "custom"}`.
 2. `↑`/`↓` previews each theme live. On the "custom" row, this only applies if a palette has already been saved (`App.customPalette != nil`) — otherwise the current theme stays put.
 3. `e` on the "custom" row opens the editor (`App.themeEditorOpen`), prefilled from the saved palette if one exists, otherwise from `theme.CurrentPalette()` (whatever theme is currently active).
-4. In the editor: `j`/`k` moves between the 8 color rows, `enter` focuses a row's 6-digit hex buffer. Each row shows a fixed, non-removable `#` followed by 6 editable slots. Typing an alphanumeric character overwrites the slot under the cursor (uppercased automatically) and advances to the next slot — except on the last slot, where the cursor stays put since there's nowhere further to go. `←`/`→` move the cursor within the 6 slots (clamped at both ends); `backspace` clears the current slot and steps back. `enter`/`esc` commits the field and returns to row navigation. Every edit emits `screens.PreviewPaletteMsg`, which `App.handleThemeEditor` applies via `theme.SetCustomPalette` + `refreshViewports()` for live preview.
-5. `ctrl+s` (when dirty and all 8 fields are valid `#RRGGBB`) emits `screens.SaveThemeMsg`. `App.handleThemeEditor` updates `App.customPalette` and persists via `saveConfig` (sets both `cfg.Theme = "custom"` and `cfg.CustomPalette`).
-6. `esc` (row-nav mode) emits `screens.CloseThemeEditorMsg`, which reverts to the theme that was active before the editor opened (`App.themeEditorOrig`) and closes without saving.
+4. In the editor: `j`/`k` moves between the 9 color rows, `enter` focuses a row's 6-digit hex buffer. Each row shows a fixed, non-removable `#` followed by 6 editable slots. Typing an alphanumeric character overwrites the slot under the cursor (uppercased automatically) and advances to the next slot — except on the last slot, where the cursor stays put since there's nowhere further to go. `←`/`→` move the cursor within the 6 slots (clamped at both ends); `backspace` clears the current slot and steps back. `enter`/`esc` commits the field and returns to row navigation. Every edit emits `screens.PreviewPaletteMsg`, which `App.handleThemeEditor` applies via `theme.SetCustomPalette` + `refreshViewports()` for live preview.
+5. `ctrl+s` (when dirty and all 9 fields are valid `#RRGGBB`) emits `screens.SaveThemeMsg`. `App.handleThemeEditor` updates `App.customPalette` and persists via `saveConfig` (sets both `cfg.Theme = "custom"` and `cfg.CustomPalette`).
+6. `esc` (row-nav mode) emits `screens.CloseThemeEditorMsg`, which reverts to the theme that was active before the editor opened (`App.themeEditorOrig`) and closes without saving. If that theme was `"custom"`, the revert also restores `App.themeEditorOrigPalette` — a snapshot of `theme.CurrentPalette()` taken *before* the preview started — into `theme.customPalette` first; without this, `theme.Set("custom")` alone would just re-apply whatever the abandoned edit left in that shared package-level variable instead of the actual prior saved colors. (This was a real bug in the first version of this feature, fixed alongside Post Theme Import below since that entry path needs the same correct revert.)
+
+### Post Theme Import
+
+1. `PostDetailModel.SetPost` calls `theme.ParsePost(post.Content)` once per post load (not per keystroke) and stores the result in `postTheme *theme.Palette` (nil if no theme block was detected). `HasThemeInPost()` exposes this for the `T` hint (shown in the footer and help modal only when a block was found) and both layouts' `screenHints`.
+2. `T`, pressed with the post itself focused (not a reply) and a block detected, emits `screens.PreviewPostThemeMsg{Palette}`.
+3. `App`'s handler snapshots `themeEditorOrig`/`themeEditorOrigPalette` (as above), then previews and opens the theme editor exactly like the picker's `e` key — but prefilled from the parsed post palette instead of the current theme. From here it's the same editor: review the swatches, tweak anything, `ctrl+s` to keep it (persists as the new custom theme and activates it) or `esc` to cancel (reverts fully to whatever was active before).
+4. Detection is post-body only, not replies — matches how these blocks are actually shared (their own top-level post) and keeps parsing a one-time cost per post load.
+
+See `theme.ParsePost`'s doc comment and the post-field mapping table below for how the block's fields resolve.
 
 ### Ephemeral (SSH) Sessions
 
@@ -61,13 +70,16 @@ func ValidHex(s string) bool
 func (p Palette) Valid() bool     // the 9 rendered fields required; Background/CodeBackground optional
 func SetCustomPalette(p Palette)
 func CurrentPalette() Palette
+func ParsePost(content string) (Palette, bool)
 ```
 
 `Self` and `Meta` were originally one field (`Self`, backed by `ColorWhite`) until it turned out to drive two unrelated things: own-username highlighting *and* the status bar's secondary text/hint descriptions. Split so each row controls exactly one thing — `ColorMeta` is a separate color var from `ColorWhite`, initialized to the same literal in every built-in theme (so no visual change there), letting only custom themes differentiate them.
 
-### Post-field mapping
+`builtinPalettes map[string]Palette` (unexported) holds each of the 4 built-ins' full color set as data — the single source of truth `setCyber`/`setC64`/`setVT320`/`setBland` apply from (`applyPalette(builtinPalettes["cyber"])`, etc.), and what lets `ParsePost` read a named built-in's colors without switching the live theme.
 
-Fields are named to line up with the theme blocks users post on cyberspace.online (see Overview), so a future "detect theme in a post" feature can map them directly:
+### `ParsePost` — detecting a theme block in a post
+
+Fields are named to line up with the theme blocks users post on cyberspace.online (see Overview), so parsing maps them directly:
 
 | Post field | `Palette` field | Notes |
 |---|---|---|
@@ -77,7 +89,13 @@ Fields are named to line up with the theme blocks users post on cyberspace.onlin
 | `Border` | `Border` | |
 | `Code` | `Highlight` | The TUI already renders code block/span text in the same color as `@mention` highlights |
 | `Code BG` | `CodeBackground` | Reserved — no code-block background rendering exists yet |
-| *(no post field)* | `Accent`, `Error`, `BarText`, `Self`, `Meta` | TUI-only roles with no webui-post equivalent; a post-import would leave these at whatever the base theme already has |
+| *(no post field)* | `Accent`, `Error`, `BarText`, `Self`, `Meta` | TUI-only roles with no webui-post equivalent; resolved from the base theme (see below) |
+
+`ParsePost(content string) (Palette, bool)`:
+1. Looks for the marker line (`/* Cyberspace Custom Theme */`, case-insensitive substring match). Absent → `ok=false`; nothing else matters.
+2. Scans up to 30 lines after the marker for `Key: value` lines (case-insensitive key match); everything not in the table above (`Main Font`, `Disable Text Glow`, etc. — webui-only, no `Palette` field) is simply never matched, no special-casing needed to ignore it.
+3. Resolves the base palette: if `Base Theme` names one of our own built-ins (`cyber`/`c64`/`vt320`/`bland`, case-insensitive) → `builtinPalettes[name]`, the actual author-intended values for the unmapped fields; otherwise → `CurrentPalette()` (today's active theme), since inventing values for an unrecognized name would just be guessing.
+4. Overlays each recognized color field onto the base **only if `ValidHex` passes** — a malformed or missing individual field silently falls back to the base's value rather than invalidating the whole block (a typo in one line shouldn't discard an otherwise-good theme). `ok=true` as long as the marker was found, even in this degenerate case.
 
 ```go
 // internal/config
@@ -107,6 +125,7 @@ type Config struct {
 | `enter`/`esc` | editor (editing) | Commit the field, back to row nav |
 | `ctrl+s` | editor (row nav) | Save custom palette |
 | `esc` | editor (row nav) | Close without saving, revert theme |
+| `T` | Post Detail, post focused (not a reply) | Preview a detected post theme — opens the editor prefilled from it, when `HasThemeInPost()` |
 
 ---
 
@@ -118,19 +137,10 @@ Same as the Settings screen: edits accumulate in memory (with live preview) unti
 
 ## Design Notes
 
-- **Editor is a modal, not a tab.** It's a sub-action of the theme picker (already a modal with live-preview/overlay plumbing built), not an independent destination — adding a tab would mean a new `screen` const, mnemonic, and renumbering across two layouts for no benefit.
-- **Prefill from the active theme**, not blank fields — matches the picker's existing "start from what's on screen" model and means all 8 fields are valid immediately, so `ctrl+s` isn't blocked on first use.
-- **Future "detect theme in a post" feature**: call `theme.SetCustomPalette(p)` to preview a parsed palette and `theme.CurrentPalette()` to compare against what's currently active. No further hooks are needed in `theme` for that feature to build on.
-
-### Future: resolving unmapped fields when importing a post's theme
-
-A post always declares a `Base Theme:` name alongside its explicit colors (see Overview). The post's colors only ever cover `Foreground`, `Background`, `Dimmed`, `Border`, and `Code` (→ `Highlight`) — see the post-field mapping table above. That leaves `Accent`, `Error`, `Self`, `Meta`, and `CodeBackground` with nothing to import from the post itself. Resolution order for those, decided but not yet built:
-
-1. **If the post's `Base Theme` matches one of our own built-in themes** (`cyber`, `c64`, `vt320`, `bland`, case-insensitive) — prefill from *that* theme's full palette. We have the actual author-intended values for the unmapped fields sitting in `theme.go`; there's no reason to discard them for a guess.
-2. **If the name doesn't match a known built-in** (a webui-only theme, a typo, a future theme not yet ported to the TUI) — prefill from `theme.CurrentPalette()` (today's active theme) instead, since inventing values for an unrecognized theme would just be guessing. This mirrors the manual editor's own prefill behavior (`e` on the picker's "custom" row).
-3. Either way, overlay the post's explicit fields on top of whichever base was chosen in step 1 or 2.
-
-**Prerequisite refactor**: step 1 needs a way to read a built-in theme's palette *without* switching to it — `setCyber`/`setC64`/`setVT320`/`setBland` currently only mutate the live `ColorX` vars imperatively, with no way to hand back "what vt320's colors are" short of actually activating vt320 (an unwanted side effect mid-import). The fix is to pull each built-in's hex literals out into a named `Palette` value (e.g. `var vt320Palette = Palette{Foreground: "#FFB000", ...}`) and have `setVT320()` call `applyPalette(vt320Palette)` — a single source of truth instead of literals duplicated across `setX()` and a second lookup table, and it gives the post-import feature its lookup for free. `bland` fits trivially (its palette is all-empty strings); its extra Bold/Underline/border-weight tweaks stay separate imperative code, since those aren't part of `Palette`.
+- **Editor is a modal, not a tab.** It's a sub-action of the theme picker (already a modal with live-preview/overlay plumbing built), not an independent destination — adding a tab would mean a new `screen` const, mnemonic, and renumbering across two layouts for no benefit. Post Theme Import reuses the same modal rather than building a second one.
+- **Prefill from the active theme**, not blank fields — matches the picker's existing "start from what's on screen" model and means all 9 fields are valid immediately, so `ctrl+s` isn't blocked on first use. Post Theme Import follows the same principle, just prefilling from the parsed post palette instead.
+- **Post Theme Import reuses the theme editor wholesale** rather than a bespoke confirm/cancel dialog: `T` just opens `ThemeEditorModel` prefilled differently. This gives the user the ability to tweak a color they don't like before committing, for free, and means there's exactly one preview/save/revert implementation to maintain instead of two.
+- **The revert-on-cancel bug**: the first version of the theme editor only stored `themeEditorOrig` (a theme *name*) for reverting on `esc`. When that name was `"custom"`, reverting just called `theme.Set("custom")`, which re-applies whatever `theme.customPalette` currently holds — but live-preview edits (from either the manual editor or a post-theme preview) mutate that same package-level variable, so an abandoned edit was left applied instead of the actual prior saved colors. Fixed by also snapshotting `themeEditorOrigPalette := theme.CurrentPalette()` at the moment preview starts, and restoring it via `theme.SetCustomPalette(...)` before `theme.Set("custom")` on cancel.
 
 ---
 
@@ -142,4 +152,6 @@ A post always declares a `Base Theme:` name alongside its explicit colors (see O
 - [x] Wired into theme picker (`e` to edit/create) in both layouts (tabs, miller)
 - [x] Live preview while editing
 - [x] Ephemeral (SSH) sessions: editing works, persistence no-ops
-- [ ] Detect a theme block in a post and apply it (future feature, out of scope here)
+- [x] `builtinPalettes` data table + `theme.ParsePost` (detects and resolves a post's theme block)
+- [x] Post Detail's `T` key + `HasThemeInPost()` hint, wired into both layouts
+- [x] Revert-on-cancel bug fixed (`themeEditorOrigPalette` snapshot), covered by a regression test

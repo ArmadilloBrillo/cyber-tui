@@ -111,10 +111,18 @@ type App struct {
 	themePickerOrig   string // theme name when picker was opened (for Esc revert)
 
 	// themeEditor state — opened from the theme picker with 'e' on the
-	// "custom" row, closed by SaveThemeMsg/CloseThemeEditorMsg.
+	// "custom" row (or from Post Detail's try-theme key), closed by
+	// SaveThemeMsg/CloseThemeEditorMsg.
 	themeEditorOpen bool
 	themeEditor     screens.ThemeEditorModel
 	themeEditorOrig string // theme name before entering the editor, for close-without-save revert
+	// themeEditorOrigPalette is a CurrentPalette() snapshot taken at the same
+	// moment as themeEditorOrig, before the editor's preview starts mutating
+	// theme's package-level customPalette. Needed to correctly revert when
+	// themeEditorOrig == "custom": theme.Set("custom") alone would just
+	// re-apply whatever the abandoned edit left in that shared variable
+	// instead of the palette that was actually active before previewing.
+	themeEditorOrigPalette theme.Palette
 
 	// customPalette is the persisted custom theme, loaded from config. Nil
 	// means the user has never saved one yet.
@@ -1141,6 +1149,20 @@ func (a App) handleThemeEditor(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.refreshViewports()
 		return a, nil, true
 
+	case screens.PreviewPostThemeMsg:
+		// Same contract as the picker's 'e' key, but prefilled from a
+		// detected post theme instead of the current theme/saved custom
+		// palette: snapshot for correct revert, preview live, hand off to
+		// the theme editor so the user can review/tweak before ctrl+s.
+		a.themeEditorOrig = theme.CurrentName()
+		a.themeEditorOrigPalette = theme.CurrentPalette()
+		theme.SetCustomPalette(msg.Palette)
+		theme.Set("custom")
+		a.refreshViewports()
+		a.themeEditorOpen = true
+		a.themeEditor = screens.NewThemeEditorModel(msg.Palette)
+		return a, nil, true
+
 	case screens.SaveThemeMsg:
 		p := msg.Palette
 		a.themeEditor = a.themeEditor.SetSaved(p)
@@ -1157,6 +1179,13 @@ func (a App) handleThemeEditor(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case screens.CloseThemeEditorMsg:
 		a.themeEditorOpen = false
+		if a.themeEditorOrig == "custom" {
+			// Restore the snapshot taken before preview started — the
+			// abandoned edit has left theme's package-level customPalette
+			// dirty, so Set("custom") alone would reapply that instead of
+			// what was actually active before the editor opened.
+			theme.SetCustomPalette(a.themeEditorOrigPalette)
+		}
 		theme.Set(a.themeEditorOrig)
 		a.refreshViewports()
 		return a, nil, true
@@ -1946,10 +1975,11 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.customPalette != nil {
 			prefill = *a.customPalette
 		}
+		a.themeEditorOrig = a.themePickerOrig
+		a.themeEditorOrigPalette = theme.CurrentPalette() // snapshot before preview, for correct revert
 		theme.SetCustomPalette(prefill)
 		theme.Set("custom")
 		a.refreshViewports()
-		a.themeEditorOrig = a.themePickerOrig
 		a.themePickerOpen = false
 		a.themeEditorOpen = true
 		a.themeEditor = screens.NewThemeEditorModel(prefill)
