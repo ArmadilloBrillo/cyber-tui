@@ -597,7 +597,7 @@ Time formatting helpers used by all screens.
 
 #### `theme.go`
 
-Color palettes and Lip Gloss style objects for four retro themes.
+Color palettes and Lip Gloss style objects for four retro themes, plus a user-editable fifth "custom" theme.
 
 **Layout constants:**
 
@@ -609,7 +609,7 @@ Color palettes and Lip Gloss style objects for four retro themes.
 | `ChromeHeight` | 3 | Sum of the above; used by screens to compute usable height |
 
 **Color variables** (package-level; reassigned by `Set()`):  
-`ColorGreen`, `ColorDimGreen`, `ColorCyan`, `ColorYellow`, `ColorRed`, `ColorBackground`, `ColorMuted`, `ColorWhite`
+`ColorGreen`, `ColorDimGreen`, `ColorCyan`, `ColorYellow`, `ColorRed`, `ColorBackground`, `ColorMuted`, `ColorWhite`, `ColorMeta`
 
 **Style objects** (Lip Gloss; auto-update when `Set()` is called):  
 `Base`, `Title`, `Subtle`, `Highlight`, `MeHighlight`, `Error`, `Border`, `ActiveBorder`, `StatusBar`, `Tab`, `ActiveTab`
@@ -618,8 +618,14 @@ Color palettes and Lip Gloss style objects for four retro themes.
 
 | Function | Purpose |
 |---|---|
-| `Set(name string)` | Applies a theme by name ("cyber", "c64", "vt320", "bland"); defaults to "cyber" |
+| `Set(name string)` | Applies a theme by name ("cyber", "c64", "vt320", "bland", "custom"); defaults to "cyber" |
 | `CurrentName() string` | Returns the active theme name |
+| `ValidHex(s string) bool` | Reports whether `s` is a well-formed `#RRGGBB` hex color |
+| `(Palette) Valid() bool` | Reports whether the 9 rendered fields of a `Palette` are well-formed hex (`Background`/`CodeBackground` are optional) |
+| `SetCustomPalette(p Palette)` | Stores `p` as the "custom" theme's palette; re-applies immediately if "custom" is already active (live preview) |
+| `CurrentPalette() Palette` | Returns the colors currently active, as a `Palette` |
+
+**`Palette` type:** the data-driven counterpart to the literal `setCyber`/`setC64`/etc. themes, named by UI role rather than color so the theme editor and config file read as "what does this control": `Foreground`, `Dimmed`, `Border`, `Accent`, `Highlight`, `Error`, `BarText`, `Self`, `Meta` (all rendered; map internally to `ColorGreen`, `ColorMuted`, `ColorDimGreen`, `ColorCyan`, `ColorYellow`, `ColorRed`, `ColorBackground`, `ColorWhite`, `ColorMeta` respectively), plus `Background`/`CodeBackground` (reserved, unused by the renderer today, hidden from the editor). `Self` and `Meta` were one field until `ColorWhite` turned out to drive both the own-username highlight and unrelated status-bar text — split so each row controls exactly one thing. Used by the "custom" theme (edited in-TUI, see `docs/40-custom-themes.md`) and exposed for a future "detect theme in a post" feature to build/inspect palettes without touching `theme`'s internals — see that doc's post-field mapping table.
 
 **Themes:**
 
@@ -629,6 +635,7 @@ Color palettes and Lip Gloss style objects for four retro themes.
 | **c64** | Commodore 64 purple background with cyan and bright magenta |
 | **vt320** | VT320 terminal dim green with amber accents |
 | **bland** | No forced colors — renders in the terminal's own default palette; active/selected states use bold/underline and a thicker active-pane border instead of color |
+| **custom** | User-built palette, edited in-TUI via the theme picker (`t`, then `e` on the "custom" row) and persisted to `~/.cyber-tui.json`. See `docs/40-custom-themes.md`. |
 
 Because all colors are package variables, styles automatically inherit the new palette when `Set()` is called — no re-initialization needed.
 
@@ -647,7 +654,8 @@ Permissions: `0600` (owner read/write only)
 | `savedAt` | string | — | ISO timestamp of last login |
 | `density` | string | `""` | `""` = dense, `"relaxed"` = blank lines between items |
 | `timezone` | string | `"UTC"` | UTC offset label (e.g. "UTC+5:30") |
-| `theme` | string | `"cyber"` | `"cyber"`, `"c64"`, or `"vt320"` |
+| `theme` | string | `"cyber"` | `"cyber"`, `"c64"`, `"vt320"`, `"bland"`, or `"custom"` |
+| `customPalette` | object \| null | `null` | 8-hex-color palette for the "custom" theme, set via the in-TUI theme editor (`docs/40-custom-themes.md`) |
 | `apiBaseURL` | string | `"https://api.cyberspace.online"` | Override for development |
 | `allowInsecureApi` | bool | `false` | Permit a plain `http://` `apiBaseURL` to a non-loopback host |
 | `useMock` | bool | `false` | Use `MockClient` instead of real API |

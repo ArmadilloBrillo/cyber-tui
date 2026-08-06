@@ -148,7 +148,7 @@ func sbStyle() lipgloss.Style {
 // renderHints formats a []hint slice as a compact styled string.
 func renderHints(hints []hint) string {
 	key := sbStyle().Foreground(theme.ColorCyan).Bold(true)
-	desc := sbStyle().Foreground(theme.ColorWhite)
+	desc := sbStyle().Foreground(theme.ColorMeta)
 	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
 	parts := make([]string, 0, len(hints)*3)
 	for i, h := range hints {

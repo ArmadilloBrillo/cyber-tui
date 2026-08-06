@@ -51,7 +51,7 @@ const (
 )
 
 // availableThemes is the ordered list of selectable themes shown in the picker.
-var availableThemes = []string{"cyber", "c64", "vt320", "bland"}
+var availableThemes = []string{"cyber", "c64", "vt320", "bland", "custom"}
 
 const (
 	logoOrig          = "ᑕ¥βєяรקค¢є"
@@ -109,6 +109,16 @@ type App struct {
 	themePickerOpen   bool
 	themePickerCursor int    // index into availableThemes
 	themePickerOrig   string // theme name when picker was opened (for Esc revert)
+
+	// themeEditor state — opened from the theme picker with 'e' on the
+	// "custom" row, closed by SaveThemeMsg/CloseThemeEditorMsg.
+	themeEditorOpen bool
+	themeEditor     screens.ThemeEditorModel
+	themeEditorOrig string // theme name before entering the editor, for close-without-save revert
+
+	// customPalette is the persisted custom theme, loaded from config. Nil
+	// means the user has never saved one yet.
+	customPalette *theme.Palette
 
 	// helpModal state — open with '?', close with any key.
 	helpModalOpen bool
@@ -300,6 +310,7 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.imageViewer = s.ImageViewer
 	a.layoutName = s.Layout
 	a.layout = layoutFromName(s.Layout)
+	a.customPalette = s.CustomPalette
 	return a
 }
 
@@ -414,6 +425,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleSettings(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleThemeEditor(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleBookmarks(msg); ok {
 		return a2, cmd
 	}
@@ -523,6 +537,10 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	// Modal overlays intercept all keys while open.
 	if a.themePickerOpen {
 		model, cmd := a.handleThemePickerKey(m)
+		return model.(App), cmd, true
+	}
+	if a.themeEditorOpen {
+		model, cmd := a.handleThemeEditorKey(m)
 		return model.(App), cmd, true
 	}
 	if a.helpModalOpen {
@@ -1109,6 +1127,38 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.LastWandered = msg.at
 			})
 		}
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// handleThemeEditor processes messages emitted by the theme editor modal:
+// live preview on every edit, persisting on save, and reverting on close.
+func (a App) handleThemeEditor(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case screens.PreviewPaletteMsg:
+		theme.SetCustomPalette(msg.Palette)
+		a.refreshViewports()
+		return a, nil, true
+
+	case screens.SaveThemeMsg:
+		p := msg.Palette
+		a.themeEditor = a.themeEditor.SetSaved(p)
+		a.customPalette = &p
+		a.themeEditorOpen = false
+		return a, func() tea.Msg {
+			a.saveConfig(func(cfg *config.Config) {
+				cfg.Theme = "custom"
+				pp := p
+				cfg.CustomPalette = &pp
+			})
+			return nil
+		}, true
+
+	case screens.CloseThemeEditorMsg:
+		a.themeEditorOpen = false
+		theme.Set(a.themeEditorOrig)
+		a.refreshViewports()
 		return a, nil, true
 	}
 	return a, nil, false
@@ -1867,17 +1917,48 @@ func (a App) activeScreenHasFocusedInput() bool { return a.layout.HasFocusedInpu
 // handleThemePickerKey processes keyboard input while the theme picker is open.
 func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	refreshCmd := func() tea.Msg { return tea.WindowSizeMsg{Width: a.width, Height: a.height} }
+	// preview applies the theme at the cursor for a live preview. "custom"
+	// only previews if a palette has already been saved — otherwise there's
+	// nothing to show yet, so the current theme stays put until 'e' builds one.
+	preview := func() {
+		name := availableThemes[a.themePickerCursor]
+		if name == "custom" {
+			if a.customPalette == nil {
+				return
+			}
+			theme.SetCustomPalette(*a.customPalette)
+		}
+		theme.Set(name)
+		a.refreshViewports()
+	}
 	switch msg.String() {
 	case "up", "k":
 		a.themePickerCursor = (a.themePickerCursor - 1 + len(availableThemes)) % len(availableThemes)
-		theme.Set(availableThemes[a.themePickerCursor])
-		a.refreshViewports()
+		preview()
 	case "down", "j":
 		a.themePickerCursor = (a.themePickerCursor + 1) % len(availableThemes)
-		theme.Set(availableThemes[a.themePickerCursor])
+		preview()
+	case "e":
+		if availableThemes[a.themePickerCursor] != "custom" {
+			return a, nil
+		}
+		prefill := theme.CurrentPalette()
+		if a.customPalette != nil {
+			prefill = *a.customPalette
+		}
+		theme.SetCustomPalette(prefill)
+		theme.Set("custom")
 		a.refreshViewports()
+		a.themeEditorOrig = a.themePickerOrig
+		a.themePickerOpen = false
+		a.themeEditorOpen = true
+		a.themeEditor = screens.NewThemeEditorModel(prefill)
+		return a, nil
 	case "enter":
 		selected := availableThemes[a.themePickerCursor]
+		if selected == "custom" && a.customPalette == nil {
+			return a, nil // nothing saved yet — press 'e' to build one
+		}
 		a.themePickerOpen = false
 		return a, tea.Batch(
 			refreshCmd,
@@ -1894,6 +1975,14 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, refreshCmd
 	}
 	return a, nil
+}
+
+// handleThemeEditorKey forwards keyboard input to the theme editor model
+// while it's open.
+func (a App) handleThemeEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	a.themeEditor, cmd = a.themeEditor.Update(msg)
+	return a, cmd
 }
 
 // refreshViewports forces all screen viewports to re-render with the current

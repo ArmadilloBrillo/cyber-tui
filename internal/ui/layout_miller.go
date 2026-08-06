@@ -124,6 +124,9 @@ func (l MillerLayout) View(a App) string {
 	if a.themePickerOpen {
 		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
 	}
+	if a.themeEditorOpen {
+		return overlayCenter(base, l.renderThemeEditor(a), a.width, a.height)
+	}
 	if a.helpModalOpen {
 		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
 	}
@@ -444,7 +447,7 @@ func (l MillerLayout) screenHints(a App) []hint {
 
 func (l MillerLayout) renderStatusBar(a App) string {
 	user := sbStyle().Foreground(theme.ColorCyan).Bold(true)
-	meta := sbStyle().Foreground(theme.ColorWhite)
+	meta := sbStyle().Foreground(theme.ColorMeta)
 	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
 
 	densityLabel := "dense"
@@ -514,9 +517,14 @@ func (l MillerLayout) renderThemePicker(a App) string {
 		"",
 		strings.Join(rows, "\n"),
 		"",
-		theme.Subtle.Render("↑↓ select   enter apply   esc cancel"),
+		theme.Subtle.Render("↑↓ select   enter apply   e edit custom   esc cancel"),
 	)
 	return theme.ActiveBorder.Render(body)
+}
+
+// renderThemeEditor renders the "custom" theme color editor modal.
+func (l MillerLayout) renderThemeEditor(a App) string {
+	return a.themeEditor.View()
 }
 
 func (l MillerLayout) renderHelpModal(a App) string {
@@ -537,6 +545,7 @@ func (l MillerLayout) renderHelpModal(a App) string {
 	globalRows = append(globalRows,
 		row("/", "search"),
 		row("t", "theme"),
+		row("e", "edit custom theme (in theme picker)"),
 		row("v", "density"),
 		row("o", "open url"),
 		row("q", "quit"),

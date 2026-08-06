@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 // BookmarkedIDsMsg is broadcast by App whenever the set of bookmarked post/reply
@@ -222,3 +223,16 @@ type LoadNoteRevisionMsg struct {
 	NoteID         string
 	RevisionNumber int
 }
+
+// PreviewPaletteMsg is emitted by ThemeEditorModel on every edit so App can
+// live-preview via theme.SetCustomPalette + refreshViewports, mirroring the
+// theme picker's up/down preview.
+type PreviewPaletteMsg struct{ Palette theme.Palette }
+
+// SaveThemeMsg is emitted by ThemeEditorModel on ctrl+s with a valid, dirty
+// palette. App persists it (unless ephemeral) and applies it as "custom".
+type SaveThemeMsg struct{ Palette theme.Palette }
+
+// CloseThemeEditorMsg is emitted by ThemeEditorModel on esc (row-nav mode,
+// not mid-field-edit) to close without saving.
+type CloseThemeEditorMsg struct{}

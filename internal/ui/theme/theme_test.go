@@ -78,3 +78,91 @@ func TestSet_StylesRebuildOnThemeChange(t *testing.T) {
 		t.Error("Base foreground should differ between cyber and c64 themes")
 	}
 }
+
+func TestValidHex(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"#00FF41", true},
+		{"#abcdef", true},
+		{"00FF41", false},
+		{"#0G0000", false},
+		{"#FFF", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := ValidHex(c.in); got != c.want {
+			t.Errorf("ValidHex(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func testPalette9() Palette {
+	return Palette{
+		Foreground: "#111111", Dimmed: "#222222", Border: "#333333", Accent: "#444444",
+		Highlight: "#555555", Error: "#666666", BarText: "#777777", Self: "#888888", Meta: "#999999",
+	}
+}
+
+func TestPalette_Valid(t *testing.T) {
+	valid := testPalette9()
+	if !valid.Valid() {
+		t.Error("expected fully hex palette to be valid")
+	}
+	invalid := valid
+	invalid.Accent = "not-a-color"
+	if invalid.Valid() {
+		t.Error("expected palette with malformed field to be invalid")
+	}
+}
+
+func TestPalette_Valid_ReservedFieldsOptional(t *testing.T) {
+	p := testPalette9() // Background/CodeBackground left empty
+	if !p.Valid() {
+		t.Error("expected palette with empty reserved fields to be valid")
+	}
+	p.Background = "not-a-color"
+	if p.Valid() {
+		t.Error("expected palette with malformed reserved field to be invalid")
+	}
+}
+
+func TestSet_Custom_AppliesStoredPalette(t *testing.T) {
+	p := testPalette9()
+	SetCustomPalette(p)
+	Set("custom")
+	if ColorGreen != lipgloss.Color(p.Foreground) {
+		t.Errorf("ColorGreen = %q, want %q", ColorGreen, p.Foreground)
+	}
+	if ColorBackground != lipgloss.Color(p.BarText) {
+		t.Errorf("ColorBackground = %q, want %q", ColorBackground, p.BarText)
+	}
+	if CurrentName() != "custom" {
+		t.Errorf("CurrentName() = %q, want custom", CurrentName())
+	}
+}
+
+func TestSetCustomPalette_LivePreviewWhenActive(t *testing.T) {
+	p1 := testPalette9()
+	Set("cyber")
+	SetCustomPalette(p1)
+	Set("custom")
+
+	p2 := Palette{
+		Foreground: "#aaaaaa", Dimmed: "#bbbbbb", Border: "#cccccc", Accent: "#dddddd",
+		Highlight: "#eeeeee", Error: "#111111", BarText: "#222222", Self: "#333333", Meta: "#444444",
+	}
+	SetCustomPalette(p2)
+	if ColorGreen != lipgloss.Color(p2.Foreground) {
+		t.Errorf("ColorGreen = %q, want live-updated %q", ColorGreen, p2.Foreground)
+	}
+}
+
+func TestCurrentPalette_RoundTrips(t *testing.T) {
+	Set("cyber")
+	p := CurrentPalette()
+	if p.Foreground != "#00FF41" || p.BarText != "#0D0D0D" {
+		t.Errorf("CurrentPalette() = %+v, want cyber's literal hex values", p)
+	}
+}
