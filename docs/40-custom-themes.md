@@ -39,6 +39,16 @@ theme.Set(cfg.Theme)
 
 See `theme.ParsePost`'s doc comment and the post-field mapping table below for how the block's fields resolve.
 
+### Export / Import
+
+Lets a saved custom theme be archived to a plain JSON file and restored from one — only the "custom" slot is ever involved on either side.
+
+1. `x` on the picker's "custom" row — guarded on `App.customPalette != nil` (nothing saved yet → no-op). Opens `screens.PathPromptModel` (`App.pathPromptOpen`, `pathPromptPurpose = pathPromptExport`), prefilled with `~/cyber-tui-theme.json`.
+2. `i` on the "custom" row — always available (no saved-palette guard). Opens the same prompt with the same default path, `pathPromptPurpose = pathPromptImport`, so a plain export-then-import round trip needs no retyping.
+3. `enter` in the prompt emits `screens.PathPromptSubmitMsg{Path}`; `esc` emits `screens.PathPromptCancelMsg{}`. The prompt itself has no filesystem awareness — it's a bare `textinput.Model` plus a settable warning line; all I/O and validation happen in `App.handlePathPrompt`.
+4. **Export**: if the (`~`-expanded) path already exists and this exact path string hasn't already been flagged (`App.pathPromptOverwritePending`), the prompt stays open with a warning ("file exists — enter again to overwrite") instead of writing — an identical resubmit proceeds. Otherwise `theme.ExportToFile(path, *App.customPalette)` writes the *saved* custom palette (never a live/unsaved preview) as indented JSON, mode 0600. Result surfaces via the existing notify banner (`a.notify(notifyInfo/notifyError, ...)`).
+5. **Import**: `theme.ImportFromFile(path)` reads and validates the file. On error (missing file, invalid JSON, or valid JSON that fails `Palette.Valid()`), notifies and the prompt closes — nothing about the saved custom palette changes. On success, it's handled exactly like `PreviewPostThemeMsg`: snapshot for correct revert, preview live, open the theme editor prefilled from the imported palette — reviewed and `ctrl+s`-confirmed, never applied blind.
+
 ### Ephemeral (SSH) Sessions
 
 `saveConfig` already no-ops when `App.ephemeral` is true — editing and live preview work normally in an SSH session, but nothing is written to the host operator's `~/.cyber-tui.json`.
@@ -71,6 +81,9 @@ func (p Palette) Valid() bool     // the 9 rendered fields required; Background/
 func SetCustomPalette(p Palette)
 func CurrentPalette() Palette
 func ParsePost(content string) (Palette, bool)
+func ExpandHome(path string) (string, error)  // "~/..." → the user's home dir; used by both of the below and by App's overwrite check
+func ExportToFile(path string, p Palette) error
+func ImportFromFile(path string) (Palette, error)  // fails closed: ErrInvalidThemeFile if the JSON parses but Valid() doesn't hold
 ```
 
 `Self` and `Meta` were originally one field (`Self`, backed by `ColorWhite`) until it turned out to drive two unrelated things: own-username highlighting *and* the status bar's secondary text/hint descriptions. Split so each row controls exactly one thing — `ColorMeta` is a separate color var from `ColorWhite`, initialized to the same literal in every built-in theme (so no visual change there), letting only custom themes differentiate them.
@@ -126,6 +139,10 @@ type Config struct {
 | `ctrl+s` | editor (row nav) | Save custom palette |
 | `esc` | editor (row nav) | Close without saving, revert theme |
 | `T` | Post Detail, post focused (not a reply) | Preview a detected post theme — opens the editor prefilled from it, when `HasThemeInPost()` |
+| `x` | picker, "custom" row | Export the saved custom theme to a file, when `customPalette != nil` |
+| `i` | picker, "custom" row | Import a theme file — opens the editor prefilled from it for review |
+| `enter` | path prompt | Submit the path (a second identical submit confirms an export overwrite) |
+| `esc` | path prompt | Cancel |
 
 ---
 
@@ -155,3 +172,8 @@ Same as the Settings screen: edits accumulate in memory (with live preview) unti
 - [x] `builtinPalettes` data table + `theme.ParsePost` (detects and resolves a post's theme block)
 - [x] Post Detail's `T` key + `HasThemeInPost()` hint, wired into both layouts
 - [x] Revert-on-cancel bug fixed (`themeEditorOrigPalette` snapshot), covered by a regression test
+- [x] `theme.ExportToFile`/`ImportFromFile`/`ExpandHome`
+- [x] `screens.PathPromptModel` (`internal/ui/screens/pathprompt.go`)
+- [x] Wired into theme picker (`x` export / `i` import on the "custom" row) in both layouts
+- [x] Export overwrite confirmation (`pathPromptOverwritePending`)
+- [x] Import reuses the theme editor for review before commit

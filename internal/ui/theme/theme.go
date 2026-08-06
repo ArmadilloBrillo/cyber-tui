@@ -1,6 +1,10 @@
 package theme
 
 import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -307,6 +311,68 @@ func ParsePost(content string) (Palette, bool) {
 	overlay(&base.CodeBackground, "code bg")
 
 	return base, true
+}
+
+// ExpandHome expands a leading "~" (or "~/...") to the user's home
+// directory, matching config.DefaultPath's convention. Paths not starting
+// with "~" are returned unchanged. Exported so callers (e.g. App, checking
+// whether an export target already exists) resolve paths the same way
+// ExportToFile/ImportFromFile do.
+func ExpandHome(path string) (string, error) {
+	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if path == "~" {
+		return home, nil
+	}
+	return filepath.Join(home, path[2:]), nil
+}
+
+// ExportToFile writes p as indented JSON to path (mode 0600, matching the
+// config file's convention), expanding a leading "~" to the user's home
+// directory.
+func ExportToFile(path string, p Palette) error {
+	resolved, err := ExpandHome(path)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(resolved, data, 0600)
+}
+
+// ErrInvalidThemeFile is returned by ImportFromFile when the file parses as
+// JSON but doesn't contain a valid palette (missing/malformed colors).
+var ErrInvalidThemeFile = errors.New("theme file has missing or invalid colors")
+
+// ImportFromFile reads and parses a theme file previously written by
+// ExportToFile (or anything JSON-shaped the same way), expanding a leading
+// "~" to the user's home directory. Returns an error if the file is
+// missing/unreadable, isn't valid JSON, or parses but fails Valid() — a
+// partially-formed file should never silently overwrite a good saved theme.
+func ImportFromFile(path string) (Palette, error) {
+	resolved, err := ExpandHome(path)
+	if err != nil {
+		return Palette{}, err
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return Palette{}, err
+	}
+	var p Palette
+	if err := json.Unmarshal(data, &p); err != nil {
+		return Palette{}, err
+	}
+	if !p.Valid() {
+		return Palette{}, ErrInvalidThemeFile
+	}
+	return p, nil
 }
 
 // applyPalette sets the rendered color vars from p's driven fields and

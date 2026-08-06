@@ -625,6 +625,9 @@ Color palettes and Lip Gloss style objects for four retro themes, plus a user-ed
 | `SetCustomPalette(p Palette)` | Stores `p` as the "custom" theme's palette; re-applies immediately if "custom" is already active (live preview) |
 | `CurrentPalette() Palette` | Returns the colors currently active, as a `Palette` |
 | `ParsePost(content string) (Palette, bool)` | Detects and parses a cyberspace.online custom-theme post block; `ok=false` only when no block is found. See `docs/40-custom-themes.md`. |
+| `ExpandHome(path string) (string, error)` | Expands a leading `~` to the user's home directory |
+| `ExportToFile(path string, p Palette) error` | Writes `p` as indented JSON (mode 0600), expanding `~` |
+| `ImportFromFile(path string) (Palette, error)` | Reads/validates a theme file; fails on a missing file, invalid JSON, or JSON that fails `Valid()` |
 
 **`Palette` type:** the data-driven counterpart to the literal `setCyber`/`setC64`/etc. themes, named by UI role rather than color so the theme editor and config file read as "what does this control": `Foreground`, `Dimmed`, `Border`, `Accent`, `Highlight`, `Error`, `BarText`, `Self`, `Meta` (all rendered; map internally to `ColorGreen`, `ColorMuted`, `ColorDimGreen`, `ColorCyan`, `ColorYellow`, `ColorRed`, `ColorBackground`, `ColorWhite`, `ColorMeta` respectively), plus `Background`/`CodeBackground` (reserved, unused by the renderer today, hidden from the editor). `Self` and `Meta` were one field until `ColorWhite` turned out to drive both the own-username highlight and unrelated status-bar text — split so each row controls exactly one thing. Used by the "custom" theme (edited in-TUI, see `docs/40-custom-themes.md`) and exposed for a future "detect theme in a post" feature to build/inspect palettes without touching `theme`'s internals — see that doc's post-field mapping table.
 
