@@ -252,24 +252,18 @@ const postThemeMarker = "cyberspace custom theme"
 // a long post.
 const postParseWindow = 30
 
-// postFieldLineRe matches one "Key: value" line, e.g. "Foreground: #d000ff"
-// or "Base Theme: vt320". Lines that don't match this shape (comments like
-// "/* Colors */", blank lines) are silently skipped.
-var postFieldLineRe = regexp.MustCompile(`^([A-Za-z][A-Za-z ]*?):\s*(.+)$`)
-
-// lineDecorationCutset is every character users' clients are seen wrapping a
-// field line in when the block gets pasted into a post — blockquotes,
-// backticks, bold/italic, list bullets — plus whitespace. Every real field
-// name starts with a letter, so trimming runs of these from both ends can
-// never eat into a key, no matter how they're combined or nested (e.g.
-// "> `Foreground: #ff5d00`").
-const lineDecorationCutset = " \t`>*_-"
-
-// stripLineDecoration strips lineDecorationCutset from both ends of line so
-// postFieldLineRe still matches the underlying "Key: value" shape underneath.
-func stripLineDecoration(line string) string {
-	return strings.Trim(line, lineDecorationCutset)
-}
+// postFieldLineRe matches a known field name and its value anywhere within a
+// line, e.g. "Foreground: #d000ff" or "Base Theme: vt320" — deliberately not
+// anchored to the start/end of the line, so any markdown a client wraps the
+// line in (backticks, blockquotes, bold, bullets, any combination or
+// nesting, e.g. "> `Foreground: #ff5d00`") simply falls outside the match
+// instead of needing to be stripped first. The value alternatives are narrow
+// (an exact 6-digit hex, or a bare word for Base Theme names) so decoration
+// stuck directly onto a value's end (e.g. "#ff5d00`") can't leak into the
+// capture either. "code bg" is listed before "code" so "Code BG: ..." binds
+// to the more specific alternative. Field names not in this list (comments
+// like "/* Colors */", webui-only fields like "Main Font") never match.
+var postFieldLineRe = regexp.MustCompile(`(?i)(base theme|code bg|foreground|background|dimmed|border|code)\s*:\s*(#[0-9A-Fa-f]{6}|[A-Za-z0-9_-]+)`)
 
 // ParsePost scans content for a posted custom-theme block (see
 // docs/40-custom-themes.md) and returns the resulting Palette. Fields the
@@ -297,12 +291,12 @@ func ParsePost(content string) (Palette, bool) {
 	end := min(markerIdx+1+postParseWindow, len(lines))
 	fields := make(map[string]string)
 	for _, line := range lines[markerIdx+1 : end] {
-		m := postFieldLineRe.FindStringSubmatch(stripLineDecoration(line))
+		m := postFieldLineRe.FindStringSubmatch(line)
 		if m == nil {
 			continue
 		}
-		key := strings.ToLower(strings.TrimSpace(m[1]))
-		fields[key] = strings.TrimSpace(m[2])
+		key := strings.ToLower(m[1])
+		fields[key] = m[2]
 	}
 
 	base := CurrentPalette()

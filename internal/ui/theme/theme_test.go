@@ -212,19 +212,28 @@ Enable Ligatures: false
 Base Font Size: normal
 `
 
-func TestStripLineDecoration(t *testing.T) {
+// TestPostFieldLineRe_IgnoresSurroundingDecoration guards the property that
+// makes ParsePost tolerant of however a client's composer wraps a field
+// line: the regex isn't anchored to the line, so decoration on either side
+// is simply outside the match, regardless of what it is.
+func TestPostFieldLineRe_IgnoresSurroundingDecoration(t *testing.T) {
 	cases := map[string]string{
-		"Foreground: #ff5d00":     "Foreground: #ff5d00",
-		"`Foreground: #ff5d00`":   "Foreground: #ff5d00",
-		"> Foreground: #f4a4c0":   "Foreground: #f4a4c0",
-		">> Foreground: #f4a4c0":  "Foreground: #f4a4c0",
-		"> `Foreground: #ff5d00`": "Foreground: #ff5d00",
-		"- Foreground: #ff5d00":   "Foreground: #ff5d00",
-		"**Foreground: #ff5d00**": "Foreground: #ff5d00",
+		"Foreground: #ff5d00":     "#ff5d00",
+		"`Foreground: #ff5d00`":   "#ff5d00",
+		"> Foreground: #f4a4c0":   "#f4a4c0",
+		">> Foreground: #f4a4c0":  "#f4a4c0",
+		"> `Foreground: #ff5d00`": "#ff5d00",
+		"- Foreground: #ff5d00":   "#ff5d00",
+		"**Foreground: #ff5d00**": "#ff5d00",
 	}
 	for in, want := range cases {
-		if got := stripLineDecoration(in); got != want {
-			t.Errorf("stripLineDecoration(%q) = %q, want %q", in, got, want)
+		m := postFieldLineRe.FindStringSubmatch(in)
+		if m == nil {
+			t.Errorf("postFieldLineRe.FindStringSubmatch(%q) = no match, want value %q", in, want)
+			continue
+		}
+		if m[2] != want {
+			t.Errorf("postFieldLineRe.FindStringSubmatch(%q) value = %q, want %q", in, m[2], want)
 		}
 	}
 }
