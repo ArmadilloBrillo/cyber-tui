@@ -712,6 +712,64 @@ func TestMatchMentionCandidates(t *testing.T) {
 	}
 }
 
+// --- mentionCandidatePool ---
+
+func TestMentionCandidatePool_IncludesHistoryOnlyUsers(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}}
+	m.messages = []model.Message{
+		{From: model.User{Username: "bob"}, Body: "hi"},
+	}
+
+	got := m.mentionCandidatePool()
+	if len(got) != 2 || got[0].Username != "alice" || got[1].Username != "bob" {
+		t.Fatalf("got %+v, want [alice, bob] (online first, then history-only)", got)
+	}
+}
+
+func TestMentionCandidatePool_DedupesOnlineAndHistoryOverlap(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice", IsChatAdmin: true}}
+	m.messages = []model.Message{
+		{From: model.User{Username: "alice"}, Body: "hi"},
+		{From: model.User{Username: "Alice"}, Body: "hi again"},
+	}
+
+	got := m.mentionCandidatePool()
+	if len(got) != 1 {
+		t.Fatalf("got %+v, want a single deduped entry for alice", got)
+	}
+	if !got[0].IsChatAdmin {
+		t.Error("expected the deduped entry to keep the online roster's IsChatAdmin, not a bare history stand-in")
+	}
+}
+
+func TestMentionCandidatePool_SkipsSystemMessages(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.messages = []model.Message{
+		{From: model.User{Username: "system"}, Body: "*** unknown command: /bogus", IsSystem: true},
+	}
+
+	if got := m.mentionCandidatePool(); len(got) != 0 {
+		t.Fatalf("got %+v, want system notices excluded from the mention pool", got)
+	}
+}
+
+func TestMentionTab_CompletesUserFromHistoryNotOnline(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "zed"}}
+	m.messages = []model.Message{
+		{From: model.User{Username: "bertha"}, Body: "long gone"},
+	}
+	m = setInput(m, "hey @ber", 8)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+
+	if got := m.mentionGhostText(); got != "tha" {
+		t.Errorf("ghost = %q, want %q — offline history-only user should still be completable", got, "tha")
+	}
+}
+
 // --- spliceMention ---
 
 func TestSpliceMention(t *testing.T) {
@@ -1203,6 +1261,29 @@ func TestUpdate_StyleAnimTick_AdvancesFrameAndRearms(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Error("expected a non-nil tea.Cmd to rearm the ticker")
+	}
+}
+
+func TestSetFocused_ResumesStyleAnimAfterBackgroundedTickIsDropped(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})
+	if !m.styleAnimRunning {
+		t.Fatal("setup: expected styleAnimRunning = true")
+	}
+
+	// Simulate switching away: the in-flight styleAnimTickMsg is dropped by
+	// App's message routing (it's not an IsRoomStreamMsg), so updateInner
+	// never runs to clear styleAnimRunning. Switching back must still be
+	// able to restart the ticker.
+	m = m.SetFocused(false)
+	m = m.SetFocused(true)
+
+	m, cmd := m.maybeStartStyleAnim()
+	if !m.styleAnimRunning {
+		t.Error("expected styleAnimRunning = true after resuming")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd restarting the ticker after refocusing")
 	}
 }
 

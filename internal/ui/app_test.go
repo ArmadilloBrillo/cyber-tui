@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 func keyMsg(key string) tea.KeyMsg {
@@ -216,6 +219,29 @@ func TestHandleKeys_Leader_G_LoginScreen_NoOp(t *testing.T) {
 	}
 	if a2.leaderPending {
 		t.Error("leaderPending should not arm on login screen")
+	}
+}
+
+func TestHandleKeys_Esc_QuitsOnLoginScreen(t *testing.T) {
+	a := newTestApp() // active == screenLogin
+	_, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	if !consumed {
+		t.Error("expected esc to be consumed on login screen")
+	}
+	if cmd == nil {
+		t.Error("expected esc to fire a quit command on login screen")
+	}
+}
+
+func TestHandleKeys_Esc_NotConsumed_OffLoginScreen(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenProfile
+	_, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	if consumed {
+		t.Error("expected esc to NOT be consumed by the global quit handler off the login screen")
+	}
+	if cmd != nil {
+		t.Error("expected no quit command from esc off the login screen")
 	}
 }
 
@@ -794,6 +820,65 @@ func TestShowSearchReplyMsg_NavigatesToPostDetailAndScrollsToReply(t *testing.T)
 	msgs := resolveMsgs(cmd)
 	if len(msgs) == 0 {
 		t.Fatal("expected resolved messages from the post+replies fetch batch")
+	}
+	for _, msg := range msgs {
+		var model tea.Model
+		model, _ = a2.Update(msg)
+		a2 = model.(App)
+	}
+	if a2.pendingReplyID != "" {
+		t.Errorf("expected pendingReplyID cleared after replies loaded, got %q", a2.pendingReplyID)
+	}
+}
+
+// --- Newly posted reply is selected and scrolled into view ---
+
+// TestCreateReplyCmd_ReturnsReplyID guards against the reply ID being
+// silently discarded — without it, nothing downstream can select or scroll
+// to the reply that was just posted.
+func TestCreateReplyCmd_ReturnsReplyID(t *testing.T) {
+	a := loggedInApp()
+
+	cmd := a.createReplyCmd("p1", "nice post", "")
+	msg := cmd()
+
+	created, ok := msg.(replyCreatedMsg)
+	if !ok {
+		t.Fatalf("expected replyCreatedMsg, got %T", msg)
+	}
+	if created.postID != "p1" {
+		t.Errorf("postID = %q, want %q", created.postID, "p1")
+	}
+	if created.replyID == "" {
+		t.Error("expected a non-empty replyID from CreateReply's response")
+	}
+}
+
+// TestReplyCreatedMsg_SetsPendingReplyID verifies that handling
+// replyCreatedMsg sets pendingReplyID to the new reply's ID before
+// reloading — the same field the notification/search deep-link path uses
+// (TestShowSearchReplyMsg_NavigatesToPostDetailAndScrollsToReply) to make
+// repliesLoadedMsg call ScrollToReply. Posting a reply must feed that same
+// pipeline instead of leaving the new reply unselected after reload.
+func TestReplyCreatedMsg_SetsPendingReplyID(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+
+	m, cmd := a.Update(replyCreatedMsg{postID: "p1", replyID: "reply-new-1"})
+	a2 := m.(App)
+
+	if a2.pendingReplyID != "reply-new-1" {
+		t.Fatalf("expected pendingReplyID = reply-new-1, got %q", a2.pendingReplyID)
+	}
+
+	// The reload-then-scroll half of the pipeline (repliesLoadedMsg calling
+	// ScrollToReply and clearing pendingReplyID) is already covered by
+	// TestShowSearchReplyMsg_NavigatesToPostDetailAndScrollsToReply and
+	// PostDetailModel's own TestPostDetail_ScrollToReply_AfterTree — this
+	// just confirms the reply-create path feeds pendingReplyID the same way.
+	msgs := resolveMsgs(cmd)
+	if len(msgs) == 0 {
+		t.Fatal("expected a resolved message from the replies reload")
 	}
 	for _, msg := range msgs {
 		var model tea.Model
@@ -2418,5 +2503,305 @@ func TestHandleImageViewer_SingleImageSuccess_NoClearScreen(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("expected no ClearScreen outside a carousel")
+	}
+}
+
+// --- Theme editor revert: cancel while "custom" was already active must
+// restore the saved custom palette, not whatever the abandoned edit left in
+// theme's shared package-level customPalette. ---
+
+func TestHandleThemeEditor_Close_RestoresSavedCustomPalette_NotAbandonedEdit(t *testing.T) {
+	saved := theme.Palette{
+		Foreground: "#111111", Dimmed: "#222222", Border: "#333333", Accent: "#444444",
+		Highlight: "#555555", Error: "#666666", BarText: "#777777", Self: "#888888", Meta: "#999999",
+	}
+	theme.SetCustomPalette(saved)
+	theme.Set("custom")
+
+	a := loggedInApp()
+	a.customPalette = &saved
+	a.themeEditorOpen = true
+	a.themeEditorOrig = "custom"
+	a.themeEditorOrigPalette = theme.CurrentPalette() // snapshot, as the 'e' handler now does
+
+	// Simulate an abandoned mid-edit: a keystroke's PreviewPaletteMsg
+	// diverges the live custom palette from the saved one.
+	dirty := saved
+	dirty.Foreground = "#ABCDEF"
+	a2, _, ok := a.handleThemeEditor(screens.PreviewPaletteMsg{Palette: dirty})
+	if !ok {
+		t.Fatal("expected PreviewPaletteMsg to be handled")
+	}
+	if theme.CurrentPalette().Foreground != "#ABCDEF" {
+		t.Fatal("expected the live preview to apply the dirty edit")
+	}
+
+	a3, _, ok := a2.handleThemeEditor(screens.CloseThemeEditorMsg{})
+	if !ok {
+		t.Fatal("expected CloseThemeEditorMsg to be handled")
+	}
+	if a3.themeEditorOpen {
+		t.Error("expected the editor to close")
+	}
+	if got := theme.CurrentPalette(); got != saved {
+		t.Errorf("CurrentPalette() after cancel = %+v, want the saved palette %+v", got, saved)
+	}
+}
+
+// --- Theme export / import ---
+
+func testThemePalette() theme.Palette {
+	return theme.Palette{
+		Foreground: "#111111", Dimmed: "#222222", Border: "#333333", Accent: "#444444",
+		Highlight: "#555555", Error: "#666666", BarText: "#777777", Self: "#888888", Meta: "#999999",
+	}
+}
+
+// appOnCustomRow returns a logged-in App with the theme picker open and its
+// cursor on the "custom" row, ready to exercise the 'x'/'i' keys.
+func appOnCustomRow(t *testing.T) App {
+	t.Helper()
+	a := loggedInApp()
+	a.themePickerOpen = true
+	a.themePickerCursor = len(availableThemes) - 1
+	if availableThemes[a.themePickerCursor] != "custom" {
+		t.Fatalf("expected last availableThemes entry to be \"custom\", got %q", availableThemes[a.themePickerCursor])
+	}
+	return a
+}
+
+func TestHandleThemePickerKey_X_NoOp_WhenNoCustomPaletteSaved(t *testing.T) {
+	a := appOnCustomRow(t)
+	a.customPalette = nil
+
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	a2 := m.(App)
+	if a2.pathPromptOpen {
+		t.Error("expected export to no-op with no saved custom palette")
+	}
+}
+
+func TestHandleThemePickerKey_X_OpensExportPrompt(t *testing.T) {
+	a := appOnCustomRow(t)
+	saved := testThemePalette()
+	a.customPalette = &saved
+
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	a2 := m.(App)
+	if !a2.pathPromptOpen || a2.pathPromptPurpose != pathPromptExport {
+		t.Error("expected the export path prompt to open")
+	}
+	if a2.pathPromptExportPalette != saved {
+		t.Errorf("pathPromptExportPalette = %+v, want the saved custom palette %+v", a2.pathPromptExportPalette, saved)
+	}
+}
+
+// appOnRow returns a logged-in App with the theme picker open and its cursor
+// on availableThemes[i].
+func appOnRow(i int) App {
+	a := loggedInApp()
+	a.themePickerOpen = true
+	a.themePickerCursor = i
+	return a
+}
+
+func TestHandleThemePickerKey_E_PrefillsFromBuiltinRow(t *testing.T) {
+	a := appOnRow(0) // "cyber"
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	a2 := m.(App)
+	if !a2.themeEditorOpen {
+		t.Fatal("expected the editor to open")
+	}
+	want, ok := theme.BuiltinPalette("cyber")
+	if !ok {
+		t.Fatal("expected cyber to be a known built-in")
+	}
+	if theme.CurrentPalette() != want {
+		t.Errorf("CurrentPalette() = %+v, want cyber's palette %+v", theme.CurrentPalette(), want)
+	}
+}
+
+func TestHandleThemePickerKey_X_ExportsBuiltinRow(t *testing.T) {
+	a := appOnRow(1) // "c64"
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	a2 := m.(App)
+	if !a2.pathPromptOpen || a2.pathPromptPurpose != pathPromptExport {
+		t.Fatal("expected the export path prompt to open")
+	}
+	want, ok := theme.BuiltinPalette("c64")
+	if !ok {
+		t.Fatal("expected c64 to be a known built-in")
+	}
+	if a2.pathPromptExportPalette != want {
+		t.Errorf("pathPromptExportPalette = %+v, want c64's palette %+v", a2.pathPromptExportPalette, want)
+	}
+}
+
+func TestHandleThemePickerKey_I_OpensImportPrompt_FromBuiltinRow(t *testing.T) {
+	a := appOnRow(2) // "vt320"
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	a2 := m.(App)
+	if !a2.pathPromptOpen || a2.pathPromptPurpose != pathPromptImport {
+		t.Error("expected the import path prompt to open from a built-in row")
+	}
+}
+
+func TestHandlePathPrompt_Cancel_RevertsToThemePickerOrig(t *testing.T) {
+	theme.Set("cyber")
+
+	a := loggedInApp()
+	a.themePickerOrig = "cyber"
+	a.pathPromptOpen = true
+	a.pathPromptPurpose = pathPromptImport
+
+	// Simulate having previewed a different row before opening the prompt.
+	theme.Set("vt320")
+
+	a2, _, ok := a.handlePathPrompt(screens.PathPromptCancelMsg{})
+	if !ok {
+		t.Fatal("expected PathPromptCancelMsg to be handled")
+	}
+	if a2.pathPromptOpen {
+		t.Error("expected the prompt to close")
+	}
+	if theme.CurrentName() != "cyber" {
+		t.Errorf("CurrentName() = %q, want reverted to %q", theme.CurrentName(), "cyber")
+	}
+}
+
+func TestHandleThemePickerKey_I_OpensImportPrompt_EvenWithoutSavedPalette(t *testing.T) {
+	a := appOnCustomRow(t)
+	a.customPalette = nil
+
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	a2 := m.(App)
+	if !a2.pathPromptOpen || a2.pathPromptPurpose != pathPromptImport {
+		t.Error("expected the import path prompt to open regardless of a saved palette")
+	}
+}
+
+func TestHandlePathPrompt_Export_WritesFile(t *testing.T) {
+	a := loggedInApp()
+	saved := testThemePalette()
+	a.customPalette = &saved
+	a.pathPromptOpen = true
+	a.pathPromptPurpose = pathPromptExport
+	a.pathPromptExportPalette = saved
+
+	path := filepath.Join(t.TempDir(), "theme.json")
+	a2, cmd, ok := a.handlePathPrompt(screens.PathPromptSubmitMsg{Path: path})
+	if !ok {
+		t.Fatal("expected PathPromptSubmitMsg to be handled")
+	}
+	if a2.pathPromptOpen {
+		t.Error("expected the prompt to close after a successful export")
+	}
+	if cmd == nil {
+		t.Fatal("expected a notify cmd")
+	}
+	got, err := theme.ImportFromFile(path)
+	if err != nil {
+		t.Fatalf("ImportFromFile: %v", err)
+	}
+	if got != saved {
+		t.Errorf("exported palette = %+v, want %+v", got, saved)
+	}
+}
+
+func TestHandlePathPrompt_Export_WarnsBeforeOverwrite_ThenProceedsOnResubmit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theme.json")
+	if err := os.WriteFile(path, []byte("pre-existing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	a := loggedInApp()
+	first := testThemePalette()
+	a.customPalette = &first
+	a.pathPromptOpen = true
+	a.pathPromptPurpose = pathPromptExport
+	a.pathPromptExportPalette = first
+
+	a2, _, ok := a.handlePathPrompt(screens.PathPromptSubmitMsg{Path: path})
+	if !ok {
+		t.Fatal("expected PathPromptSubmitMsg to be handled")
+	}
+	if !a2.pathPromptOpen {
+		t.Error("expected the prompt to stay open pending overwrite confirmation")
+	}
+	if a2.pathPromptOverwritePending != path {
+		t.Errorf("pathPromptOverwritePending = %q, want %q", a2.pathPromptOverwritePending, path)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "pre-existing" {
+		t.Error("expected the file to be untouched before the overwrite is confirmed")
+	}
+
+	a3, _, ok := a2.handlePathPrompt(screens.PathPromptSubmitMsg{Path: path})
+	if !ok {
+		t.Fatal("expected the resubmit to be handled")
+	}
+	if a3.pathPromptOpen {
+		t.Error("expected the prompt to close once the overwrite is confirmed")
+	}
+	got, err := theme.ImportFromFile(path)
+	if err != nil {
+		t.Fatalf("expected the file to now contain the exported palette: %v", err)
+	}
+	if got != first {
+		t.Errorf("exported palette = %+v, want %+v", got, first)
+	}
+}
+
+func TestHandlePathPrompt_Import_Success_OpensThemeEditor(t *testing.T) {
+	imported := testThemePalette()
+	path := filepath.Join(t.TempDir(), "theme.json")
+	if err := theme.ExportToFile(path, imported); err != nil {
+		t.Fatal(err)
+	}
+
+	a := loggedInApp()
+	a.pathPromptOpen = true
+	a.pathPromptPurpose = pathPromptImport
+
+	a2, _, ok := a.handlePathPrompt(screens.PathPromptSubmitMsg{Path: path})
+	if !ok {
+		t.Fatal("expected PathPromptSubmitMsg to be handled")
+	}
+	if a2.pathPromptOpen {
+		t.Error("expected the prompt to close")
+	}
+	if !a2.themeEditorOpen {
+		t.Fatal("expected the theme editor to open for review")
+	}
+	if theme.CurrentName() != "custom" {
+		t.Errorf("CurrentName() = %q, want custom (previewing the import)", theme.CurrentName())
+	}
+	if theme.CurrentPalette() != imported {
+		t.Errorf("CurrentPalette() = %+v, want the imported palette %+v", theme.CurrentPalette(), imported)
+	}
+}
+
+func TestHandlePathPrompt_Import_Failure_NotifiesAndLeavesCustomPaletteUntouched(t *testing.T) {
+	saved := testThemePalette()
+	a := loggedInApp()
+	a.customPalette = &saved
+	a.pathPromptOpen = true
+	a.pathPromptPurpose = pathPromptImport
+
+	a2, cmd, ok := a.handlePathPrompt(screens.PathPromptSubmitMsg{Path: filepath.Join(t.TempDir(), "missing.json")})
+	if !ok {
+		t.Fatal("expected PathPromptSubmitMsg to be handled")
+	}
+	if a2.pathPromptOpen {
+		t.Error("expected the prompt to close after a failed import")
+	}
+	if a2.themeEditorOpen {
+		t.Error("expected the theme editor to stay closed on import failure")
+	}
+	if cmd == nil {
+		t.Fatal("expected a notify cmd")
+	}
+	if a2.customPalette != &saved {
+		t.Error("expected the saved custom palette to be untouched by a failed import")
 	}
 }

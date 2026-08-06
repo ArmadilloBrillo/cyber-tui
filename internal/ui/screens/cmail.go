@@ -636,11 +636,17 @@ func (m CMailModel) TotalUnread() int {
 // SetFocused marks whether the C-Mail tab is the one currently on screen.
 // Becoming focused clears the currently-open conversation's local unread
 // count (mirroring ChatroomsModel.SetFocused), so TotalUnread() doesn't keep
-// counting messages the user is now actively viewing.
+// counting messages the user is now actively viewing. It also clears
+// styleAnimRunning: styleAnimTickMsg isn't in IsDMStreamMsg, so a tick that
+// fires while this tab is backgrounded is dropped before updateInner ever
+// resets the flag, permanently blocking maybeStartStyleAnim from restarting
+// the ticker. Regaining focus is the point where any prior ticker is known
+// to be dead, so it's safe to clear the flag here.
 func (m CMailModel) SetFocused(focused bool) CMailModel {
 	m.focused = focused
 	if focused {
 		m = m.zeroActiveConvUnread()
+		m.styleAnimRunning = false
 	}
 	return m
 }
@@ -1072,9 +1078,16 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 				if m.activeConv != nil {
 					val := m.input.Value()
 					if val != "" {
+						convID := m.activeConv.ID
+						if strings.HasPrefix(val, "/") {
+							cmd := strings.ToLower(strings.Fields(val)[0])
+							if !isKnownSlashCommand(cmd, nil) {
+								m.input.Reset()
+								return m.AppendSystemMessage(convID, "*** unknown command: "+cmd), nil
+							}
+						}
 						m.input.Reset()
 						m.announcingTyping = false // server auto-clears typing on send; no DELETE needed
-						convID := m.activeConv.ID
 						return m, func() tea.Msg {
 							return SendCMailMsg{ConversationID: convID, Body: val}
 						}

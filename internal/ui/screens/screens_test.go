@@ -361,6 +361,7 @@ func TestChatrooms_Send_KnownCommandStillSends(t *testing.T) {
 		"/me waves",
 		"/blink hello",
 		"/comic+rainbow hi",
+		"/spoiler secret",
 		"/gif https://example.com/a.gif",
 		"/song https://youtu.be/x | artist | title",
 		"/art",
@@ -387,6 +388,28 @@ func TestChatrooms_Send_KnownCommandStillSends(t *testing.T) {
 				t.Errorf("expected body=%q, got %q", body, sendMsg.Body)
 			}
 		})
+	}
+}
+
+// TestChatrooms_Send_SpoilerCannotChain guards against a bug where the
+// client-side whitelist accepted "/spoiler+rainbow" (each part individually
+// a known style) even though the server rejects /spoiler chained with any
+// other style — see the "/help" command text. /spoiler alone is still fine.
+func TestChatrooms_Send_SpoilerCannotChain(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // open room
+
+	for _, r := range "/spoiler+rainbow hi" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+	if cmd != nil {
+		t.Fatal("expected no command for /spoiler+rainbow (spoiler cannot be chained)")
+	}
+	if view := m.View(); !strings.Contains(view, "unknown command: /spoiler+rainbow") {
+		t.Errorf("expected an unknown-command notice in the view, got: %q", view)
 	}
 }
 

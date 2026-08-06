@@ -124,6 +124,12 @@ func (l MillerLayout) View(a App) string {
 	if a.themePickerOpen {
 		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
 	}
+	if a.themeEditorOpen {
+		return overlayCenter(base, l.renderThemeEditor(a), a.width, a.height)
+	}
+	if a.pathPromptOpen {
+		return overlayCenter(base, l.renderPathPrompt(a), a.width, a.height)
+	}
 	if a.helpModalOpen {
 		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
 	}
@@ -288,6 +294,11 @@ func (l MillerLayout) renderNav(a App) string {
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			badge = fmt.Sprintf(" ●%d", a.polledUnreadCount)
 		}
+		if t.s == screenFeed {
+			if n := a.feed.PendingNewCount(); n > 0 {
+				badge = fmt.Sprintf(" ●%d", n)
+			}
+		}
 		if t.s == screenCMail {
 			if n := a.cmail.TotalUnread(); n > 0 {
 				badge = fmt.Sprintf(" ●%d", n)
@@ -431,7 +442,11 @@ func (l MillerLayout) screenHints(a App) []hint {
 	case focusMenu:
 		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-9 / g+", "jump"}, {"?", "more"}}
 	case focusDetail:
-		return []hint{{"h/←", "list"}, {"j/k", "replies"}, {"↵", "thread"}, {"r", "reply"}}
+		hints := []hint{{"h/←", "list"}, {"j/k", "replies"}, {"↵", "thread"}, {"r", "reply"}}
+		if a.active == screenPostDetail && a.postDetail.HasThemeInPost() {
+			hints = append(hints, hint{"T", "try theme"})
+		}
+		return hints
 	default: // focusList
 		return append([]hint{{"h/←", "menu"}, {"→/↵", "preview"}}, TabsLayout{}.screenHints(a)...)
 	}
@@ -439,7 +454,7 @@ func (l MillerLayout) screenHints(a App) []hint {
 
 func (l MillerLayout) renderStatusBar(a App) string {
 	user := sbStyle().Foreground(theme.ColorCyan).Bold(true)
-	meta := sbStyle().Foreground(theme.ColorWhite)
+	meta := sbStyle().Foreground(theme.ColorMeta)
 	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
 
 	densityLabel := "dense"
@@ -509,9 +524,19 @@ func (l MillerLayout) renderThemePicker(a App) string {
 		"",
 		strings.Join(rows, "\n"),
 		"",
-		theme.Subtle.Render("↑↓ select   enter apply   esc cancel"),
+		theme.Subtle.Render("↑↓ select   enter apply   e edit   x export   i import   esc cancel"),
 	)
 	return theme.ActiveBorder.Render(body)
+}
+
+// renderThemeEditor renders the "custom" theme color editor modal.
+func (l MillerLayout) renderThemeEditor(a App) string {
+	return a.themeEditor.View()
+}
+
+// renderPathPrompt renders the export/import file-path prompt modal.
+func (l MillerLayout) renderPathPrompt(a App) string {
+	return a.pathPrompt.View()
 }
 
 func (l MillerLayout) renderHelpModal(a App) string {
@@ -532,6 +557,8 @@ func (l MillerLayout) renderHelpModal(a App) string {
 	globalRows = append(globalRows,
 		row("/", "search"),
 		row("t", "theme"),
+		row("e", "edit custom theme (in theme picker)"),
+		row("x / i", "export / import custom theme (in theme picker)"),
 		row("v", "density"),
 		row("o", "open url"),
 		row("q", "quit"),

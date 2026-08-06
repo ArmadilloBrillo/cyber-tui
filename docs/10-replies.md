@@ -51,7 +51,7 @@ All multi-line text entry uses the shared `ComposeModel` (`internal/ui/screens/c
 
 Response: `{ "data": { "replyId": "..." } }` (201).
 
-After a successful reply, the reply list for the current post is automatically reloaded.
+After a successful reply, the reply list for the current post is automatically reloaded, and the newly created reply is selected and scrolled fully into view — the same `App.pendingReplyID` → `repliesLoadedMsg` → `PostDetailModel.ScrollToReply` pipeline used to deep-link into a specific reply from a notification or search result (see Implementation Notes). If the new reply isn't in the loaded tree (e.g. thread nesting deeper than `effectiveMaxDepth`), `ScrollToReply` no-ops and selection falls back to whatever `SetReplies` defaults to.
 
 ---
 
@@ -60,6 +60,7 @@ After a successful reply, the reply list for the current post is automatically r
 - `CreateReply` is defined in `api.Client` interface and implemented in `HTTPClient` and `MockClient`.
 - `PostDetailModel` embeds `ComposeModel`. When compose is active, the viewport height shrinks by `compose.BoxHeight()` (= `contentLines + 3`) and navigation keys (`↑↓/jk`) are blocked.
 - `ShowPostForReplyMsg` (from feed) and `SubmitReplyMsg` (from post detail) are the inter-screen message types handled by `App.Update` in `internal/ui/app.go`.
+- `createReplyCmd` returns the new reply's ID (`CreateReply`'s response) on `replyCreatedMsg`; `handlePostDetail` sets `App.pendingReplyID` to it before reloading, reusing the same field/pipeline the notification and search deep-link paths (`ShowSearchReplyMsg`, etc.) already use to select and scroll to a specific reply.
 
 ---
 

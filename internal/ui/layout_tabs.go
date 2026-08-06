@@ -42,12 +42,18 @@ func (l TabsLayout) View(a App) string {
 	content := lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(l.renderActiveScreen(a))
 	base := lipgloss.JoinVertical(lipgloss.Left,
 		l.renderTabBar(a),
-		"",
+		l.renderFeedPendingBar(a),
 		content,
 		l.renderBottomBar(a),
 	)
 	if a.themePickerOpen {
 		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
+	}
+	if a.themeEditorOpen {
+		return overlayCenter(base, l.renderThemeEditor(a), a.width, a.height)
+	}
+	if a.pathPromptOpen {
+		return overlayCenter(base, l.renderPathPrompt(a), a.width, a.height)
 	}
 	if a.helpModalOpen {
 		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
@@ -178,6 +184,11 @@ func (l TabsLayout) renderTabBar(a App) string {
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			badge = fmt.Sprintf(" (%d)", a.polledUnreadCount)
 		}
+		if t.s == screenFeed {
+			if n := a.feed.PendingNewCount(); n > 0 {
+				badge = fmt.Sprintf(" (%d)", n)
+			}
+		}
 		if t.s == screenCMail {
 			if n := a.cmail.TotalUnread(); n > 0 {
 				badge = fmt.Sprintf(" (%d)", n)
@@ -219,6 +230,20 @@ func (l TabsLayout) renderTabBar(a App) string {
 		Render(a.logoText)
 	spacer := strings.Repeat(" ", max(0, a.width-lipgloss.Width(tabs)-lipgloss.Width(logo)))
 	return tabs + spacer + logo
+}
+
+// renderFeedPendingBar fills the blank separator row below the tab bar with
+// the "N new entries" message while posts are staged from the background
+// feed poll. Hidden during an active refresh so it doesn't sit alongside the
+// viewport's own "fetching new posts..." message for that instant.
+func (l TabsLayout) renderFeedPendingBar(a App) string {
+	if a.active != screenFeed || a.feed.IsRefreshing() {
+		return ""
+	}
+	if label := a.feed.PendingNewLabel(); label != "" {
+		return theme.Subtle.Render(label)
+	}
+	return ""
 }
 
 func (l TabsLayout) renderActiveScreen(a App) string {
@@ -283,7 +308,7 @@ func (l TabsLayout) renderNotification(a App) string {
 
 func (l TabsLayout) renderStatusBar(a App) string {
 	user := sbStyle().Foreground(theme.ColorCyan).Bold(true)
-	meta := sbStyle().Foreground(theme.ColorWhite)
+	meta := sbStyle().Foreground(theme.ColorMeta)
 	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
 
 	densityLabel := "dense"
@@ -356,7 +381,11 @@ func (l TabsLayout) screenHints(a App) []hint {
 		if a.postDetail.ComposeActive() {
 			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}, {"esc", "back"}, more}
+		hints := []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}}
+		if a.postDetail.HasThemeInPost() {
+			hints = append(hints, hint{"T", "try theme"})
+		}
+		return append(hints, hint{"esc", "back"}, more)
 	case screenProfile:
 		if a.profile.ComposeActive() {
 			return []hint{{"Ctrl+s", "save"}, {"Esc", "cancel"}, {"tab", "cycle"}}
@@ -442,7 +471,7 @@ func (l TabsLayout) renderThemePicker(a App) string {
 			items = append(items, theme.Subtle.Render("  "+name))
 		}
 	}
-	hint := theme.Subtle.Render("↑↓ preview   enter save   esc cancel")
+	hint := theme.Subtle.Render("↑↓ preview   enter save   e edit   x export   i import   esc cancel")
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
@@ -451,6 +480,16 @@ func (l TabsLayout) renderThemePicker(a App) string {
 		hint,
 	)
 	return theme.ActiveBorder.Render(body)
+}
+
+// renderThemeEditor renders the "custom" theme color editor modal.
+func (l TabsLayout) renderThemeEditor(a App) string {
+	return a.themeEditor.View()
+}
+
+// renderPathPrompt renders the export/import file-path prompt modal.
+func (l TabsLayout) renderPathPrompt(a App) string {
+	return a.pathPrompt.View()
 }
 
 func (l TabsLayout) renderHelpModal(a App) string {
@@ -469,6 +508,8 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		row("← →", "cycle tabs"),
 		row("/", "search"),
 		row("t", "theme"),
+		row("e", "edit custom theme (in theme picker)"),
+		row("x / i", "export / import custom theme (in theme picker)"),
 		row("v", "density"),
 		row("o", "open url"),
 		row("q", "quit"),

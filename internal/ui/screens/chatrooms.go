@@ -295,34 +295,52 @@ type SendRoomMessageMsg struct {
 	Body   string
 }
 
-// knownCircCommands are the slash commands the server recognizes. Checked
-// client-side so a typo'd command shows a local error instead of being sent
-// as a literal chat message. Command *syntax* validation stays server-side.
-var knownCircCommands = map[string]bool{
+// baseSlashCommands are the slash commands the server recognizes for both
+// CIRC and C-Mail. Checked client-side so a typo'd command shows a local
+// error instead of being sent as a literal chat message. Command *syntax*
+// validation stays server-side.
+var baseSlashCommands = map[string]bool{
 	"/me": true, "/poke": true, "/hug": true, "/hi5": true, "/slap": true,
 	"/dice": true, "/8ball": true, "/fortune": true, "/help": true,
-	"/mute": true, "/unmute": true, "/muted": true, "/unmuteall": true,
-	"/gif": true, "/song": true, "/art": true,
+	"/gif": true, "/song": true,
+}
+
+// circOnlySlashCommands are additionally recognized in CIRC only — C-Mail's
+// server rejects them (see docs/00-latest-api-reference.md).
+var circOnlySlashCommands = map[string]bool{
+	"/mute": true, "/unmute": true, "/muted": true, "/unmuteall": true, "/art": true,
 }
 
 // knownCircStyles are the text-style command names (see chatstyle.go) that
 // can appear alone or chained with "+" (e.g. "/comic+rainbow"), so they're
-// checked separately from the exact-match knownCircCommands lookup.
+// checked separately from the exact-match baseSlashCommands lookup. Shared
+// by both CIRC and C-Mail — styles work identically in either.
 var knownCircStyles = map[string]bool{
 	styleBlink: true, styleL33t: true, styleComic: true, styleCursive: true,
 	styleTimes: true, styleRainbow: true, styleFlip: true, styleQuiet: true,
 	styleSlow: true, styleGlitch: true, styleSpoiler: true, styleWave: true,
 }
 
-// isKnownCircStyleCombo reports whether cmd is a "/"-prefixed, "+"-joined
-// combination of known style names, e.g. "/comic+rainbow".
-func isKnownCircStyleCombo(cmd string) bool {
-	for p := range strings.SplitSeq(strings.TrimPrefix(cmd, "/"), "+") {
+// isKnownStyleCombo reports whether cmd is a "/"-prefixed, "+"-joined
+// combination of known style names, e.g. "/comic+rainbow". "/spoiler" is a
+// known style but cannot be chained with any other (server-enforced, see
+// the "/help" command text), so a combo containing it alongside another
+// style is rejected even though each individual part is valid.
+func isKnownStyleCombo(cmd string) bool {
+	parts := strings.Split(strings.TrimPrefix(cmd, "/"), "+")
+	for _, p := range parts {
 		if !knownCircStyles[p] {
 			return false
 		}
 	}
-	return true
+	return len(parts) == 1 || !slices.Contains(parts, styleSpoiler)
+}
+
+// isKnownSlashCommand reports whether cmd (lowercased, "/"-prefixed) is a
+// command the server accepts for the calling screen. extra carries any
+// screen-specific commands on top of the common set (e.g. circOnlySlashCommands).
+func isKnownSlashCommand(cmd string, extra map[string]bool) bool {
+	return baseSlashCommands[cmd] || extra[cmd] || isKnownStyleCombo(cmd)
 }
 
 // RoomOpenedMsg is emitted when the user enters a chatroom. App uses it to call MarkRoomRead.
@@ -388,11 +406,17 @@ func (m ChatroomsModel) CancelSubscription() ChatroomsModel {
 }
 
 // SetFocused marks whether the Chatrooms tab is the one currently on screen.
-// Becoming focused clears unreadCount for the tab-bar badge.
+// Becoming focused clears unreadCount for the tab-bar badge. It also clears
+// styleAnimRunning: styleAnimTickMsg isn't in IsRoomStreamMsg, so a tick that
+// fires while this tab is backgrounded is dropped before updateInner ever
+// resets the flag, permanently blocking maybeStartStyleAnim from restarting
+// the ticker. Regaining focus is the point where any prior ticker is known
+// to be dead, so it's safe to clear the flag here.
 func (m ChatroomsModel) SetFocused(focused bool) ChatroomsModel {
 	m.focused = focused
 	if focused {
 		m.unreadCount = 0
+		m.styleAnimRunning = false
 	}
 	return m
 }
@@ -1302,7 +1326,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 						roomID := m.activeRoom.Slug
 						if strings.HasPrefix(val, "/") {
 							cmd := strings.ToLower(strings.Fields(val)[0])
-							if !knownCircCommands[cmd] && !isKnownCircStyleCombo(cmd) {
+							if !isKnownSlashCommand(cmd, circOnlySlashCommands) {
 								m.input.Reset()
 								return m.AppendSystemMessage(roomID, "*** unknown command: "+cmd), nil
 							}
@@ -1721,9 +1745,40 @@ func mentionQueryAt(value string, cursor int) (query string, atPos int, ok bool)
 	return string(runes[i+1 : cursor]), i, true
 }
 
-// matchMentionCandidates returns the online users whose username starts with
-// query (case-insensitive), in the same admins-first/alphabetical order
-// SetRoomUsers already sorts m.roomUsers into.
+// mentionCandidatePool returns the users eligible for @-mention completion:
+// everyone currently online (m.roomUsers, admins-first/alphabetical) plus
+// anyone else who has a message in the currently loaded history — every
+// page pulled in so far via scroll-to-top pagination, not just what's
+// visible in the viewport right now — so a since-departed poster can still
+// be completed. History-only users are appended after the online ones
+// (alphabetical, deduped case-insensitively) so Tab-cycling still prefers
+// present users first when names collide by prefix.
+func (m ChatroomsModel) mentionCandidatePool() []model.RoomUser {
+	seen := make(map[string]bool, len(m.roomUsers))
+	for _, u := range m.roomUsers {
+		seen[strings.ToLower(u.Username)] = true
+	}
+	var extra []model.RoomUser
+	for _, msg := range m.messages {
+		name := msg.From.Username
+		if name == "" || msg.IsSystem {
+			continue
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		extra = append(extra, model.RoomUser{Username: name})
+	}
+	sort.Slice(extra, func(i, j int) bool {
+		return strings.ToLower(extra[i].Username) < strings.ToLower(extra[j].Username)
+	})
+	return append(append([]model.RoomUser(nil), m.roomUsers...), extra...)
+}
+
+// matchMentionCandidates returns the users whose username starts with query
+// (case-insensitive), preserving the input slice's order.
 func matchMentionCandidates(users []model.RoomUser, query string) []model.RoomUser {
 	q := strings.ToLower(query)
 	var out []model.RoomUser
@@ -1772,7 +1827,7 @@ func (m ChatroomsModel) mentionActiveCandidate() (atPos, cursor int, query, cand
 	if !mok {
 		return 0, 0, "", "", false
 	}
-	matches := matchMentionCandidates(m.roomUsers, q)
+	matches := matchMentionCandidates(m.mentionCandidatePool(), q)
 	if len(matches) == 0 {
 		return 0, 0, "", "", false
 	}

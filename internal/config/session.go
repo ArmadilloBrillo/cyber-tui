@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 // Config holds all persistent state for the app: session tokens, user preferences,
@@ -30,8 +32,11 @@ type Config struct {
 	Timezone string `json:"timezone,omitempty"`
 
 	// App settings — edit manually in ~/.cyber-tui.json.
-	// Theme selects the color palette: "cyber" (default), "c64", "vt320", "bland".
+	// Theme selects the color palette: "cyber" (default), "c64", "vt320", "bland", "custom".
 	Theme string `json:"theme,omitempty"`
+	// CustomPalette holds the user-built palette for the "custom" theme,
+	// saved from the in-TUI theme editor. Nil until the user saves one.
+	CustomPalette *theme.Palette `json:"customPalette,omitempty"`
 	// APIBaseURL overrides the default API endpoint (https://api.cyberspace.online).
 	APIBaseURL string `json:"apiBaseURL,omitempty"`
 	// AllowInsecureAPI permits a plain http:// APIBaseURL to a non-loopback host.

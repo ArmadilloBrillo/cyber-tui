@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	neturl "net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,7 +52,11 @@ const (
 )
 
 // availableThemes is the ordered list of selectable themes shown in the picker.
-var availableThemes = []string{"cyber", "c64", "vt320", "bland"}
+var availableThemes = []string{"cyber", "c64", "vt320", "bland", "custom"}
+
+// defaultThemeFilePath prefills the export/import path prompt, so a plain
+// export-then-import round trip needs no retyping.
+const defaultThemeFilePath = "~/cyber-tui-theme.json"
 
 const (
 	logoOrig          = "ᑕ¥βєяรקค¢є"
@@ -82,6 +87,14 @@ func randomCyberRune(exclude rune) rune {
 	return logoCyberPool[0]
 }
 
+// pathPromptPurpose distinguishes what App does with a submitted PathPromptModel path.
+type pathPromptPurpose int
+
+const (
+	pathPromptExport pathPromptPurpose = iota
+	pathPromptImport
+)
+
 type App struct {
 	layout      Layout
 	layoutName  string // "tabs" (default) or "miller"; used when persisting to config
@@ -109,6 +122,40 @@ type App struct {
 	themePickerOpen   bool
 	themePickerCursor int    // index into availableThemes
 	themePickerOrig   string // theme name when picker was opened (for Esc revert)
+
+	// themeEditor state — opened from the theme picker with 'e' on the
+	// "custom" row (or from Post Detail's try-theme key), closed by
+	// SaveThemeMsg/CloseThemeEditorMsg.
+	themeEditorOpen bool
+	themeEditor     screens.ThemeEditorModel
+	themeEditorOrig string // theme name before entering the editor, for close-without-save revert
+	// themeEditorOrigPalette is a CurrentPalette() snapshot taken at the same
+	// moment as themeEditorOrig, before the editor's preview starts mutating
+	// theme's package-level customPalette. Needed to correctly revert when
+	// themeEditorOrig == "custom": theme.Set("custom") alone would just
+	// re-apply whatever the abandoned edit left in that shared variable
+	// instead of the palette that was actually active before previewing.
+	themeEditorOrigPalette theme.Palette
+
+	// customPalette is the persisted custom theme, loaded from config. Nil
+	// means the user has never saved one yet.
+	customPalette *theme.Palette
+
+	// pathPrompt state — opened from the theme picker's currently
+	// highlighted row with 'x' (export) or 'i' (import), closed by
+	// PathPromptSubmitMsg/PathPromptCancelMsg.
+	pathPromptOpen    bool
+	pathPrompt        screens.PathPromptModel
+	pathPromptPurpose pathPromptPurpose
+	// pathPromptOverwritePending holds the export path once it's been
+	// flagged as already existing — an identical resubmit proceeds without
+	// asking again; any other path (or a fresh Open) resets this.
+	pathPromptOverwritePending string
+	// pathPromptExportPalette is the palette to write when pathPromptPurpose
+	// is pathPromptExport — whichever theme was highlighted (a built-in or
+	// the saved custom theme) when 'x' was pressed, captured once so a later
+	// picker-cursor move can't change what gets written.
+	pathPromptExportPalette theme.Palette
 
 	// helpModal state — open with '?', close with any key.
 	helpModalOpen bool
@@ -260,6 +307,7 @@ func NewApp(client api.Client) App {
 		topics:             screens.NewTopicsModel(),
 		journal:            screens.NewJournalModel(0),
 		search:             screens.NewSearchModel(),
+		pathPrompt:         screens.NewPathPromptModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -300,6 +348,7 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.imageViewer = s.ImageViewer
 	a.layoutName = s.Layout
 	a.layout = layoutFromName(s.Layout)
+	a.customPalette = s.CustomPalette
 	return a
 }
 
@@ -414,6 +463,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleSettings(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleThemeEditor(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handlePathPrompt(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleBookmarks(msg); ok {
 		return a2, cmd
 	}
@@ -523,6 +578,14 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	// Modal overlays intercept all keys while open.
 	if a.themePickerOpen {
 		model, cmd := a.handleThemePickerKey(m)
+		return model.(App), cmd, true
+	}
+	if a.themeEditorOpen {
+		model, cmd := a.handleThemeEditorKey(m)
+		return model.(App), cmd, true
+	}
+	if a.pathPromptOpen {
+		model, cmd := a.handlePathPromptKey(m)
 		return model.(App), cmd, true
 	}
 	if a.helpModalOpen {
@@ -645,6 +708,10 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 	case "ctrl+c", "q", "ctrl+q":
 		if a.active != screenLogin {
+			return a, tea.Quit, true
+		}
+	case "esc":
+		if a.active == screenLogin {
 			return a, tea.Quit, true
 		}
 	}
@@ -784,6 +851,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.broadcastWatchedIDs()
 			}
 		}
+		a.pendingReplyID = msg.replyID
 		return a, a.loadRepliesCmd(msg.postID), true
 	case screens.BackToFeedMsg:
 		a.active = a.postDetailReturn
@@ -1104,6 +1172,116 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.LastWandered = msg.at
 			})
 		}
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// handleThemeEditor processes messages emitted by the theme editor modal:
+// live preview on every edit, persisting on save, and reverting on close.
+func (a App) handleThemeEditor(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case screens.PreviewPaletteMsg:
+		theme.SetCustomPalette(msg.Palette)
+		a.refreshViewports()
+		return a, nil, true
+
+	case screens.PreviewPostThemeMsg:
+		// Same contract as the picker's 'e' key, but prefilled from a
+		// detected post theme instead of the current theme/saved custom
+		// palette: snapshot for correct revert, preview live, hand off to
+		// the theme editor so the user can review/tweak before ctrl+s.
+		a.themeEditorOrig = theme.CurrentName()
+		a.themeEditorOrigPalette = theme.CurrentPalette()
+		theme.SetCustomPalette(msg.Palette)
+		theme.Set("custom")
+		a.refreshViewports()
+		a.themeEditorOpen = true
+		a.themeEditor = screens.NewThemeEditorModel(msg.Palette)
+		return a, nil, true
+
+	case screens.SaveThemeMsg:
+		p := msg.Palette
+		a.themeEditor = a.themeEditor.SetSaved(p)
+		a.customPalette = &p
+		a.themeEditorOpen = false
+		return a, func() tea.Msg {
+			a.saveConfig(func(cfg *config.Config) {
+				cfg.Theme = "custom"
+				pp := p
+				cfg.CustomPalette = &pp
+			})
+			return nil
+		}, true
+
+	case screens.CloseThemeEditorMsg:
+		a.themeEditorOpen = false
+		if a.themeEditorOrig == "custom" {
+			// Restore the snapshot taken before preview started — the
+			// abandoned edit has left theme's package-level customPalette
+			// dirty, so Set("custom") alone would reapply that instead of
+			// what was actually active before the editor opened.
+			theme.SetCustomPalette(a.themeEditorOrigPalette)
+		}
+		theme.Set(a.themeEditorOrig)
+		a.refreshViewports()
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// handlePathPrompt processes messages emitted by the export/import path
+// prompt. Export requires a second identical submit once a target file is
+// found to already exist (pathPromptOverwritePending); import validates the
+// file via theme.ImportFromFile and, on success, hands off to the theme
+// editor exactly like PreviewPostThemeMsg — reviewed and confirmed with
+// ctrl+s, never applied blind.
+func (a App) handlePathPrompt(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case screens.PathPromptSubmitMsg:
+		switch a.pathPromptPurpose {
+		case pathPromptExport:
+			resolved, _ := theme.ExpandHome(msg.Path)
+			if _, err := os.Stat(resolved); err == nil && msg.Path != a.pathPromptOverwritePending {
+				a.pathPromptOverwritePending = msg.Path
+				a.pathPrompt = a.pathPrompt.SetWarning("file exists — enter again to overwrite")
+				return a, nil, true
+			}
+			a.pathPromptOpen = false
+			if err := theme.ExportToFile(msg.Path, a.pathPromptExportPalette); err != nil {
+				a2, cmd := a.notify(notifyError, "export failed: "+err.Error())
+				return a2, cmd, true
+			}
+			a2, cmd := a.notify(notifyInfo, "theme exported to "+msg.Path)
+			return a2, cmd, true
+
+		case pathPromptImport:
+			a.pathPromptOpen = false
+			p, err := theme.ImportFromFile(msg.Path)
+			if err != nil {
+				a2, cmd := a.notify(notifyError, "import failed: "+err.Error())
+				return a2, cmd, true
+			}
+			a.themeEditorOrig = theme.CurrentName()
+			a.themeEditorOrigPalette = theme.CurrentPalette()
+			theme.SetCustomPalette(p)
+			theme.Set("custom")
+			a.refreshViewports()
+			a.themeEditorOpen = true
+			a.themeEditor = screens.NewThemeEditorModel(p)
+			return a, nil, true
+		}
+		return a, nil, true
+
+	case screens.PathPromptCancelMsg:
+		a.pathPromptOpen = false
+		a.pathPromptOverwritePending = ""
+		// The picker's own live preview may have changed the active theme
+		// while browsing rows before 'x'/'i' was pressed — restore whatever
+		// was active before the picker was ever opened, same as the
+		// picker's own esc.
+		theme.Set(a.themePickerOrig)
+		a.refreshViewports()
 		return a, nil, true
 	}
 	return a, nil, false
@@ -1862,17 +2040,81 @@ func (a App) activeScreenHasFocusedInput() bool { return a.layout.HasFocusedInpu
 // handleThemePickerKey processes keyboard input while the theme picker is open.
 func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	refreshCmd := func() tea.Msg { return tea.WindowSizeMsg{Width: a.width, Height: a.height} }
+	// preview applies the theme at the cursor for a live preview. "custom"
+	// only previews if a palette has already been saved — otherwise there's
+	// nothing to show yet, so the current theme stays put until 'e' builds one.
+	preview := func() {
+		name := availableThemes[a.themePickerCursor]
+		if name == "custom" {
+			if a.customPalette == nil {
+				return
+			}
+			theme.SetCustomPalette(*a.customPalette)
+		}
+		theme.Set(name)
+		a.refreshViewports()
+	}
+	// rowPalette resolves the full palette for the picker's currently
+	// highlighted row: a built-in's literal colors, or the saved custom
+	// palette (ok=false if the row is "custom" and nothing's been saved yet
+	// — there's nothing to edit-as-a-starting-point-from or export there).
+	rowPalette := func() (theme.Palette, bool) {
+		name := availableThemes[a.themePickerCursor]
+		if name == "custom" {
+			if a.customPalette == nil {
+				return theme.Palette{}, false
+			}
+			return *a.customPalette, true
+		}
+		return theme.BuiltinPalette(name)
+	}
 	switch msg.String() {
 	case "up", "k":
 		a.themePickerCursor = (a.themePickerCursor - 1 + len(availableThemes)) % len(availableThemes)
-		theme.Set(availableThemes[a.themePickerCursor])
-		a.refreshViewports()
+		preview()
 	case "down", "j":
 		a.themePickerCursor = (a.themePickerCursor + 1) % len(availableThemes)
-		theme.Set(availableThemes[a.themePickerCursor])
+		preview()
+	case "e":
+		prefill, ok := rowPalette()
+		if !ok {
+			prefill = theme.CurrentPalette() // "custom" row, nothing saved yet — fall back like before
+		}
+		a.themeEditorOrig = a.themePickerOrig
+		a.themeEditorOrigPalette = theme.CurrentPalette() // snapshot before preview, for correct revert
+		theme.SetCustomPalette(prefill)
+		theme.Set("custom")
 		a.refreshViewports()
+		a.themePickerOpen = false
+		a.themeEditorOpen = true
+		a.themeEditor = screens.NewThemeEditorModel(prefill)
+		return a, nil
+	case "x":
+		p, ok := rowPalette()
+		if !ok {
+			return a, nil // "custom" row, nothing saved yet to export
+		}
+		a.themePickerOpen = false
+		a.pathPromptOpen = true
+		a.pathPromptPurpose = pathPromptExport
+		a.pathPromptOverwritePending = ""
+		a.pathPromptExportPalette = p
+		var cmd tea.Cmd
+		a.pathPrompt, cmd = a.pathPrompt.Open("export theme to", defaultThemeFilePath)
+		return a, cmd
+	case "i":
+		a.themePickerOpen = false
+		a.pathPromptOpen = true
+		a.pathPromptPurpose = pathPromptImport
+		a.pathPromptOverwritePending = ""
+		var cmd tea.Cmd
+		a.pathPrompt, cmd = a.pathPrompt.Open("import theme from", defaultThemeFilePath)
+		return a, cmd
 	case "enter":
 		selected := availableThemes[a.themePickerCursor]
+		if selected == "custom" && a.customPalette == nil {
+			return a, nil // nothing saved yet — press 'e' to build one
+		}
 		a.themePickerOpen = false
 		return a, tea.Batch(
 			refreshCmd,
@@ -1889,6 +2131,22 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, refreshCmd
 	}
 	return a, nil
+}
+
+// handleThemeEditorKey forwards keyboard input to the theme editor model
+// while it's open.
+func (a App) handleThemeEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	a.themeEditor, cmd = a.themeEditor.Update(msg)
+	return a, cmd
+}
+
+// handlePathPromptKey forwards keyboard input to the path prompt model
+// while it's open.
+func (a App) handlePathPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	a.pathPrompt, cmd = a.pathPrompt.Update(msg)
+	return a, cmd
 }
 
 // refreshViewports forces all screen viewports to re-render with the current
@@ -2296,6 +2554,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		cmailCmd,
 		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
+		a.scheduleFeedPollCmd(),
 		a.loadSettingsCmd(),
 		a.scheduleWanderCmd(),
 		a.checkAndWanderCmd(),
@@ -2334,7 +2593,7 @@ type userProfileLoadedMsg struct {
 type followResultMsg struct{ followID string }
 type unfollowResultMsg struct{}
 type repliesLoadedMsg struct{ replies []model.Reply }
-type replyCreatedMsg struct{ postID string }
+type replyCreatedMsg struct{ postID, replyID string }
 type replyDeletedMsg struct{ replyID string }
 type postCreatedMsg struct{}
 type postDeletedMsg struct {
@@ -2604,6 +2863,8 @@ type notifPostLoadedMsg struct{ post model.Post }
 type profilePostLoadedMsg struct{ post model.Post }
 type pollUnreadTickMsg struct{}
 type unreadCountMsg struct{ count int }
+type feedPollTickMsg struct{}
+type feedPeekMsg struct{ posts []model.Post }
 type logoAnimTickMsg struct{}  // 30s idle trigger — begins the scramble animation
 type logoFrameTickMsg struct{} // 60ms per-frame tick during scramble/hold/unscramble
 
@@ -2615,6 +2876,23 @@ func (a *App) loadFeedCmd() tea.Cmd {
 		}
 		return feedLoadedMsg{posts: posts, cursor: cursor}
 	}
+}
+
+// fetchFeedPeekCmd fetches the newest page of the feed for the background
+// poll to diff against the currently loaded posts. Errors are swallowed
+// (nil msg) — a missed poll just tries again on the next tick.
+func (a *App) fetchFeedPeekCmd() tea.Cmd {
+	return func() tea.Msg {
+		posts, _, err := a.client.GetFeed("")
+		if err != nil {
+			return nil
+		}
+		return feedPeekMsg{posts: posts}
+	}
+}
+
+func (a *App) scheduleFeedPollCmd() tea.Cmd {
+	return tea.Tick(15*time.Second, func(time.Time) tea.Msg { return feedPollTickMsg{} })
 }
 
 func (a *App) loadFeedPageCmd(cursor string) tea.Cmd {
@@ -2848,11 +3126,11 @@ func (a *App) loadTopicThreadCmd(postID string) tea.Cmd {
 
 func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreateReply(postID, content, parentReplyID)
+		reply, err := a.client.CreateReply(postID, content, parentReplyID)
 		if err != nil {
 			return actionErrMsg{err}
 		}
-		return replyCreatedMsg{postID: postID}
+		return replyCreatedMsg{postID: postID, replyID: reply.ID}
 	}
 }
 
@@ -2981,6 +3259,14 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		if msg.count > prev && !a.notifications.HasPaginated() {
 			return a, a.loadNotifsCmd(), true
 		}
+		return a, nil, true
+	case feedPollTickMsg:
+		if !a.feed.IsLoaded() || a.feed.IsRefreshing() {
+			return a, a.scheduleFeedPollCmd(), true
+		}
+		return a, tea.Batch(a.fetchFeedPeekCmd(), a.scheduleFeedPollCmd()), true
+	case feedPeekMsg:
+		a.feed = a.feed.SetPendingNew(msg.posts)
 		return a, nil, true
 	}
 	return a, nil, false

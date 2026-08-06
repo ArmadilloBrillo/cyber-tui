@@ -350,6 +350,7 @@ Email + password login form.
 
 - Two `textinput` fields (email, password)
 - Tab/Up/Down navigate between fields; Enter on the password field emits `SubmitLoginMsg` (picked up by App)
+- Esc quits the app (handled globally in `app.go`'s `handleKeys`, gated to `screenLogin`)
 - Supports email prefill from config
 - Shows loading spinner and error messages
 - Renders a retro ASCII banner
@@ -361,7 +362,8 @@ Key types: `LoginModel`, `SubmitLoginMsg` (email + password), `LoginErrMsg` (err
 Home feed of posts from followed users.
 
 - Cursor-based pagination: emits `LoadMoreFeedMsg` when viewport reaches the bottom; App appends new posts
-- Emits `RefreshFeedMsg` when pressing Up at the top
+- Emits `RefreshFeedMsg` when pressing Up at the top (no entries pending) — see `docs/13-feed-refresh.md`
+- Background poll every 15s stages newly-seen posts (`pendingNew`) without touching the viewport; shows a "load N new entries" banner and a Feed-tab badge. Pressing Up at the top with entries pending merges them locally instead of emitting `RefreshFeedMsg` — see `docs/39-feed-background-poll.md`
 - Emits `ShowPostMsg` on Enter → App navigates to PostDetail
 - Emits `SubmitNewPostMsg` on compose submit (content + topics)
 - `n` opens compose for a new post (with topics input); `r` opens compose for a reply
@@ -487,7 +489,7 @@ Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integrati
 - **Own name & mentions:** `renderCircMessages`/`renderActionLine` style the current user's own username in `theme.MeHighlight` (bold white) instead of `theme.Highlight` (yellow) for the message-author prefix, and pass `currentUser` straight into `markdown.RenderInline` for the body — its `highlightUser` param bolds the same case-insensitive, word-bounded mentions (bare or `@`-prefixed) at the same raw-text level as the rest of the inline styling, not as a separate post-render pass (a prior version did this via a `highlightMentions` regex splicing a fresh `Render()` call into already-ANSI-rendered text, which broke surrounding styling after the match — see `docs/33-circ.md`) — white rather than cyan since cyan is already the CIRC room-title/border/tab-mnemonic color
 - **Jump-to-room from a notification:** Notifications' `enter` on a `chat_mention` emits `OpenRoomMsg{RoomSlug, NotifID}`; App records the originating screen in `App.chatroomsReturn`, activates this screen (reloading the room list, since Chatrooms wasn't already active and has no live room yet — `activateScreen` calls `ChatroomsModel.ResetToList()` as part of that, clearing `canGoBack` and forcing list mode, so `canGoBack` is set back to `true` right after), and calls `SetPendingRoomSlug`, then `OpenPendingRoom()` (called from the `roomsLoadedMsg` handler) auto-enters detail mode for the matching room via the shared `enterRoomDetail` helper — the same code path the list `enter` keybinding uses
 - **Deep-link ESC:** when `canGoBack` is true, ESC in detail mode emits `LeaveChatroomsMsg` instead of dropping to the room list; App sets `active = chatroomsReturn`, returning straight to Notifications (or wherever else a future deep link originates). Re-pressing the Chatrooms key while *already* on the screen still calls `ChatroomsModel.ResetToList()` in `activateScreen`, clearing `canGoBack` and forcing `mode` back to list — the intentional escape hatch out of a deep-linked room without ESC. Switching into Chatrooms from a *different* tab, however, resumes whatever room was left open instead of resetting (`activateScreen` only resets when the previously active screen wasn't already Chatrooms — see "Background across tab switches" above) — this mirrors the `canGoBack`/`profileReturn` pattern in `profile.go`, also just adopted by `cmail.go`
-- **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendRoomMessage`'s reply text is routed through app.go's `roomCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice` (shared with `cmail.go`). `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live) rendered via `renderActionLine` as classic IRC `* username body *` — see `docs/33-circ.md` for the live-testing findings. Before sending, the `"enter"` handler checks a `/`-prefixed input's first word against `knownCircCommands`; an unrecognized command is rejected locally via `AppendSystemMessage` (`*** unknown command: /xyz`) instead of being sent as a literal chat message — see `docs/33-circ.md`
+- **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendRoomMessage`'s reply text is routed through app.go's `roomCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice` (shared with `cmail.go`). `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live) rendered via `renderActionLine` as classic IRC `* username body *` — see `docs/33-circ.md` for the live-testing findings. Before sending, the `"enter"` handler checks a `/`-prefixed input's first word against `isKnownSlashCommand` (shared with `cmail.go`); an unrecognized command is rejected locally via `AppendSystemMessage` (`*** unknown command: /xyz`) instead of being sent as a literal chat message — see `docs/33-circ.md`
 
 Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`, `OpenRoomMsg`, `LeaveChatroomsMsg`
 Key internal types: `roomSubscription` (RTDB channel + cancel func + `RoomID`), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `roomReconnectedMsg`, `roomReconnectFailedMsg`, `roomReconnectRetryDueMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`; presence: `roomPresenceSubscription`, `roomPresenceAnnouncedMsg`, `roomHeartbeatTickMsg`, `roomUsersLoadedMsg`, `roomPresenceSubscribedMsg`, `roomPresenceReceivedMsg`, `roomPresenceStreamClosedMsg`
@@ -595,7 +597,7 @@ Time formatting helpers used by all screens.
 
 #### `theme.go`
 
-Color palettes and Lip Gloss style objects for four retro themes.
+Color palettes and Lip Gloss style objects for four retro themes, plus a user-editable fifth "custom" theme.
 
 **Layout constants:**
 
@@ -607,7 +609,7 @@ Color palettes and Lip Gloss style objects for four retro themes.
 | `ChromeHeight` | 3 | Sum of the above; used by screens to compute usable height |
 
 **Color variables** (package-level; reassigned by `Set()`):  
-`ColorGreen`, `ColorDimGreen`, `ColorCyan`, `ColorYellow`, `ColorRed`, `ColorBackground`, `ColorMuted`, `ColorWhite`
+`ColorGreen`, `ColorDimGreen`, `ColorCyan`, `ColorYellow`, `ColorRed`, `ColorBackground`, `ColorMuted`, `ColorWhite`, `ColorMeta`
 
 **Style objects** (Lip Gloss; auto-update when `Set()` is called):  
 `Base`, `Title`, `Subtle`, `Highlight`, `MeHighlight`, `Error`, `Border`, `ActiveBorder`, `StatusBar`, `Tab`, `ActiveTab`
@@ -616,8 +618,18 @@ Color palettes and Lip Gloss style objects for four retro themes.
 
 | Function | Purpose |
 |---|---|
-| `Set(name string)` | Applies a theme by name ("cyber", "c64", "vt320", "bland"); defaults to "cyber" |
+| `Set(name string)` | Applies a theme by name ("cyber", "c64", "vt320", "bland", "custom"); defaults to "cyber" |
 | `CurrentName() string` | Returns the active theme name |
+| `ValidHex(s string) bool` | Reports whether `s` is a well-formed `#RRGGBB` hex color |
+| `(Palette) Valid() bool` | Reports whether the 9 rendered fields of a `Palette` are well-formed hex (`Background`/`CodeBackground` are optional) |
+| `SetCustomPalette(p Palette)` | Stores `p` as the "custom" theme's palette; re-applies immediately if "custom" is already active (live preview) |
+| `CurrentPalette() Palette` | Returns the colors currently active, as a `Palette` |
+| `ParsePost(content string) (Palette, bool)` | Detects and parses a cyberspace.online custom-theme post block; `ok=false` only when no block is found. See `docs/40-custom-themes.md`. |
+| `ExpandHome(path string) (string, error)` | Expands a leading `~` to the user's home directory |
+| `ExportToFile(path string, p Palette) error` | Writes `p` as indented JSON (mode 0600), expanding `~` |
+| `ImportFromFile(path string) (Palette, error)` | Reads/validates a theme file; fails on a missing file, invalid JSON, or JSON that fails `Valid()` |
+
+**`Palette` type:** the data-driven counterpart to the literal `setCyber`/`setC64`/etc. themes, named by UI role rather than color so the theme editor and config file read as "what does this control": `Foreground`, `Dimmed`, `Border`, `Accent`, `Highlight`, `Error`, `BarText`, `Self`, `Meta` (all rendered; map internally to `ColorGreen`, `ColorMuted`, `ColorDimGreen`, `ColorCyan`, `ColorYellow`, `ColorRed`, `ColorBackground`, `ColorWhite`, `ColorMeta` respectively), plus `Background`/`CodeBackground` (reserved, unused by the renderer today, hidden from the editor). `Self` and `Meta` were one field until `ColorWhite` turned out to drive both the own-username highlight and unrelated status-bar text — split so each row controls exactly one thing. Used by the "custom" theme (edited in-TUI, see `docs/40-custom-themes.md`) and exposed for a future "detect theme in a post" feature to build/inspect palettes without touching `theme`'s internals — see that doc's post-field mapping table.
 
 **Themes:**
 
@@ -627,6 +639,7 @@ Color palettes and Lip Gloss style objects for four retro themes.
 | **c64** | Commodore 64 purple background with cyan and bright magenta |
 | **vt320** | VT320 terminal dim green with amber accents |
 | **bland** | No forced colors — renders in the terminal's own default palette; active/selected states use bold/underline and a thicker active-pane border instead of color |
+| **custom** | User-built palette, edited in-TUI via the theme picker (`t`, then `e` on the "custom" row) and persisted to `~/.cyber-tui.json`. See `docs/40-custom-themes.md`. |
 
 Because all colors are package variables, styles automatically inherit the new palette when `Set()` is called — no re-initialization needed.
 
@@ -645,7 +658,8 @@ Permissions: `0600` (owner read/write only)
 | `savedAt` | string | — | ISO timestamp of last login |
 | `density` | string | `""` | `""` = dense, `"relaxed"` = blank lines between items |
 | `timezone` | string | `"UTC"` | UTC offset label (e.g. "UTC+5:30") |
-| `theme` | string | `"cyber"` | `"cyber"`, `"c64"`, or `"vt320"` |
+| `theme` | string | `"cyber"` | `"cyber"`, `"c64"`, `"vt320"`, `"bland"`, or `"custom"` |
+| `customPalette` | object \| null | `null` | 8-hex-color palette for the "custom" theme, set via the in-TUI theme editor (`docs/40-custom-themes.md`) |
 | `apiBaseURL` | string | `"https://api.cyberspace.online"` | Override for development |
 | `allowInsecureApi` | bool | `false` | Permit a plain `http://` `apiBaseURL` to a non-loopback host |
 | `useMock` | bool | `false` | Use `MockClient` instead of real API |
@@ -819,6 +833,7 @@ cycle), not a global shortcut.
 | `p` | View author's profile |
 | `c` | Start C-Mail conversation with focused author |
 | `w` | Watch / unwatch the thread (root post focused only; no-op on replies) |
+| `T` | Preview a theme detected in the post's body (root post focused only) — opens the theme editor prefilled from it; hint only shown when one is detected. See `docs/40-custom-themes.md`. |
 | `esc` | Back to feed |
 
 ### Compose

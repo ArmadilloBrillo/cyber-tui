@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 // BookmarkedIDsMsg is broadcast by App whenever the set of bookmarked post/reply
@@ -222,3 +223,32 @@ type LoadNoteRevisionMsg struct {
 	NoteID         string
 	RevisionNumber int
 }
+
+// PreviewPaletteMsg is emitted by ThemeEditorModel on every edit so App can
+// live-preview via theme.SetCustomPalette + refreshViewports, mirroring the
+// theme picker's up/down preview.
+type PreviewPaletteMsg struct{ Palette theme.Palette }
+
+// SaveThemeMsg is emitted by ThemeEditorModel on ctrl+s with a valid, dirty
+// palette. App persists it (unless ephemeral) and applies it as "custom".
+type SaveThemeMsg struct{ Palette theme.Palette }
+
+// CloseThemeEditorMsg is emitted by ThemeEditorModel on esc (row-nav mode,
+// not mid-field-edit) to close without saving.
+type CloseThemeEditorMsg struct{}
+
+// PathPromptSubmitMsg is emitted by PathPromptModel on enter, carrying the
+// current input value. The prompt has no filesystem awareness of its own —
+// App decides what the path means (export target, import source) and
+// whether it needs a second confirmation (e.g. overwrite).
+type PathPromptSubmitMsg struct{ Path string }
+
+// PathPromptCancelMsg is emitted by PathPromptModel on esc.
+type PathPromptCancelMsg struct{}
+
+// PreviewPostThemeMsg is emitted by PostDetailModel when the user presses
+// the try-theme key on a post with a detected theme block. App opens the
+// theme editor prefilled with Palette, exactly as if the user had pressed
+// 'e' on the picker's "custom" row but starting from the post's colors
+// instead of the current theme's.
+type PreviewPostThemeMsg struct{ Palette theme.Palette }
