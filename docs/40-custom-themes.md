@@ -108,7 +108,7 @@ Fields are named to line up with the theme blocks users post on cyberspace.onlin
 
 `ParsePost(content string) (Palette, bool)`:
 1. Looks for the marker line (`/* Cyberspace Custom Theme */`, case-insensitive substring match). Absent → `ok=false`; nothing else matters.
-2. Scans up to 30 lines after the marker for `Key: value` lines (case-insensitive key match); everything not in the table above (`Main Font`, `Disable Text Glow`, etc. — webui-only, no `Palette` field) is simply never matched, no special-casing needed to ignore it.
+2. Scans up to 30 lines after the marker for `Key: value` lines (case-insensitive key match); everything not in the table above (`Main Font`, `Disable Text Glow`, etc. — webui-only, no `Palette` field) is simply never matched, no special-casing needed to ignore it. The web UI wraps each line in markdown backticks (e.g. `` `Foreground: #ff5d00` ``) when it composes this block, so a wrapping backtick pair is stripped from each line before matching — otherwise every field misses the regex (it requires the line to start with a letter) while the marker itself, matched by loose substring, still detects fine. This was a real bug: `T` would enable normally but the preview silently fell back to the current theme for every field, since none of them ever matched.
 3. Resolves the base palette: if `Base Theme` names one of our own built-ins (`cyber`/`c64`/`vt320`/`bland`, case-insensitive) → `builtinPalettes[name]`, the actual author-intended values for the unmapped fields; otherwise → `CurrentPalette()` (today's active theme), since inventing values for an unrecognized name would just be guessing.
 4. Overlays each recognized color field onto the base **only if `ValidHex` passes** — a malformed or missing individual field silently falls back to the base's value rather than invalidating the whole block (a typo in one line shouldn't discard an otherwise-good theme). `ok=true` as long as the marker was found, even in this degenerate case.
 
@@ -174,6 +174,7 @@ Same as the Settings screen: edits accumulate in memory (with live preview) unti
 - [x] `builtinPalettes` data table + `theme.ParsePost` (detects and resolves a post's theme block)
 - [x] Post Detail's `T` key + `HasThemeInPost()` hint, wired into both layouts
 - [x] Revert-on-cancel bug fixed (`themeEditorOrigPalette` snapshot), covered by a regression test
+- [x] Backtick-wrapped post fields bug fixed (`ParsePost` now strips wrapping backticks per line), covered by a regression test using the web UI's actual posted format
 - [x] `theme.ExportToFile`/`ImportFromFile`/`ExpandHome`
 - [x] `screens.PathPromptModel` (`internal/ui/screens/pathprompt.go`)
 - [x] Wired into theme picker (`x` export / `i` import on the "custom" row) in both layouts

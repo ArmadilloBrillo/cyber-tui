@@ -296,6 +296,32 @@ Foreground: #ABCDEF
 	}
 }
 
+// TestParsePost_BacktickWrappedFields_StillOverlay covers the actual format
+// cyberspace.online's web UI posts in: each field line wrapped in markdown
+// backticks (e.g. "`Foreground: #ff5d00`"), which the field regex doesn't
+// match unless the backticks are stripped first.
+func TestParsePost_BacktickWrappedFields_StillOverlay(t *testing.T) {
+	body := "oooooraaaange\n\n\n\n" +
+		"`/* Cyberspace Custom Theme */`\n\n" +
+		"`Base Theme: dark`\n\n" +
+		"`/* Colors */`\n\n" +
+		"`Foreground: #ff5d00`\n\n" +
+		"`Background: #131313`\n\n" +
+		"`Dimmed: #c1c1c1`\n\n" +
+		"`Border: #393939`\n\n" +
+		"`Code: #f5f5f5`\n\n" +
+		"`Code BG: #393939`\n"
+
+	p, ok := ParsePost(body)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if p.Foreground != "#ff5d00" || p.Background != "#131313" || p.Dimmed != "#c1c1c1" ||
+		p.Border != "#393939" || p.Highlight != "#f5f5f5" || p.CodeBackground != "#393939" {
+		t.Errorf("backtick-wrapped fields not overlaid correctly: %+v", p)
+	}
+}
+
 // --- Export / Import ---
 
 func TestExportImport_RoundTrips(t *testing.T) {

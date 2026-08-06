@@ -283,7 +283,11 @@ func ParsePost(content string) (Palette, bool) {
 	end := min(markerIdx+1+postParseWindow, len(lines))
 	fields := make(map[string]string)
 	for _, line := range lines[markerIdx+1 : end] {
-		m := postFieldLineRe.FindStringSubmatch(strings.TrimSpace(line))
+		// cyberspace.online's web UI wraps each field line in markdown
+		// backticks (e.g. "`Foreground: #ff5d00`") — strip them before
+		// matching, or every field silently fails to parse.
+		trimmed := strings.Trim(strings.TrimSpace(line), "`")
+		m := postFieldLineRe.FindStringSubmatch(trimmed)
 		if m == nil {
 			continue
 		}
