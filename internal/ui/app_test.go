@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -2543,5 +2545,185 @@ func TestHandleThemeEditor_Close_RestoresSavedCustomPalette_NotAbandonedEdit(t *
 	}
 	if got := theme.CurrentPalette(); got != saved {
 		t.Errorf("CurrentPalette() after cancel = %+v, want the saved palette %+v", got, saved)
+	}
+}
+
+// --- Theme export / import ---
+
+func testThemePalette() theme.Palette {
+	return theme.Palette{
+		Foreground: "#111111", Dimmed: "#222222", Border: "#333333", Accent: "#444444",
+		Highlight: "#555555", Error: "#666666", BarText: "#777777", Self: "#888888", Meta: "#999999",
+	}
+}
+
+// appOnCustomRow returns a logged-in App with the theme picker open and its
+// cursor on the "custom" row, ready to exercise the 'x'/'i' keys.
+func appOnCustomRow(t *testing.T) App {
+	t.Helper()
+	a := loggedInApp()
+	a.themePickerOpen = true
+	a.themePickerCursor = len(availableThemes) - 1
+	if availableThemes[a.themePickerCursor] != "custom" {
+		t.Fatalf("expected last availableThemes entry to be \"custom\", got %q", availableThemes[a.themePickerCursor])
+	}
+	return a
+}
+
+func TestHandleThemePickerKey_X_NoOp_WhenNoCustomPaletteSaved(t *testing.T) {
+	a := appOnCustomRow(t)
+	a.customPalette = nil
+
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	a2 := m.(App)
+	if a2.pathPromptOpen {
+		t.Error("expected export to no-op with no saved custom palette")
+	}
+}
+
+func TestHandleThemePickerKey_X_OpensExportPrompt(t *testing.T) {
+	a := appOnCustomRow(t)
+	saved := testThemePalette()
+	a.customPalette = &saved
+
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	a2 := m.(App)
+	if !a2.pathPromptOpen || a2.pathPromptPurpose != pathPromptExport {
+		t.Error("expected the export path prompt to open")
+	}
+}
+
+func TestHandleThemePickerKey_I_OpensImportPrompt_EvenWithoutSavedPalette(t *testing.T) {
+	a := appOnCustomRow(t)
+	a.customPalette = nil
+
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	a2 := m.(App)
+	if !a2.pathPromptOpen || a2.pathPromptPurpose != pathPromptImport {
+		t.Error("expected the import path prompt to open regardless of a saved palette")
+	}
+}
+
+func TestHandlePathPrompt_Export_WritesFile(t *testing.T) {
+	a := loggedInApp()
+	saved := testThemePalette()
+	a.customPalette = &saved
+	a.pathPromptOpen = true
+	a.pathPromptPurpose = pathPromptExport
+
+	path := filepath.Join(t.TempDir(), "theme.json")
+	a2, cmd, ok := a.handlePathPrompt(screens.PathPromptSubmitMsg{Path: path})
+	if !ok {
+		t.Fatal("expected PathPromptSubmitMsg to be handled")
+	}
+	if a2.pathPromptOpen {
+		t.Error("expected the prompt to close after a successful export")
+	}
+	if cmd == nil {
+		t.Fatal("expected a notify cmd")
+	}
+	got, err := theme.ImportFromFile(path)
+	if err != nil {
+		t.Fatalf("ImportFromFile: %v", err)
+	}
+	if got != saved {
+		t.Errorf("exported palette = %+v, want %+v", got, saved)
+	}
+}
+
+func TestHandlePathPrompt_Export_WarnsBeforeOverwrite_ThenProceedsOnResubmit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theme.json")
+	if err := os.WriteFile(path, []byte("pre-existing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	a := loggedInApp()
+	first := testThemePalette()
+	a.customPalette = &first
+	a.pathPromptOpen = true
+	a.pathPromptPurpose = pathPromptExport
+
+	a2, _, ok := a.handlePathPrompt(screens.PathPromptSubmitMsg{Path: path})
+	if !ok {
+		t.Fatal("expected PathPromptSubmitMsg to be handled")
+	}
+	if !a2.pathPromptOpen {
+		t.Error("expected the prompt to stay open pending overwrite confirmation")
+	}
+	if a2.pathPromptOverwritePending != path {
+		t.Errorf("pathPromptOverwritePending = %q, want %q", a2.pathPromptOverwritePending, path)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "pre-existing" {
+		t.Error("expected the file to be untouched before the overwrite is confirmed")
+	}
+
+	a3, _, ok := a2.handlePathPrompt(screens.PathPromptSubmitMsg{Path: path})
+	if !ok {
+		t.Fatal("expected the resubmit to be handled")
+	}
+	if a3.pathPromptOpen {
+		t.Error("expected the prompt to close once the overwrite is confirmed")
+	}
+	got, err := theme.ImportFromFile(path)
+	if err != nil {
+		t.Fatalf("expected the file to now contain the exported palette: %v", err)
+	}
+	if got != first {
+		t.Errorf("exported palette = %+v, want %+v", got, first)
+	}
+}
+
+func TestHandlePathPrompt_Import_Success_OpensThemeEditor(t *testing.T) {
+	imported := testThemePalette()
+	path := filepath.Join(t.TempDir(), "theme.json")
+	if err := theme.ExportToFile(path, imported); err != nil {
+		t.Fatal(err)
+	}
+
+	a := loggedInApp()
+	a.pathPromptOpen = true
+	a.pathPromptPurpose = pathPromptImport
+
+	a2, _, ok := a.handlePathPrompt(screens.PathPromptSubmitMsg{Path: path})
+	if !ok {
+		t.Fatal("expected PathPromptSubmitMsg to be handled")
+	}
+	if a2.pathPromptOpen {
+		t.Error("expected the prompt to close")
+	}
+	if !a2.themeEditorOpen {
+		t.Fatal("expected the theme editor to open for review")
+	}
+	if theme.CurrentName() != "custom" {
+		t.Errorf("CurrentName() = %q, want custom (previewing the import)", theme.CurrentName())
+	}
+	if theme.CurrentPalette() != imported {
+		t.Errorf("CurrentPalette() = %+v, want the imported palette %+v", theme.CurrentPalette(), imported)
+	}
+}
+
+func TestHandlePathPrompt_Import_Failure_NotifiesAndLeavesCustomPaletteUntouched(t *testing.T) {
+	saved := testThemePalette()
+	a := loggedInApp()
+	a.customPalette = &saved
+	a.pathPromptOpen = true
+	a.pathPromptPurpose = pathPromptImport
+
+	a2, cmd, ok := a.handlePathPrompt(screens.PathPromptSubmitMsg{Path: filepath.Join(t.TempDir(), "missing.json")})
+	if !ok {
+		t.Fatal("expected PathPromptSubmitMsg to be handled")
+	}
+	if a2.pathPromptOpen {
+		t.Error("expected the prompt to close after a failed import")
+	}
+	if a2.themeEditorOpen {
+		t.Error("expected the theme editor to stay closed on import failure")
+	}
+	if cmd == nil {
+		t.Fatal("expected a notify cmd")
+	}
+	if a2.customPalette != &saved {
+		t.Error("expected the saved custom palette to be untouched by a failed import")
 	}
 }

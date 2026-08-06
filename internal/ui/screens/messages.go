@@ -237,6 +237,15 @@ type SaveThemeMsg struct{ Palette theme.Palette }
 // not mid-field-edit) to close without saving.
 type CloseThemeEditorMsg struct{}
 
+// PathPromptSubmitMsg is emitted by PathPromptModel on enter, carrying the
+// current input value. The prompt has no filesystem awareness of its own —
+// App decides what the path means (export target, import source) and
+// whether it needs a second confirmation (e.g. overwrite).
+type PathPromptSubmitMsg struct{ Path string }
+
+// PathPromptCancelMsg is emitted by PathPromptModel on esc.
+type PathPromptCancelMsg struct{}
+
 // PreviewPostThemeMsg is emitted by PostDetailModel when the user presses
 // the try-theme key on a post with a detected theme block. App opens the
 // theme editor prefilled with Palette, exactly as if the user had pressed

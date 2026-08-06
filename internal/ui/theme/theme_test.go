@@ -1,6 +1,9 @@
 package theme
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -271,5 +274,67 @@ Foreground: #ABCDEF
 	}
 	if p.Foreground != "#ABCDEF" {
 		t.Errorf("Foreground = %q, want overlaid #ABCDEF", p.Foreground)
+	}
+}
+
+// --- Export / Import ---
+
+func TestExportImport_RoundTrips(t *testing.T) {
+	p := testPalette9()
+	path := filepath.Join(t.TempDir(), "theme.json")
+
+	if err := ExportToFile(path, p); err != nil {
+		t.Fatalf("ExportToFile: %v", err)
+	}
+	got, err := ImportFromFile(path)
+	if err != nil {
+		t.Fatalf("ImportFromFile: %v", err)
+	}
+	if got != p {
+		t.Errorf("round-tripped palette = %+v, want %+v", got, p)
+	}
+}
+
+func TestExportToFile_ExpandsHome(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	p := testPalette9()
+	if err := ExportToFile("~/theme.json", p); err != nil {
+		t.Fatalf("ExportToFile: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "theme.json")); err != nil {
+		t.Errorf("expected file at expanded home path: %v", err)
+	}
+}
+
+func TestImportFromFile_MissingFile(t *testing.T) {
+	_, err := ImportFromFile(filepath.Join(t.TempDir(), "does-not-exist.json"))
+	if err == nil {
+		t.Error("expected an error for a missing file")
+	}
+}
+
+func TestImportFromFile_InvalidJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theme.json")
+	if err := os.WriteFile(path, []byte("not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ImportFromFile(path)
+	if err == nil {
+		t.Error("expected an error for invalid JSON")
+	}
+}
+
+func TestImportFromFile_ValidJSON_InvalidPalette(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theme.json")
+	// Valid JSON, but missing required color fields (all empty strings).
+	if err := os.WriteFile(path, []byte(`{"Foreground":"not-a-color"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ImportFromFile(path)
+	if !errors.Is(err, ErrInvalidThemeFile) {
+		t.Errorf("expected ErrInvalidThemeFile, got %v", err)
 	}
 }

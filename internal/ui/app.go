@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	neturl "net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +54,10 @@ const (
 // availableThemes is the ordered list of selectable themes shown in the picker.
 var availableThemes = []string{"cyber", "c64", "vt320", "bland", "custom"}
 
+// defaultThemeFilePath prefills the export/import path prompt, so a plain
+// export-then-import round trip needs no retyping.
+const defaultThemeFilePath = "~/cyber-tui-theme.json"
+
 const (
 	logoOrig          = "ᑕ¥βєяรקค¢є"
 	logoHoldFrames    = 5 // frames held fully scrambled (~300ms at 60ms/frame)
@@ -81,6 +86,14 @@ func randomCyberRune(exclude rune) rune {
 	}
 	return logoCyberPool[0]
 }
+
+// pathPromptPurpose distinguishes what App does with a submitted PathPromptModel path.
+type pathPromptPurpose int
+
+const (
+	pathPromptExport pathPromptPurpose = iota
+	pathPromptImport
+)
 
 type App struct {
 	layout      Layout
@@ -127,6 +140,17 @@ type App struct {
 	// customPalette is the persisted custom theme, loaded from config. Nil
 	// means the user has never saved one yet.
 	customPalette *theme.Palette
+
+	// pathPrompt state — opened from the theme picker's "custom" row with
+	// 'x' (export) or 'i' (import), closed by PathPromptSubmitMsg/
+	// PathPromptCancelMsg.
+	pathPromptOpen    bool
+	pathPrompt        screens.PathPromptModel
+	pathPromptPurpose pathPromptPurpose
+	// pathPromptOverwritePending holds the export path once it's been
+	// flagged as already existing — an identical resubmit proceeds without
+	// asking again; any other path (or a fresh Open) resets this.
+	pathPromptOverwritePending string
 
 	// helpModal state — open with '?', close with any key.
 	helpModalOpen bool
@@ -278,6 +302,7 @@ func NewApp(client api.Client) App {
 		topics:             screens.NewTopicsModel(),
 		journal:            screens.NewJournalModel(0),
 		search:             screens.NewSearchModel(),
+		pathPrompt:         screens.NewPathPromptModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -436,6 +461,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleThemeEditor(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handlePathPrompt(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleBookmarks(msg); ok {
 		return a2, cmd
 	}
@@ -549,6 +577,10 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	}
 	if a.themeEditorOpen {
 		model, cmd := a.handleThemeEditorKey(m)
+		return model.(App), cmd, true
+	}
+	if a.pathPromptOpen {
+		model, cmd := a.handlePathPromptKey(m)
 		return model.(App), cmd, true
 	}
 	if a.helpModalOpen {
@@ -1188,6 +1220,57 @@ func (a App) handleThemeEditor(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		theme.Set(a.themeEditorOrig)
 		a.refreshViewports()
+		return a, nil, true
+	}
+	return a, nil, false
+}
+
+// handlePathPrompt processes messages emitted by the export/import path
+// prompt. Export requires a second identical submit once a target file is
+// found to already exist (pathPromptOverwritePending); import validates the
+// file via theme.ImportFromFile and, on success, hands off to the theme
+// editor exactly like PreviewPostThemeMsg — reviewed and confirmed with
+// ctrl+s, never applied blind.
+func (a App) handlePathPrompt(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case screens.PathPromptSubmitMsg:
+		switch a.pathPromptPurpose {
+		case pathPromptExport:
+			resolved, _ := theme.ExpandHome(msg.Path)
+			if _, err := os.Stat(resolved); err == nil && msg.Path != a.pathPromptOverwritePending {
+				a.pathPromptOverwritePending = msg.Path
+				a.pathPrompt = a.pathPrompt.SetWarning("file exists — enter again to overwrite")
+				return a, nil, true
+			}
+			a.pathPromptOpen = false
+			if err := theme.ExportToFile(msg.Path, *a.customPalette); err != nil {
+				a2, cmd := a.notify(notifyError, "export failed: "+err.Error())
+				return a2, cmd, true
+			}
+			a2, cmd := a.notify(notifyInfo, "theme exported to "+msg.Path)
+			return a2, cmd, true
+
+		case pathPromptImport:
+			a.pathPromptOpen = false
+			p, err := theme.ImportFromFile(msg.Path)
+			if err != nil {
+				a2, cmd := a.notify(notifyError, "import failed: "+err.Error())
+				return a2, cmd, true
+			}
+			a.themeEditorOrig = theme.CurrentName()
+			a.themeEditorOrigPalette = theme.CurrentPalette()
+			theme.SetCustomPalette(p)
+			theme.Set("custom")
+			a.refreshViewports()
+			a.themeEditorOpen = true
+			a.themeEditor = screens.NewThemeEditorModel(p)
+			return a, nil, true
+		}
+		return a, nil, true
+
+	case screens.PathPromptCancelMsg:
+		a.pathPromptOpen = false
+		a.pathPromptOverwritePending = ""
 		return a, nil, true
 	}
 	return a, nil, false
@@ -1984,6 +2067,28 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.themeEditorOpen = true
 		a.themeEditor = screens.NewThemeEditorModel(prefill)
 		return a, nil
+	case "x":
+		if availableThemes[a.themePickerCursor] != "custom" || a.customPalette == nil {
+			return a, nil // nothing saved yet to export
+		}
+		a.themePickerOpen = false
+		a.pathPromptOpen = true
+		a.pathPromptPurpose = pathPromptExport
+		a.pathPromptOverwritePending = ""
+		var cmd tea.Cmd
+		a.pathPrompt, cmd = a.pathPrompt.Open("export custom theme to", defaultThemeFilePath)
+		return a, cmd
+	case "i":
+		if availableThemes[a.themePickerCursor] != "custom" {
+			return a, nil
+		}
+		a.themePickerOpen = false
+		a.pathPromptOpen = true
+		a.pathPromptPurpose = pathPromptImport
+		a.pathPromptOverwritePending = ""
+		var cmd tea.Cmd
+		a.pathPrompt, cmd = a.pathPrompt.Open("import custom theme from", defaultThemeFilePath)
+		return a, cmd
 	case "enter":
 		selected := availableThemes[a.themePickerCursor]
 		if selected == "custom" && a.customPalette == nil {
@@ -2012,6 +2117,14 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (a App) handleThemeEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	a.themeEditor, cmd = a.themeEditor.Update(msg)
+	return a, cmd
+}
+
+// handlePathPromptKey forwards keyboard input to the path prompt model
+// while it's open.
+func (a App) handlePathPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	a.pathPrompt, cmd = a.pathPrompt.Update(msg)
 	return a, cmd
 }
 

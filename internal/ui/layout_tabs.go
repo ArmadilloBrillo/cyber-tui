@@ -52,6 +52,9 @@ func (l TabsLayout) View(a App) string {
 	if a.themeEditorOpen {
 		return overlayCenter(base, l.renderThemeEditor(a), a.width, a.height)
 	}
+	if a.pathPromptOpen {
+		return overlayCenter(base, l.renderPathPrompt(a), a.width, a.height)
+	}
 	if a.helpModalOpen {
 		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
 	}
@@ -468,7 +471,7 @@ func (l TabsLayout) renderThemePicker(a App) string {
 			items = append(items, theme.Subtle.Render("  "+name))
 		}
 	}
-	hint := theme.Subtle.Render("↑↓ preview   enter save   e edit custom   esc cancel")
+	hint := theme.Subtle.Render("↑↓ preview   enter save   e edit   x export   i import   esc cancel")
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
@@ -482,6 +485,11 @@ func (l TabsLayout) renderThemePicker(a App) string {
 // renderThemeEditor renders the "custom" theme color editor modal.
 func (l TabsLayout) renderThemeEditor(a App) string {
 	return a.themeEditor.View()
+}
+
+// renderPathPrompt renders the export/import file-path prompt modal.
+func (l TabsLayout) renderPathPrompt(a App) string {
+	return a.pathPrompt.View()
 }
 
 func (l TabsLayout) renderHelpModal(a App) string {
@@ -501,6 +509,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		row("/", "search"),
 		row("t", "theme"),
 		row("e", "edit custom theme (in theme picker)"),
+		row("x / i", "export / import custom theme (in theme picker)"),
 		row("v", "density"),
 		row("o", "open url"),
 		row("q", "quit"),
