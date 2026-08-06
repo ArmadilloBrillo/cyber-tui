@@ -212,6 +212,23 @@ Enable Ligatures: false
 Base Font Size: normal
 `
 
+func TestStripLineDecoration(t *testing.T) {
+	cases := map[string]string{
+		"Foreground: #ff5d00":     "Foreground: #ff5d00",
+		"`Foreground: #ff5d00`":   "Foreground: #ff5d00",
+		"> Foreground: #f4a4c0":   "Foreground: #f4a4c0",
+		">> Foreground: #f4a4c0":  "Foreground: #f4a4c0",
+		"> `Foreground: #ff5d00`": "Foreground: #ff5d00",
+		"- Foreground: #ff5d00":   "Foreground: #ff5d00",
+		"**Foreground: #ff5d00**": "Foreground: #ff5d00",
+	}
+	for in, want := range cases {
+		if got := stripLineDecoration(in); got != want {
+			t.Errorf("stripLineDecoration(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestParsePost_NoMarker_NotDetected(t *testing.T) {
 	_, ok := ParsePost("just a regular post with no theme in it")
 	if ok {

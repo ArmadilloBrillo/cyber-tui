@@ -257,17 +257,18 @@ const postParseWindow = 30
 // "/* Colors */", blank lines) are silently skipped.
 var postFieldLineRe = regexp.MustCompile(`^([A-Za-z][A-Za-z ]*?):\s*(.+)$`)
 
-// stripLineDecoration removes markdown formatting users' clients wrap each
-// field line in when the block gets pasted into a post — a blockquote marker
-// (e.g. "> Foreground: #ff5d00", possibly nested ">> ...") and/or a wrapping
-// backtick pair (e.g. "`Foreground: #ff5d00`") — so postFieldLineRe still
-// matches the underlying "Key: value" shape underneath.
+// lineDecorationCutset is every character users' clients are seen wrapping a
+// field line in when the block gets pasted into a post — blockquotes,
+// backticks, bold/italic, list bullets — plus whitespace. Every real field
+// name starts with a letter, so trimming runs of these from both ends can
+// never eat into a key, no matter how they're combined or nested (e.g.
+// "> `Foreground: #ff5d00`").
+const lineDecorationCutset = " \t`>*_-"
+
+// stripLineDecoration strips lineDecorationCutset from both ends of line so
+// postFieldLineRe still matches the underlying "Key: value" shape underneath.
 func stripLineDecoration(line string) string {
-	line = strings.TrimSpace(line)
-	for strings.HasPrefix(line, ">") {
-		line = strings.TrimSpace(strings.TrimPrefix(line, ">"))
-	}
-	return strings.Trim(line, "`")
+	return strings.Trim(line, lineDecorationCutset)
 }
 
 // ParsePost scans content for a posted custom-theme block (see
