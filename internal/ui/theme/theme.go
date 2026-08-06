@@ -436,6 +436,15 @@ var builtinPalettes = map[string]Palette{
 	"bland": {},
 }
 
+// BuiltinPalette returns the named built-in theme's full palette without
+// switching to it (name: "cyber"/"c64"/"vt320"/"bland"), or ok=false for
+// any other name (including "custom", which has no fixed palette of its
+// own — see CurrentPalette/SetCustomPalette for that).
+func BuiltinPalette(name string) (Palette, bool) {
+	p, ok := builtinPalettes[name]
+	return p, ok
+}
+
 func setCyber() {
 	applyPalette(builtinPalettes["cyber"])
 }
