@@ -257,6 +257,19 @@ const postParseWindow = 30
 // "/* Colors */", blank lines) are silently skipped.
 var postFieldLineRe = regexp.MustCompile(`^([A-Za-z][A-Za-z ]*?):\s*(.+)$`)
 
+// stripLineDecoration removes markdown formatting users' clients wrap each
+// field line in when the block gets pasted into a post — a blockquote marker
+// (e.g. "> Foreground: #ff5d00", possibly nested ">> ...") and/or a wrapping
+// backtick pair (e.g. "`Foreground: #ff5d00`") — so postFieldLineRe still
+// matches the underlying "Key: value" shape underneath.
+func stripLineDecoration(line string) string {
+	line = strings.TrimSpace(line)
+	for strings.HasPrefix(line, ">") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, ">"))
+	}
+	return strings.Trim(line, "`")
+}
+
 // ParsePost scans content for a posted custom-theme block (see
 // docs/40-custom-themes.md) and returns the resulting Palette. Fields the
 // block doesn't cover (Accent, Error, BarText, Self, Meta, and any
@@ -283,11 +296,7 @@ func ParsePost(content string) (Palette, bool) {
 	end := min(markerIdx+1+postParseWindow, len(lines))
 	fields := make(map[string]string)
 	for _, line := range lines[markerIdx+1 : end] {
-		// cyberspace.online's web UI wraps each field line in markdown
-		// backticks (e.g. "`Foreground: #ff5d00`") — strip them before
-		// matching, or every field silently fails to parse.
-		trimmed := strings.Trim(strings.TrimSpace(line), "`")
-		m := postFieldLineRe.FindStringSubmatch(trimmed)
+		m := postFieldLineRe.FindStringSubmatch(stripLineDecoration(line))
 		if m == nil {
 			continue
 		}

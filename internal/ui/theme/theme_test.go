@@ -322,6 +322,31 @@ func TestParsePost_BacktickWrappedFields_StillOverlay(t *testing.T) {
 	}
 }
 
+// TestParsePost_BlockquoteWrappedFields_StillOverlay covers another real
+// posted format: the block quoted with markdown blockquote "> " markers
+// instead of backticks (e.g. "> Foreground: #f4a4c0").
+func TestParsePost_BlockquoteWrappedFields_StillOverlay(t *testing.T) {
+	body := "I was testing palettes for my ui.\n\n" +
+		"> /* Cyberspace Custom Theme */\n>\n" +
+		"> Base Theme: vt320\n>\n" +
+		"> /* Colors */\n>\n" +
+		"> Foreground: #f4a4c0\n>\n" +
+		"> Background: #450d59\n>\n" +
+		"> Dimmed: #ee719e\n>\n" +
+		"> Border: #e63b7a\n>\n" +
+		"> Code: #c3d117\n>\n" +
+		"> Code BG: #6f760a\n"
+
+	p, ok := ParsePost(body)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if p.Foreground != "#f4a4c0" || p.Background != "#450d59" || p.Dimmed != "#ee719e" ||
+		p.Border != "#e63b7a" || p.Highlight != "#c3d117" || p.CodeBackground != "#6f760a" {
+		t.Errorf("blockquote-wrapped fields not overlaid correctly: %+v", p)
+	}
+}
+
 // --- Export / Import ---
 
 func TestExportImport_RoundTrips(t *testing.T) {
