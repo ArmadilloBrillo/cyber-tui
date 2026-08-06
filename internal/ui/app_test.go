@@ -2591,6 +2591,82 @@ func TestHandleThemePickerKey_X_OpensExportPrompt(t *testing.T) {
 	if !a2.pathPromptOpen || a2.pathPromptPurpose != pathPromptExport {
 		t.Error("expected the export path prompt to open")
 	}
+	if a2.pathPromptExportPalette != saved {
+		t.Errorf("pathPromptExportPalette = %+v, want the saved custom palette %+v", a2.pathPromptExportPalette, saved)
+	}
+}
+
+// appOnRow returns a logged-in App with the theme picker open and its cursor
+// on availableThemes[i].
+func appOnRow(i int) App {
+	a := loggedInApp()
+	a.themePickerOpen = true
+	a.themePickerCursor = i
+	return a
+}
+
+func TestHandleThemePickerKey_E_PrefillsFromBuiltinRow(t *testing.T) {
+	a := appOnRow(0) // "cyber"
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	a2 := m.(App)
+	if !a2.themeEditorOpen {
+		t.Fatal("expected the editor to open")
+	}
+	want, ok := theme.BuiltinPalette("cyber")
+	if !ok {
+		t.Fatal("expected cyber to be a known built-in")
+	}
+	if theme.CurrentPalette() != want {
+		t.Errorf("CurrentPalette() = %+v, want cyber's palette %+v", theme.CurrentPalette(), want)
+	}
+}
+
+func TestHandleThemePickerKey_X_ExportsBuiltinRow(t *testing.T) {
+	a := appOnRow(1) // "c64"
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	a2 := m.(App)
+	if !a2.pathPromptOpen || a2.pathPromptPurpose != pathPromptExport {
+		t.Fatal("expected the export path prompt to open")
+	}
+	want, ok := theme.BuiltinPalette("c64")
+	if !ok {
+		t.Fatal("expected c64 to be a known built-in")
+	}
+	if a2.pathPromptExportPalette != want {
+		t.Errorf("pathPromptExportPalette = %+v, want c64's palette %+v", a2.pathPromptExportPalette, want)
+	}
+}
+
+func TestHandleThemePickerKey_I_OpensImportPrompt_FromBuiltinRow(t *testing.T) {
+	a := appOnRow(2) // "vt320"
+	m, _ := a.handleThemePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	a2 := m.(App)
+	if !a2.pathPromptOpen || a2.pathPromptPurpose != pathPromptImport {
+		t.Error("expected the import path prompt to open from a built-in row")
+	}
+}
+
+func TestHandlePathPrompt_Cancel_RevertsToThemePickerOrig(t *testing.T) {
+	theme.Set("cyber")
+
+	a := loggedInApp()
+	a.themePickerOrig = "cyber"
+	a.pathPromptOpen = true
+	a.pathPromptPurpose = pathPromptImport
+
+	// Simulate having previewed a different row before opening the prompt.
+	theme.Set("vt320")
+
+	a2, _, ok := a.handlePathPrompt(screens.PathPromptCancelMsg{})
+	if !ok {
+		t.Fatal("expected PathPromptCancelMsg to be handled")
+	}
+	if a2.pathPromptOpen {
+		t.Error("expected the prompt to close")
+	}
+	if theme.CurrentName() != "cyber" {
+		t.Errorf("CurrentName() = %q, want reverted to %q", theme.CurrentName(), "cyber")
+	}
 }
 
 func TestHandleThemePickerKey_I_OpensImportPrompt_EvenWithoutSavedPalette(t *testing.T) {
@@ -2610,6 +2686,7 @@ func TestHandlePathPrompt_Export_WritesFile(t *testing.T) {
 	a.customPalette = &saved
 	a.pathPromptOpen = true
 	a.pathPromptPurpose = pathPromptExport
+	a.pathPromptExportPalette = saved
 
 	path := filepath.Join(t.TempDir(), "theme.json")
 	a2, cmd, ok := a.handlePathPrompt(screens.PathPromptSubmitMsg{Path: path})
@@ -2642,6 +2719,7 @@ func TestHandlePathPrompt_Export_WarnsBeforeOverwrite_ThenProceedsOnResubmit(t *
 	a.customPalette = &first
 	a.pathPromptOpen = true
 	a.pathPromptPurpose = pathPromptExport
+	a.pathPromptExportPalette = first
 
 	a2, _, ok := a.handlePathPrompt(screens.PathPromptSubmitMsg{Path: path})
 	if !ok {

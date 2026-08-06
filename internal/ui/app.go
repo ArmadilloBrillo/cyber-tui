@@ -141,9 +141,9 @@ type App struct {
 	// means the user has never saved one yet.
 	customPalette *theme.Palette
 
-	// pathPrompt state — opened from the theme picker's "custom" row with
-	// 'x' (export) or 'i' (import), closed by PathPromptSubmitMsg/
-	// PathPromptCancelMsg.
+	// pathPrompt state — opened from the theme picker's currently
+	// highlighted row with 'x' (export) or 'i' (import), closed by
+	// PathPromptSubmitMsg/PathPromptCancelMsg.
 	pathPromptOpen    bool
 	pathPrompt        screens.PathPromptModel
 	pathPromptPurpose pathPromptPurpose
@@ -151,6 +151,11 @@ type App struct {
 	// flagged as already existing — an identical resubmit proceeds without
 	// asking again; any other path (or a fresh Open) resets this.
 	pathPromptOverwritePending string
+	// pathPromptExportPalette is the palette to write when pathPromptPurpose
+	// is pathPromptExport — whichever theme was highlighted (a built-in or
+	// the saved custom theme) when 'x' was pressed, captured once so a later
+	// picker-cursor move can't change what gets written.
+	pathPromptExportPalette theme.Palette
 
 	// helpModal state — open with '?', close with any key.
 	helpModalOpen bool
@@ -1243,7 +1248,7 @@ func (a App) handlePathPrompt(msg tea.Msg) (App, tea.Cmd, bool) {
 				return a, nil, true
 			}
 			a.pathPromptOpen = false
-			if err := theme.ExportToFile(msg.Path, *a.customPalette); err != nil {
+			if err := theme.ExportToFile(msg.Path, a.pathPromptExportPalette); err != nil {
 				a2, cmd := a.notify(notifyError, "export failed: "+err.Error())
 				return a2, cmd, true
 			}
@@ -1271,6 +1276,12 @@ func (a App) handlePathPrompt(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.PathPromptCancelMsg:
 		a.pathPromptOpen = false
 		a.pathPromptOverwritePending = ""
+		// The picker's own live preview may have changed the active theme
+		// while browsing rows before 'x'/'i' was pressed — restore whatever
+		// was active before the picker was ever opened, same as the
+		// picker's own esc.
+		theme.Set(a.themePickerOrig)
+		a.refreshViewports()
 		return a, nil, true
 	}
 	return a, nil, false
@@ -2043,6 +2054,20 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		theme.Set(name)
 		a.refreshViewports()
 	}
+	// rowPalette resolves the full palette for the picker's currently
+	// highlighted row: a built-in's literal colors, or the saved custom
+	// palette (ok=false if the row is "custom" and nothing's been saved yet
+	// — there's nothing to edit-as-a-starting-point-from or export there).
+	rowPalette := func() (theme.Palette, bool) {
+		name := availableThemes[a.themePickerCursor]
+		if name == "custom" {
+			if a.customPalette == nil {
+				return theme.Palette{}, false
+			}
+			return *a.customPalette, true
+		}
+		return theme.BuiltinPalette(name)
+	}
 	switch msg.String() {
 	case "up", "k":
 		a.themePickerCursor = (a.themePickerCursor - 1 + len(availableThemes)) % len(availableThemes)
@@ -2051,12 +2076,9 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.themePickerCursor = (a.themePickerCursor + 1) % len(availableThemes)
 		preview()
 	case "e":
-		if availableThemes[a.themePickerCursor] != "custom" {
-			return a, nil
-		}
-		prefill := theme.CurrentPalette()
-		if a.customPalette != nil {
-			prefill = *a.customPalette
+		prefill, ok := rowPalette()
+		if !ok {
+			prefill = theme.CurrentPalette() // "custom" row, nothing saved yet — fall back like before
 		}
 		a.themeEditorOrig = a.themePickerOrig
 		a.themeEditorOrigPalette = theme.CurrentPalette() // snapshot before preview, for correct revert
@@ -2068,26 +2090,25 @@ func (a App) handleThemePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.themeEditor = screens.NewThemeEditorModel(prefill)
 		return a, nil
 	case "x":
-		if availableThemes[a.themePickerCursor] != "custom" || a.customPalette == nil {
-			return a, nil // nothing saved yet to export
+		p, ok := rowPalette()
+		if !ok {
+			return a, nil // "custom" row, nothing saved yet to export
 		}
 		a.themePickerOpen = false
 		a.pathPromptOpen = true
 		a.pathPromptPurpose = pathPromptExport
 		a.pathPromptOverwritePending = ""
+		a.pathPromptExportPalette = p
 		var cmd tea.Cmd
-		a.pathPrompt, cmd = a.pathPrompt.Open("export custom theme to", defaultThemeFilePath)
+		a.pathPrompt, cmd = a.pathPrompt.Open("export theme to", defaultThemeFilePath)
 		return a, cmd
 	case "i":
-		if availableThemes[a.themePickerCursor] != "custom" {
-			return a, nil
-		}
 		a.themePickerOpen = false
 		a.pathPromptOpen = true
 		a.pathPromptPurpose = pathPromptImport
 		a.pathPromptOverwritePending = ""
 		var cmd tea.Cmd
-		a.pathPrompt, cmd = a.pathPrompt.Open("import custom theme from", defaultThemeFilePath)
+		a.pathPrompt, cmd = a.pathPrompt.Open("import theme from", defaultThemeFilePath)
 		return a, cmd
 	case "enter":
 		selected := availableThemes[a.themePickerCursor]

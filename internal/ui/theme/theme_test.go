@@ -170,6 +170,25 @@ func TestCurrentPalette_RoundTrips(t *testing.T) {
 	}
 }
 
+func TestBuiltinPalette_KnownName(t *testing.T) {
+	p, ok := BuiltinPalette("vt320")
+	if !ok {
+		t.Fatal("expected ok=true for a known built-in")
+	}
+	if p.Foreground != "#FFB000" {
+		t.Errorf("Foreground = %q, want vt320's literal #FFB000", p.Foreground)
+	}
+}
+
+func TestBuiltinPalette_UnknownName(t *testing.T) {
+	if _, ok := BuiltinPalette("not-a-theme"); ok {
+		t.Error("expected ok=false for an unknown name")
+	}
+	if _, ok := BuiltinPalette("custom"); ok {
+		t.Error("expected ok=false for \"custom\" — it has no fixed built-in palette")
+	}
+}
+
 const examplePostBody = `Check out my new theme!
 
 /* Cyberspace Custom Theme */
