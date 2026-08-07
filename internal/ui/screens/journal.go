@@ -356,11 +356,7 @@ func (m JournalModel) handleEditKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
 
 	if m.topicsFocused {
 		var cmd tea.Cmd
-		filtered, ok := filterAmbiguousKeyMsg(msg)
-		if !ok {
-			return m, nil
-		}
-		m.topicsInput, cmd = m.topicsInput.Update(filtered)
+		m.topicsInput, cmd = updateTopicsInput(m.topicsInput, msg)
 		return m, cmd
 	}
 
