@@ -382,7 +382,7 @@ func (l TabsLayout) screenHints(a App) []hint {
 			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
 		hints := []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}}
-		if a.postDetail.HasThemeInPost() {
+		if a.postDetail.HasTheme() {
 			hints = append(hints, hint{"T", "try theme"})
 		}
 		return append(hints, hint{"esc", "back"}, more)

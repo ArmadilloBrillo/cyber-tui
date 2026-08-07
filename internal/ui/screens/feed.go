@@ -124,11 +124,14 @@ func NewFeedModel() FeedModel {
 }
 
 // ParseTopics splits a comma-separated topic string and caps the result at 3.
-// Empty parts are ignored. Leading/trailing whitespace is trimmed.
+// Empty parts are ignored. Leading/trailing whitespace is trimmed. Topics are
+// lowercased here — the field itself preserves whatever case was typed (see
+// filterSlugCharsKeyMsg), matching the API's documented "must be lowercase"
+// rule only at this submit boundary.
 func ParseTopics(s string) []string {
 	var out []string
 	for _, part := range strings.Split(s, ",") {
-		t := strings.TrimSpace(part)
+		t := strings.ToLower(strings.TrimSpace(part))
 		if t != "" {
 			out = append(out, t)
 		}

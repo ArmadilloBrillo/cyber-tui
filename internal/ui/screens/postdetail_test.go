@@ -390,21 +390,21 @@ Code: #7A5DFF
 Code BG: #5100ff
 `
 
-func TestPostDetail_ThemeBlockDetected_SetsHasThemeInPost(t *testing.T) {
+func TestPostDetail_ThemeBlockDetected_SetsHasTheme(t *testing.T) {
 	m := initPostDetail()
 	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: postWithThemeBlock})
 
-	if !m.HasThemeInPost() {
-		t.Error("expected HasThemeInPost() == true for a post with a theme block")
+	if !m.HasTheme() {
+		t.Error("expected HasTheme() == true for a post with a theme block")
 	}
 }
 
-func TestPostDetail_NoThemeBlock_HasThemeInPostFalse(t *testing.T) {
+func TestPostDetail_NoThemeBlock_HasThemeFalse(t *testing.T) {
 	m := initPostDetail()
 	m = m.SetPost(pdPost("p1")) // plain "original post" content, no theme block
 
-	if m.HasThemeInPost() {
-		t.Error("expected HasThemeInPost() == false for a post without a theme block")
+	if m.HasTheme() {
+		t.Error("expected HasTheme() == false for a post without a theme block")
 	}
 }
 
@@ -435,19 +435,51 @@ func TestPostDetail_T_NoOp_WhenNoThemeBlock(t *testing.T) {
 	}
 }
 
-func TestPostDetail_T_NoOp_WhenReplySelected(t *testing.T) {
+func TestPostDetail_T_NoOp_WhenSelectedReplyHasNoThemeBlock(t *testing.T) {
 	m := initPostDetail()
 	now := time.Now()
 	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: postWithThemeBlock})
-	m = m.SetReplies([]model.Reply{pdReply("r1", "", "alice", now)})
+	m = m.SetReplies([]model.Reply{pdReply("r1", "", "alice", now)}) // plain content, no theme block
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select the reply
 	if m.SelectedReplyID() != "r1" {
 		t.Fatal("expected the reply to be selected")
 	}
 
+	if m.HasTheme() {
+		t.Error("expected HasTheme() == false for a reply without a theme block, even though the post has one")
+	}
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("T")})
 	if cmd != nil {
-		t.Error("expected T to no-op when a reply (not the post) is selected, even with a theme block present")
+		t.Error("expected T to no-op when the selected reply has no theme block, even though the post does")
+	}
+}
+
+func TestPostDetail_T_EmitsPreviewPostThemeMsg_WhenSelectedReplyHasThemeBlock(t *testing.T) {
+	m := initPostDetail()
+	now := time.Now()
+	m = m.SetPost(pdPost("p1")) // plain post content, no theme block
+	reply := pdReply("r1", "", "alice", now)
+	reply.Content = postWithThemeBlock
+	m = m.SetReplies([]model.Reply{reply})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select the reply
+	if m.SelectedReplyID() != "r1" {
+		t.Fatal("expected the reply to be selected")
+	}
+
+	if !m.HasTheme() {
+		t.Error("expected HasTheme() == true for a reply with a theme block")
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("T")})
+	if cmd == nil {
+		t.Fatal("expected a cmd from T when the selected reply has a theme block")
+	}
+	msg, ok := cmd().(screens.PreviewPostThemeMsg)
+	if !ok {
+		t.Fatalf("expected PreviewPostThemeMsg, got %T", cmd())
+	}
+	if msg.Palette.Foreground != "#d000ff" {
+		t.Errorf("Palette.Foreground = %q, want #d000ff", msg.Palette.Foreground)
 	}
 }

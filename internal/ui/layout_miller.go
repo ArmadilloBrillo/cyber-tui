@@ -443,7 +443,7 @@ func (l MillerLayout) screenHints(a App) []hint {
 		return []hint{{"j/k", "nav"}, {"l/↵", "enter"}, {"1-9 / g+", "jump"}, {"?", "more"}}
 	case focusDetail:
 		hints := []hint{{"h/←", "list"}, {"j/k", "replies"}, {"↵", "thread"}, {"r", "reply"}}
-		if a.active == screenPostDetail && a.postDetail.HasThemeInPost() {
+		if a.active == screenPostDetail && a.postDetail.HasTheme() {
 			hints = append(hints, hint{"T", "try theme"})
 		}
 		return hints

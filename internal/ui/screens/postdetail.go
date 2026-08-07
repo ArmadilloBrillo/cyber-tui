@@ -169,9 +169,27 @@ func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 	return m
 }
 
-// HasThemeInPost reports whether the currently open post's body contains a
+// currentTheme returns the detected theme block for whatever's currently
+// selected — the post itself (cached in postTheme, computed once in
+// SetPost), or the selected reply's content, parsed on demand. Reply content
+// is small and the regex scan is cheap, so this isn't cached per selection
+// the way postTheme is.
+func (m PostDetailModel) currentTheme() *theme.Palette {
+	if m.selectedReply < 0 {
+		return m.postTheme
+	}
+	if m.selectedReply >= len(m.flatTree) {
+		return nil
+	}
+	if p, ok := theme.ParsePost(m.flatTree[m.selectedReply].Reply.Content); ok {
+		return &p
+	}
+	return nil
+}
+
+// HasTheme reports whether the currently selected post or reply contains a
 // detected custom-theme block (see docs/40-custom-themes.md).
-func (m PostDetailModel) HasThemeInPost() bool { return m.postTheme != nil }
+func (m PostDetailModel) HasTheme() bool { return m.currentTheme() != nil }
 
 // HasPost reports whether a post is currently open or persisted in the
 // background — used by activateScreen to decide whether returning to the
@@ -593,11 +611,8 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			m, cmd = m.OpenCompose()
 			return m, cmd
 		case "T":
-			// Post-only (not replies) — matches how these theme blocks are
-			// actually shared, and keeps detection a one-time SetPost cost.
-			if m.selectedReply < 0 && m.postTheme != nil {
-				p := *m.postTheme
-				return m, func() tea.Msg { return PreviewPostThemeMsg{Palette: p} }
+			if p := m.currentTheme(); p != nil {
+				return m, func() tea.Msg { return PreviewPostThemeMsg{Palette: *p} }
 			}
 			return m, nil
 		case "p":
