@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -245,6 +246,46 @@ func TestParsePost_NoMarker_NotDetected(t *testing.T) {
 	}
 }
 
+func TestParsePost_NoMarker_OneFieldOnly_NotDetected(t *testing.T) {
+	_, ok := ParsePost("my new setup, the border looks great: Border: #270082")
+	if ok {
+		t.Error("expected ok=false when only one field matches and the marker is absent")
+	}
+}
+
+func TestParsePost_NoMarker_ClusteredFields_DetectedViaFallback(t *testing.T) {
+	body := `My Custom Theme
+Base Theme: vt320
+Foreground: #d000ff
+Border: #270082
+`
+	p, ok := ParsePost(body)
+	if !ok {
+		t.Fatal("expected ok=true via the field-based fallback when the marker is relabeled")
+	}
+	vt320 := builtinPalettes["vt320"]
+	if p.Accent != vt320.Accent {
+		t.Errorf("Accent = %q, want vt320's %q (base theme should still resolve)", p.Accent, vt320.Accent)
+	}
+	if p.Foreground != "#d000ff" || p.Border != "#270082" {
+		t.Errorf("explicit fields not overlaid correctly: %+v", p)
+	}
+}
+
+func TestParsePost_NoMarker_FieldsTooFarApart_NotDetected(t *testing.T) {
+	lines := make([]string, 0, postParseWindow+10)
+	lines = append(lines, "Foreground: #d000ff")
+	for range postParseWindow + 2 {
+		lines = append(lines, "just some unrelated line of text")
+	}
+	lines = append(lines, "Border: #270082")
+
+	_, ok := ParsePost(strings.Join(lines, "\n"))
+	if ok {
+		t.Error("expected ok=false when matched fields are spread further apart than postParseWindow")
+	}
+}
+
 func TestParsePost_KnownBaseTheme_FillsUnmappedFromIt(t *testing.T) {
 	p, ok := ParsePost(examplePostBody)
 	if !ok {
@@ -370,6 +411,65 @@ func TestParsePost_BlockquoteWrappedFields_StillOverlay(t *testing.T) {
 	if p.Foreground != "#f4a4c0" || p.Background != "#450d59" || p.Dimmed != "#ee719e" ||
 		p.Border != "#e63b7a" || p.Highlight != "#c3d117" || p.CodeBackground != "#6f760a" {
 		t.Errorf("blockquote-wrapped fields not overlaid correctly: %+v", p)
+	}
+}
+
+// --- CSS color functions (rgb/rgba/hsl/hsla) ---
+
+func TestParseCSSColor(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   string
+		wantOK bool
+	}{
+		{"#D000FF", "#D000FF", true},                    // plain hex passes through unchanged
+		{"rgb(255,0,128)", "#FF0080", true},              // no spaces, no alpha
+		{"rgb(255, 0, 128)", "#FF0080", true},            // spaces after commas
+		{"rgba(255, 0, 128, 0.8)", "#CC0066", true},      // alpha composited against black
+		{"hsl(0,0%,100%)", "#ffffff", true},              // white, no alpha
+		{"hsla(0,0%,100%,.75)", "#BFBFBF", true},         // alpha composited against black
+		{"hsla(0,0%,100%,40%)", "#666666", true},         // alpha as a percentage
+		{"hsla(0, 0%, 0%, 1)", "#000000", true},          // alpha=1, black stays black
+		{"rgb(255,0)", "", false},                        // too few components
+		{"rgb(300,0,0)", "", false},                      // out of range
+		{"rgb(x,0,0)", "", false},                        // non-numeric
+		{"rgba(255,0,0,1.5)", "", false},                 // alpha out of range
+		{"rgba(255,0,0,x)", "", false},                   // alpha non-numeric
+		{"cmyk(0,0,0,0)", "", false},                     // unrecognized function
+		{"hsla(0,0%,100%,.75", "", false},                // unclosed paren
+		{"vt320", "", false},                             // bare word, not a color
+	}
+	for _, c := range cases {
+		got, ok := parseCSSColor(c.in)
+		if ok != c.wantOK {
+			t.Errorf("parseCSSColor(%q) ok = %v, want %v", c.in, ok, c.wantOK)
+			continue
+		}
+		if ok && !strings.EqualFold(got, c.want) {
+			t.Errorf("parseCSSColor(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestParsePost_HSLAField_OverlaysConvertedHex(t *testing.T) {
+	body := `/* Cyberspace Custom Theme */
+Base Theme: vt320
+Foreground: hsla(0,0%,100%,.75)
+Border: rgb(39,57,57)
+`
+	p, ok := ParsePost(body)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if !strings.EqualFold(p.Foreground, "#BFBFBF") {
+		t.Errorf("Foreground = %q, want #BFBFBF (converted from hsla, alpha composited against black)", p.Foreground)
+	}
+	if !strings.EqualFold(p.Border, "#273939") {
+		t.Errorf("Border = %q, want #273939 (converted from rgb)", p.Border)
+	}
+	vt320 := builtinPalettes["vt320"]
+	if p.Dimmed != vt320.Dimmed {
+		t.Errorf("Dimmed = %q, want vt320's base value %q (field not present in block)", p.Dimmed, vt320.Dimmed)
 	}
 }
 

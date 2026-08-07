@@ -4,7 +4,7 @@
 
 Alongside the 4 built-in themes (cyber, c64, vt320, bland), users can build and save their own "custom" theme from inside the TUI. The custom theme is a palette edited via a modal opened from the existing theme picker (`t`), and persisted to `~/.cyber-tui.json`.
 
-Users on cyberspace.online also post custom themes as formatted text blocks (base theme + hex colors + some webui-only font/effect fields). Post Detail's `T` key detects one of these blocks and opens the same theme editor prefilled from it, so trying it out and saving/canceling both reuse the manual editor's existing preview/save/revert contract — see Post Theme Import below.
+Users on cyberspace.online also post custom themes as formatted text blocks (base theme + hex colors + some webui-only font/effect fields), in top-level posts and replies alike. Post Detail's `T` key detects a block in whichever's currently selected — the post itself, or a reply — and opens the same theme editor prefilled from it, so trying it out and saving/canceling both reuse the manual editor's existing preview/save/revert contract — see Post Theme Import below.
 
 ---
 
@@ -32,10 +32,10 @@ theme.Set(cfg.Theme)
 
 ### Post Theme Import
 
-1. `PostDetailModel.SetPost` calls `theme.ParsePost(post.Content)` once per post load (not per keystroke) and stores the result in `postTheme *theme.Palette` (nil if no theme block was detected). `HasThemeInPost()` exposes this for the `T` hint (shown in the footer and help modal only when a block was found) and both layouts' `screenHints`.
-2. `T`, pressed with the post itself focused (not a reply) and a block detected, emits `screens.PreviewPostThemeMsg{Palette}`.
-3. `App`'s handler snapshots `themeEditorOrig`/`themeEditorOrigPalette` (as above), then previews and opens the theme editor exactly like the picker's `e` key — but prefilled from the parsed post palette instead of the current theme. From here it's the same editor: review the swatches, tweak anything, `ctrl+s` to keep it (persists as the new custom theme and activates it) or `esc` to cancel (reverts fully to whatever was active before).
-4. Detection is post-body only, not replies — matches how these blocks are actually shared (their own top-level post) and keeps parsing a one-time cost per post load.
+1. `PostDetailModel.SetPost` calls `theme.ParsePost(post.Content)` once per post load (not per keystroke) and stores the result in `postTheme *theme.Palette` (nil if no theme block was detected). `currentTheme()` returns `postTheme` when the post itself is selected, or parses the currently selected reply's content on demand (`theme.ParsePost(reply.Content)`, not cached — reply content is small and the scan is cheap). `HasTheme()` exposes this for the `T` hint (shown in the footer and help modal only when a block was found in whatever's currently selected) and both layouts' `screenHints`.
+2. `T`, pressed with a block detected in the current selection (post or reply), emits `screens.PreviewPostThemeMsg{Palette}`.
+3. `App`'s handler snapshots `themeEditorOrig`/`themeEditorOrigPalette` (as above), then previews and opens the theme editor exactly like the picker's `e` key — but prefilled from the parsed palette instead of the current theme. From here it's the same editor: review the swatches, tweak anything, `ctrl+s` to keep it (persists as the new custom theme and activates it) or `esc` to cancel (reverts fully to whatever was active before).
+4. Detection is scoped to whatever's currently selected — the post, or one reply at a time — not a scan of the whole thread at once.
 
 See `theme.ParsePost`'s doc comment and the post-field mapping table below for how the block's fields resolve.
 
@@ -107,10 +107,11 @@ Fields are named to line up with the theme blocks users post on cyberspace.onlin
 | *(no post field)* | `Accent`, `Error`, `BarText`, `Self`, `Meta` | TUI-only roles with no webui-post equivalent; resolved from the base theme (see below) |
 
 `ParsePost(content string) (Palette, bool)`:
-1. Looks for the marker line (`/* Cyberspace Custom Theme */`, case-insensitive substring match). Absent → `ok=false`; nothing else matters.
-2. Scans up to 30 lines after the marker for a known field name followed by its value, found *anywhere* within the line (`postFieldLineRe` is deliberately not anchored to the line's start/end); everything not in its 7-name alternation (`Main Font`, `Disable Text Glow`, `/* Colors */`, etc. — webui-only, no `Palette` field) is simply never matched, no special-casing needed to ignore it. Users paste the exported block into a post using whatever markdown styling their client applies — the web UI wraps each line in backticks (e.g. `` `Foreground: #ff5d00` ``), other posts have been seen with `> ` blockquote markers instead, sometimes nested or combined (e.g. `` > `Foreground: #ff5d00` ``) — and since the regex isn't anchored, that decoration just falls outside the match rather than needing to be recognized and stripped. The value alternatives are narrow (an exact 6-digit hex, or a bare word for `Base Theme` names) so decoration stuck directly onto a value's end can't leak into the capture either. This was a real bug in an earlier version of this parser (anchored `^...$` regex, required the whole line to be exactly `Key: value`): `T` would enable normally (the marker is matched by loose substring, unaffected) but the preview silently fell back to the current theme for every field, since none of them ever matched with any wrapping present.
-3. Resolves the base palette: if `Base Theme` names one of our own built-ins (`cyber`/`c64`/`vt320`/`bland`, case-insensitive) → `builtinPalettes[name]`, the actual author-intended values for the unmapped fields; otherwise → `CurrentPalette()` (today's active theme), since inventing values for an unrecognized name would just be guessing.
-4. Overlays each recognized color field onto the base **only if `ValidHex` passes** — a malformed or missing individual field silently falls back to the base's value rather than invalidating the whole block (a typo in one line shouldn't discard an otherwise-good theme). `ok=true` as long as the marker was found, even in this degenerate case.
+1. Looks for the marker line (`/* Cyberspace Custom Theme */`, case-insensitive substring match). If found, fields are scanned from the 30 lines after it (step 2), and `ok=true` regardless of how many fields actually matched.
+2. Scans for a known field name followed by its value, found *anywhere* within the line (`postFieldLineRe` is deliberately not anchored to the line's start/end); everything not in its 7-name alternation (`Main Font`, `Disable Text Glow`, `/* Colors */`, etc. — webui-only, no `Palette` field) is simply never matched, no special-casing needed to ignore it. Users paste the exported block into a post using whatever markdown styling their client applies — the web UI wraps each line in backticks (e.g. `` `Foreground: #ff5d00` ``), other posts have been seen with `> ` blockquote markers instead, sometimes nested or combined (e.g. `` > `Foreground: #ff5d00` ``) — and since the regex isn't anchored, that decoration just falls outside the match rather than needing to be recognized and stripped. The value alternatives are narrow (an exact 6-digit hex, or a bare word for `Base Theme` names) so decoration stuck directly onto a value's end can't leak into the capture either. This was a real bug in an earlier version of this parser (anchored `^...$` regex, required the whole line to be exactly `Key: value`): `T` would enable normally (the marker is matched by loose substring, unaffected) but the preview silently fell back to the current theme for every field, since none of them ever matched with any wrapping present.
+3. **Marker-absent fallback**: some users relabel or edit the marker line when pasting a block into a post, so its absence doesn't end detection — the whole content is scanned for field lines instead of just the 30 lines after a marker. `ok=true` only if at least `minFieldsForDetection` (2) distinct fields matched *and* the matched lines fall within `postParseWindow` (30) lines of each other — one stray matched word, or two unrelated mentions spread across a long post, aren't enough signal on their own.
+4. Resolves the base palette: if `Base Theme` names one of our own built-ins (`cyber`/`c64`/`vt320`/`bland`, case-insensitive) → `builtinPalettes[name]`, the actual author-intended values for the unmapped fields; otherwise → `CurrentPalette()` (today's active theme), since inventing values for an unrecognized name would just be guessing.
+5. Overlays each recognized color field onto the base **only if the value resolves to hex via `parseCSSColor`** — a malformed or missing individual field silently falls back to the base's value rather than invalidating the whole block (a typo in one line shouldn't discard an otherwise-good theme). `parseCSSColor` accepts a value already in `#RRGGBB` form, or an `rgb()`/`rgba()`/`hsl()`/`hsla()` CSS function call (e.g. `hsla(0, 0%, 100%, .75)`), converting it to hex. HSL→RGB math is done by `github.com/lucasb-eyer/go-colorful` (already pulled in transitively via lipgloss/termenv). An alpha component (the `a` variants) is **composited against a fixed black background** rather than discarded — `hsla(0,0%,100%,.4)` becomes `#666666`, not `#FFFFFF` — since theme authors commonly derive a dimmed/border variant of a base color purely via alpha; dropping it would collapse those fields to the same full-opacity color as the base.
 
 ```go
 // internal/config
@@ -140,7 +141,7 @@ type Config struct {
 | `enter`/`esc` | editor (editing) | Commit the field, back to row nav |
 | `ctrl+s` | editor (row nav or mid-edit) | Save the current palette — works regardless of whether a field is focused, and even with no edits at all (e.g. right after `T`/import, to accept it as-is); blocked only if a color is currently invalid |
 | `esc` | editor (row nav) | Close without saving, revert theme |
-| `T` | Post Detail, post focused (not a reply) | Preview a detected post theme — opens the editor prefilled from it, when `HasThemeInPost()` |
+| `T` | Post Detail, post or reply focused | Preview a detected theme block in whatever's currently selected — opens the editor prefilled from it, when `HasTheme()` |
 | `x` | picker, any row | Export the highlighted row's theme to a file (guarded only on the "custom" row having nothing saved yet) |
 | `i` | picker, any row | Import a theme file — opens the editor prefilled from it for review |
 | `enter` | path prompt | Submit the path (a second identical submit confirms an export overwrite) |
@@ -172,7 +173,10 @@ Same as the Settings screen: edits accumulate in memory (with live preview) unti
 - [x] Live preview while editing
 - [x] Ephemeral (SSH) sessions: editing works, persistence no-ops
 - [x] `builtinPalettes` data table + `theme.ParsePost` (detects and resolves a post's theme block)
-- [x] Post Detail's `T` key + `HasThemeInPost()` hint, wired into both layouts
+- [x] Post Detail's `T` key + `HasTheme()` hint, wired into both layouts
+- [x] Marker-absent fallback: field-cluster detection when the marker line is relabeled or missing (`minFieldsForDetection`, `postParseWindow`-bounded clustering), covered by tests
+- [x] Detection extended to replies: `T`/`HasTheme()` scoped to whichever's currently selected (post or reply), parsed on demand
+- [x] `rgb()`/`rgba()`/`hsl()`/`hsla()` color values accepted alongside hex (`parseCSSColor`, alpha composited against black), covered by tests
 - [x] Revert-on-cancel bug fixed (`themeEditorOrigPalette` snapshot), covered by a regression test
 - [x] Markdown-wrapped post fields bug fixed (`postFieldLineRe` is unanchored and matches a known field name + narrowly-typed value anywhere in the line, so backticks/blockquotes/bold/bullets in any combination simply fall outside the match), covered by a regex-level test on the decoration property plus regression tests using two real posted formats (backtick-wrapped, blockquote-wrapped)
 - [x] `theme.ExportToFile`/`ImportFromFile`/`ExpandHome`
