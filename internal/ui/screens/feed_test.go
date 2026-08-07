@@ -1,6 +1,7 @@
 package screens_test
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -349,5 +350,25 @@ func TestFeed_UpAtTop_WithPendingNew_AnimatesThenMergesLocally(t *testing.T) {
 
 	if m.PendingNewCount() != 0 {
 		t.Errorf("PendingNewCount() = %d, want 0 after the merge tick fires", m.PendingNewCount())
+	}
+}
+
+// --- ParseTopics ---
+
+func TestParseTopics_LowercasesTrimsCapsAndIgnoresEmpty(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{"MUSIC", []string{"music"}},
+		{"Music, Linux", []string{"music", "linux"}},
+		{"a,,b,", []string{"a", "b"}},
+		{"a,b,c,d", []string{"a", "b", "c"}}, // capped at 3
+	}
+	for _, c := range cases {
+		if got := screens.ParseTopics(c.in); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("ParseTopics(%q) = %#v, want %#v", c.in, got, c.want)
+		}
 	}
 }

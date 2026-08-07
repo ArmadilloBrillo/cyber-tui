@@ -1,6 +1,9 @@
 package screens
 
 import (
+	"strings"
+
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -32,6 +35,127 @@ func filterAmbiguousKeyMsg(msg tea.KeyMsg) (tea.KeyMsg, bool) {
 	}
 	msg.Runes = filtered
 	return msg, true
+}
+
+// filterSlugCharsKeyMsg drops any rune not in [a-zA-Z0-9-] (plus
+// extraAllowed, for fields that need a delimiter — e.g. topics' comma/space
+// separators) before it reaches a textinput. Case is left as typed — the
+// API's documented slug/topics character rules
+// (docs/00-latest-api-reference.md) require lowercase, but that's applied
+// once at the submit boundary (SlugValue, ParseTopics) rather than live, so
+// what's on screen matches what was typed. If every rune in the message is
+// filtered out, returns keep=false so nothing is inserted.
+func filterSlugCharsKeyMsg(msg tea.KeyMsg, extraAllowed string) (tea.KeyMsg, bool) {
+	if msg.Type != tea.KeyRunes {
+		return msg, true
+	}
+	filtered := make([]rune, 0, len(msg.Runes))
+	for _, r := range msg.Runes {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-':
+			filtered = append(filtered, r)
+		case strings.ContainsRune(extraAllowed, r):
+			filtered = append(filtered, r)
+		}
+	}
+	if len(filtered) == 0 {
+		return msg, false
+	}
+	msg.Runes = filtered
+	return msg, true
+}
+
+// topicsCount returns the number of non-empty, trimmed comma-separated
+// segments in s — mirrors ParseTopics' counting rule without allocating the
+// slice ParseTopics returns.
+func topicsCount(s string) int {
+	n := 0
+	for _, part := range strings.Split(s, ",") {
+		if strings.TrimSpace(part) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// lastTopicSegment returns the portion of current after its last comma (or
+// the whole string, if there's no comma yet) — the topic currently being
+// typed.
+func lastTopicSegment(current string) string {
+	if idx := strings.LastIndex(current, ","); idx != -1 {
+		return current[idx+1:]
+	}
+	return current
+}
+
+// filterTopicsKeyMsg applies filterSlugCharsKeyMsg (allowing ", " as topic
+// delimiters) and additionally drops:
+//   - a comma that would open a 4th topic (current already holds 3 —
+//     mirrors ParseTopics' cap live instead of silently truncating at
+//     submit time), or finalize a topic that's empty/space-only or ends in
+//     a space;
+//   - a space that would lead a topic, or immediately follow another space
+//     — a topic may contain single spaces, never a run of 2+.
+//
+// current is the field's value before this keystroke is applied.
+func filterTopicsKeyMsg(msg tea.KeyMsg, current string) (tea.KeyMsg, bool) {
+	filtered, keep := filterSlugCharsKeyMsg(msg, ", ")
+	if !keep || msg.Type != tea.KeyRunes {
+		return filtered, keep
+	}
+	segment := lastTopicSegment(current)
+	segmentEmpty := strings.TrimSpace(segment) == ""
+	trailingSpace := strings.HasSuffix(segment, " ")
+	blockComma := segmentEmpty || trailingSpace || topicsCount(current) >= 3
+	blockSpace := segmentEmpty || trailingSpace
+	if !blockComma && !blockSpace {
+		return filtered, true
+	}
+	runes := make([]rune, 0, len(filtered.Runes))
+	for _, r := range filtered.Runes {
+		if r == ',' && blockComma {
+			continue
+		}
+		if r == ' ' && blockSpace {
+			continue
+		}
+		runes = append(runes, r)
+	}
+	if len(runes) == 0 {
+		return filtered, false
+	}
+	filtered.Runes = runes
+	return filtered, true
+}
+
+// updateTopicsInput processes one message against a topics textinput,
+// applying filterTopicsKeyMsg's rules. If the key would type a comma right
+// after an accidental trailing space, the space is silently trimmed first
+// so the comma still lands, instead of leaving the comma key dead — a
+// previously reported annoyance. The "no trailing space" rule still holds;
+// it's just enforced by auto-correction here rather than refusal. The trim
+// is only committed to the field once the comma is confirmed to pass
+// filterTopicsKeyMsg — a comma that's still going to be rejected anyway
+// (e.g. it would open an empty topic) leaves the field untouched, same as
+// any other blocked keystroke.
+func updateTopicsInput(input textinput.Model, msg tea.Msg) (textinput.Model, tea.Cmd) {
+	km, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return input.Update(msg)
+	}
+	current := input.Value()
+	trimCandidate := current
+	if km.Type == tea.KeyRunes && strings.ContainsRune(string(km.Runes), ',') {
+		trimCandidate = strings.TrimRight(current, " ")
+	}
+	filtered, keep := filterTopicsKeyMsg(km, trimCandidate)
+	if !keep {
+		return input, nil
+	}
+	if trimCandidate != current {
+		input.SetValue(trimCandidate)
+	}
+	return input.Update(filtered)
 }
 
 // extractURLs is a package-internal helper used by URLProvider implementations.

@@ -330,7 +330,7 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.titleInput.SetValue("")
 	m.slugInput.SetValue("")
 	m.slugError = ""
-	m.topicsInput.SetValue("tui")
+	m.topicsInput.SetValue("")
 	m.textarea.SetValue("")
 	m.bodyLines = composeMinLines
 	m.textarea.SetHeight(composeMinLines)
@@ -358,7 +358,9 @@ func (m PostComposePanel) Close() PostComposePanel {
 func (m PostComposePanel) IsActive() bool     { return m.active }
 func (m PostComposePanel) Content() string    { return m.textarea.Value() }
 func (m PostComposePanel) TitleValue() string { return strings.TrimSpace(m.titleInput.Value()) }
-func (m PostComposePanel) SlugValue() string  { return strings.TrimSpace(m.slugInput.Value()) }
+func (m PostComposePanel) SlugValue() string {
+	return strings.ToLower(strings.TrimSpace(m.slugInput.Value()))
+}
 func (m PostComposePanel) TopicsRaw() string  { return m.topicsInput.Value() }
 func (m PostComposePanel) IsPublic() bool     { return m.isPublic }
 func (m PostComposePanel) IsNSFW() bool       { return m.isNSFW }
@@ -497,7 +499,7 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 		return m, cmd
 	case postFieldSlug:
 		if km, ok := msg.(tea.KeyMsg); ok {
-			filtered, keep := filterAmbiguousKeyMsg(km)
+			filtered, keep := filterSlugCharsKeyMsg(km, "")
 			if !keep {
 				return m, nil
 			}
@@ -528,17 +530,8 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 		m.textarea, cmd = m.textarea.Update(msg)
 		return m.recalcBodyHeight(), cmd
 	case postFieldTopics:
-		if km, ok := msg.(tea.KeyMsg); ok {
-			filtered, keep := filterAmbiguousKeyMsg(km)
-			if !keep {
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.topicsInput, cmd = m.topicsInput.Update(filtered)
-			return m, cmd
-		}
 		var cmd tea.Cmd
-		m.topicsInput, cmd = m.topicsInput.Update(msg)
+		m.topicsInput, cmd = updateTopicsInput(m.topicsInput, msg)
 		return m, cmd
 	}
 	// postFieldPublic, postFieldNSFW: no text input, only space handled above.
