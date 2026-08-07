@@ -3,12 +3,15 @@ package theme
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	colorful "github.com/lucasb-eyer/go-colorful"
 )
 
 // Layout constants — shared across app and screens so viewport heights
@@ -243,14 +246,23 @@ func CurrentPalette() Palette {
 
 // postThemeMarker is the fixed marker line cyberspace.online's web UI emits
 // at the top of a posted custom-theme block. Its presence (case-insensitive
-// substring match) is what triggers detection; everything else is lenient.
+// substring match) is the fast path that triggers detection. Users often
+// relabel or edit this line when pasting a block into a post, so its absence
+// doesn't rule out a theme block — see the fallback in ParsePost.
 const postThemeMarker = "cyberspace custom theme"
 
 // postParseWindow bounds how many lines after the marker ParsePost scans for
 // "Key: value" fields — generous for the known fixed format (under 20 lines)
 // without letting a false-positive scan run into unrelated later content in
-// a long post.
+// a long post. Also used, when the marker is absent, as the maximum spread
+// between the first and last matched field line for the fallback below.
 const postParseWindow = 30
+
+// minFieldsForDetection is the minimum number of distinct recognized fields
+// required to treat a post as containing a theme block when the marker line
+// is missing — one matched word alone (e.g. a post that just says "the
+// border looks off") isn't enough signal on its own.
+const minFieldsForDetection = 2
 
 // postFieldLineRe matches a known field name and its value anywhere within a
 // line, e.g. "Foreground: #d000ff" or "Base Theme: vt320" — deliberately not
@@ -258,12 +270,119 @@ const postParseWindow = 30
 // line in (backticks, blockquotes, bold, bullets, any combination or
 // nesting, e.g. "> `Foreground: #ff5d00`") simply falls outside the match
 // instead of needing to be stripped first. The value alternatives are narrow
-// (an exact 6-digit hex, or a bare word for Base Theme names) so decoration
+// (an exact 6-digit hex, an rgb()/rgba()/hsl()/hsla() CSS function call —
+// see parseCSSColor — or a bare word for Base Theme names) so decoration
 // stuck directly onto a value's end (e.g. "#ff5d00`") can't leak into the
-// capture either. "code bg" is listed before "code" so "Code BG: ..." binds
-// to the more specific alternative. Field names not in this list (comments
-// like "/* Colors */", webui-only fields like "Main Font") never match.
-var postFieldLineRe = regexp.MustCompile(`(?i)(base theme|code bg|foreground|background|dimmed|border|code)\s*:\s*(#[0-9A-Fa-f]{6}|[A-Za-z0-9_-]+)`)
+// capture either. The CSS-function alternative is listed before the bare
+// word one so it wins in full rather than being truncated at the value's
+// leading letters (Go's regexp prefers the first alternative that matches).
+// "code bg" is listed before "code" so "Code BG: ..." binds to the more
+// specific alternative. Field names not in this list (comments like
+// "/* Colors */", webui-only fields like "Main Font") never match.
+var postFieldLineRe = regexp.MustCompile(`(?i)(base theme|code bg|foreground|background|dimmed|border|code)\s*:\s*(#[0-9A-Fa-f]{6}|(?:rgba?|hsla?)\([^)]*\)|[A-Za-z0-9_-]+)`)
+
+// cssColorFuncRe matches an rgb()/rgba()/hsl()/hsla() CSS color function
+// call, e.g. "hsla(0, 0%, 100%, .75)" or "rgb(255,0,128)".
+var cssColorFuncRe = regexp.MustCompile(`(?i)^(rgba?|hsla?)\(([^)]*)\)$`)
+
+// parseCSSColor resolves a post field's color value to a "#RRGGBB" hex
+// string: passes an already-valid hex value through unchanged, or converts
+// an rgb()/rgba()/hsl()/hsla() CSS function call. An alpha component (the
+// "a" variants) is composited against a fixed black background rather than
+// discarded — theme authors commonly derive a dimmed/border variant of a
+// base color purely via alpha (e.g. "hsla(0,0%,100%,.4)" as a faded-white
+// border), and dropping it would collapse every such field to the same
+// full-opacity color. Returns ok=false for anything else (malformed value,
+// unrecognized function, wrong component count).
+func parseCSSColor(v string) (string, bool) {
+	if ValidHex(v) {
+		return v, true
+	}
+	m := cssColorFuncRe.FindStringSubmatch(v)
+	if m == nil {
+		return "", false
+	}
+	parts := strings.Split(m[2], ",")
+	if len(parts) < 3 {
+		return "", false
+	}
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+
+	var r, g, b uint8
+	if strings.HasPrefix(strings.ToLower(m[1]), "rgb") {
+		rr, ok1 := parseByteComponent(parts[0])
+		gg, ok2 := parseByteComponent(parts[1])
+		bb, ok3 := parseByteComponent(parts[2])
+		if !ok1 || !ok2 || !ok3 {
+			return "", false
+		}
+		r, g, b = rr, gg, bb
+	} else {
+		h, err := strconv.ParseFloat(strings.TrimSuffix(parts[0], "deg"), 64)
+		s, ok2 := parsePercentComponent(parts[1])
+		l, ok3 := parsePercentComponent(parts[2])
+		if err != nil || !ok2 || !ok3 {
+			return "", false
+		}
+		c := colorful.Hsl(h, s, l)
+		r = uint8(c.R*255 + 0.5)
+		g = uint8(c.G*255 + 0.5)
+		b = uint8(c.B*255 + 0.5)
+	}
+
+	alpha := 1.0
+	if len(parts) >= 4 {
+		a, ok := parseAlphaComponent(parts[3])
+		if !ok {
+			return "", false
+		}
+		alpha = a
+	}
+	if alpha < 1 {
+		// Black background, so alpha-over compositing reduces to a plain
+		// per-channel scale — not the post's own Background field, which
+		// would need resolving before every other field and is itself
+		// reserved/unused elsewhere in Palette.
+		r = uint8(float64(r)*alpha + 0.5)
+		g = uint8(float64(g)*alpha + 0.5)
+		b = uint8(float64(b)*alpha + 0.5)
+	}
+	return fmt.Sprintf("#%02X%02X%02X", r, g, b), true
+}
+
+// parseByteComponent parses an rgb()/rgba() 0-255 integer component.
+func parseByteComponent(s string) (uint8, bool) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 || n > 255 {
+		return 0, false
+	}
+	return uint8(n), true
+}
+
+// parseAlphaComponent parses an rgba()/hsla() alpha component: a 0-1 float
+// (".75", "0.4", "1") or a percentage ("40%").
+func parseAlphaComponent(s string) (float64, bool) {
+	if strings.HasSuffix(s, "%") {
+		return parsePercentComponent(s)
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || f < 0 || f > 1 {
+		return 0, false
+	}
+	return f, true
+}
+
+// parsePercentComponent parses an hsl()/hsla() saturation or lightness
+// component (e.g. "100%") into the 0-1 range colorful.Hsl expects.
+func parsePercentComponent(s string) (float64, bool) {
+	f, err := strconv.ParseFloat(strings.TrimSuffix(s, "%"), 64)
+	if err != nil {
+		return 0, false
+	}
+	return f / 100, true
+}
 
 // ParsePost scans content for a posted custom-theme block (see
 // docs/40-custom-themes.md) and returns the resulting Palette. Fields the
@@ -272,9 +391,17 @@ var postFieldLineRe = regexp.MustCompile(`(?i)(base theme|code bg|foreground|bac
 // "Base Theme" names one of our own built-ins (case-insensitive), that
 // theme's full palette is used; otherwise CurrentPalette() (today's active
 // theme). The block's explicit, validly-hex fields are then overlaid on
-// top. Returns ok=false only when the marker itself isn't present — an
-// otherwise-malformed block still returns ok=true with the base palette
-// unchanged for any field it couldn't parse.
+// top.
+//
+// Detection has two paths. If the marker line is found, fields are scanned
+// from the 30 lines after it and ok=true regardless of how many fields
+// actually matched — an otherwise-malformed block still returns the base
+// palette unchanged for any field it couldn't parse. If the marker is
+// missing (someone relabeled or edited the header when pasting), the whole
+// content is scanned for field lines instead; ok=true only if at least
+// minFieldsForDetection distinct fields matched within postParseWindow lines
+// of each other, so a lone matched word or two unrelated mentions far apart
+// in a long post don't false-trigger.
 func ParsePost(content string) (Palette, bool) {
 	lines := strings.Split(content, "\n")
 	markerIdx := -1
@@ -284,19 +411,32 @@ func ParsePost(content string) (Palette, bool) {
 			break
 		}
 	}
-	if markerIdx == -1 {
-		return Palette{}, false
+
+	scanFrom, scanTo := 0, len(lines)
+	if markerIdx != -1 {
+		scanFrom = markerIdx + 1
+		scanTo = min(scanFrom+postParseWindow, len(lines))
 	}
 
-	end := min(markerIdx+1+postParseWindow, len(lines))
 	fields := make(map[string]string)
-	for _, line := range lines[markerIdx+1 : end] {
-		m := postFieldLineRe.FindStringSubmatch(line)
+	firstFieldIdx, lastFieldIdx := -1, -1
+	for i := scanFrom; i < scanTo; i++ {
+		m := postFieldLineRe.FindStringSubmatch(lines[i])
 		if m == nil {
 			continue
 		}
+		if firstFieldIdx == -1 {
+			firstFieldIdx = i
+		}
+		lastFieldIdx = i
 		key := strings.ToLower(m[1])
 		fields[key] = m[2]
+	}
+
+	if markerIdx == -1 {
+		if len(fields) < minFieldsForDetection || lastFieldIdx-firstFieldIdx > postParseWindow {
+			return Palette{}, false
+		}
 	}
 
 	base := CurrentPalette()
@@ -307,8 +447,10 @@ func ParsePost(content string) (Palette, bool) {
 	}
 
 	overlay := func(dst *string, key string) {
-		if v, ok := fields[key]; ok && ValidHex(v) {
-			*dst = v
+		if v, ok := fields[key]; ok {
+			if hex, ok := parseCSSColor(v); ok {
+				*dst = hex
+			}
 		}
 	}
 	overlay(&base.Foreground, "foreground")
