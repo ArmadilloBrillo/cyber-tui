@@ -36,7 +36,6 @@ func main() {
 		theme.SetCustomPalette(*cfg.CustomPalette)
 	}
 	theme.Set(cfg.Theme)
-	gfxProto := imgview.DetectProtocol()
 
 	if !cfg.UseMock {
 		if err := validateBaseURL(cfg.APIBaseURL, cfg.AllowInsecureAPI); err != nil {
@@ -83,6 +82,12 @@ func main() {
 	}
 
 	// Local TUI mode
+	gfxProto := imgview.DetectProtocol()
+	// Sixel terminals don't set a reliable env var, so probe only when env-var
+	// detection came up empty — Kitty/iTerm2 are higher fidelity when known.
+	if gfxProto == imgview.ProtocolNone && imgview.ProbeSixel(os.Stdin, os.Stdout) {
+		gfxProto = imgview.ProtocolSixel
+	}
 	app := ui.NewApp(newClient()).WithGraphicsProtocol(gfxProto)
 	// Prefer saved session (token-based) over autoEmail/autoPassword credentials.
 	if cfg.RefreshToken != "" {

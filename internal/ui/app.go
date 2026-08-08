@@ -442,6 +442,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.imageCarouselIndex = 0
 		a.imageFetchGen++ // invalidate anything still in flight
 		a.imageCache = nil
+		if a.graphicsProtocol == imgview.ProtocolSixel {
+			// Sixel has no delete-placement primitive like Kitty's a=d,d=A, and
+			// Bubble Tea's diff renderer can skip re-emitting a row whose text
+			// happens to match the prior frame, leaving stray pixels behind. A
+			// full repaint is the only reliable way to clear them.
+			return a, tea.ClearScreen
+		}
 		return a, nil
 	}
 	if a2, cmd, ok := a.handleKeys(msg); ok {
@@ -2334,6 +2341,13 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
+			case imgview.ProtocolSixel:
+				var err error
+				cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
+				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
 			default:
 				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: fmt.Errorf("no graphics protocol")}
 			}
@@ -2375,10 +2389,10 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		a.imageCache[m.rawURL] = cachedImage{frames: m.frames, delays: m.delays}
 		var cmds []tea.Cmd
-		if a.graphicsProtocol == imgview.ProtocolITerm2 && len(a.imageCarouselItems) > 1 {
-			// iTerm2/WezTerm has no Kitty-style delete-all self-heal; force a
-			// full repaint so a cycled-to smaller image can't leave stray
-			// pixels from the previous one in rows the new frame skips.
+		if (a.graphicsProtocol == imgview.ProtocolITerm2 || a.graphicsProtocol == imgview.ProtocolSixel) && len(a.imageCarouselItems) > 1 {
+			// iTerm2/WezTerm and Sixel have no Kitty-style delete-all self-heal;
+			// force a full repaint so a cycled-to smaller image can't leave
+			// stray pixels from the previous one in rows the new frame skips.
 			cmds = append(cmds, tea.ClearScreen)
 		}
 		if len(m.encodedFrames) > 1 {
