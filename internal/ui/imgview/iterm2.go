@@ -23,7 +23,7 @@ func EncodeITerm2(img image.Image, maxCols, maxRows int) (encoded string, cols, 
 		return "", 0, 0, fmt.Errorf("imgview: png encode: %w", encErr)
 	}
 	payload := base64.StdEncoding.EncodeToString(buf.Bytes())
-	cols, rows = fitBox(w, h, maxCols, maxRows)
+	cols, rows = fitBox(w, h, maxCols, maxRows, pxPerCol, 2*pxPerCol)
 	// width/height without suffix means terminal character cells in iTerm2.
 	encoded = fmt.Sprintf(
 		"\x1b]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1:%s\x07",

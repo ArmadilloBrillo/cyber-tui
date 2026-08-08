@@ -30,7 +30,7 @@ func EncodeKitty(img image.Image, maxCols, maxRows int) (encoded string, cols, r
 	}
 
 	payload := base64.StdEncoding.EncodeToString(raw)
-	cols, rows = fitBox(w, h, maxCols, maxRows)
+	cols, rows = fitBox(w, h, maxCols, maxRows, pxPerCol, 2*pxPerCol)
 	// a=T: transmit and display. f=32: 32-bit RGBA. s/v: pixel dimensions.
 	// c/r: display size in terminal columns/rows (Kitty scales to fit, preserving aspect ratio).
 	// m=0: final chunk.
