@@ -932,16 +932,26 @@ func (m ChatroomsModel) selfShownIdle() bool {
 	return false
 }
 
-// maybeStartStyleAnim starts the slow/wave/glitch animation ticker if any
-// currently loaded message needs one and it isn't already running. Coarse-
-// scoped: it checks every loaded message in the room, not just ones visible
-// in the viewport — see the plan's Trade-offs section for the rationale and
-// upgrade path. Returns a nil tea.Cmd when no start is needed.
+// maybeStartStyleAnim starts the slow/wave/glitch animation ticker if a
+// currently *visible* message needs one and it isn't already running.
+// Scoped to the viewport (via m.msgOffsets/m.msgHeights) rather than the
+// full history — a coarse whole-room scan meant a single animated message
+// anywhere in a long-lived room's history kept a 150ms full re-render
+// running indefinitely, even after that message scrolled off-screen.
+// Returns a nil tea.Cmd when no start is needed.
 func (m ChatroomsModel) maybeStartStyleAnim() (ChatroomsModel, tea.Cmd) {
 	if m.styleAnimRunning || m.mode != chatroomModeDetail {
 		return m, nil
 	}
-	for _, msg := range m.messages {
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+	for i, msg := range m.messages {
+		if i >= len(m.msgOffsets) || i >= len(m.msgHeights) {
+			break
+		}
+		itemStart, itemEnd := m.msgOffsets[i], m.msgOffsets[i]+m.msgHeights[i]
+		if itemEnd <= top || itemStart >= bottom {
+			continue
+		}
 		if hasAnimatedStyle(msg.Style) {
 			m.styleAnimRunning = true
 			return m, styleAnimTickCmd()
