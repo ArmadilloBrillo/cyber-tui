@@ -362,7 +362,7 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 	if author != "" {
 		authorStyled = "  " + theme.Highlight.Render("@"+author)
 	}
-	attInd := attachmentIndicator(attachments)
+	attInd := attachmentIndicator(attachments, content)
 	left1 := typeTag + authorStyled
 	if attInd != "" {
 		left1 += "  " + attInd

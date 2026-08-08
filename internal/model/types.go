@@ -51,8 +51,8 @@ type Follow struct {
 }
 
 // Attachment represents a media attachment on a post or reply.
-// Type is "image" or "audio". Src is always present.
-// Image-specific: Width, Height. Audio-specific: Origin, Artist, Title, Genre.
+// Type is "image", "gif", or "audio". Src is always present.
+// Image/gif-specific: Width, Height. Audio-specific: Origin, Artist, Title, Genre.
 type Attachment struct {
 	Type   string
 	Src    string

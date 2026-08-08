@@ -353,6 +353,101 @@ func TestFeed_UpAtTop_WithPendingNew_AnimatesThenMergesLocally(t *testing.T) {
 	}
 }
 
+// --- VisibleInlineImages ---
+
+// TestFeed_VisibleInlineImages_DisabledByDefault mirrors PostDetail's
+// equivalent: with InlineImagesEnabled never sent, a post with an eligible
+// image must report no slots — the feature is a strict no-op until enabled.
+func TestFeed_VisibleInlineImages_DisabledByDefault(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+// TestFeed_VisibleInlineImages_MultiplePosts confirms multiple posts on
+// screen at once each report their own image slot, with distinct per-post
+// Keys and strictly increasing Rows — the scenario phase 5 exists to
+// exercise (several images visible simultaneously, not just one post's).
+func TestFeed_VisibleInlineImages_MultiplePosts(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 80})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+		{ID: "p2", AuthorUsername: "bob", Content: "yo\n\n![b](https://example.com/b.png)\n\nlater"},
+	}, "")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 slots (one per post), got %d: %+v", len(slots), slots)
+	}
+	if slots[0].Key != "post:p1:0" || slots[1].Key != "post:p2:0" {
+		t.Errorf("expected distinct per-post keys, got %q and %q", slots[0].Key, slots[1].Key)
+	}
+	if slots[1].Row <= slots[0].Row {
+		t.Errorf("expected the second post's image below the first's: rows %d, %d", slots[0].Row, slots[1].Row)
+	}
+}
+
+// TestFeed_VisibleInlineImages_TrailingImageDoesNotShrinkCard is a
+// regression test: a post whose *last* image has no text after it (very
+// common in real content — many posts end right on the image) used to have
+// its reserved image band silently deleted by a trailing-whitespace trim in
+// renderPostBody, shrinking the card's computed height below what the image
+// actually needed and letting it paint into the next post. p1's image here
+// is the very last thing in its content — the exact trigger.
+func TestFeed_VisibleInlineImages_TrailingImageDoesNotShrinkCard(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 80})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "look at this\n\n![a](https://example.com/a.png)"},
+		{ID: "p2", AuthorUsername: "bob", Content: "yo\n\n![b](https://example.com/b.png)\n\nlater"},
+	}, "")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 slots (one per post), got %d: %+v", len(slots), slots)
+	}
+	// p2's image must land at least a full image band below p1's — if the
+	// bug were present, p1's card would be computed shorter than its actual
+	// rendered content, and p2's row would land inside (or before) p1's own
+	// reserved band instead of safely after it.
+	const minGap = 10 // inlineImageMaxRows(8) + 2 spacer rows
+	if got := slots[1].Row - slots[0].Row; got < minGap {
+		t.Errorf("expected at least %d rows between the two posts' images (card shrunk?), got %d (rows %d, %d)", minGap, got, slots[0].Row, slots[1].Row)
+	}
+}
+
+// TestFeed_VisibleInlineImages_CapsAtFirstImage confirms Feed shows at most
+// one inline image per post even when a post has multiple eligible ones
+// (e.g. mattmanz1/yay-i-have-gear, 2 images) — PostDetail still shows all of
+// them (see postdetail_test.go); Feed's card is compact and truncates body
+// text, so capping to the first keeps its image count predictable rather
+// than 0..N depending on how much intro text precedes the images.
+func TestFeed_VisibleInlineImages_CapsAtFirstImage(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "two photos\n\n![a](https://example.com/a.png)\n\n![b](https://example.com/b.png)"},
+	}, "")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected exactly 1 slot (capped), got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != "https://example.com/a.png" {
+		t.Errorf("expected the first image only, got %q", slots[0].URL)
+	}
+}
+
 // --- ParseTopics ---
 
 func TestParseTopics_LowercasesTrimsCapsAndIgnoresEmpty(t *testing.T) {

@@ -95,6 +95,12 @@ type FeedModel struct {
 	loc               *time.Location // timezone for timestamp display; nil = UTC
 	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
 
+	// inlineImagesEnabled mirrors SharedConfigMsg.InlineImagesEnabled — see
+	// PostDetailModel's field of the same name. postImages is parallel to
+	// postOffsets/visiblePosts(); only ever populated when this is true.
+	inlineImagesEnabled bool
+	postImages          [][]postImageSlot
+
 	currentUsername  string // set after login; used to guard the delete key
 	confirmingDelete bool   // true while the delete-post confirmation overlay is shown
 
@@ -362,8 +368,9 @@ func (m FeedModel) SetLocation(loc *time.Location) FeedModel {
 // refreshContent rebuilds the viewport content and updates postOffsets.
 // Call this whenever posts, selectedIndex, or width changes.
 func (m FeedModel) refreshContent() FeedModel {
-	content, offsets := m.buildContent()
+	content, offsets, postImages := m.buildContent()
 	m.postOffsets = offsets
+	m.postImages = postImages
 	m.viewport.SetContent(content)
 	return m
 }
@@ -377,7 +384,8 @@ func (m FeedModel) ensureSelectedVisible() FeedModel {
 		return m
 	}
 	postStart := m.postOffsets[m.selectedIndex]
-	postHeight := lipgloss.Height(m.renderPost(visible[m.selectedIndex], false))
+	rendered, _ := m.renderPost(visible[m.selectedIndex], false)
+	postHeight := lipgloss.Height(rendered)
 	postEnd := postStart + postHeight - 1
 
 	viewTop := m.viewport.YOffset
@@ -417,6 +425,8 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.defaultPublicPost = msg.Settings.DefaultPublicPost
+		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
+		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
 		if msg.Settings.FilterNSFW != m.filterNSFW {
@@ -425,6 +435,8 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			if m.ready {
 				m = m.refreshContent()
 			}
+		} else if imagesChanged && m.ready {
+			m = m.refreshContent()
 		}
 		if msg.MaxThreadDepth != m.maxThreadDepth {
 			m.maxThreadDepth = msg.MaxThreadDepth
@@ -701,10 +713,11 @@ func (m FeedModel) triggerLoadMore() (FeedModel, tea.Cmd) {
 }
 
 // buildContent renders all posts into a single string for the viewport and
-// returns the start line of each post so ensureSelectedVisible can scroll accurately.
-func (m FeedModel) buildContent() (string, []int) {
+// returns the start line of each post so ensureSelectedVisible can scroll
+// accurately, plus each post's inline image slots (parallel to offsets).
+func (m FeedModel) buildContent() (string, []int, [][]postImageSlot) {
 	if m.fetching {
-		return theme.Subtle.Render("  loading feed…"), nil
+		return theme.Subtle.Render("  loading feed…"), nil, nil
 	}
 	var prefix string
 	startLine := 0
@@ -714,9 +727,9 @@ func (m FeedModel) buildContent() (string, []int) {
 	}
 	if len(m.posts) == 0 {
 		if m.err != nil {
-			return prefix + theme.Subtle.Render("  couldn't load feed"), nil
+			return prefix + theme.Subtle.Render("  couldn't load feed"), nil, nil
 		}
-		return prefix + theme.Subtle.Render("  no posts yet"), nil
+		return prefix + theme.Subtle.Render("  no posts yet"), nil, nil
 	}
 	sep := "\n"
 	lineInc := 0
@@ -726,12 +739,14 @@ func (m FeedModel) buildContent() (string, []int) {
 	}
 	visible := m.visiblePosts()
 	offsets := make([]int, len(visible))
+	postImages := make([][]postImageSlot, len(visible))
 	var out strings.Builder
 	out.WriteString(prefix)
 	currentLine := startLine
 	for i, p := range visible {
 		offsets[i] = currentLine
-		rendered := m.renderPost(p, i == m.selectedIndex)
+		rendered, imgSlots := m.renderPost(p, i == m.selectedIndex)
+		postImages[i] = imgSlots
 		out.WriteString(rendered)
 		out.WriteString(sep)
 		currentLine += lipgloss.Height(rendered) + lineInc
@@ -741,31 +756,34 @@ func (m FeedModel) buildContent() (string, []int) {
 	} else if m.exhausted {
 		out.WriteString(theme.Subtle.Render("  — end of feed —") + "\n")
 	}
-	return out.String(), offsets
+	return out.String(), offsets, postImages
 }
 
 // feedBodyCacheEntry is a memoized renderPostBody result plus the inputs it
-// was computed from, so a stale hit (width resize, bookmark/watch toggle, or
-// an edited post body) can be detected and recomputed instead of served.
+// was computed from, so a stale hit (width resize, bookmark/watch toggle, an
+// edited post body, or the inline-images setting changing) can be detected
+// and recomputed instead of served.
 type feedBodyCacheEntry struct {
-	body       string
-	width      int
-	bookmarked bool
-	watched    bool
-	content    string
+	body                string
+	imgSlots            []postImageSlot
+	width               int
+	bookmarked          bool
+	watched             bool
+	content             string
+	inlineImagesEnabled bool
 }
 
-func (m FeedModel) renderPost(p model.Post, selected bool) string {
+func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
 
-	body, ok := "", false
-	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content {
-		body, ok = e.body, true
+	body, imgSlots, ok := "", []postImageSlot(nil), false
+	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.inlineImagesEnabled == m.inlineImagesEnabled {
+		body, imgSlots, ok = e.body, e.imgSlots, true
 	}
 	if !ok {
-		body = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
-		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content}
+		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
+		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, inlineImagesEnabled: m.inlineImagesEnabled}
 	}
 
 	boxStyle := theme.Border
@@ -775,7 +793,7 @@ func (m FeedModel) renderPost(p model.Post, selected bool) string {
 	if m.width-4 > 0 {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}
-	return boxStyle.Render(body)
+	return boxStyle.Render(body), imgSlots
 }
 
 // currentDetailCmd clears the detail pane immediately and starts a debounce timer.
@@ -1075,4 +1093,38 @@ func (m FeedModel) GetFocusedURLs() []string {
 	}
 	p := visible[m.selectedIndex]
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
+}
+
+// VisibleInlineImages returns the inline image slots currently fully within
+// the viewport, top to bottom, across every visible post — see
+// PostDetailModel.VisibleInlineImages for the full contract (this is purely
+// a "where, if anywhere" query; App owns fetching/encoding/caching).
+func (m FeedModel) VisibleInlineImages() []InlineImageSlot {
+	if !m.ready || !m.inlineImagesEnabled {
+		return nil
+	}
+	visible := m.visiblePosts()
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+
+	var slots []InlineImageSlot
+	for i, p := range visible {
+		if i >= len(m.postImages) || i >= len(m.postOffsets) {
+			continue
+		}
+		for j, img := range m.postImages[i] {
+			abs := m.postOffsets[i] + img.Line
+			if abs < top || abs+inlineImageMaxRows > bottom {
+				continue
+			}
+			slots = append(slots, InlineImageSlot{
+				URL:       img.URL,
+				Row:       abs - top,
+				ColIndent: 2,
+				MaxCols:   m.width - 4,
+				MaxRows:   inlineImageEncodeMaxRows,
+				Key:       fmt.Sprintf("post:%s:%d", p.ID, j),
+			})
+		}
+	}
+	return slots
 }

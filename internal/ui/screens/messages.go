@@ -44,8 +44,16 @@ type SharedConfigMsg struct {
 	MaxThreadDepth int
 	Timezone       string
 	ImageViewer    string
-	OwnGuildSlug   string
-	LayoutName     string // "tabs" or "miller"; used by settings screen to show current value
+	// InlineImages is the user's raw preference (config.Config.InlineImages),
+	// used by the settings screen to display/edit the toggle.
+	InlineImages bool
+	// InlineImagesEnabled is the fully-gated value — InlineImages AND a
+	// graphics protocol is available AND ImageViewer != "browser" AND the
+	// session isn't ephemeral (SSH-hosted). Feed and PostDetail should check
+	// only this field; they never need to know about the individual gates.
+	InlineImagesEnabled bool
+	OwnGuildSlug        string
+	LayoutName          string // "tabs" or "miller"; used by settings screen to show current value
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -97,6 +105,7 @@ type SaveSettingsMsg struct {
 	MaxThreadDepth int
 	Timezone       string
 	ImageViewer    string
+	InlineImages   bool
 	LayoutName     string // "tabs" or "miller"
 	RemoteChanged  bool   // true when API-managed fields differ from the last saved baseline
 }

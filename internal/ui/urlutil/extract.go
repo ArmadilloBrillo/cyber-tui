@@ -52,6 +52,27 @@ func ExtractURLs(content string) []string {
 	return urls
 }
 
+// CountImages returns the number of markdown image nodes in content, in
+// document order. Used for the post/reply header badge — deliberately
+// looser than any inline-rendering eligibility rule elsewhere: this counts
+// every ![alt](url), whether or not it would qualify for inline display.
+func CountImages(content string) int {
+	if strings.TrimSpace(content) == "" {
+		return 0
+	}
+	doc := md.Parser().Parse(text.NewReader([]byte(content)))
+	n := 0
+	ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			if _, ok := node.(*ast.Image); ok {
+				n++
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+	return n
+}
+
 // NormalizeURL prefixes relative paths with the cyberspace.online base URL.
 // Absolute URLs are returned unchanged.
 func NormalizeURL(u string) string {

@@ -181,6 +181,19 @@ type App struct {
 	// network fetch. Cleared whenever the modal closes.
 	imageCache map[string]cachedImage
 
+	// inlineImageCache holds encoded inline-image escape sequences for the
+	// life of the session, keyed by inlineImageCacheKey (URL + column budget
+	// + protocol) — never evicted; see the plan's accepted spike-scope cut.
+	// inlineImageFetching tracks keys with a fetch already in flight, so
+	// syncInlineImages (called every Update) doesn't refire the same
+	// request every frame while it's pending. inlineImageLastSig is the
+	// previous frame's visible-slot signature (see inlineImageSignature),
+	// used to detect a scroll/selection change that requires a full clear
+	// for Sixel/iTerm2 (neither has a placement-delete primitive).
+	inlineImageCache    map[string]string
+	inlineImageFetching map[string]bool
+	inlineImageLastSig  string
+
 	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
 	// loc is the parsed *time.Location derived from timezone.
 	timezone string
@@ -243,6 +256,10 @@ type App struct {
 	// imageViewer is the user's preference from config.ImageViewer. When "browser",
 	// image URLs always open in the OS browser even if a protocol is detected.
 	imageViewer string
+
+	// inlineImages is the user's raw preference from config.InlineImages.
+	// See canInlineImages for the fully-gated value broadcast to screens.
+	inlineImages bool
 
 	// imageModal holds the state for the inline image overlay. When imageModalOpen
 	// is true, View composites the encoded image sequence over the base content.
@@ -354,6 +371,7 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.wanderLust = s.WanderLust
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
+	a.inlineImages = s.InlineImages
 	a.layoutName = s.Layout
 	a.layout = layoutFromName(s.Layout)
 	a.customPalette = s.CustomPalette
@@ -411,7 +429,22 @@ func (a App) Init() tea.Cmd {
 // handlers so each can claim the message and return early. WindowSizeMsg is
 // handled first and always falls through to delegateUpdate so the active
 // screen can also react to it.
+// Update is the top-level bubbletea entry point. It delegates to updateInner
+// for all existing message handling, then runs syncInlineImages once per
+// message on the resulting state — after the active screen has already
+// processed msg, so VisibleInlineImages() reflects any scroll/selection
+// change from this same message — batching its command (if any) with
+// whatever updateInner returned.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	a2, cmd := a.updateInner(msg)
+	a3, syncCmd := a2.syncInlineImages()
+	if syncCmd == nil {
+		return a3, cmd
+	}
+	return a3, tea.Batch(cmd, syncCmd)
+}
+
+func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
 		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
@@ -514,6 +547,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleImageViewer(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleInlineImageFetched(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleErr(msg); ok {
 		return a2, cmd
 	}
@@ -542,7 +578,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -1127,6 +1163,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
+		ii := msg.InlineImages
 		ln := msg.LayoutName
 		return a, func() tea.Msg {
 			if msg.RemoteChanged {
@@ -1139,9 +1176,10 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
+				cfg.InlineImages = ii
 				cfg.Layout = ln
 			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, layoutName: ln}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, inlineImages: ii, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -1150,11 +1188,12 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
+		a.inlineImages = msg.inlineImages
 		a.layoutName = msg.layoutName
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.inlineImages, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
 		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
@@ -2286,6 +2325,154 @@ func (a App) canRenderImageInline(u string) bool {
 		a.imageViewer != "browser"
 }
 
+// canInlineImages reports whether Feed/PostDetail should render post
+// attachments inline: the user's InlineImages preference is on, plus the
+// same protocol/imageViewer/ephemeral gates as the fullscreen image viewer
+// (see canRenderImageInline). There's no URL to check yet here — this gates
+// the feature as a whole, per-attachment checks happen when rendering.
+func (a App) canInlineImages() bool {
+	return a.inlineImages &&
+		!a.ephemeral &&
+		// ponytail: Sixel/iTerm2 only — Kitty's placement-ID lifecycle isn't
+		// wired into syncInlineImages yet (phase 6). Loosen to
+		// != ProtocolNone once that lands; until then, gating Kitty out here
+		// keeps a Kitty user from losing the "[IMG]" placeholder text to a
+		// reserved blank band that never gets drawn into.
+		(a.graphicsProtocol == imgview.ProtocolSixel || a.graphicsProtocol == imgview.ProtocolITerm2) &&
+		a.imageViewer != "browser"
+}
+
+// activeInlineImageSlots returns the active screen's currently visible
+// inline image slots, or nil for screens that don't support inline images
+// (Search/Guilds/Topics/Miller panes — see renderPostBody's doc comment).
+func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
+	switch a.active {
+	case screenPostDetail:
+		return a.postDetail.VisibleInlineImages()
+	case screenFeed:
+		return a.feed.VisibleInlineImages()
+	default:
+		return nil
+	}
+}
+
+// inlineImageSignature summarizes a slot list's identity and position —
+// used to detect "did the visible set of inline images change at all this
+// frame" cheaply, without deep-comparing slices.
+func inlineImageSignature(slots []screens.InlineImageSlot) string {
+	var sb strings.Builder
+	for _, s := range slots {
+		fmt.Fprintf(&sb, "%s@%d;", s.Key, s.Row)
+	}
+	return sb.String()
+}
+
+// inlineImageCacheKey identifies one encoded rendering of a slot's image —
+// URL, column budget, and protocol, matching how a resize (which changes
+// MaxCols) or a protocol change naturally invalidates old entries.
+func inlineImageCacheKey(slot screens.InlineImageSlot, proto imgview.GraphicsProtocol) string {
+	return fmt.Sprintf("%s|%d|%d", slot.URL, slot.MaxCols, proto)
+}
+
+// syncInlineImages diffs the active screen's current VisibleInlineImages()
+// against inlineImageCache and returns a command that fetches+encodes
+// anything missing. It's called once per Update, after the active screen
+// has already processed the message. A change in the visible-slot signature
+// forces a full-screen clear on Sixel/iTerm2 — neither protocol has a
+// placement-delete primitive, so a moved or removed image can otherwise
+// leave stray pixels behind (the same reasoning already applied to the
+// fullscreen modal's close/cycle handling).
+func (a App) syncInlineImages() (App, tea.Cmd) {
+	if !a.canInlineImages() {
+		return a, nil
+	}
+	slots := a.activeInlineImageSlots()
+	var cmds []tea.Cmd
+	if sig := inlineImageSignature(slots); sig != a.inlineImageLastSig {
+		a.inlineImageLastSig = sig
+		cmds = append(cmds, tea.ClearScreen)
+	}
+	if a.inlineImageFetching == nil {
+		a.inlineImageFetching = make(map[string]bool)
+	}
+	for _, slot := range slots {
+		key := inlineImageCacheKey(slot, a.graphicsProtocol)
+		if _, cached := a.inlineImageCache[key]; cached {
+			continue
+		}
+		if a.inlineImageFetching[key] {
+			continue
+		}
+		a.inlineImageFetching[key] = true
+		cmds = append(cmds, a.fetchInlineImageCmd(slot, key))
+	}
+	if len(cmds) == 0 {
+		return a, nil
+	}
+	return a, tea.Batch(cmds...)
+}
+
+// inlineImageFetchedMsg reports the result of one fetchInlineImageCmd.
+type inlineImageFetchedMsg struct {
+	key     string
+	encoded string
+	err     error
+}
+
+// fetchInlineImageCmd fetches and encodes slot's image for the currently
+// detected protocol (Sixel or iTerm2 — see canInlineImages). Unlike the
+// fullscreen modal, there's no user-visible loading state to manage: a miss
+// this frame just means the reserved blank band stays blank until the
+// result lands.
+func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string) tea.Cmd {
+	proto := a.graphicsProtocol
+	maxCols, maxRows := slot.MaxCols, slot.MaxRows
+	url := slot.URL
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		img, err := imgview.Fetch(ctx, url)
+		if err != nil {
+			return inlineImageFetchedMsg{key: key, err: err}
+		}
+		var encoded string
+		switch proto {
+		case imgview.ProtocolITerm2:
+			encoded, _, _, err = imgview.EncodeITerm2(img, maxCols, maxRows)
+		case imgview.ProtocolSixel:
+			cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
+			encoded, _, _, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH)
+		default:
+			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
+		}
+		if err != nil {
+			return inlineImageFetchedMsg{key: key, err: err}
+		}
+		return inlineImageFetchedMsg{key: key, encoded: encoded}
+	}
+}
+
+// handleInlineImageFetched processes an inlineImageFetchedMsg: on success,
+// caches the encoded result so the next frame's render picks it up; on
+// failure, just clears the in-flight marker so a future frame (e.g. after a
+// resize) can retry — there's no modal to fall back to here, the slot
+// simply stays blank.
+func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
+	m, ok := msg.(inlineImageFetchedMsg)
+	if !ok {
+		return a, nil, false
+	}
+	delete(a.inlineImageFetching, m.key)
+	if m.err != nil {
+		return a, nil, true
+	}
+	if a.inlineImageCache == nil {
+		a.inlineImageCache = make(map[string]string)
+	}
+	a.inlineImageCache[m.key] = m.encoded
+	return a, nil, true
+}
+
 // openExternalURL opens u in the OS default browser as a fire-and-forget command.
 func openExternalURL(u string) tea.Cmd {
 	return func() tea.Msg {
@@ -2604,6 +2791,7 @@ type feedPageMsg struct {
 	cursor string
 }
 type roomsLoadedMsg struct{ rooms []model.Room }
+
 // roomCommandReplyMsg/cmailCommandReplyMsg carry a reply-only slash command's
 // text (e.g. /help) back from the send response, for local display only —
 // nothing was posted, so nothing arrives via the RTDB subscription.
@@ -2640,6 +2828,7 @@ type settingsSavedMsg struct {
 	maxThreadDepth int
 	timezone       string
 	imageViewer    string
+	inlineImages   bool
 	layoutName     string
 }
 type wanderTickMsg struct{ gen int }

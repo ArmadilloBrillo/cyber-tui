@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
+	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -98,7 +99,33 @@ func (l TabsLayout) View(a App) string {
 		}
 		return strings.Join(lines, "\n")
 	}
+	if slots := a.activeInlineImageSlots(); len(slots) > 0 {
+		return l.injectInlineImages(a, base, slots)
+	}
 	return base
+}
+
+// injectInlineImages appends absolute-cursor-positioned escape sequences for
+// each slot with a cache hit, same technique as the modal's imgRow/imgCol
+// (base + "\x1b[row;colH" + encoded, cursor parked at the bottom line after).
+// A slot with no cache hit yet is skipped — its reserved band just stays the
+// blank text the screen already rendered into base. Row 1 is the tab bar,
+// row 2 the feed-pending/separator row, so content's own row 0 is ANSI row 3;
+// column 1 is the content pane's left edge (no left margin in this layout).
+func (l TabsLayout) injectInlineImages(a App, base string, slots []screens.InlineImageSlot) string {
+	var sb strings.Builder
+	sb.WriteString(base)
+	for _, slot := range slots {
+		encoded, ok := a.inlineImageCache[inlineImageCacheKey(slot, a.graphicsProtocol)]
+		if !ok {
+			continue
+		}
+		row := 3 + slot.Row
+		col := 1 + slot.ColIndent
+		sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", row, col, encoded))
+	}
+	sb.WriteString(fmt.Sprintf("\x1b[%d;1H", a.height))
+	return sb.String()
 }
 
 // HandleNav processes navigation key presses for the tabs layout: the "1"-"9"

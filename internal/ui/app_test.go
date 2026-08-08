@@ -2903,3 +2903,49 @@ func TestHandlePathPrompt_Import_Failure_NotifiesAndLeavesCustomPaletteUntouched
 		t.Error("expected the saved custom palette to be untouched by a failed import")
 	}
 }
+
+// TestInlineImageSignature_DistinguishesPositionAndIdentity confirms the
+// signature used to detect "did the visible inline-image set change this
+// frame" actually changes when a slot's Key or Row changes, and stays equal
+// for an identical slot list — the one thing syncInlineImages depends on to
+// decide whether Sixel/iTerm2 need a full-screen clear.
+func TestInlineImageSignature_DistinguishesPositionAndIdentity(t *testing.T) {
+	a := []screens.InlineImageSlot{{Key: "post:p1", Row: 3}, {Key: "reply:r1", Row: 20}}
+	b := []screens.InlineImageSlot{{Key: "post:p1", Row: 3}, {Key: "reply:r1", Row: 20}}
+	if inlineImageSignature(a) != inlineImageSignature(b) {
+		t.Error("expected identical slot lists to produce the same signature")
+	}
+
+	scrolled := []screens.InlineImageSlot{{Key: "post:p1", Row: 2}, {Key: "reply:r1", Row: 19}}
+	if inlineImageSignature(a) == inlineImageSignature(scrolled) {
+		t.Error("expected a scroll (Row change) to change the signature")
+	}
+
+	oneGone := []screens.InlineImageSlot{{Key: "post:p1", Row: 3}}
+	if inlineImageSignature(a) == inlineImageSignature(oneGone) {
+		t.Error("expected a removed slot to change the signature")
+	}
+}
+
+// TestInlineImageCacheKey_VariesByColsAndProtocol confirms the cache key
+// changes when the column budget (resize) or protocol changes, and stays
+// stable otherwise — a resize or protocol switch must invalidate stale
+// encodes rather than reuse a wrongly-sized/wrongly-encoded one.
+func TestInlineImageCacheKey_VariesByColsAndProtocol(t *testing.T) {
+	slot := screens.InlineImageSlot{URL: "https://example.com/a.png", MaxCols: 76}
+	key1 := inlineImageCacheKey(slot, imgview.ProtocolSixel)
+	key2 := inlineImageCacheKey(slot, imgview.ProtocolSixel)
+	if key1 != key2 {
+		t.Error("expected the same slot+protocol to produce the same key")
+	}
+
+	wider := slot
+	wider.MaxCols = 100
+	if inlineImageCacheKey(wider, imgview.ProtocolSixel) == key1 {
+		t.Error("expected a different MaxCols to produce a different key")
+	}
+
+	if inlineImageCacheKey(slot, imgview.ProtocolITerm2) == key1 {
+		t.Error("expected a different protocol to produce a different key")
+	}
+}
