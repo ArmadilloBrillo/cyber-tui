@@ -279,6 +279,14 @@ type App struct {
 	notifyLevel notifyLevel
 	notifyGen   int
 
+	// sessionGen is bumped in handleUnauthorized on session expiry, so the
+	// self-rescheduling poll/wander/logo-idle tea.Tick chains started by
+	// afterLoginCmd (each stamped with the gen they were scheduled under)
+	// drop themselves instead of doing work or rescheduling once stale —
+	// otherwise those chains kept running forever after logout, and could
+	// double up if the user logged back in while an old set was still ticking.
+	sessionGen int
+
 	logoText      string
 	logoPhase     logoAnimPhase
 	logoFrame     int
@@ -1164,6 +1172,9 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 
 	case wanderTickMsg:
+		if msg.gen != a.sessionGen {
+			return a, nil, true
+		}
 		return a, tea.Batch(a.checkAndWanderCmd(), a.scheduleWanderCmd()), true
 
 	case wanderDoneMsg:
@@ -1867,8 +1878,11 @@ func (a App) notify(level notifyLevel, text string) (App, tea.Cmd) {
 }
 
 func (a App) handleLogoAnim(msg tea.Msg) (App, tea.Cmd, bool) {
-	switch msg.(type) {
+	switch m := msg.(type) {
 	case logoAnimTickMsg:
+		if m.gen != a.sessionGen {
+			return a, nil, true
+		}
 		positions := make([]int, len(logoOrigRunes))
 		for i := range positions {
 			positions[i] = i
@@ -1908,7 +1922,7 @@ func (a App) handleLogoAnim(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.logoPhase = logoPhaseIdle
 				a.logoFrame = 0
 				a.logoText = logoOrig
-				return a, scheduleLogoAnimCmd(), true
+				return a, a.scheduleLogoAnimCmd(), true
 			}
 			return a, logoFrameTickCmd(), true
 		default: // logoPhaseIdle — consume stale in-flight tick
@@ -1960,6 +1974,11 @@ func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
 	a.tokens = model.Tokens{}
 	a.cmail = a.cmail.CancelUserConvsSubscription()
 	a.saveConfig(func(cfg *config.Config) { cfg.RefreshToken = "" })
+	// Invalidates the poll/wander/logo-idle tea.Tick chains started by
+	// afterLoginCmd: each carries the gen it was scheduled under, so once
+	// this no longer matches, they drop themselves on their next fire
+	// instead of rescheduling — see sessionGen's doc comment.
+	a.sessionGen++
 
 	a.active = screenLogin
 	a.focus = focusMenu
@@ -2558,7 +2577,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.loadSettingsCmd(),
 		a.scheduleWanderCmd(),
 		a.checkAndWanderCmd(),
-		scheduleLogoAnimCmd(),
+		a.scheduleLogoAnimCmd(),
 	)
 }
 
@@ -2609,7 +2628,7 @@ type settingsSavedMsg struct {
 	imageViewer    string
 	layoutName     string
 }
-type wanderTickMsg struct{}
+type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
 type errMsg struct{ err error }
 
@@ -2861,12 +2880,12 @@ type notifsPageMsg struct {
 }
 type notifPostLoadedMsg struct{ post model.Post }
 type profilePostLoadedMsg struct{ post model.Post }
-type pollUnreadTickMsg struct{}
+type pollUnreadTickMsg struct{ gen int }
 type unreadCountMsg struct{ count int }
-type feedPollTickMsg struct{}
+type feedPollTickMsg struct{ gen int }
 type feedPeekMsg struct{ posts []model.Post }
-type logoAnimTickMsg struct{}  // 30s idle trigger — begins the scramble animation
-type logoFrameTickMsg struct{} // 60ms per-frame tick during scramble/hold/unscramble
+type logoAnimTickMsg struct{ gen int } // 30s idle trigger — begins the scramble animation
+type logoFrameTickMsg struct{}         // 60ms per-frame tick during scramble/hold/unscramble
 
 func (a *App) loadFeedCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -2892,7 +2911,8 @@ func (a *App) fetchFeedPeekCmd() tea.Cmd {
 }
 
 func (a *App) scheduleFeedPollCmd() tea.Cmd {
-	return tea.Tick(15*time.Second, func(time.Time) tea.Msg { return feedPollTickMsg{} })
+	gen := a.sessionGen
+	return tea.Tick(15*time.Second, func(time.Time) tea.Msg { return feedPollTickMsg{gen: gen} })
 }
 
 func (a *App) loadFeedPageCmd(cursor string) tea.Cmd {
@@ -3252,6 +3272,9 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		// the RTDB subscription opened in afterLoginCmd (see
 		// OpenUserConvsSubscription). This ticker now only drives the
 		// notifications unread-count badge.
+		if msg.gen != a.sessionGen {
+			return a, nil, true
+		}
 		return a, tea.Batch(a.fetchUnreadCountCmd(), a.schedulePollCmd()), true
 	case unreadCountMsg:
 		prev := a.polledUnreadCount
@@ -3261,6 +3284,9 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case feedPollTickMsg:
+		if msg.gen != a.sessionGen {
+			return a, nil, true
+		}
 		if !a.feed.IsLoaded() || a.feed.IsRefreshing() {
 			return a, a.scheduleFeedPollCmd(), true
 		}
@@ -3810,15 +3836,18 @@ func (a *App) loadNoteRevisionCmd(noteID string, revision int) tea.Cmd {
 }
 
 func (a *App) schedulePollCmd() tea.Cmd {
-	return tea.Tick(60*time.Second, func(time.Time) tea.Msg { return pollUnreadTickMsg{} })
+	gen := a.sessionGen
+	return tea.Tick(60*time.Second, func(time.Time) tea.Msg { return pollUnreadTickMsg{gen: gen} })
 }
 
 func (a *App) scheduleWanderCmd() tea.Cmd {
-	return tea.Tick(1*time.Hour, func(time.Time) tea.Msg { return wanderTickMsg{} })
+	gen := a.sessionGen
+	return tea.Tick(1*time.Hour, func(time.Time) tea.Msg { return wanderTickMsg{gen: gen} })
 }
 
-func scheduleLogoAnimCmd() tea.Cmd {
-	return tea.Tick(30*time.Second, func(time.Time) tea.Msg { return logoAnimTickMsg{} })
+func (a *App) scheduleLogoAnimCmd() tea.Cmd {
+	gen := a.sessionGen
+	return tea.Tick(30*time.Second, func(time.Time) tea.Msg { return logoAnimTickMsg{gen: gen} })
 }
 
 func logoFrameTickCmd() tea.Cmd {

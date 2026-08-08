@@ -1413,6 +1413,41 @@ func TestHandleUnauthorized_OtherErrorDoesNotRedirect(t *testing.T) {
 	}
 }
 
+// TestHandleUnauthorized_InvalidatesPendingTickers guards against the
+// poll/wander/logo-idle tea.Tick chains started by afterLoginCmd surviving
+// session expiry: each is stamped with the sessionGen it was scheduled
+// under, so once handleUnauthorized bumps sessionGen, a tick that was
+// already in flight must drop itself instead of refetching or
+// rescheduling — otherwise it (and a fresh set started by a subsequent
+// re-login) would keep polling indefinitely after logout.
+func TestHandleUnauthorized_InvalidatesPendingTickers(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+	genBefore := a.sessionGen
+
+	m, _ := a.Update(errMsg{api.ErrUnauthorized})
+	a2 := m.(App)
+	if a2.sessionGen == genBefore {
+		t.Fatal("expected sessionGen to advance on session expiry")
+	}
+
+	if _, cmd, ok := a2.handleNotifications(pollUnreadTickMsg{gen: genBefore}); !ok || cmd != nil {
+		t.Errorf("pollUnreadTickMsg{gen: %d} (stale) handled=%v cmd=%v, want handled=true cmd=nil", genBefore, ok, cmd)
+	}
+	if _, cmd, ok := a2.handleNotifications(feedPollTickMsg{gen: genBefore}); !ok || cmd != nil {
+		t.Errorf("feedPollTickMsg{gen: %d} (stale) handled=%v cmd=%v, want handled=true cmd=nil", genBefore, ok, cmd)
+	}
+	if _, cmd, ok := a2.handleSettings(wanderTickMsg{gen: genBefore}); !ok || cmd != nil {
+		t.Errorf("wanderTickMsg{gen: %d} (stale) handled=%v cmd=%v, want handled=true cmd=nil", genBefore, ok, cmd)
+	}
+
+	// A tick stamped with the current (post-expiry) gen — e.g. one scheduled
+	// by a fresh login — must still do real work, not be dropped too.
+	if _, cmd, ok := a2.handleNotifications(pollUnreadTickMsg{gen: a2.sessionGen}); !ok || cmd == nil {
+		t.Errorf("pollUnreadTickMsg{gen: current} handled=%v cmd=%v, want handled=true cmd=non-nil", ok, cmd)
+	}
+}
+
 // --- errors never block: notifPostLoadErrMsg & handleErr → banner ---
 
 // A notification pointing to a deleted post must surface as a friendly,
