@@ -1,6 +1,8 @@
 package screens
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -687,5 +689,84 @@ func TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned(t *testi
 	}
 	if !strings.Contains(content, "hi from bob") {
 		t.Errorf("expected bob's message to still render, got: %q", content)
+	}
+}
+
+// TestFeedRenderPost_CachesBodyAcrossSelectionChange guards the fix that
+// splits renderPostBody (cacheable) out from the selection border: moving
+// the cursor between posts must reuse the cached body and only change
+// styling, and an edited post must invalidate the cache instead of serving
+// stale text.
+func TestFeedRenderPost_CachesBodyAcrossSelectionChange(t *testing.T) {
+	withTrueColor(t) // Border vs ActiveBorder differ only in color; see withTrueColor's doc comment
+	m := NewFeedModel()
+	m.width = 80
+	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "hello world"}
+
+	unselected := m.renderPost(post, false)
+	selected := m.renderPost(post, true)
+
+	if unselected == selected {
+		t.Error("expected selected vs unselected rendering to differ (border style)")
+	}
+	if _, hit := m.bodyCache["p1"]; !hit {
+		t.Fatal("expected renderPost to populate the body cache")
+	}
+
+	post.Content = "edited content"
+	edited := m.renderPost(post, false)
+	if strings.Contains(ansi.Strip(edited), "hello world") {
+		t.Error("expected cache to invalidate after post content changed, got stale body")
+	}
+	if !strings.Contains(ansi.Strip(edited), "edited content") {
+		t.Errorf("expected edited content in output, got: %q", edited)
+	}
+}
+
+// BenchmarkRenderCircMessagesWithSelection measures how render cost scales
+// with the number of loaded messages — chatrooms.go never caps m.messages,
+// and this render runs in full on every 150ms style-animation tick
+// (maybeStartStyleAnim, chatrooms.go:940), so cost-per-tick grows with
+// however much history a long-lived room has accumulated.
+func BenchmarkRenderCircMessagesWithSelection(b *testing.B) {
+	for _, n := range []int{100, 1000, 5000, 10000} {
+		msgs := make([]model.Message, n)
+		for i := range msgs {
+			msgs[i] = circMsg("bob", "hey alice, message number "+strconv.Itoa(i)+" in the room")
+		}
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil)
+			}
+		})
+	}
+}
+
+// BenchmarkFeedBuildContent_SelectionChange measures the cost of the rebuild
+// that runs on every up/down key press (refreshContent -> buildContent,
+// feed.go:552-559/626-633) once the body cache is already warm — i.e. only
+// the selected index changes between calls, the realistic case for arrow-key
+// navigation. Before the body cache, this cost was O(n) in loaded posts
+// (every post's markdown re-parsed on every keystroke); with it, only the
+// selection styling should redo work.
+func BenchmarkFeedBuildContent_SelectionChange(b *testing.B) {
+	for _, n := range []int{100, 1000, 5000} {
+		m := NewFeedModel()
+		m.width = 80
+		posts := make([]model.Post, n)
+		for i := range posts {
+			posts[i] = model.Post{ID: strconv.Itoa(i), AuthorUsername: "bob", Content: "post body number " + strconv.Itoa(i)}
+		}
+		m.posts = posts
+		m.buildContent() // warm the cache once, like the initial refreshContent after load
+
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				m.selectedIndex = i % n
+				m.buildContent()
+			}
+		})
 	}
 }

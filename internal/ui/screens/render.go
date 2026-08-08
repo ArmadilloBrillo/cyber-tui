@@ -23,6 +23,25 @@ const postMaxBodyLines = 4
 // maxBodyLines caps body text at that many lines (postMaxBodyLines for list views,
 // 0 for the reading pane where the full content should be shown).
 func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int) string {
+	content := renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines)
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if width-4 > 0 {
+		boxStyle = boxStyle.Width(width - 2)
+	}
+	return boxStyle.Render(content)
+}
+
+// renderPostBody renders everything in a post's card except the selection
+// border (header, badges, title, markdown body, topics) — the part that's
+// identical whether or not the post is selected. Split out from RenderPost
+// so a caller re-rendering only because the selection moved (e.g. feed.go's
+// arrow-key navigation) can cache this per post ID/width and skip the
+// markdown re-parse, instead of rebuilding every loaded post on every
+// keystroke.
+func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int) string {
 	innerWidth := width - 4
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -92,14 +111,6 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 	}
 	topics := topicsSB.String()
 
-	boxStyle := theme.Border
-	if selected {
-		boxStyle = theme.ActiveBorder
-	}
-	if innerWidth > 0 {
-		boxStyle = boxStyle.Width(width - 2)
-	}
-
 	body = strings.TrimRight(body, "\n")
 	rows := []string{header}
 	if badges != "" {
@@ -112,7 +123,7 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 	if topics != "" {
 		rows = append(rows, "\n"+topics)
 	}
-	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
 // attachmentIndicator returns a compact header badge for any attachments present,

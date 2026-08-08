@@ -1287,6 +1287,36 @@ func TestSetFocused_ResumesStyleAnimAfterBackgroundedTickIsDropped(t *testing.T)
 	}
 }
 
+// TestMaybeStartStyleAnim_SkipsOffscreenAnimatedMessage guards the viewport
+// scoping fix: an animated-style message that has scrolled out of view must
+// not keep rearming the 150ms full-history re-render forever. Scrolling it
+// back into view must resume the ticker.
+func TestMaybeStartStyleAnim_SkipsOffscreenAnimatedMessage(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	msgs := []model.Message{{ID: "m0", From: model.User{Username: "molly"}, Body: "wave hi", Style: []string{"wave"}, CreatedAt: time.Now()}}
+	for i := 1; i <= 60; i++ {
+		msgs = append(msgs, model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "molly"},
+			Body:      fmt.Sprintf("plain message %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+	m = m.SetMessages("zion", msgs) // SetMessages scrolls to bottom, pushing m0 off-screen
+
+	m, cmd := m.maybeStartStyleAnim()
+	if m.styleAnimRunning || cmd != nil {
+		t.Error("expected the ticker to stay off while the only animated message is scrolled out of view")
+	}
+
+	m.viewport.SetYOffset(0) // scroll back up so m0 is visible again
+	m, cmd = m.maybeStartStyleAnim()
+	if !m.styleAnimRunning || cmd == nil {
+		t.Error("expected the ticker to start once the animated message scrolls back into view")
+	}
+}
+
 // --- spoiler reveal (see updateBrowsingKey's "enter" case) ---
 
 func TestBrowsing_Enter_TogglesSpoilerReveal(t *testing.T) {
