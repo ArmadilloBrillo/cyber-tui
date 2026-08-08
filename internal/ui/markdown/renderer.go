@@ -8,6 +8,7 @@ import (
 	"html"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
@@ -151,14 +152,34 @@ func RenderInline(content, highlightUser string) string {
 	if content == "" {
 		return ""
 	}
+	var highlightRe *regexp.Regexp
+	if highlightUser != "" {
+		highlightRe = compiledHighlightRegex(highlightUser)
+	}
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
-		lines[i] = renderInlineLine(line, highlightUser)
+		lines[i] = renderInlineLine(line, highlightRe)
 	}
 	return strings.Join(lines, "\n")
 }
 
-func renderInlineLine(line, highlightUser string) string {
+// highlightRegexCache memoizes the per-username regex RenderInline uses to
+// bold mentions of the current user, keyed by username. That username is
+// constant for the life of a session, so without this every call recompiled
+// the same pattern from scratch — and RenderInline runs on every line of
+// every rendered message.
+var highlightRegexCache sync.Map // string (username) -> *regexp.Regexp
+
+func compiledHighlightRegex(username string) *regexp.Regexp {
+	if v, ok := highlightRegexCache.Load(username); ok {
+		return v.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile(`(?i)@?\b` + regexp.QuoteMeta(username) + `\b`)
+	actual, _ := highlightRegexCache.LoadOrStore(username, re)
+	return actual.(*regexp.Regexp)
+}
+
+func renderInlineLine(line string, highlightRe *regexp.Regexp) string {
 	if strings.TrimSpace(line) == "" {
 		return line
 	}
@@ -169,10 +190,7 @@ func renderInlineLine(line, highlightUser string) string {
 	if !ok {
 		return line
 	}
-	r := &renderer{source: src, width: 0}
-	if highlightUser != "" {
-		r.highlightRe = regexp.MustCompile(`(?i)@?\b` + regexp.QuoteMeta(highlightUser) + `\b`)
-	}
+	r := &renderer{source: src, width: 0, highlightRe: highlightRe}
 	return r.renderDocument(docNode)
 }
 
