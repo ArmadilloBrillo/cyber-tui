@@ -105,6 +105,13 @@ type FeedModel struct {
 	watchedPostIDs    map[string]struct{}
 	filterNSFW        bool
 
+	// bodyCache memoizes renderPostBody per post ID, keyed additionally by
+	// whatever else affects its output — see renderPost. Selection state
+	// isn't part of the key: moving the cursor only changes the border, not
+	// the cached body, so arrow-key navigation doesn't re-parse markdown for
+	// every loaded post.
+	bodyCache map[string]feedBodyCacheEntry
+
 	// Miller reading pane: replies for the currently selected post.
 	detailPostID       string
 	detailReplies      []model.Reply
@@ -120,6 +127,7 @@ func NewFeedModel() FeedModel {
 		panel:            NewPostComposePanel(0),
 		detailReplyIndex: -1,
 		flagPrompt:       NewFlagPrompt(),
+		bodyCache:        make(map[string]feedBodyCacheEntry),
 	}
 }
 
@@ -718,26 +726,56 @@ func (m FeedModel) buildContent() (string, []int) {
 	}
 	visible := m.visiblePosts()
 	offsets := make([]int, len(visible))
-	var out string
+	var out strings.Builder
+	out.WriteString(prefix)
 	currentLine := startLine
 	for i, p := range visible {
 		offsets[i] = currentLine
 		rendered := m.renderPost(p, i == m.selectedIndex)
-		out += rendered + sep
+		out.WriteString(rendered)
+		out.WriteString(sep)
 		currentLine += lipgloss.Height(rendered) + lineInc
 	}
 	if m.loading {
-		out += theme.Subtle.Render("  loading more…") + "\n"
+		out.WriteString(theme.Subtle.Render("  loading more…") + "\n")
 	} else if m.exhausted {
-		out += theme.Subtle.Render("  — end of feed —") + "\n"
+		out.WriteString(theme.Subtle.Render("  — end of feed —") + "\n")
 	}
-	return prefix + out, offsets
+	return out.String(), offsets
+}
+
+// feedBodyCacheEntry is a memoized renderPostBody result plus the inputs it
+// was computed from, so a stale hit (width resize, bookmark/watch toggle, or
+// an edited post body) can be detected and recomputed instead of served.
+type feedBodyCacheEntry struct {
+	body       string
+	width      int
+	bookmarked bool
+	watched    bool
+	content    string
 }
 
 func (m FeedModel) renderPost(p model.Post, selected bool) string {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
+
+	body, ok := "", false
+	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content {
+		body, ok = e.body, true
+	}
+	if !ok {
+		body = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
+		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content}
+	}
+
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if m.width-4 > 0 {
+		boxStyle = boxStyle.Width(m.width - 2)
+	}
+	return boxStyle.Render(body)
 }
 
 // currentDetailCmd clears the detail pane immediately and starts a debounce timer.
