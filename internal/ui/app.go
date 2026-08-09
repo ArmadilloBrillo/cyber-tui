@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -181,6 +182,85 @@ type App struct {
 	// network fetch. Cleared whenever the modal closes.
 	imageCache map[string]cachedImage
 
+	// inlineImageCache holds encoded inline-image escape sequences, keyed by
+	// inlineImageCacheKey (slot key + URL + column budget + protocol),
+	// bounded by inlineImageCacheMaxBytes — see cacheInlineImage, which
+	// evicts the oldest-inserted entry first once exceeded.
+	// inlineImageCacheOrder/inlineImageCacheElems/inlineImageCacheBytes are
+	// cacheInlineImage's bookkeeping for that eviction; nothing else should
+	// touch them. inlineImageFetching tracks keys with a fetch already in
+	// flight, so syncInlineImages (called every Update) doesn't refire the
+	// same request every frame while it's pending. inlineImageFailedAt
+	// records when a key last failed to fetch, so a permanently-broken URL
+	// gets a cooldown (inlineImageFailureCooldown) instead of being retried
+	// on every single Update its slot stays visible for. inlineImageLastSig
+	// is the previous frame's visible-slot signature (see
+	// inlineImageSignature), used to detect a scroll/selection change that
+	// requires a full clear for Sixel/iTerm2 (neither has a placement-delete
+	// primitive — Kitty does, see kittyPlacementIDs, and never uses this).
+	inlineImageCache      map[string]string
+	inlineImageCacheOrder *list.List
+	inlineImageCacheElems map[string]*list.Element
+	inlineImageCacheBytes int
+	inlineImageFetching   map[string]bool
+	inlineImageFailedAt   map[string]time.Time
+	inlineImageLastSig    string
+
+	// kittyPlacementIDs assigns a stable id (used as both image id and
+	// placement id, see imgview.EncodeKitty) to each inline image slot ever
+	// seen, keyed by InlineImageSlot.Key. Entries are PERMANENT — never
+	// removed once assigned, even after the slot scrolls off-screen and gets
+	// deleted on the terminal side. This matters because inlineImageCacheKey
+	// doesn't vary by id (only by slot key/URL/width/protocol): if a key's id
+	// changed on every re-entry into view, a slot scrolling back into view
+	// would hit its OLD cache entry (still embedding the OLD, already-deleted
+	// id) and, since that old id sits permanently in pendingKittyDeletes (see
+	// below), get deleted again the instant it's redrawn — invisible forever
+	// after its first scroll-off. Keeping the id (and thus the cache entry)
+	// stable for a key's whole session lifetime avoids that entirely.
+	// kittyNextPlacementID is the session-lived counter handing out new ids —
+	// never reused/freed within a session. This stays safe even now that
+	// inlineImageCache is bounded (see its doc comment): evicting a cache
+	// entry doesn't touch its id, since inlineImageCacheKey doesn't embed
+	// one — a slot whose entry got evicted just re-fetches and re-encodes
+	// using its already-stable id, same as any other cache miss. If ids were
+	// ever evicted too, that would have to happen in the same step as
+	// evicting the matching cache entry, or a reissued id could collide with
+	// a still-cached payload embedding the old one.
+	//
+	// kittyVisibleKeys is the set of slot keys visible as of the last sync
+	// call. Because kittyPlacementIDs is never pruned, "not in
+	// kittyPlacementIDs" can no longer be used to detect a drop — nearly
+	// every key ever seen is "not currently visible" at any given moment, not
+	// just ones that just transitioned. Comparing against kittyVisibleKeys
+	// instead of kittyPlacementIDs is what lets syncKittyPlacements detect
+	// exactly the visible->invisible and invisible->visible transitions.
+	//
+	// pendingKittyDeletes is the set of dropped-out placement ids whose
+	// delete sequence gets resent on every subsequent frame. Deletes are the
+	// one part of this feature that's a single-shot event rather than
+	// something re-emitted every frame a slot is visible (creates/
+	// repositions are, by nature of the normal per-frame render loop) — and
+	// Bubble Tea's renderer batches/throttles actual terminal writes, so it
+	// can call View() many times between two real flushes and only the last
+	// computed View() before a flush tick ever reaches the terminal. A
+	// countdown-based resend budget was tried here first, decremented once
+	// per Update; a fast enough scroll can still rack up enough Updates
+	// between two real flushes to exhaust that budget on nothing but
+	// never-flushed intermediate renders, losing the delete exactly like the
+	// original single-shot version. Since Kitty placement ids are never
+	// reused within a session (kittyNextPlacementID only grows), resending an
+	// already-deleted id's delete is always a harmless no-op — so, like
+	// imageNeedsCleanup above (same underlying race, same fix), entries here
+	// are never auto-expired by a countdown; they're only removed early when
+	// syncKittyPlacements reports the same key has become visible again (see
+	// "revived" in syncInlineImages), which cancels the stale delete before it
+	// can wipe out the slot's freshly redrawn placement.
+	kittyPlacementIDs    map[string]int
+	kittyNextPlacementID int
+	kittyVisibleKeys     map[string]struct{}
+	pendingKittyDeletes  map[int]struct{}
+
 	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
 	// loc is the parsed *time.Location derived from timezone.
 	timezone string
@@ -243,6 +323,10 @@ type App struct {
 	// imageViewer is the user's preference from config.ImageViewer. When "browser",
 	// image URLs always open in the OS browser even if a protocol is detected.
 	imageViewer string
+
+	// inlineImages is the user's raw preference from config.InlineImages.
+	// See canInlineImages for the fully-gated value broadcast to screens.
+	inlineImages bool
 
 	// imageModal holds the state for the inline image overlay. When imageModalOpen
 	// is true, View composites the encoded image sequence over the base content.
@@ -354,13 +438,17 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.wanderLust = s.WanderLust
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
+	a.inlineImages = s.InlineImages
 	a.layoutName = s.Layout
 	a.layout = layoutFromName(s.Layout)
 	a.customPalette = s.CustomPalette
 	return a
 }
 
-func layoutFromName(_ string) Layout {
+func layoutFromName(name string) Layout {
+	if name == "miller" {
+		return MillerLayout{}
+	}
 	return TabsLayout{}
 }
 
@@ -411,7 +499,22 @@ func (a App) Init() tea.Cmd {
 // handlers so each can claim the message and return early. WindowSizeMsg is
 // handled first and always falls through to delegateUpdate so the active
 // screen can also react to it.
+// Update is the top-level bubbletea entry point. It delegates to updateInner
+// for all existing message handling, then runs syncInlineImages once per
+// message on the resulting state — after the active screen has already
+// processed msg, so VisibleInlineImages() reflects any scroll/selection
+// change from this same message — batching its command (if any) with
+// whatever updateInner returned.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	a2, cmd := a.updateInner(msg)
+	a3, syncCmd := a2.syncInlineImages()
+	if syncCmd == nil {
+		return a3, cmd
+	}
+	return a3, tea.Batch(cmd, syncCmd)
+}
+
+func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
 		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
@@ -514,6 +617,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleImageViewer(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleInlineImageFetched(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleErr(msg); ok {
 		return a2, cmd
 	}
@@ -542,7 +648,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -1127,6 +1233,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
+		ii := msg.InlineImages
 		ln := msg.LayoutName
 		return a, func() tea.Msg {
 			if msg.RemoteChanged {
@@ -1139,9 +1246,10 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
+				cfg.InlineImages = ii
 				cfg.Layout = ln
 			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, layoutName: ln}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, inlineImages: ii, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -1150,11 +1258,12 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
+		a.inlineImages = msg.inlineImages
 		a.layoutName = msg.layoutName
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.inlineImages, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
 		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
@@ -2054,7 +2163,12 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 
 // --- view ---
 
-func (a App) View() string { return a.layout.View(a) }
+func (a App) View() string {
+	if a.active == screenLogin {
+		return a.login.View()
+	}
+	return a.layout.View(a)
+}
 
 // activeScreenHasFocusedInput returns true when the current screen has a
 // text input that is focused, preventing arrow keys from being consumed by
@@ -2286,6 +2400,315 @@ func (a App) canRenderImageInline(u string) bool {
 		a.imageViewer != "browser"
 }
 
+// canInlineImages reports whether Feed/PostDetail should render post
+// attachments inline: the user's InlineImages preference is on, plus the
+// same protocol/imageViewer/ephemeral gates as the fullscreen image viewer
+// (see canRenderImageInline). There's no URL to check yet here — this gates
+// the feature as a whole, per-attachment checks happen when rendering.
+func (a App) canInlineImages() bool {
+	return a.inlineImages &&
+		!a.ephemeral &&
+		a.graphicsProtocol != imgview.ProtocolNone &&
+		a.imageViewer != "browser"
+}
+
+// activeInlineImageSlots returns the active screen's currently visible
+// inline image slots, or nil for screens that don't support inline images
+// (Search/Guilds/Topics). Used by TabsLayout.InlineImageSlots; MillerLayout
+// has its own equivalent since its screen geometry (and, for Feed, which
+// screen method even has the current content — see FeedModel.VisibleDetailInlineImages)
+// differs from Tabs'.
+func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
+	switch a.active {
+	case screenPostDetail:
+		return a.postDetail.VisibleInlineImages()
+	case screenFeed:
+		return a.feed.VisibleInlineImages()
+	default:
+		return nil
+	}
+}
+
+// inlineImageSignature summarizes a slot list's identity and position —
+// used to detect "did the visible set of inline images change at all this
+// frame" cheaply, without deep-comparing slices.
+func inlineImageSignature(slots []screens.InlineImageSlot) string {
+	var sb strings.Builder
+	for _, s := range slots {
+		fmt.Fprintf(&sb, "%s@%d;", s.Key, s.Row)
+	}
+	return sb.String()
+}
+
+// inlineImageCacheKey identifies one encoded rendering of a slot's image —
+// slot key, URL, column budget, and protocol. Keying by slot (not just URL)
+// matters for Kitty, whose encoded bytes embed a placement id specific to
+// one on-screen instance (see imgview.EncodeKitty) — two slots showing the
+// same URL must never share an encode. Also matches how a resize (which
+// changes MaxCols) or a protocol change naturally invalidates old entries.
+func inlineImageCacheKey(slot screens.InlineImageSlot, proto imgview.GraphicsProtocol) string {
+	return fmt.Sprintf("%s|%s|%d|%d", slot.Key, slot.URL, slot.MaxCols, proto)
+}
+
+// kittyModalPlacementID is a fixed, reserved Kitty placement/image id used
+// exclusively by the fullscreen image modal — distinct from inline
+// rendering's per-slot ids (see App.kittyPlacementIDs), which start from 1
+// and grow with normal use. Giving the modal a dedicated id (rather than
+// the anonymous placementID==0 mode EncodeKitty also supports) means its
+// own open/close/cycle lifecycle never has to blunt-delete-all placements —
+// which would erase every inline image's placement too, now that both
+// features can be on screen at once. Re-sending a=T with this same id on
+// each open/cycle replaces any previous modal placement per the protocol
+// spec, so no separate self-heal delete is needed there either. Deliberately
+// NOT the top of Kitty's 32-bit id range (4294967295 / 0xFFFFFFFF): that
+// exact value is a conventional "no id"/sentinel value in a lot of unsigned-
+// integer code, and terminals implementing the protocol are free to special-
+// case it — consistent with the modal flashing open then immediately
+// vanishing once this id was used, rather than staying on screen like any
+// other named placement. 999000000 is an arbitrary value nowhere near any
+// common sentinel (0, 1, INT32_MAX, UINT32_MAX) yet still astronomically far
+// from the small incrementing counter inline rendering uses, so it can never
+// collide with it either.
+const kittyModalPlacementID = 999000000
+
+// syncKittyPlacements assigns a stable id (used as both image id and
+// placement id, see imgview.EncodeKitty) to every slot ever seen — new keys
+// get the next counter value, permanently; already-tracked keys keep theirs
+// forever, whether currently visible or not (see kittyPlacementIDs' doc
+// comment on the App struct for why). Comparing this sync's visible set
+// against kittyVisibleKeys (last sync's) reports exactly two transitions:
+// toDelete, ids for keys that just became invisible, and revived, ids for
+// keys that just became visible again — the caller cancels any pending
+// delete for a revived id before it can wipe out that key's freshly redrawn
+// placement. Returns the updated App, the current key->id mapping (for
+// fetchInlineImageCmd to look up), toDelete, and revived.
+func (a App) syncKittyPlacements(slots []screens.InlineImageSlot) (App, map[string]int, []int, []int) {
+	if a.kittyPlacementIDs == nil {
+		a.kittyPlacementIDs = make(map[string]int)
+	}
+	current := make(map[string]bool, len(slots))
+	for _, s := range slots {
+		current[s.Key] = true
+		if _, ok := a.kittyPlacementIDs[s.Key]; !ok {
+			a.kittyNextPlacementID++
+			a.kittyPlacementIDs[s.Key] = a.kittyNextPlacementID
+		}
+	}
+	var toDelete, revived []int
+	for key := range a.kittyVisibleKeys {
+		if !current[key] {
+			toDelete = append(toDelete, a.kittyPlacementIDs[key])
+		}
+	}
+	for key := range current {
+		if _, wasVisible := a.kittyVisibleKeys[key]; !wasVisible {
+			revived = append(revived, a.kittyPlacementIDs[key])
+		}
+	}
+	visible := make(map[string]struct{}, len(current))
+	for key := range current {
+		visible[key] = struct{}{}
+	}
+	a.kittyVisibleKeys = visible
+	return a, a.kittyPlacementIDs, toDelete, revived
+}
+
+// accumulateKittyDeletes merges newlyDropped ids into pending. Merging
+// (never overwriting or expiring) is what makes a delete robust against
+// Bubble Tea's throttled renderer processing several Updates before it
+// actually writes a frame — see pendingKittyDeletes' doc comment on the App
+// struct for why even a resend countdown could still lose a delete that was
+// never rendered.
+func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[int]struct{} {
+	if pending == nil {
+		pending = make(map[int]struct{})
+	}
+	for _, id := range newlyDropped {
+		pending[id] = struct{}{}
+	}
+	return pending
+}
+
+// syncInlineImages diffs the active screen's current VisibleInlineImages()
+// against inlineImageCache and returns a command that fetches+encodes
+// anything missing. It's called once per Update, after the active screen
+// has already processed the message. Kitty gets precise per-image
+// create/delete via kittyPlacementIDs/pendingKittyDeletes (see
+// syncKittyPlacements); Sixel/iTerm2 have no placement-delete primitive, so
+// any change in the visible-slot signature instead forces a full-screen
+// clear — a moved or removed image can otherwise leave stray pixels behind
+// (the same reasoning already applied to the fullscreen modal's close/cycle
+// handling).
+func (a App) syncInlineImages() (App, tea.Cmd) {
+	var slots []screens.InlineImageSlot
+	if a.canInlineImages() {
+		slots, _, _ = a.layout.InlineImageSlots(a)
+	}
+	var cmds []tea.Cmd
+
+	isKitty := a.graphicsProtocol == imgview.ProtocolKitty
+	var placementIDs map[string]int
+	if isKitty {
+		var toDelete, revived []int
+		a, placementIDs, toDelete, revived = a.syncKittyPlacements(slots)
+		for _, id := range revived {
+			delete(a.pendingKittyDeletes, id)
+		}
+		a.pendingKittyDeletes = accumulateKittyDeletes(a.pendingKittyDeletes, toDelete)
+	} else if sig := inlineImageSignature(slots); sig != a.inlineImageLastSig {
+		a.inlineImageLastSig = sig
+		cmds = append(cmds, tea.ClearScreen)
+	}
+
+	if a.inlineImageFetching == nil {
+		a.inlineImageFetching = make(map[string]bool)
+	}
+	for _, slot := range slots {
+		key := inlineImageCacheKey(slot, a.graphicsProtocol)
+		if _, cached := a.inlineImageCache[key]; cached {
+			continue
+		}
+		if a.inlineImageFetching[key] {
+			continue
+		}
+		if failedAt, failed := a.inlineImageFailedAt[key]; failed && time.Since(failedAt) < inlineImageFailureCooldown {
+			continue
+		}
+		a.inlineImageFetching[key] = true
+		placementID := 0
+		if isKitty {
+			placementID = placementIDs[slot.Key]
+		}
+		cmds = append(cmds, a.fetchInlineImageCmd(slot, key, placementID))
+	}
+	if len(cmds) == 0 {
+		return a, nil
+	}
+	return a, tea.Batch(cmds...)
+}
+
+// inlineImageFetchedMsg reports the result of one fetchInlineImageCmd.
+type inlineImageFetchedMsg struct {
+	key     string
+	encoded string
+	err     error
+}
+
+// fetchInlineImageCmd fetches and encodes slot's image for the currently
+// detected protocol. placementID is only used for Kitty (see
+// imgview.EncodeKitty); callers pass 0 for Sixel/iTerm2. Unlike the
+// fullscreen modal, there's no user-visible loading state to manage: a miss
+// this frame just means the reserved blank band stays blank until the
+// result lands.
+func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, placementID int) tea.Cmd {
+	proto := a.graphicsProtocol
+	maxCols, maxRows := slot.MaxCols, slot.MaxRows
+	url := slot.URL
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		img, err := imgview.Fetch(ctx, url)
+		if err != nil {
+			return inlineImageFetchedMsg{key: key, err: err}
+		}
+		var encoded string
+		switch proto {
+		case imgview.ProtocolITerm2:
+			encoded, _, _, err = imgview.EncodeITerm2(img, maxCols, maxRows)
+		case imgview.ProtocolSixel:
+			cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
+			encoded, _, _, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH)
+		case imgview.ProtocolKitty:
+			encoded, _, _, err = imgview.EncodeKitty(img, maxCols, maxRows, placementID)
+		default:
+			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
+		}
+		if err != nil {
+			return inlineImageFetchedMsg{key: key, err: err}
+		}
+		return inlineImageFetchedMsg{key: key, encoded: encoded}
+	}
+}
+
+// inlineImageFailureCooldown bounds how often a permanently-broken image URL
+// gets refetched — without it, a dead link left visible while the user is
+// idle-scrolling elsewhere on the same screen fires a fresh HTTP request on
+// every single Update (keystroke, tick, anything) that includes its slot in
+// the visible set. Not tied to a resize/navigation-triggered retry: the slot
+// naturally gets another attempt on its own once the cooldown lapses.
+const inlineImageFailureCooldown = 60 * time.Second
+
+// handleInlineImageFetched processes an inlineImageFetchedMsg: on success,
+// caches the encoded result so the next frame's render picks it up, and
+// clears any earlier failure record for the key; on failure, records when it
+// failed (see inlineImageFailureCooldown) so syncInlineImages doesn't retry
+// it on every subsequent Update — there's no modal to fall back to here, the
+// slot simply stays blank until either the cooldown lapses or something
+// invalidates the key outright (e.g. a resize changing its column budget).
+func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
+	m, ok := msg.(inlineImageFetchedMsg)
+	if !ok {
+		return a, nil, false
+	}
+	delete(a.inlineImageFetching, m.key)
+	if m.err != nil {
+		if a.inlineImageFailedAt == nil {
+			a.inlineImageFailedAt = make(map[string]time.Time)
+		}
+		a.inlineImageFailedAt[m.key] = time.Now()
+		return a, nil, true
+	}
+	delete(a.inlineImageFailedAt, m.key)
+	return a.cacheInlineImage(m.key, m.encoded), nil, true
+}
+
+// inlineImageCacheMaxBytes bounds inlineImageCache's total payload size —
+// see cacheInlineImage. A long scrolling session or a terminal resized many
+// times would otherwise grow the cache for the life of the process. Chosen
+// as a reasonable starting cap, not derived from measurement (ponytail:
+// revisit if real sessions show it's too tight or too loose in practice).
+const inlineImageCacheMaxBytes = 16 << 20 // 16 MiB
+
+// cacheInlineImage stores encoded under key in inlineImageCache, evicting
+// the oldest-inserted entries first once inlineImageCacheMaxBytes is
+// exceeded. Eviction only removes the cache entry, never the corresponding
+// kittyPlacementIDs id (see that field's doc comment) — cache keys don't
+// embed the id, so a slot whose entry gets evicted just re-fetches and
+// re-encodes using its already-stable id on the next sync, the same as any
+// other cache miss.
+func (a App) cacheInlineImage(key, encoded string) App {
+	return a.cacheInlineImageBounded(key, encoded, inlineImageCacheMaxBytes)
+}
+
+// cacheInlineImageBounded is cacheInlineImage with an injectable cap, so
+// tests can exercise eviction with a small maxBytes instead of megabytes of
+// fixture data.
+func (a App) cacheInlineImageBounded(key, encoded string, maxBytes int) App {
+	if a.inlineImageCache == nil {
+		a.inlineImageCache = make(map[string]string)
+		a.inlineImageCacheOrder = list.New()
+		a.inlineImageCacheElems = make(map[string]*list.Element)
+	}
+	if old, exists := a.inlineImageCache[key]; exists {
+		a.inlineImageCacheBytes -= len(old)
+		a.inlineImageCacheOrder.MoveToBack(a.inlineImageCacheElems[key])
+	} else {
+		a.inlineImageCacheElems[key] = a.inlineImageCacheOrder.PushBack(key)
+	}
+	a.inlineImageCache[key] = encoded
+	a.inlineImageCacheBytes += len(encoded)
+
+	for a.inlineImageCacheBytes > maxBytes && a.inlineImageCacheOrder.Len() > 1 {
+		oldest := a.inlineImageCacheOrder.Front()
+		oldestKey := oldest.Value.(string)
+		a.inlineImageCacheBytes -= len(a.inlineImageCache[oldestKey])
+		delete(a.inlineImageCache, oldestKey)
+		delete(a.inlineImageCacheElems, oldestKey)
+		a.inlineImageCacheOrder.Remove(oldest)
+	}
+	return a
+}
+
 // openExternalURL opens u in the OS default browser as a fire-and-forget command.
 func openExternalURL(u string) tea.Cmd {
 	return func() tea.Msg {
@@ -2334,7 +2757,11 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 		for i, img := range frames {
 			switch proto {
 			case imgview.ProtocolKitty:
-				encodedFrames[i], cols, rows = imgview.EncodeKitty(img, displayCols, displayRows)
+				var err error
+				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, kittyModalPlacementID)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
 			case imgview.ProtocolITerm2:
 				var err error
 				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows)
@@ -2604,6 +3031,7 @@ type feedPageMsg struct {
 	cursor string
 }
 type roomsLoadedMsg struct{ rooms []model.Room }
+
 // roomCommandReplyMsg/cmailCommandReplyMsg carry a reply-only slash command's
 // text (e.g. /help) back from the send response, for local display only —
 // nothing was posted, so nothing arrives via the RTDB subscription.
@@ -2640,6 +3068,7 @@ type settingsSavedMsg struct {
 	maxThreadDepth int
 	timezone       string
 	imageViewer    string
+	inlineImages   bool
 	layoutName     string
 }
 type wanderTickMsg struct{ gen int }

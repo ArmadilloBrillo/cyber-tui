@@ -78,6 +78,13 @@ type Config struct {
 	// fullscreen modal; "browser" always opens in the OS default browser.
 	ImageViewer string `json:"imageViewer,omitempty"`
 
+	// InlineImages enables rendering each post's first image attachment
+	// directly in the feed and post detail views, instead of just a link.
+	// Experimental — off by default. Still subject to the same graphics
+	// protocol detection and ImageViewer/ephemeral-session gating as the
+	// fullscreen image viewer.
+	InlineImages bool `json:"inlineImages,omitempty"`
+
 	// Layout selects the UI layout. "" or "tabs" = tab bar (default); "miller" = sidebar columns.
 	Layout string `json:"layout,omitempty"`
 }
@@ -204,4 +211,3 @@ func ShouldWanderNow(cfg Config) bool {
 	return cfg.LastWandered.IsZero() ||
 		time.Since(cfg.LastWandered) >= WanderInterval
 }
-

@@ -166,6 +166,11 @@ var settingsGroups = []settingsGroup{
 					return m
 				},
 			},
+			{
+				label: "inline images (experimental)", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.inlineImages },
+				toggle:  func(m SettingsModel) SettingsModel { m.inlineImages = !m.inlineImages; return m },
+			},
 		},
 	},
 	{
@@ -175,6 +180,29 @@ var settingsGroups = []settingsGroup{
 				label: "wander mode", kind: "bool",
 				getBool: func(m SettingsModel) bool { return m.wanderLust },
 				toggle:  func(m SettingsModel) SettingsModel { m.wanderLust = !m.wanderLust; return m },
+			},
+		},
+	},
+	{
+		title: "layout",
+		items: []settingsItem{
+			{
+				label: "layout", kind: "enum",
+				options: []string{"tabs", "miller"},
+				getEnum: func(m SettingsModel) string {
+					if m.layoutName == "miller" {
+						return "miller"
+					}
+					return "tabs"
+				},
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					cur := m.layoutName
+					if cur == "" {
+						cur = "tabs"
+					}
+					m.layoutName = cycleStringEnum(cur, []string{"tabs", "miller"}, delta)
+					return m
+				},
 			},
 		},
 	},
@@ -192,6 +220,8 @@ type SettingsModel struct {
 	originalTimezone       string         // last saved baseline
 	imageViewer            string         // live local config value ("terminal" or "browser")
 	originalImageViewer    string         // last saved baseline
+	inlineImages           bool           // live local config value
+	originalInlineImages   bool           // last saved baseline
 	layoutName             string         // live local config value ("tabs" or "miller")
 	originalLayoutName     string         // last saved baseline
 	cursor                 int
@@ -216,7 +246,7 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, imageViewer, layoutName string) SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, imageViewer string, inlineImages bool, layoutName string) SettingsModel {
 	m.saved = true
 	m.err = nil
 	m.original = m.settings
@@ -228,6 +258,8 @@ func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, i
 	m.originalTimezone = timezone
 	m.imageViewer = imageViewer
 	m.originalImageViewer = imageViewer
+	m.inlineImages = inlineImages
+	m.originalInlineImages = inlineImages
 	m.layoutName = layoutName
 	m.originalLayoutName = layoutName
 	return m
@@ -246,6 +278,7 @@ func (m SettingsModel) IsDirty() bool {
 		m.maxThreadDepth != m.originalMaxThreadDepth ||
 		m.timezone != m.originalTimezone ||
 		m.imageViewer != m.originalImageViewer ||
+		m.inlineImages != m.originalInlineImages ||
 		m.layoutName != m.originalLayoutName
 }
 
@@ -330,6 +363,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			}
 			m.imageViewer = iv
 			m.originalImageViewer = iv
+			m.inlineImages = msg.InlineImages
+			m.originalInlineImages = msg.InlineImages
 			m.layoutName = msg.LayoutName
 			m.originalLayoutName = msg.LayoutName
 		}
@@ -381,10 +416,11 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				td := m.maxThreadDepth
 				tz := m.timezone
 				iv := m.imageViewer
+				ii := m.inlineImages
 				ln := m.layoutName
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, LayoutName: ln, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, InlineImages: ii, LayoutName: ln, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -396,6 +432,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.maxThreadDepth = m.originalMaxThreadDepth
 			m.timezone = m.originalTimezone
 			m.imageViewer = m.originalImageViewer
+			m.inlineImages = m.originalInlineImages
 			m.layoutName = m.originalLayoutName
 			m.saved = false
 			m.err = nil

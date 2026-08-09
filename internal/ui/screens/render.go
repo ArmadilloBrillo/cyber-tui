@@ -12,6 +12,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
+	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
 const postMaxBodyLines = 4
@@ -23,7 +24,7 @@ const postMaxBodyLines = 4
 // maxBodyLines caps body text at that many lines (postMaxBodyLines for list views,
 // 0 for the reading pane where the full content should be shown).
 func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int) string {
-	content := renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines)
+	content, _ := renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines, false)
 	boxStyle := theme.Border
 	if selected {
 		boxStyle = theme.ActiveBorder
@@ -40,8 +41,10 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 // so a caller re-rendering only because the selection moved (e.g. feed.go's
 // arrow-key navigation) can cache this per post ID/width and skip the
 // markdown re-parse, instead of rebuilding every loaded post on every
-// keystroke.
-func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int) string {
+// keystroke. inlineImagesEnabled is false for every RenderPost caller
+// (Search/Guilds/Topics/Miller panes) — only FeedModel's own list-view
+// renderer opts in, so the returned []postImageSlot is always nil elsewhere.
+func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled bool) (string, []postImageSlot) {
 	innerWidth := width - 4
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -49,7 +52,7 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)),
 	) + audioIcon(p.Attachments) + bookmarkIcon(bookmarked) + watchIcon(watched)
 	var rightParts []string
-	if ind := attachmentIndicator(p.Attachments); ind != "" {
+	if ind := attachmentIndicator(p.Attachments, p.Content); ind != "" {
 		rightParts = append(rightParts, ind)
 	}
 	switch p.RepliesCount {
@@ -86,16 +89,50 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 	}
 	badges := strings.Join(badgeParts, "  ")
 
+	rows := []string{header}
+	if badges != "" {
+		rows = append(rows, badges)
+	}
+	if p.Title != "" {
+		rows = append(rows, theme.Highlight.Render(p.Title))
+	}
+	// 1 = the card's own top border row, added by RenderPost/FeedModel.renderPost.
+	lineBase := 1 + lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, rows...))
+
 	var body string
+	var imgSlots []postImageSlot
 	if innerWidth > 0 {
-		rendered := markdown.Render(p.Content, innerWidth)
-		lines := strings.Split(rendered, "\n")
-		if maxBodyLines > 0 && len(lines) > maxBodyLines {
-			body = strings.Join(lines[:maxBodyLines], "\n")
-			more := len(lines) - maxBodyLines
-			body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
+		if inlineImagesEnabled {
+			rendered, hits := markdown.RenderLocatingImages(p.Content, innerWidth)
+			// Feed's card is compact and truncates body text to maxBodyLines,
+			// so a post's later images can already fall past that cutoff and
+			// simply not fit — capping to the first eligible image here keeps
+			// Feed predictable rather than showing a variable 0..N of them.
+			// PostDetail (no text truncation) still shows every eligible image.
+			if len(hits) > 1 {
+				hits = hits[:1]
+			}
+			lines := strings.Split(rendered, "\n")
+			more := 0
+			if maxBodyLines > 0 && len(lines) > maxBodyLines {
+				more = len(lines) - maxBodyLines
+				lines = lines[:maxBodyLines]
+			}
+			lines, imgSlots = spliceInlineImageBands(lines, hits, lineBase)
+			body = strings.Join(lines, "\n")
+			if more > 0 {
+				body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
+			}
 		} else {
-			body = rendered
+			rendered := markdown.Render(p.Content, innerWidth)
+			lines := strings.Split(rendered, "\n")
+			if maxBodyLines > 0 && len(lines) > maxBodyLines {
+				body = strings.Join(lines[:maxBodyLines], "\n")
+				more := len(lines) - maxBodyLines
+				body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
+			} else {
+				body = rendered
+			}
 		}
 	} else {
 		body = markdown.Render(p.Content, 0)
@@ -111,30 +148,45 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 	}
 	topics := topicsSB.String()
 
-	body = strings.TrimRight(body, "\n")
-	rows := []string{header}
-	if badges != "" {
-		rows = append(rows, badges)
-	}
-	if p.Title != "" {
-		rows = append(rows, theme.Highlight.Render(p.Title))
+	if len(imgSlots) == 0 {
+		// Only safe when nothing was spliced in: an image band's reserved
+		// rows are blank strings, and when the last image in a post has no
+		// text after it (common — many posts end right on the image),
+		// blindly trimming trailing "\n"s deletes that whole reservation,
+		// shrinking the card below what VisibleInlineImages/App assume it
+		// occupies and letting the image paint into the next post's card.
+		body = strings.TrimRight(body, "\n")
 	}
 	rows = append(rows, body)
 	if topics != "" {
 		rows = append(rows, "\n"+topics)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	return lipgloss.JoinVertical(lipgloss.Left, rows...), imgSlots
 }
 
-// attachmentIndicator returns a compact header badge for any attachments present,
-// e.g. "[img]". Returns "" when there are no attachments.
-func attachmentIndicator(attachments []model.Attachment) string {
+// attachmentIndicator returns a compact header badge for any images present
+// — counting both structured image/gif Attachments and images embedded as
+// markdown syntax in content (most real posts use the latter; see
+// urlutil.CountImages) — e.g. "[img]" for one, "[img +2]" when there are
+// more beyond the first (the count beyond what inline rendering shows, and
+// what the carousel modal has left to page through). Returns "" when there
+// are no images at all — audio attachments get their own icon (audioIcon).
+func attachmentIndicator(attachments []model.Attachment, content string) string {
+	n := 0
 	for _, a := range attachments {
-		if a.Type == "image" {
-			return theme.Subtle.Render("[img]")
+		if a.Type == "image" || a.Type == "gif" {
+			n++
 		}
 	}
-	return ""
+	n += urlutil.CountImages(content)
+	switch {
+	case n == 0:
+		return ""
+	case n == 1:
+		return theme.Subtle.Render("[img]")
+	default:
+		return theme.Subtle.Render(fmt.Sprintf("[img +%d]", n-1))
+	}
 }
 
 // audioIcon returns a ♫ icon (with leading spaces) when any attachment is audio, else "".

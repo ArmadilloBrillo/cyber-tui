@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/muesli/cancelreader"
 	"golang.org/x/term"
 )
 
@@ -73,6 +74,12 @@ func ProbeSixel(stdin, stdout *os.File) bool {
 		return false
 	}
 
+	cr, err := cancelreader.NewReader(stdin)
+	if err != nil {
+		return false
+	}
+	defer cr.Close()
+
 	type readResult struct {
 		buf []byte
 		err error
@@ -80,7 +87,7 @@ func ProbeSixel(stdin, stdout *os.File) bool {
 	done := make(chan readResult, 1)
 	go func() {
 		buf := make([]byte, 64)
-		n, err := stdin.Read(buf)
+		n, err := cr.Read(buf)
 		done <- readResult{buf[:n], err}
 	}()
 
@@ -91,6 +98,7 @@ func ProbeSixel(stdin, stdout *os.File) bool {
 		}
 		return ParseDA1SixelSupport(res.buf)
 	case <-time.After(da1ProbeTimeout):
+		cr.Cancel()
 		return false
 	}
 }

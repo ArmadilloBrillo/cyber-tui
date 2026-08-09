@@ -120,6 +120,101 @@ func TestRender_ImageNoAlt(t *testing.T) {
 	}
 }
 
+// TestRenderLocatingImages_SoleParagraphImage confirms the common real-world
+// case: an image alone in its own paragraph is reported as eligible, with
+// the correct URL and line index, and out is unaffected (byte-identical to
+// plain Render).
+func TestRenderLocatingImages_SoleParagraphImage(t *testing.T) {
+	content := "hi\n\n![photo.jpg](https://example.com/photo.jpg)\n\nbye"
+	out, hits := RenderLocatingImages(content, 80)
+	if len(hits) != 1 {
+		t.Fatalf("expected exactly 1 eligible image, got %d: %+v", len(hits), hits)
+	}
+	hit := hits[0]
+	if hit.URL != "https://example.com/photo.jpg" {
+		t.Errorf("expected matching URL, got %q", hit.URL)
+	}
+	lines := strings.Split(out, "\n")
+	if hit.Line < 0 || hit.Line >= len(lines) {
+		t.Fatalf("hit.Line %d out of range for %d lines", hit.Line, len(lines))
+	}
+	if !strings.Contains(strip(lines[hit.Line]), "[IMG") {
+		t.Errorf("expected line %d to be the image placeholder, got %q", hit.Line, lines[hit.Line])
+	}
+	if out != Render(content, 80) {
+		t.Errorf("RenderLocatingImages's out must be byte-identical to Render's output")
+	}
+}
+
+// TestRenderLocatingImages_LineOffsetAcrossMultiLineBlock confirms the line
+// index accounts for a preceding block that itself wraps to multiple lines
+// — the one case renderDocument's running lineOffset exists to handle.
+func TestRenderLocatingImages_LineOffsetAcrossMultiLineBlock(t *testing.T) {
+	long := strings.Repeat("word ", 30) // wraps across several lines at width 40
+	content := long + "\n\n![img](https://example.com/a.png)"
+	out, hits := RenderLocatingImages(content, 40)
+	if len(hits) != 1 {
+		t.Fatalf("expected exactly 1 eligible image, got %d: %+v", len(hits), hits)
+	}
+	hit := hits[0]
+	lines := strings.Split(out, "\n")
+	if hit.Line == 0 {
+		t.Errorf("expected the image line to come after the wrapped paragraph's multiple lines, got Line=0")
+	}
+	if hit.Line < 0 || hit.Line >= len(lines) || !strings.Contains(strip(lines[hit.Line]), "[IMG") {
+		t.Errorf("hit.Line (%d) does not point at the image line: %q", hit.Line, lines)
+	}
+}
+
+// TestRenderLocatingImages_Ineligible covers the spike's accepted corner
+// cuts: an image mixed inline with other text, and one nested in a list —
+// neither is ever reported, regardless of what else is in the document.
+func TestRenderLocatingImages_Ineligible(t *testing.T) {
+	cases := map[string]string{
+		"mixed inline text": "look at this ![img](https://example.com/a.png) cool huh",
+		"nested in list":    "- ![img](https://example.com/a.png)\n- other item",
+		"no image at all":   "just plain text, no images here",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, hits := RenderLocatingImages(content, 80)
+			if len(hits) != 0 {
+				t.Errorf("expected no eligible images for %q, got %+v", content, hits)
+			}
+		})
+	}
+}
+
+// TestRenderLocatingImages_MultipleImages confirms every eligible image in a
+// document is reported, in document order, with correct per-hit lines — and
+// that an ineligible image earlier in the document doesn't suppress a later
+// eligible one (the old "first image or nothing" rule no longer applies).
+func TestRenderLocatingImages_MultipleImages(t *testing.T) {
+	content := "intro ![mixed](https://example.com/mixed.png) text\n\n" +
+		"![first](https://example.com/first.png)\n\n" +
+		"middle text\n\n" +
+		"![second](https://example.com/second.png)"
+	out, hits := RenderLocatingImages(content, 80)
+	if len(hits) != 2 {
+		t.Fatalf("expected 2 eligible images (mixed one excluded), got %d: %+v", len(hits), hits)
+	}
+	if hits[0].URL != "https://example.com/first.png" {
+		t.Errorf("expected first hit to be 'first', got %q", hits[0].URL)
+	}
+	if hits[1].URL != "https://example.com/second.png" {
+		t.Errorf("expected second hit to be 'second', got %q", hits[1].URL)
+	}
+	if hits[1].Line <= hits[0].Line {
+		t.Errorf("expected hits in ascending line order, got %d then %d", hits[0].Line, hits[1].Line)
+	}
+	lines := strings.Split(out, "\n")
+	for _, h := range hits {
+		if h.Line < 0 || h.Line >= len(lines) || !strings.Contains(strip(lines[h.Line]), "[IMG") {
+			t.Errorf("hit.Line (%d) does not point at an image line: %q", h.Line, lines)
+		}
+	}
+}
+
 func TestRender_InlineCode(t *testing.T) {
 	raw := Render("Use `fmt.Println` here", 80)
 	plain := strip(raw)

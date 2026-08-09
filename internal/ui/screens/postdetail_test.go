@@ -210,6 +210,86 @@ func TestPostDetail_PaginationRebuildsTree(t *testing.T) {
 	}
 }
 
+// TestPostDetail_VisibleInlineImages_DisabledByDefault confirms that with no
+// SharedConfigMsg.InlineImagesEnabled ever sent (the default), no slots are
+// reported even for a post whose content has an eligible image — the whole
+// feature must be a strict no-op until explicitly turned on.
+func TestPostDetail_VisibleInlineImages_DisabledByDefault(t *testing.T) {
+	m := initPostDetail()
+	post := pdPost("p1")
+	post.Content = "hi\n\n![a](https://example.com/a.png)\n\nbye"
+	m = m.SetPost(post)
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+// TestPostDetail_VisibleInlineImages_PostAndReply confirms that once enabled,
+// both the post's and a top-level reply's eligible image are reported, in
+// order, with the URL/Key/indent expected for each.
+func TestPostDetail_VisibleInlineImages_PostAndReply(t *testing.T) {
+	m := initPostDetail()
+	// Taller than the default 40 rows: the post's own reserved image band
+	// plus its header/border already takes a good chunk of the viewport, so
+	// a short viewport would legitimately cut the reply's image band off —
+	// this test wants both fully visible, not to exercise that cutoff.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 60})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+
+	post := pdPost("p1")
+	post.Content = "hi\n\n![a](https://example.com/a.png)\n\nbye"
+	m = m.SetPost(post)
+
+	reply := pdReply("r1", "", "someone", time.Now())
+	reply.Content = "check this\n\n![b](https://example.com/b.png)"
+	m = m.SetReplies([]model.Reply{reply})
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 visible slots (post + reply), got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != "https://example.com/a.png" || slots[0].Key != "post:p1:0" || slots[0].ColIndent != 2 {
+		t.Errorf("unexpected post slot: %+v", slots[0])
+	}
+	if slots[1].URL != "https://example.com/b.png" || slots[1].Key != "reply:r1:0" || slots[1].ColIndent != 2 {
+		t.Errorf("unexpected reply slot: %+v", slots[1])
+	}
+	if slots[1].Row <= slots[0].Row {
+		t.Errorf("expected reply slot to be below the post slot: post Row=%d, reply Row=%d", slots[0].Row, slots[1].Row)
+	}
+}
+
+// TestPostDetail_VisibleInlineImages_MultipleImagesInOnePost confirms every
+// eligible image in a single post is reported (not just the first), each
+// with its own index-suffixed Key, and that the second image's Row accounts
+// for the first image's full spacer-inclusive band plus the text paragraph
+// between them — the one thing renderBodyWithInlineImage's shift-tracking
+// loop exists to get right.
+func TestPostDetail_VisibleInlineImages_MultipleImagesInOnePost(t *testing.T) {
+	m := initPostDetail()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 80})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+
+	post := pdPost("p1")
+	post.Content = "one\n\n![a](https://example.com/a.png)\n\ntwo\n\n![b](https://example.com/b.png)\n\nthree"
+	m = m.SetPost(post)
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 slots for 2 images in one post, got %d: %+v", len(slots), slots)
+	}
+	if slots[0].Key != "post:p1:0" || slots[1].Key != "post:p1:1" {
+		t.Errorf("expected distinct per-image keys, got %q and %q", slots[0].Key, slots[1].Key)
+	}
+	// inlineImageMaxRows(8) + 2 spacer rows is the minimum gap between two
+	// images with nothing but a one-line paragraph between them.
+	const minGap = 10
+	if got := slots[1].Row - slots[0].Row; got < minGap {
+		t.Errorf("expected at least %d rows between images, got %d (rows %d, %d)", minGap, got, slots[0].Row, slots[1].Row)
+	}
+}
+
 // TestPostDetail_DepthCap verifies that a chain deeper than 3 levels does not
 // panic and that all replies remain reachable via navigation.
 func TestPostDetail_DepthCap(t *testing.T) {

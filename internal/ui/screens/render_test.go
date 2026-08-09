@@ -465,6 +465,44 @@ func TestRenderAttachments_GifBadge(t *testing.T) {
 	}
 }
 
+// TestAttachmentIndicator_CountsImages confirms the badge is blank with no
+// images, flat "[img]" for exactly one, and "[img +N]" (extra beyond the one
+// inline rendering shows) for multiple — audio attachments never count, and
+// markdown-embedded images (the actual mechanism real posts use — see the
+// "markdown only" cases) count the same as structured Attachments.
+func TestAttachmentIndicator_CountsImages(t *testing.T) {
+	cases := []struct {
+		name        string
+		attachments []model.Attachment
+		content     string
+		want        string
+	}{
+		{"none", nil, "just text", ""},
+		{"audio only", []model.Attachment{{Type: "audio"}}, "", ""},
+		{"one image", []model.Attachment{{Type: "image"}}, "", "[img]"},
+		{"one gif", []model.Attachment{{Type: "gif"}}, "", "[img]"},
+		{"image plus gif", []model.Attachment{{Type: "image"}, {Type: "gif"}}, "", "[img +1]"},
+		{"three images", []model.Attachment{{Type: "image"}, {Type: "audio"}, {Type: "image"}, {Type: "image"}}, "", "[img +2]"},
+		{"markdown only, one image", nil, "hi\n\n![a](https://x/a.png)\n\n", "[img]"},
+		{"markdown only, two images", nil, "![a](https://x/a.png)\n\n![b](https://x/b.png)\n\n", "[img +1]"},
+		{"attachment plus markdown image", []model.Attachment{{Type: "audio"}}, "![a](https://x/a.png)\n\n", "[img]"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out := attachmentIndicator(c.attachments, c.content)
+			if c.want == "" {
+				if out != "" {
+					t.Errorf("expected no badge, got: %q", out)
+				}
+				return
+			}
+			if !strings.Contains(out, c.want) {
+				t.Errorf("expected badge to contain %q, got: %q", c.want, out)
+			}
+		})
+	}
+}
+
 // TestRenderCircMessages_AttachmentOnlyBodySkipsDuplicateURL confirms that
 // when Body merely duplicates ImageUrl (an attachment-only message), the URL
 // is shown once via the attachment badge, not a second time as wrapped body text.
@@ -703,8 +741,8 @@ func TestFeedRenderPost_CachesBodyAcrossSelectionChange(t *testing.T) {
 	m.width = 80
 	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "hello world"}
 
-	unselected := m.renderPost(post, false)
-	selected := m.renderPost(post, true)
+	unselected, _ := m.renderPost(post, false)
+	selected, _ := m.renderPost(post, true)
 
 	if unselected == selected {
 		t.Error("expected selected vs unselected rendering to differ (border style)")
@@ -714,7 +752,7 @@ func TestFeedRenderPost_CachesBodyAcrossSelectionChange(t *testing.T) {
 	}
 
 	post.Content = "edited content"
-	edited := m.renderPost(post, false)
+	edited, _ := m.renderPost(post, false)
 	if strings.Contains(ansi.Strip(edited), "hello world") {
 		t.Error("expected cache to invalidate after post content changed, got stale body")
 	}

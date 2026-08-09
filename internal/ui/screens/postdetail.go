@@ -102,19 +102,27 @@ type SubmitReplyMsg struct {
 }
 
 type PostDetailModel struct {
-	post          model.Post
-	replies       []model.Reply
-	flatTree      []replyNode // DFS-ordered tree walk; len always == len(replies)
-	replyOffsets  []int       // start line of each reply within the viewport content
-	replyHeights  []int       // rendered height of each reply (matches offsets; set by buildContent)
-	postHeight    int         // rendered height of the full post block; set by refreshContent
-	selectedReply int
-	viewport      viewport.Model
-	width         int
-	height        int
-	ready         bool
-	loading       bool
-	err           error
+	post         model.Post
+	replies      []model.Reply
+	flatTree     []replyNode // DFS-ordered tree walk; len always == len(replies)
+	replyOffsets []int       // start line of each reply within the viewport content
+	replyHeights []int       // rendered height of each reply (matches offsets; set by buildContent)
+	postHeight   int         // rendered height of the full post block; set by refreshContent
+
+	// inlineImagesEnabled mirrors SharedConfigMsg.InlineImagesEnabled — the
+	// fully-gated value (config flag AND protocol available AND imageViewer
+	// != "browser" AND not an ephemeral SSH session). postImages/replyImages
+	// are only ever populated when this is true.
+	inlineImagesEnabled bool
+	postImages          []postImageSlot   // every eligible image in the post; set by buildContent
+	replyImages         [][]postImageSlot // parallel to flatTree/replyOffsets — one slice per reply; set by buildContent
+	selectedReply       int
+	viewport            viewport.Model
+	width               int
+	height              int
+	ready               bool
+	loading             bool
+	err                 error
 
 	compose           ComposeModel
 	replyPostID       string         // postID set when compose opens
@@ -392,10 +400,12 @@ func (m PostDetailModel) viewportHeight() int {
 }
 
 func (m PostDetailModel) refreshContent() PostDetailModel {
-	content, offsets, heights, postH := m.buildContent()
+	content, offsets, heights, postH, postImgs, replyImgs := m.buildContent()
 	m.replyOffsets = offsets
 	m.replyHeights = heights
 	m.postHeight = postH
+	m.postImages = postImgs
+	m.replyImages = replyImgs
 	m.viewport.SetContent(content)
 	return m
 }
@@ -410,7 +420,8 @@ func (m PostDetailModel) ensureSelectedVisible() PostDetailModel {
 	if m.selectedReply == -1 {
 		// Post is selected — it always starts at line 0.
 		itemStart = 0
-		itemHeight = lipgloss.Height(m.renderFullPost(true))
+		fullPost, _ := m.renderFullPost(true)
+		itemHeight = lipgloss.Height(fullPost)
 	} else {
 		if len(m.replyOffsets) == 0 || m.selectedReply >= len(m.flatTree) {
 			return m
@@ -441,11 +452,15 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
+		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
 		if msg.MaxThreadDepth != m.maxThreadDepth {
 			m.maxThreadDepth = msg.MaxThreadDepth
 			m = m.applyReplies(m.replies)
+		} else if imagesChanged && m.ready {
+			m = m.refreshContent()
 		}
 		return m, nil
 
@@ -691,8 +706,8 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 // the rendered height of each reply, and the rendered height of the post block.
 // Heights are measured here once so that ensureSelectedVisible and the pager
 // always use the same values that were used to lay out the content.
-func (m PostDetailModel) buildContent() (string, []int, []int, int) {
-	postContent := m.renderFullPost(m.selectedReply == -1)
+func (m PostDetailModel) buildContent() (content string, offsets []int, heights []int, postH int, postImgs []postImageSlot, replyImgs [][]postImageSlot) {
+	postContent, postImgs := m.renderFullPost(m.selectedReply == -1)
 	var repliesHeaderText string
 	total := m.post.RepliesCount
 	loaded := len(m.replies)
@@ -721,17 +736,17 @@ func (m PostDetailModel) buildContent() (string, []int, []int, int) {
 	sb.WriteString(repliesHeader)
 	sb.WriteString(sep)
 
-	postH := lipgloss.Height(postContent)
+	postH = lipgloss.Height(postContent)
 
 	if m.loading {
 		sb.WriteString(theme.Subtle.Render("  loading replies…"))
 		sb.WriteString("\n")
-		return sb.String(), nil, nil, postH
+		return sb.String(), nil, nil, postH, postImgs, nil
 	}
 	if len(m.replies) == 0 {
 		sb.WriteString(theme.Subtle.Render("  no replies yet"))
 		sb.WriteString("\n")
-		return sb.String(), nil, nil, postH
+		return sb.String(), nil, nil, postH, postImgs, nil
 	}
 
 	// Base line where first reply starts.
@@ -743,13 +758,15 @@ func (m PostDetailModel) buildContent() (string, []int, []int, int) {
 	} else {
 		baseLines = postH + lipgloss.Height(repliesHeader)
 	}
-	offsets := make([]int, len(m.flatTree))
-	heights := make([]int, len(m.flatTree))
+	offsets = make([]int, len(m.flatTree))
+	heights = make([]int, len(m.flatTree))
+	replyImgs = make([][]postImageSlot, len(m.flatTree))
 	currentLine := baseLines
 
 	for i, node := range m.flatTree {
 		offsets[i] = currentLine
-		rendered := m.renderReply(node, i == m.selectedReply)
+		rendered, replyImgsForNode := m.renderReply(node, i == m.selectedReply)
+		replyImgs[i] = replyImgsForNode
 		h := lipgloss.Height(rendered)
 		heights[i] = h
 		sb.WriteString(rendered)
@@ -761,10 +778,10 @@ func (m PostDetailModel) buildContent() (string, []int, []int, int) {
 		}
 	}
 
-	return sb.String(), offsets, heights, postH
+	return sb.String(), offsets, heights, postH, postImgs, replyImgs
 }
 
-func (m PostDetailModel) renderFullPost(selected bool) string {
+func (m PostDetailModel) renderFullPost(selected bool) (string, []postImageSlot) {
 	innerWidth := m.width - 4
 
 	_, postBookmarked := m.bookmarkedPostIDs[m.post.ID]
@@ -774,7 +791,7 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 		theme.Subtle.Render("  "+displayTime(m.post.CreatedAt, m.location(), m.timeDisplayFormat, false)),
 	) + audioIcon(m.post.Attachments) + bookmarkIcon(postBookmarked) + watchIcon(postWatched)
 	var rightParts []string
-	if ind := attachmentIndicator(m.post.Attachments); ind != "" {
+	if ind := attachmentIndicator(m.post.Attachments, m.post.Content); ind != "" {
 		rightParts = append(rightParts, ind)
 	}
 	right := strings.Join(rightParts, " ")
@@ -803,7 +820,15 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 	}
 	badges := strings.Join(badgeParts, "  ")
 
-	body := markdown.Render(m.post.Content, innerWidth)
+	rows := []string{header}
+	if badges != "" {
+		rows = append(rows, badges)
+	}
+	if m.post.Title != "" {
+		rows = append(rows, theme.Title.Render(m.post.Title))
+	}
+
+	body, imgSlots := m.renderBodyWithInlineImage(m.post.Content, innerWidth, 1+lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, rows...)))
 	if att := renderAttachments(m.post.Attachments); att != "" {
 		body = body + "\n" + att
 	}
@@ -822,18 +847,38 @@ func (m PostDetailModel) renderFullPost(selected bool) string {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}
 
-	rows := []string{header}
-	if badges != "" {
-		rows = append(rows, badges)
-	}
-	if m.post.Title != "" {
-		rows = append(rows, theme.Title.Render(m.post.Title))
-	}
 	rows = append(rows, body, fmt.Sprintf("\n%s", topics))
-	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, rows...)), imgSlots
 }
 
-func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
+// renderBodyWithInlineImage renders content at innerWidth, splicing in an
+// inlineImageBandRows-tall reserved band (spacer + inlineImageMaxRows image
+// rows + spacer) in place of each eligible image's placeholder line, when
+// inline images are enabled. lineBase is the number of lines that will
+// precede body in the card this is embedded in (border top row +
+// header/badges/title), used to translate each image's body-local line into
+// a card-local one. Returns the plain-Render output, unchanged, when inline
+// images are disabled or no eligible image is found.
+//
+// Splicing shifts every line after the insertion point down by
+// (inlineImageBandRows - 1); processing hits in ascending/document order and
+// accumulating that shift as we go means each hit's original Line, plus the
+// shift accumulated from only the earlier hits already spliced in, is always
+// the correct current insertion point — no need to re-scan or recompute
+// anything after the fact.
+func (m PostDetailModel) renderBodyWithInlineImage(content string, innerWidth, lineBase int) (string, []postImageSlot) {
+	if !m.inlineImagesEnabled {
+		return markdown.Render(content, innerWidth), nil
+	}
+	rendered, hits := markdown.RenderLocatingImages(content, innerWidth)
+	if len(hits) == 0 {
+		return rendered, nil
+	}
+	lines, slots := spliceInlineImageBands(strings.Split(rendered, "\n"), hits, lineBase)
+	return strings.Join(lines, "\n"), slots
+}
+
+func (m PostDetailModel) renderReply(node replyNode, selected bool) (string, []postImageSlot) {
 	indentW := node.Depth * 3
 	cardWidth := m.width - 2 - indentW
 	innerWidth := cardWidth - 2
@@ -848,7 +893,7 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 	_, replyBookmarked := m.bookmarkedReplyIDs[node.Reply.ID]
 	left := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...) + audioIcon(node.Reply.Attachments) + bookmarkIcon(replyBookmarked)
 	var replyRightParts []string
-	if ind := attachmentIndicator(node.Reply.Attachments); ind != "" {
+	if ind := attachmentIndicator(node.Reply.Attachments, node.Reply.Content); ind != "" {
 		replyRightParts = append(replyRightParts, ind)
 	}
 	replyRight := strings.Join(replyRightParts, " ")
@@ -860,7 +905,9 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 		}
 	}
 
-	body := markdown.Render(node.Reply.Content, innerWidth)
+	// lineBase: 1 border-top row + 1 header row (header is always a single
+	// JoinHorizontal line here, unlike the full post's optional badges/title).
+	body, imgSlots := m.renderBodyWithInlineImage(node.Reply.Content, innerWidth, 2)
 	if att := renderAttachments(node.Reply.Attachments); att != "" {
 		body = body + "\n" + att
 	}
@@ -874,9 +921,9 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) string {
 	}
 	card := boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
 	if indentW > 0 {
-		return lipgloss.NewStyle().MarginLeft(indentW).Render(card)
+		return lipgloss.NewStyle().MarginLeft(indentW).Render(card), imgSlots
 	}
-	return card
+	return card, imgSlots
 }
 
 func (m PostDetailModel) View() string {
@@ -937,4 +984,53 @@ func (m PostDetailModel) GetFocusedURLs() []string {
 		return append(extractURLs(r.Content), attachmentURLs(r.Attachments)...)
 	}
 	return append(extractURLs(m.post.Content), attachmentURLs(m.post.Attachments)...)
+}
+
+// VisibleInlineImages returns the inline image slots (post + replies)
+// currently fully within the viewport, top to bottom. It's purely a "where,
+// if anywhere" query — App's rendering step owns fetching, encoding, and any
+// placement/cache state; this just reports positions for the current frame.
+// An image only counts as visible when its entire reserved row band fits in
+// [YOffset, YOffset+Height) — no partial-visibility clipping (see the plan).
+func (m PostDetailModel) VisibleInlineImages() []InlineImageSlot {
+	if !m.ready || !m.inlineImagesEnabled {
+		return nil
+	}
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+
+	var slots []InlineImageSlot
+	for i, img := range m.postImages {
+		if img.Line < top || img.Line+inlineImageMaxRows > bottom {
+			continue
+		}
+		slots = append(slots, InlineImageSlot{
+			URL:       img.URL,
+			Row:       img.Line - top,
+			ColIndent: 2,
+			MaxCols:   m.width - 4,
+			MaxRows:   inlineImageEncodeMaxRows,
+			Key:       fmt.Sprintf("post:%s:%d", m.post.ID, i),
+		})
+	}
+	for i, node := range m.flatTree {
+		if i >= len(m.replyImages) {
+			continue
+		}
+		indentW := node.Depth * 3
+		for j, img := range m.replyImages[i] {
+			abs := m.replyOffsets[i] + img.Line
+			if abs < top || abs+inlineImageMaxRows > bottom {
+				continue
+			}
+			slots = append(slots, InlineImageSlot{
+				URL:       img.URL,
+				Row:       abs - top,
+				ColIndent: 2 + indentW,
+				MaxCols:   m.width - 4 - indentW,
+				MaxRows:   inlineImageEncodeMaxRows,
+				Key:       fmt.Sprintf("reply:%s:%d", node.Reply.ID, j),
+			})
+		}
+	}
+	return slots
 }

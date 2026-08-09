@@ -95,6 +95,12 @@ type FeedModel struct {
 	loc               *time.Location // timezone for timestamp display; nil = UTC
 	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
 
+	// inlineImagesEnabled mirrors SharedConfigMsg.InlineImagesEnabled — see
+	// PostDetailModel's field of the same name. postImages is parallel to
+	// postOffsets/visiblePosts(); only ever populated when this is true.
+	inlineImagesEnabled bool
+	postImages          [][]postImageSlot
+
 	currentUsername  string // set after login; used to guard the delete key
 	confirmingDelete bool   // true while the delete-post confirmation overlay is shown
 
@@ -362,8 +368,9 @@ func (m FeedModel) SetLocation(loc *time.Location) FeedModel {
 // refreshContent rebuilds the viewport content and updates postOffsets.
 // Call this whenever posts, selectedIndex, or width changes.
 func (m FeedModel) refreshContent() FeedModel {
-	content, offsets := m.buildContent()
+	content, offsets, postImages := m.buildContent()
 	m.postOffsets = offsets
+	m.postImages = postImages
 	m.viewport.SetContent(content)
 	return m
 }
@@ -377,7 +384,8 @@ func (m FeedModel) ensureSelectedVisible() FeedModel {
 		return m
 	}
 	postStart := m.postOffsets[m.selectedIndex]
-	postHeight := lipgloss.Height(m.renderPost(visible[m.selectedIndex], false))
+	rendered, _ := m.renderPost(visible[m.selectedIndex], false)
+	postHeight := lipgloss.Height(rendered)
 	postEnd := postStart + postHeight - 1
 
 	viewTop := m.viewport.YOffset
@@ -417,6 +425,8 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.defaultPublicPost = msg.Settings.DefaultPublicPost
+		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
+		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
 		if msg.Settings.FilterNSFW != m.filterNSFW {
@@ -425,6 +435,8 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			if m.ready {
 				m = m.refreshContent()
 			}
+		} else if imagesChanged && m.ready {
+			m = m.refreshContent()
 		}
 		if msg.MaxThreadDepth != m.maxThreadDepth {
 			m.maxThreadDepth = msg.MaxThreadDepth
@@ -701,10 +713,11 @@ func (m FeedModel) triggerLoadMore() (FeedModel, tea.Cmd) {
 }
 
 // buildContent renders all posts into a single string for the viewport and
-// returns the start line of each post so ensureSelectedVisible can scroll accurately.
-func (m FeedModel) buildContent() (string, []int) {
+// returns the start line of each post so ensureSelectedVisible can scroll
+// accurately, plus each post's inline image slots (parallel to offsets).
+func (m FeedModel) buildContent() (string, []int, [][]postImageSlot) {
 	if m.fetching {
-		return theme.Subtle.Render("  loading feed…"), nil
+		return theme.Subtle.Render("  loading feed…"), nil, nil
 	}
 	var prefix string
 	startLine := 0
@@ -714,9 +727,9 @@ func (m FeedModel) buildContent() (string, []int) {
 	}
 	if len(m.posts) == 0 {
 		if m.err != nil {
-			return prefix + theme.Subtle.Render("  couldn't load feed"), nil
+			return prefix + theme.Subtle.Render("  couldn't load feed"), nil, nil
 		}
-		return prefix + theme.Subtle.Render("  no posts yet"), nil
+		return prefix + theme.Subtle.Render("  no posts yet"), nil, nil
 	}
 	sep := "\n"
 	lineInc := 0
@@ -726,12 +739,14 @@ func (m FeedModel) buildContent() (string, []int) {
 	}
 	visible := m.visiblePosts()
 	offsets := make([]int, len(visible))
+	postImages := make([][]postImageSlot, len(visible))
 	var out strings.Builder
 	out.WriteString(prefix)
 	currentLine := startLine
 	for i, p := range visible {
 		offsets[i] = currentLine
-		rendered := m.renderPost(p, i == m.selectedIndex)
+		rendered, imgSlots := m.renderPost(p, i == m.selectedIndex)
+		postImages[i] = imgSlots
 		out.WriteString(rendered)
 		out.WriteString(sep)
 		currentLine += lipgloss.Height(rendered) + lineInc
@@ -741,31 +756,34 @@ func (m FeedModel) buildContent() (string, []int) {
 	} else if m.exhausted {
 		out.WriteString(theme.Subtle.Render("  — end of feed —") + "\n")
 	}
-	return out.String(), offsets
+	return out.String(), offsets, postImages
 }
 
 // feedBodyCacheEntry is a memoized renderPostBody result plus the inputs it
-// was computed from, so a stale hit (width resize, bookmark/watch toggle, or
-// an edited post body) can be detected and recomputed instead of served.
+// was computed from, so a stale hit (width resize, bookmark/watch toggle, an
+// edited post body, or the inline-images setting changing) can be detected
+// and recomputed instead of served.
 type feedBodyCacheEntry struct {
-	body       string
-	width      int
-	bookmarked bool
-	watched    bool
-	content    string
+	body                string
+	imgSlots            []postImageSlot
+	width               int
+	bookmarked          bool
+	watched             bool
+	content             string
+	inlineImagesEnabled bool
 }
 
-func (m FeedModel) renderPost(p model.Post, selected bool) string {
+func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
 
-	body, ok := "", false
-	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content {
-		body, ok = e.body, true
+	body, imgSlots, ok := "", []postImageSlot(nil), false
+	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.inlineImagesEnabled == m.inlineImagesEnabled {
+		body, imgSlots, ok = e.body, e.imgSlots, true
 	}
 	if !ok {
-		body = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
-		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content}
+		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
+		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, inlineImagesEnabled: m.inlineImagesEnabled}
 	}
 
 	boxStyle := theme.Border
@@ -775,7 +793,7 @@ func (m FeedModel) renderPost(p model.Post, selected bool) string {
 	if m.width-4 > 0 {
 		boxStyle = boxStyle.Width(m.width - 2)
 	}
-	return boxStyle.Render(body)
+	return boxStyle.Render(body), imgSlots
 }
 
 // currentDetailCmd clears the detail pane immediately and starts a debounce timer.
@@ -821,9 +839,31 @@ func (m FeedModel) CurrentDetailCmd() (FeedModel, tea.Cmd) {
 	return m, func() tea.Msg { return LoadFeedDetailMsg{PostID: postID} }
 }
 
+// renderDetailPost renders the selected post's card for Miller's reading
+// pane, mirroring RenderPost's border/selection styling but — unlike
+// RenderPost, whose non-Feed-list callers (Search/Guilds/Topics/the
+// fullscreen modal) always pass inlineImagesEnabled=false — opts into
+// inline-image-aware rendering via m.inlineImagesEnabled, so Miller's
+// detail pane can composite inline images the same way Feed's own list
+// view and PostDetail already do.
+func (m FeedModel) renderDetailPost(p model.Post, selected, bookmarked, watched bool, width int) (string, []postImageSlot) {
+	content, imgSlots := renderPostBody(p, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if width-4 > 0 {
+		boxStyle = boxStyle.Width(width - 2)
+	}
+	return boxStyle.Render(content), imgSlots
+}
+
 // renderDetailReply renders a reply in the Miller reading pane using the same tree-aware
-// card style as the post-detail screen: depth indentation, parent back-reference, active border.
-func (m FeedModel) renderDetailReply(node replyNode, selected bool, width int) string {
+// card style as the post-detail screen: depth indentation, parent back-reference, active
+// border. lineBase is 2 (border top row + the single header row) — reply cards, unlike
+// posts, never have optional badge/title rows, so this is always fixed (see
+// PostDetailModel.renderReply's identical convention).
+func (m FeedModel) renderDetailReply(node replyNode, selected bool, width int) (string, []postImageSlot) {
 	indentW := node.Depth * 3
 	cardWidth := width - 2 - indentW
 	if cardWidth < 4 {
@@ -840,7 +880,19 @@ func (m FeedModel) renderDetailReply(node replyNode, selected bool, width int) s
 	}
 	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false))
 
-	body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
+	var body string
+	var imgSlots []postImageSlot
+	if m.inlineImagesEnabled {
+		rendered, hits := markdown.RenderLocatingImages(node.Reply.Content, innerWidth)
+		if len(hits) > 0 {
+			lines, slots := spliceInlineImageBands(strings.Split(rendered, "\n"), hits, 2)
+			rendered = strings.Join(lines, "\n")
+			imgSlots = slots
+		}
+		body = strings.TrimRight(rendered, "\n")
+	} else {
+		body = strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
+	}
 
 	boxStyle := theme.Border
 	if selected {
@@ -851,9 +903,57 @@ func (m FeedModel) renderDetailReply(node replyNode, selected bool, width int) s
 	}
 	card := boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
 	if indentW > 0 {
-		return lipgloss.NewStyle().MarginLeft(indentW).Render(card)
+		return lipgloss.NewStyle().MarginLeft(indentW).Render(card), imgSlots
 	}
-	return card
+	return card, imgSlots
+}
+
+// detailContent is everything Miller's reading pane needs to render, page,
+// and locate inline images for the selected post + its reply tree — computed
+// once so all three stay in exact agreement. Computing pager heights (or
+// image positions) from separately re-rendered content risks desyncing from
+// what's actually on screen, e.g. if inline images make a card taller than a
+// non-image-aware height measurement would predict.
+type detailContent struct {
+	parts       []string // card strings: post first, then one per m.detailFlatTree entry
+	startLines  []int    // startLines[i] = the line parts[i] begins at within the joined content
+	lineCount   int      // total lines across all parts joined
+	postH       int
+	postImages  []postImageSlot
+	replyImages [][]postImageSlot // parallel to m.detailFlatTree; nil while detailLoading
+}
+
+// buildDetailContent renders the selected post's card and reply tree at
+// width. postSelected/selectedReply control which card gets the active
+// border; callers that only need geometry (pageDetailNav) pass false/-1
+// since border style never changes a card's rendered height.
+func (m FeedModel) buildDetailContent(width int, postSelected bool, selectedReply int) detailContent {
+	visible := m.visiblePosts()
+	if m.selectedIndex >= len(visible) {
+		return detailContent{}
+	}
+	p := visible[m.selectedIndex]
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	_, watched := m.watchedPostIDs[p.ID]
+
+	card, postImgs := m.renderDetailPost(p, postSelected, bookmarked, watched, width)
+	postH := lipgloss.Height(card)
+
+	parts := []string{card}
+	startLines := []int{0}
+	lineCount := postH
+	var replyImgs [][]postImageSlot
+	if !m.detailLoading {
+		replyImgs = make([][]postImageSlot, len(m.detailFlatTree))
+		for i, node := range m.detailFlatTree {
+			rendered, imgs := m.renderDetailReply(node, i == selectedReply, width)
+			replyImgs[i] = imgs
+			startLines = append(startLines, lineCount)
+			lineCount += lipgloss.Height(rendered)
+			parts = append(parts, rendered)
+		}
+	}
+	return detailContent{parts: parts, startLines: startLines, lineCount: lineCount, postH: postH, postImages: postImgs, replyImages: replyImgs}
 }
 
 // renderCompactPost renders a single-line summary of a post for the Miller compact list pane.
@@ -967,29 +1067,18 @@ func (m FeedModel) CompactListView(width, height int) string {
 
 // pageDetailNav implements pager-style scrolling for the Miller detail pane.
 func (m FeedModel) pageDetailNav(delta, paneH, paneW int) FeedModel {
-	visible := m.visiblePosts()
-	if m.selectedIndex >= len(visible) {
+	dc := m.buildDetailContent(paneW, false, -1)
+	if len(dc.parts) == 0 {
 		return m
 	}
-	p := visible[m.selectedIndex]
-	_, bookmarked := m.bookmarkedPostIDs[p.ID]
-	_, watched := m.watchedPostIDs[p.ID]
-
-	postCard := RenderPost(p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0)
-	postH := lipgloss.Height(postCard)
-
-	replyStarts := make([]int, len(m.detailFlatTree))
-	replyHeights := make([]int, len(m.detailFlatTree))
-	pos := postH
-	for i, node := range m.detailFlatTree {
-		replyStarts[i] = pos
-		rendered := m.renderDetailReply(node, false, paneW)
-		replyHeights[i] = lipgloss.Height(rendered)
-		pos += replyHeights[i]
+	replyStarts := dc.startLines[1:]
+	replyHeights := make([]int, len(dc.parts)-1)
+	for i := range replyHeights {
+		replyHeights[i] = lipgloss.Height(dc.parts[i+1])
 	}
 
 	m.detailReplyIndex, m.detailScrollOffset = millerPageNav(
-		delta, paneH, postH, replyStarts, replyHeights, m.detailReplyIndex, m.detailScrollOffset,
+		delta, paneH, dc.postH, replyStarts, replyHeights, m.detailReplyIndex, m.detailScrollOffset,
 	)
 	return m
 }
@@ -1008,31 +1097,96 @@ func (m FeedModel) DetailView(width, height int) string {
 	if m.selectedIndex >= len(visible) {
 		return theme.Subtle.Render("  select a post")
 	}
-	p := visible[m.selectedIndex]
-	_, bookmarked := m.bookmarkedPostIDs[p.ID]
-	_, watched := m.watchedPostIDs[p.ID]
-
-	// Render all items and track each item's start line for scroll computation.
-	postSelected := m.detailReplyIndex < 0
-	card := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0)
-
-	var parts []string
-	startLines := []int{0} // startLines[0] = post start line (always 0)
-	lineCount := lipgloss.Height(card)
-	parts = append(parts, card)
-
+	dc := m.buildDetailContent(width, m.detailReplyIndex < 0, m.detailReplyIndex)
+	parts := dc.parts
 	if m.detailLoading {
 		parts = append(parts, theme.Subtle.Render("  loading replies…"))
-	} else {
-		for i, node := range m.detailFlatTree {
-			rendered := m.renderDetailReply(node, i == m.detailReplyIndex, width)
-			startLines = append(startLines, lineCount)
-			lineCount += lipgloss.Height(rendered)
-			parts = append(parts, rendered)
-		}
 	}
 	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return sliceContent(fullContent, m.detailScrollOffset, height, lineCount)
+	return sliceContent(fullContent, m.detailScrollOffset, height, dc.lineCount)
+}
+
+// effectiveScrollTop mirrors sliceContent's own offset clamping (see
+// miller_pager.go) so callers computing positions against the *actual*
+// displayed window agree with what sliceContent will show — near the
+// bottom of a pane, sliceContent clamps the raw scroll offset inward, and
+// using the raw offset instead would misplace inline images.
+func effectiveScrollTop(offset, height, lineCount int) int {
+	if lineCount <= height {
+		return 0
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset+height > lineCount {
+		offset = lineCount - height
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return offset
+}
+
+// VisibleDetailInlineImages returns the inline image slots currently fully
+// within Miller's reading pane for the selected post + reply tree. width and
+// height must match what MillerLayout passed to DetailView this frame (see
+// MillerLayout.InlineImageSlots) — this recomputes buildDetailContent rather
+// than caching, since the pane width Miller uses depends on the current
+// list/detail split and isn't known until View() runs, and Bubble Tea's
+// value-receiver View() can't persist it back onto the model for Update() to
+// see next (see FeedModel.VisibleInlineImages for the Tabs-viewport analog).
+func (m FeedModel) VisibleDetailInlineImages(width, height int) []InlineImageSlot {
+	if !m.ready || !m.inlineImagesEnabled {
+		return nil
+	}
+	visible := m.visiblePosts()
+	if m.selectedIndex >= len(visible) {
+		return nil
+	}
+	dc := m.buildDetailContent(width, m.detailReplyIndex < 0, m.detailReplyIndex)
+	if len(dc.parts) == 0 {
+		return nil
+	}
+	top := effectiveScrollTop(m.detailScrollOffset, height, dc.lineCount)
+	bottom := top + height
+
+	p := visible[m.selectedIndex]
+	var slots []InlineImageSlot
+	for j, img := range dc.postImages {
+		if img.Line < top || img.Line+inlineImageMaxRows > bottom {
+			continue
+		}
+		slots = append(slots, InlineImageSlot{
+			URL:       img.URL,
+			Row:       img.Line - top,
+			ColIndent: 2,
+			MaxCols:   width - 4,
+			MaxRows:   inlineImageEncodeMaxRows,
+			Key:       fmt.Sprintf("post:%s:%d", p.ID, j),
+		})
+	}
+	for i, node := range m.detailFlatTree {
+		if i >= len(dc.replyImages) || i+1 >= len(dc.startLines) {
+			continue
+		}
+		indentW := node.Depth * 3
+		replyStart := dc.startLines[i+1]
+		for j, img := range dc.replyImages[i] {
+			abs := replyStart + img.Line
+			if abs < top || abs+inlineImageMaxRows > bottom {
+				continue
+			}
+			slots = append(slots, InlineImageSlot{
+				URL:       img.URL,
+				Row:       abs - top,
+				ColIndent: 2 + indentW,
+				MaxCols:   width - 4 - indentW,
+				MaxRows:   inlineImageEncodeMaxRows,
+				Key:       fmt.Sprintf("reply:%s:%d", node.Reply.ID, j),
+			})
+		}
+	}
+	return slots
 }
 
 func (m FeedModel) View() string {
@@ -1075,4 +1229,38 @@ func (m FeedModel) GetFocusedURLs() []string {
 	}
 	p := visible[m.selectedIndex]
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
+}
+
+// VisibleInlineImages returns the inline image slots currently fully within
+// the viewport, top to bottom, across every visible post — see
+// PostDetailModel.VisibleInlineImages for the full contract (this is purely
+// a "where, if anywhere" query; App owns fetching/encoding/caching).
+func (m FeedModel) VisibleInlineImages() []InlineImageSlot {
+	if !m.ready || !m.inlineImagesEnabled {
+		return nil
+	}
+	visible := m.visiblePosts()
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+
+	var slots []InlineImageSlot
+	for i, p := range visible {
+		if i >= len(m.postImages) || i >= len(m.postOffsets) {
+			continue
+		}
+		for j, img := range m.postImages[i] {
+			abs := m.postOffsets[i] + img.Line
+			if abs < top || abs+inlineImageMaxRows > bottom {
+				continue
+			}
+			slots = append(slots, InlineImageSlot{
+				URL:       img.URL,
+				Row:       abs - top,
+				ColIndent: 2,
+				MaxCols:   m.width - 4,
+				MaxRows:   inlineImageEncodeMaxRows,
+				Key:       fmt.Sprintf("post:%s:%d", p.ID, j),
+			})
+		}
+	}
+	return slots
 }
