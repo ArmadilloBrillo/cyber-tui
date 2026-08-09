@@ -7,7 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
@@ -59,10 +58,6 @@ func (l MillerLayout) activeCompactRenderer(a App) CompactListRenderer {
 }
 
 func (l MillerLayout) View(a App) string {
-	if a.active == screenLogin {
-		return a.login.View()
-	}
-
 	contentH := a.height - 1 - millerHeaderHeight // full height minus bottom bar and column header
 	contentW := a.width - millerSidebarWidth
 
@@ -121,53 +116,39 @@ func (l MillerLayout) View(a App) string {
 		base = lipgloss.JoinVertical(lipgloss.Left, hdrRow, mainRow, l.renderBottomBar(a))
 	}
 
-	if a.themePickerOpen {
-		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
-	}
-	if a.themeEditorOpen {
-		return overlayCenter(base, l.renderThemeEditor(a), a.width, a.height)
-	}
-	if a.pathPromptOpen {
-		return overlayCenter(base, l.renderPathPrompt(a), a.width, a.height)
-	}
-	if a.helpModalOpen {
-		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
-	}
-	if a.urlPickerOpen {
-		return overlayCenter(base, l.renderURLPicker(a), a.width, a.height)
-	}
-	if a.imageModalOpen {
-		textModal := l.renderImageModal(a)
-		composed := overlayCenter(base, textModal, a.width, a.height)
-		modalW := lipgloss.Width(textModal)
-		modalH := len(strings.Split(textModal, "\n"))
-		xOff := (a.width - modalW) / 2
-		yOff := (a.height - modalH) / 2
-		if xOff < 0 {
-			xOff = 0
+	return compositeOverlays(l, a, base)
+}
+
+// InlineImageSlots returns the visible inline-image slots for whichever
+// screen is active, plus this layout's screen origin for them — which
+// depends on whether the active screen is shown via the compact-list/detail
+// split (Feed) or the plain content pane (PostDetail), since the detail
+// pane's left edge sits further right when a list pane precedes it. This
+// replicates the exact width/height View() computes for the same screen, so
+// a slot's position always matches what's actually on screen this frame —
+// Feed's detail pane in particular has no other source of truth for its
+// current width, since it's derived fresh from paneWidths on every View()
+// call rather than stored anywhere Update() can see.
+func (l MillerLayout) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int) {
+	const rowOrigin = 2 // 1: header row, so content's own row 0 is ANSI row 2
+	contentH := a.height - 1 - millerHeaderHeight
+	contentW := a.width - millerSidebarWidth
+
+	if r := l.activeCompactRenderer(a); r != nil {
+		if a.active != screenFeed {
+			return nil, 0, 0
 		}
-		if yOff < 0 {
-			yOff = 0
+		listW, detailW := l.paneWidths(contentW)
+		if cc, ok := r.(CompactComposer); ok && cc.ComposeActive() {
+			contentH = max(0, contentH-cc.ComposeHeight())
 		}
-		imgRow := yOff + 2
-		imgCol := xOff + 3
-		return composed + fmt.Sprintf("\x1b[%d;%dH%s\x1b[%d;1H", imgRow, imgCol, a.imageModalEncoded, a.height)
+		colOrigin := millerSidebarWidth + 1 + listW + 1
+		return a.feed.VisibleDetailInlineImages(detailW, contentH), rowOrigin, colOrigin
 	}
-	if a.imageNeedsCleanup && a.graphicsProtocol == imgview.ProtocolKitty {
-		// Targeted delete for the modal's own reserved placement, not a
-		// blunt delete-all — see the matching comment in layout_tabs.go.
-		modalH := a.imageModalRows + 2
-		yOff := (a.height - modalH) / 2
-		if yOff < 0 {
-			yOff = 0
-		}
-		lines := strings.Split(base, "\n")
-		if yOff < len(lines) {
-			lines[yOff] = imgview.DeleteKittyPlacement(kittyModalPlacementID) + lines[yOff]
-		}
-		return strings.Join(lines, "\n")
+	if a.active == screenPostDetail {
+		return a.postDetail.VisibleInlineImages(), rowOrigin, millerSidebarWidth + 1
 	}
-	return base
+	return nil, 0, 0
 }
 
 func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {

@@ -428,7 +428,10 @@ func (a App) WithSavedSession(s config.Config) App {
 	return a
 }
 
-func layoutFromName(_ string) Layout {
+func layoutFromName(name string) Layout {
+	if name == "miller" {
+		return MillerLayout{}
+	}
 	return TabsLayout{}
 }
 
@@ -2143,7 +2146,12 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 
 // --- view ---
 
-func (a App) View() string { return a.layout.View(a) }
+func (a App) View() string {
+	if a.active == screenLogin {
+		return a.login.View()
+	}
+	return a.layout.View(a)
+}
 
 // activeScreenHasFocusedInput returns true when the current screen has a
 // text input that is focused, preventing arrow keys from being consumed by
@@ -2389,7 +2397,10 @@ func (a App) canInlineImages() bool {
 
 // activeInlineImageSlots returns the active screen's currently visible
 // inline image slots, or nil for screens that don't support inline images
-// (Search/Guilds/Topics/Miller panes — see renderPostBody's doc comment).
+// (Search/Guilds/Topics). Used by TabsLayout.InlineImageSlots; MillerLayout
+// has its own equivalent since its screen geometry (and, for Feed, which
+// screen method even has the current content — see FeedModel.VisibleDetailInlineImages)
+// differs from Tabs'.
 func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
 	switch a.active {
 	case screenPostDetail:
@@ -2514,7 +2525,7 @@ func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[in
 func (a App) syncInlineImages() (App, tea.Cmd) {
 	var slots []screens.InlineImageSlot
 	if a.canInlineImages() {
-		slots = a.activeInlineImageSlots()
+		slots, _, _ = a.layout.InlineImageSlots(a)
 	}
 	var cmds []tea.Cmd
 

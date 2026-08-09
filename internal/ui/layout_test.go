@@ -7,6 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/imgview"
+	"github.com/ragnar/cyber-tui/internal/ui/screens"
 )
 
 // --- visibleTabs ---
@@ -500,5 +502,124 @@ func TestSplitMnemonic_NotFound(t *testing.T) {
 	before, ch, after := splitMnemonic("feed", 'z')
 	if before != "feed" || ch != "" || after != "" {
 		t.Errorf("got (%q, %q, %q), want (\"feed\", \"\", \"\")", before, ch, after)
+	}
+}
+
+// --- layoutFromName ---
+
+func TestLayoutFromName(t *testing.T) {
+	if _, ok := layoutFromName("miller").(MillerLayout); !ok {
+		t.Errorf("expected layoutFromName(%q) to return MillerLayout", "miller")
+	}
+	for _, name := range []string{"", "tabs", "unknown"} {
+		if _, ok := layoutFromName(name).(TabsLayout); !ok {
+			t.Errorf("expected layoutFromName(%q) to return TabsLayout", name)
+		}
+	}
+}
+
+// --- compositeOverlays ---
+
+// fakeModalRenderer is a minimal modalRenderer test double so
+// compositeOverlays' shared logic can be tested in isolation, without a full
+// TabsLayout/MillerLayout render pipeline — see TestTabsLayoutView_ and
+// TestMillerLayoutView_InjectsInlineImages below for the real-pipeline
+// smoke tests that exercise each layout's own InlineImageSlots.
+type fakeModalRenderer struct {
+	slots                []screens.InlineImageSlot
+	rowOrigin, colOrigin int
+}
+
+func (f fakeModalRenderer) renderThemePicker(a App) string { return "" }
+func (f fakeModalRenderer) renderThemeEditor(a App) string { return "" }
+func (f fakeModalRenderer) renderPathPrompt(a App) string  { return "" }
+func (f fakeModalRenderer) renderHelpModal(a App) string   { return "" }
+func (f fakeModalRenderer) renderURLPicker(a App) string   { return "" }
+func (f fakeModalRenderer) renderImageModal(a App) string  { return "" }
+func (f fakeModalRenderer) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int) {
+	return f.slots, f.rowOrigin, f.colOrigin
+}
+
+// TestCompositeOverlays_KittyCleanupFallsThroughToInlineImages is a
+// regression test for the bug MillerLayout originally shipped with: the
+// Kitty placement-cleanup block must fall through to inline-image
+// injection in the same frame, not return early — an early return there
+// silently drops all inline-image rendering for the rest of the session
+// (see app.go's imageNeedsCleanup doc comment). Since compositeOverlays is
+// now the one place this logic lives, this test alone covers both layouts.
+func TestCompositeOverlays_KittyCleanupFallsThroughToInlineImages(t *testing.T) {
+	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
+	a := App{
+		width: 40, height: 10,
+		graphicsProtocol:  imgview.ProtocolKitty,
+		imageNeedsCleanup: true,
+		imageModalRows:    3,
+		inlineImageCache:  map[string]string{inlineImageCacheKey(slot, imgview.ProtocolKitty): "\x1b_Gfake\x1b\\"},
+	}
+	l := fakeModalRenderer{slots: []screens.InlineImageSlot{slot}, rowOrigin: 5, colOrigin: 7}
+	out := compositeOverlays(l, a, strings.Repeat("x\n", 9)+"x")
+
+	if !strings.Contains(out, imgview.DeleteKittyPlacement(kittyModalPlacementID)) {
+		t.Error("expected the Kitty modal placement delete in the composited output")
+	}
+	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
+		t.Error("expected the inline image's cached escape sequence in the same composited output — cleanup must fall through, not return early")
+	}
+	if !strings.Contains(out, "\x1b[6;9H") { // rowOrigin(5)+slot.Row(1)=6, colOrigin(7)+slot.ColIndent(2)=9
+		t.Errorf("expected the inline image positioned at rowOrigin+Row, colOrigin+ColIndent; got %q", out)
+	}
+}
+
+// TestTabsLayoutView_InjectsInlineImages is the golden-output test category
+// both prior architecture reviews flagged as missing: an assertion on
+// TabsLayout.View()'s actual composited output, not just the pure diff
+// functions underneath it.
+func TestTabsLayoutView_InjectsInlineImages(t *testing.T) {
+	a := loggedInApp()
+	a.width, a.height = 80, 40
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.feed, _ = a.feed.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	a.feed, _ = a.feed.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+	slots := a.feed.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("setup: expected 1 slot from the feed, got %d: %+v", len(slots), slots)
+	}
+	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol): "\x1b_Gfake\x1b\\"}
+
+	out := (TabsLayout{}).View(a)
+	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
+		t.Errorf("expected TabsLayout.View to composite the cached inline image, got: %q", out)
+	}
+}
+
+// TestMillerLayoutView_InjectsInlineImages is the same golden-output check
+// for MillerLayout's Feed detail pane specifically — the exact code path
+// that silently rendered nothing before this branch (MillerLayout never
+// called injectInlineImages at all, and Feed's detail pane has no other
+// source of truth for its rendering width than MillerLayout.InlineImageSlots
+// computing it fresh, so this exercises that whole chain end to end).
+func TestMillerLayoutView_InjectsInlineImages(t *testing.T) {
+	a := loggedInApp()
+	a.width, a.height = 100, 40
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.feed, _ = a.feed.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a.feed, _ = a.feed.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+	a.feed, _ = a.feed.Update(screens.FeedDetailRepliesMsg{PostID: "p1", Replies: nil})
+
+	slots, _, _ := MillerLayout{}.InlineImageSlots(a)
+	if len(slots) != 1 {
+		t.Fatalf("setup: expected 1 slot from Miller's Feed detail pane, got %d: %+v", len(slots), slots)
+	}
+	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol): "\x1b_Gfake\x1b\\"}
+
+	out := (MillerLayout{}).View(a)
+	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
+		t.Errorf("expected MillerLayout.View to composite the cached inline image in the Feed detail pane, got: %q", out)
 	}
 }

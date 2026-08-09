@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/ragnar/cyber-tui/internal/ui/imgview"
+	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/version"
 )
@@ -27,6 +30,140 @@ type Layout interface {
 	// column at the given terminal height. Returns 0 if the layout has no compact list column.
 	// App uses this to auto-fetch additional pages after the initial load.
 	NeedsCompactAutoFill(termHeight int) int
+	// InlineImageSlots returns the active screen's visible inline-image slots
+	// and this layout's screen origin for them — see modalRenderer's method
+	// of the same name (Layout and modalRenderer both need it: App.syncInlineImages
+	// calls it via the Layout interface to know what to fetch, independent of
+	// rendering, while compositeOverlays calls it via modalRenderer to know
+	// where to composite the result).
+	InlineImageSlots(a App) (slots []screens.InlineImageSlot, rowOrigin, colOrigin int)
+}
+
+// modalRenderer is implemented by both TabsLayout and MillerLayout so
+// compositeOverlays can render each layout's own modal content while the
+// compositing order — and, critically, the inline-image injection step —
+// lives in exactly one place. Everything here genuinely varies per layout
+// (chrome, colors, sizing); the order overlays get checked and composited
+// in does not, and used to be duplicated by hand between layout_tabs.go and
+// layout_miller.go, which is how MillerLayout ended up never calling
+// injectInlineImages at all.
+type modalRenderer interface {
+	renderThemePicker(a App) string
+	renderThemeEditor(a App) string
+	renderPathPrompt(a App) string
+	renderHelpModal(a App) string
+	renderURLPicker(a App) string
+	renderImageModal(a App) string
+	// InlineImageSlots returns the active screen's visible inline-image
+	// slots plus this layout's screen origin (rowOrigin, colOrigin) for
+	// them — the origin varies per layout (and, within Miller, per screen)
+	// since it depends on chrome that differs between layouts.
+	InlineImageSlots(a App) (slots []screens.InlineImageSlot, rowOrigin, colOrigin int)
+}
+
+// compositeOverlays applies every overlay — the five simple modals, the
+// fullscreen image modal, the Kitty placement-cleanup delete, and inline
+// image injection — on top of base, in that fixed order. Called once as the
+// last line of each Layout's View(), so no implementation can skip a step
+// or return early partway through.
+func compositeOverlays(l modalRenderer, a App, base string) string {
+	switch {
+	case a.themePickerOpen:
+		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
+	case a.themeEditorOpen:
+		return overlayCenter(base, l.renderThemeEditor(a), a.width, a.height)
+	case a.pathPromptOpen:
+		return overlayCenter(base, l.renderPathPrompt(a), a.width, a.height)
+	case a.helpModalOpen:
+		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
+	case a.urlPickerOpen:
+		return overlayCenter(base, l.renderURLPicker(a), a.width, a.height)
+	}
+	if a.imageModalOpen {
+		textModal := l.renderImageModal(a)
+		composed := overlayCenter(base, textModal, a.width, a.height)
+		// Compute the same offsets overlayCenter used so we can position
+		// the image sequence inside the border without embedding it in the
+		// overlay string (which would corrupt overlayCenter's ANSI splicing).
+		modalW := lipgloss.Width(textModal)
+		modalH := len(strings.Split(textModal, "\n"))
+		xOff := (a.width - modalW) / 2
+		yOff := (a.height - modalH) / 2
+		if xOff < 0 {
+			xOff = 0
+		}
+		if yOff < 0 {
+			yOff = 0
+		}
+		// theme.ActiveBorder: 1-char border + 1-char horizontal padding on each
+		// side. Image content therefore starts 2 cols right of the border edge.
+		// ANSI cursor sequences are 1-indexed; the border top row is yOff+1.
+		imgRow := yOff + 2
+		imgCol := xOff + 3
+		return composed + fmt.Sprintf("\x1b[%d;%dH%s\x1b[%d;1H", imgRow, imgCol, a.imageModalEncoded, a.height)
+	}
+	if a.imageNeedsCleanup && a.graphicsProtocol == imgview.ProtocolKitty {
+		// Inject the targeted delete for the modal's own reserved placement
+		// (kittyModalPlacementID) onto the line that held the modal's top
+		// border so Bubble Tea's diff renderer delivers it to the terminal.
+		// Never a blunt delete-all: that would also erase any inline
+		// images' placements, which can be on screen at the same time.
+		//
+		// This must fall through to the inline-image injection below rather
+		// than returning early: imageNeedsCleanup stays true indefinitely
+		// (see its doc comment — it's never auto-cleared, only cleared by the
+		// next modal image opening), so an early return here would silently
+		// stop all inline-image rendering for the rest of the session after
+		// the very first Kitty modal close.
+		modalH := a.imageModalRows + 2
+		yOff := (a.height - modalH) / 2
+		if yOff < 0 {
+			yOff = 0
+		}
+		lines := strings.Split(base, "\n")
+		if yOff < len(lines) {
+			lines[yOff] = imgview.DeleteKittyPlacement(kittyModalPlacementID) + lines[yOff]
+		}
+		base = strings.Join(lines, "\n")
+	}
+	slots, rowOrigin, colOrigin := l.InlineImageSlots(a)
+	if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 {
+		return injectInlineImages(a, base, slots, rowOrigin, colOrigin)
+	}
+	return base
+}
+
+// injectInlineImages appends absolute-cursor-positioned escape sequences for
+// each slot with a cache hit, same technique as the modal's imgRow/imgCol
+// (base + "\x1b[row;colH" + encoded, cursor parked at the bottom line after).
+// A slot with no cache hit yet is skipped — its reserved band just stays the
+// blank text the screen already rendered into base. rowOrigin/colOrigin are
+// the calling layout's screen origin for slot-relative coordinates (see
+// modalRenderer.InlineImageSlots) — they differ per layout, and within
+// Miller, per which screen/pane is active.
+//
+// Kitty's pendingKittyDeletes don't need cursor positioning — placements are
+// addressed by id, not screen coordinates — so they're just appended
+// anywhere in the frame. This is why the caller invokes this function even
+// when slots is empty: a delete can be pending with nothing currently
+// visible (e.g. every inline image just scrolled off-screen).
+func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, rowOrigin, colOrigin int) string {
+	var sb strings.Builder
+	sb.WriteString(base)
+	for _, slot := range slots {
+		encoded, ok := a.inlineImageCache[inlineImageCacheKey(slot, a.graphicsProtocol)]
+		if !ok {
+			continue
+		}
+		row := rowOrigin + slot.Row
+		col := colOrigin + slot.ColIndent
+		sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", row, col, encoded))
+	}
+	for id := range a.pendingKittyDeletes {
+		sb.WriteString(imgview.DeleteKittyPlacement(id))
+	}
+	sb.WriteString(fmt.Sprintf("\x1b[%d;1H", a.height))
+	return sb.String()
 }
 
 // CompactListRenderer is optionally implemented by screens that can display as a compact

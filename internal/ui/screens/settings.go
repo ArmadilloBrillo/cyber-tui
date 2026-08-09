@@ -183,6 +183,29 @@ var settingsGroups = []settingsGroup{
 			},
 		},
 	},
+	{
+		title: "layout",
+		items: []settingsItem{
+			{
+				label: "layout", kind: "enum",
+				options: []string{"tabs", "miller"},
+				getEnum: func(m SettingsModel) string {
+					if m.layoutName == "miller" {
+						return "miller"
+					}
+					return "tabs"
+				},
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					cur := m.layoutName
+					if cur == "" {
+						cur = "tabs"
+					}
+					m.layoutName = cycleStringEnum(cur, []string{"tabs", "miller"}, delta)
+					return m
+				},
+			},
+		},
+	},
 }
 
 // SettingsModel is the Settings screen.
