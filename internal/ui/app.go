@@ -2512,10 +2512,10 @@ func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[in
 // (the same reasoning already applied to the fullscreen modal's close/cycle
 // handling).
 func (a App) syncInlineImages() (App, tea.Cmd) {
-	if !a.canInlineImages() {
-		return a, nil
+	var slots []screens.InlineImageSlot
+	if a.canInlineImages() {
+		slots = a.activeInlineImageSlots()
 	}
-	slots := a.activeInlineImageSlots()
 	var cmds []tea.Cmd
 
 	isKitty := a.graphicsProtocol == imgview.ProtocolKitty

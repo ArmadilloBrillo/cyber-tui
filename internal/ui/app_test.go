@@ -3013,6 +3013,39 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 	}
 }
 
+// TestSyncInlineImages_DisablingClearsStaleKittyPlacements is a regression
+// test: syncInlineImages used to early-return the moment canInlineImages()
+// went false (e.g. the user toggled inline images off), skipping the
+// diff/delete logic entirely and leaving previously-drawn Kitty placements
+// on screen. It must still diff down to an empty slot list so every
+// previously-visible key gets queued for deletion.
+func TestSyncInlineImages_DisablingClearsStaleKittyPlacements(t *testing.T) {
+	a := App{
+		graphicsProtocol: imgview.ProtocolKitty,
+		inlineImages:     false, // disabled: canInlineImages() is false
+		kittyPlacementIDs: map[string]int{
+			"post:p1:0": 1,
+			"post:p2:0": 2,
+		},
+		kittyVisibleKeys: map[string]struct{}{
+			"post:p1:0": {},
+			"post:p2:0": {},
+		},
+	}
+
+	a, _ = a.syncInlineImages()
+
+	if len(a.kittyVisibleKeys) != 0 {
+		t.Errorf("expected kittyVisibleKeys to be cleared, got %v", a.kittyVisibleKeys)
+	}
+	if _, ok := a.pendingKittyDeletes[1]; !ok {
+		t.Errorf("expected placement id 1 to be queued for deletion, got %v", a.pendingKittyDeletes)
+	}
+	if _, ok := a.pendingKittyDeletes[2]; !ok {
+		t.Errorf("expected placement id 2 to be queued for deletion, got %v", a.pendingKittyDeletes)
+	}
+}
+
 // TestAccumulateKittyDeletes_SurvivesSkippedRenders is a regression test for
 // fast-scroll ghosting: a delete computed by one Update must not be lost if
 // Bubble Tea's throttled renderer processes several Updates (each recomputing
