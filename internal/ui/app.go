@@ -182,17 +182,67 @@ type App struct {
 	imageCache map[string]cachedImage
 
 	// inlineImageCache holds encoded inline-image escape sequences for the
-	// life of the session, keyed by inlineImageCacheKey (URL + column budget
-	// + protocol) — never evicted; see the plan's accepted spike-scope cut.
-	// inlineImageFetching tracks keys with a fetch already in flight, so
-	// syncInlineImages (called every Update) doesn't refire the same
-	// request every frame while it's pending. inlineImageLastSig is the
-	// previous frame's visible-slot signature (see inlineImageSignature),
-	// used to detect a scroll/selection change that requires a full clear
-	// for Sixel/iTerm2 (neither has a placement-delete primitive).
+	// life of the session, keyed by inlineImageCacheKey (slot key + URL +
+	// column budget + protocol) — never evicted; see the plan's accepted
+	// spike-scope cut. inlineImageFetching tracks keys with a fetch already
+	// in flight, so syncInlineImages (called every Update) doesn't refire
+	// the same request every frame while it's pending. inlineImageLastSig is
+	// the previous frame's visible-slot signature (see
+	// inlineImageSignature), used to detect a scroll/selection change that
+	// requires a full clear for Sixel/iTerm2 (neither has a placement-delete
+	// primitive — Kitty does, see kittyPlacementIDs, and never uses this).
 	inlineImageCache    map[string]string
 	inlineImageFetching map[string]bool
 	inlineImageLastSig  string
+
+	// kittyPlacementIDs assigns a stable id (used as both image id and
+	// placement id, see imgview.EncodeKitty) to each inline image slot ever
+	// seen, keyed by InlineImageSlot.Key. Entries are PERMANENT — never
+	// removed once assigned, even after the slot scrolls off-screen and gets
+	// deleted on the terminal side. This matters because inlineImageCacheKey
+	// doesn't vary by id (only by slot key/URL/width/protocol): if a key's id
+	// changed on every re-entry into view, a slot scrolling back into view
+	// would hit its OLD cache entry (still embedding the OLD, already-deleted
+	// id) and, since that old id sits permanently in pendingKittyDeletes (see
+	// below), get deleted again the instant it's redrawn — invisible forever
+	// after its first scroll-off. Keeping the id (and thus the cache entry)
+	// stable for a key's whole session lifetime avoids that entirely.
+	// kittyNextPlacementID is the session-lived counter handing out new ids —
+	// never reused/freed within a session, which is fine for a spike (see the
+	// plan's no-cache-eviction cut; the same reasoning applies here).
+	//
+	// kittyVisibleKeys is the set of slot keys visible as of the last sync
+	// call. Because kittyPlacementIDs is never pruned, "not in
+	// kittyPlacementIDs" can no longer be used to detect a drop — nearly
+	// every key ever seen is "not currently visible" at any given moment, not
+	// just ones that just transitioned. Comparing against kittyVisibleKeys
+	// instead of kittyPlacementIDs is what lets syncKittyPlacements detect
+	// exactly the visible->invisible and invisible->visible transitions.
+	//
+	// pendingKittyDeletes is the set of dropped-out placement ids whose
+	// delete sequence gets resent on every subsequent frame. Deletes are the
+	// one part of this feature that's a single-shot event rather than
+	// something re-emitted every frame a slot is visible (creates/
+	// repositions are, by nature of the normal per-frame render loop) — and
+	// Bubble Tea's renderer batches/throttles actual terminal writes, so it
+	// can call View() many times between two real flushes and only the last
+	// computed View() before a flush tick ever reaches the terminal. A
+	// countdown-based resend budget was tried here first, decremented once
+	// per Update; a fast enough scroll can still rack up enough Updates
+	// between two real flushes to exhaust that budget on nothing but
+	// never-flushed intermediate renders, losing the delete exactly like the
+	// original single-shot version. Since Kitty placement ids are never
+	// reused within a session (kittyNextPlacementID only grows), resending an
+	// already-deleted id's delete is always a harmless no-op — so, like
+	// imageNeedsCleanup above (same underlying race, same fix), entries here
+	// are never auto-expired by a countdown; they're only removed early when
+	// syncKittyPlacements reports the same key has become visible again (see
+	// "revived" in syncInlineImages), which cancels the stale delete before it
+	// can wipe out the slot's freshly redrawn placement.
+	kittyPlacementIDs    map[string]int
+	kittyNextPlacementID int
+	kittyVisibleKeys     map[string]struct{}
+	pendingKittyDeletes  map[int]struct{}
 
 	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
 	// loc is the parsed *time.Location derived from timezone.
@@ -2333,12 +2383,7 @@ func (a App) canRenderImageInline(u string) bool {
 func (a App) canInlineImages() bool {
 	return a.inlineImages &&
 		!a.ephemeral &&
-		// ponytail: Sixel/iTerm2 only — Kitty's placement-ID lifecycle isn't
-		// wired into syncInlineImages yet (phase 6). Loosen to
-		// != ProtocolNone once that lands; until then, gating Kitty out here
-		// keeps a Kitty user from losing the "[IMG]" placeholder text to a
-		// reserved blank band that never gets drawn into.
-		(a.graphicsProtocol == imgview.ProtocolSixel || a.graphicsProtocol == imgview.ProtocolITerm2) &&
+		a.graphicsProtocol != imgview.ProtocolNone &&
 		a.imageViewer != "browser"
 }
 
@@ -2368,30 +2413,125 @@ func inlineImageSignature(slots []screens.InlineImageSlot) string {
 }
 
 // inlineImageCacheKey identifies one encoded rendering of a slot's image —
-// URL, column budget, and protocol, matching how a resize (which changes
-// MaxCols) or a protocol change naturally invalidates old entries.
+// slot key, URL, column budget, and protocol. Keying by slot (not just URL)
+// matters for Kitty, whose encoded bytes embed a placement id specific to
+// one on-screen instance (see imgview.EncodeKitty) — two slots showing the
+// same URL must never share an encode. Also matches how a resize (which
+// changes MaxCols) or a protocol change naturally invalidates old entries.
 func inlineImageCacheKey(slot screens.InlineImageSlot, proto imgview.GraphicsProtocol) string {
-	return fmt.Sprintf("%s|%d|%d", slot.URL, slot.MaxCols, proto)
+	return fmt.Sprintf("%s|%s|%d|%d", slot.Key, slot.URL, slot.MaxCols, proto)
+}
+
+// kittyModalPlacementID is a fixed, reserved Kitty placement/image id used
+// exclusively by the fullscreen image modal — distinct from inline
+// rendering's per-slot ids (see App.kittyPlacementIDs), which start from 1
+// and grow with normal use. Giving the modal a dedicated id (rather than
+// the anonymous placementID==0 mode EncodeKitty also supports) means its
+// own open/close/cycle lifecycle never has to blunt-delete-all placements —
+// which would erase every inline image's placement too, now that both
+// features can be on screen at once. Re-sending a=T with this same id on
+// each open/cycle replaces any previous modal placement per the protocol
+// spec, so no separate self-heal delete is needed there either. Deliberately
+// NOT the top of Kitty's 32-bit id range (4294967295 / 0xFFFFFFFF): that
+// exact value is a conventional "no id"/sentinel value in a lot of unsigned-
+// integer code, and terminals implementing the protocol are free to special-
+// case it — consistent with the modal flashing open then immediately
+// vanishing once this id was used, rather than staying on screen like any
+// other named placement. 999000000 is an arbitrary value nowhere near any
+// common sentinel (0, 1, INT32_MAX, UINT32_MAX) yet still astronomically far
+// from the small incrementing counter inline rendering uses, so it can never
+// collide with it either.
+const kittyModalPlacementID = 999000000
+
+// syncKittyPlacements assigns a stable id (used as both image id and
+// placement id, see imgview.EncodeKitty) to every slot ever seen — new keys
+// get the next counter value, permanently; already-tracked keys keep theirs
+// forever, whether currently visible or not (see kittyPlacementIDs' doc
+// comment on the App struct for why). Comparing this sync's visible set
+// against kittyVisibleKeys (last sync's) reports exactly two transitions:
+// toDelete, ids for keys that just became invisible, and revived, ids for
+// keys that just became visible again — the caller cancels any pending
+// delete for a revived id before it can wipe out that key's freshly redrawn
+// placement. Returns the updated App, the current key->id mapping (for
+// fetchInlineImageCmd to look up), toDelete, and revived.
+func (a App) syncKittyPlacements(slots []screens.InlineImageSlot) (App, map[string]int, []int, []int) {
+	if a.kittyPlacementIDs == nil {
+		a.kittyPlacementIDs = make(map[string]int)
+	}
+	current := make(map[string]bool, len(slots))
+	for _, s := range slots {
+		current[s.Key] = true
+		if _, ok := a.kittyPlacementIDs[s.Key]; !ok {
+			a.kittyNextPlacementID++
+			a.kittyPlacementIDs[s.Key] = a.kittyNextPlacementID
+		}
+	}
+	var toDelete, revived []int
+	for key := range a.kittyVisibleKeys {
+		if !current[key] {
+			toDelete = append(toDelete, a.kittyPlacementIDs[key])
+		}
+	}
+	for key := range current {
+		if _, wasVisible := a.kittyVisibleKeys[key]; !wasVisible {
+			revived = append(revived, a.kittyPlacementIDs[key])
+		}
+	}
+	visible := make(map[string]struct{}, len(current))
+	for key := range current {
+		visible[key] = struct{}{}
+	}
+	a.kittyVisibleKeys = visible
+	return a, a.kittyPlacementIDs, toDelete, revived
+}
+
+// accumulateKittyDeletes merges newlyDropped ids into pending. Merging
+// (never overwriting or expiring) is what makes a delete robust against
+// Bubble Tea's throttled renderer processing several Updates before it
+// actually writes a frame — see pendingKittyDeletes' doc comment on the App
+// struct for why even a resend countdown could still lose a delete that was
+// never rendered.
+func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[int]struct{} {
+	if pending == nil {
+		pending = make(map[int]struct{})
+	}
+	for _, id := range newlyDropped {
+		pending[id] = struct{}{}
+	}
+	return pending
 }
 
 // syncInlineImages diffs the active screen's current VisibleInlineImages()
 // against inlineImageCache and returns a command that fetches+encodes
 // anything missing. It's called once per Update, after the active screen
-// has already processed the message. A change in the visible-slot signature
-// forces a full-screen clear on Sixel/iTerm2 — neither protocol has a
-// placement-delete primitive, so a moved or removed image can otherwise
-// leave stray pixels behind (the same reasoning already applied to the
-// fullscreen modal's close/cycle handling).
+// has already processed the message. Kitty gets precise per-image
+// create/delete via kittyPlacementIDs/pendingKittyDeletes (see
+// syncKittyPlacements); Sixel/iTerm2 have no placement-delete primitive, so
+// any change in the visible-slot signature instead forces a full-screen
+// clear — a moved or removed image can otherwise leave stray pixels behind
+// (the same reasoning already applied to the fullscreen modal's close/cycle
+// handling).
 func (a App) syncInlineImages() (App, tea.Cmd) {
 	if !a.canInlineImages() {
 		return a, nil
 	}
 	slots := a.activeInlineImageSlots()
 	var cmds []tea.Cmd
-	if sig := inlineImageSignature(slots); sig != a.inlineImageLastSig {
+
+	isKitty := a.graphicsProtocol == imgview.ProtocolKitty
+	var placementIDs map[string]int
+	if isKitty {
+		var toDelete, revived []int
+		a, placementIDs, toDelete, revived = a.syncKittyPlacements(slots)
+		for _, id := range revived {
+			delete(a.pendingKittyDeletes, id)
+		}
+		a.pendingKittyDeletes = accumulateKittyDeletes(a.pendingKittyDeletes, toDelete)
+	} else if sig := inlineImageSignature(slots); sig != a.inlineImageLastSig {
 		a.inlineImageLastSig = sig
 		cmds = append(cmds, tea.ClearScreen)
 	}
+
 	if a.inlineImageFetching == nil {
 		a.inlineImageFetching = make(map[string]bool)
 	}
@@ -2404,7 +2544,11 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 			continue
 		}
 		a.inlineImageFetching[key] = true
-		cmds = append(cmds, a.fetchInlineImageCmd(slot, key))
+		placementID := 0
+		if isKitty {
+			placementID = placementIDs[slot.Key]
+		}
+		cmds = append(cmds, a.fetchInlineImageCmd(slot, key, placementID))
 	}
 	if len(cmds) == 0 {
 		return a, nil
@@ -2420,11 +2564,12 @@ type inlineImageFetchedMsg struct {
 }
 
 // fetchInlineImageCmd fetches and encodes slot's image for the currently
-// detected protocol (Sixel or iTerm2 — see canInlineImages). Unlike the
+// detected protocol. placementID is only used for Kitty (see
+// imgview.EncodeKitty); callers pass 0 for Sixel/iTerm2. Unlike the
 // fullscreen modal, there's no user-visible loading state to manage: a miss
 // this frame just means the reserved blank band stays blank until the
 // result lands.
-func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string) tea.Cmd {
+func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, placementID int) tea.Cmd {
 	proto := a.graphicsProtocol
 	maxCols, maxRows := slot.MaxCols, slot.MaxRows
 	url := slot.URL
@@ -2442,6 +2587,8 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string) tea.C
 		case imgview.ProtocolSixel:
 			cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 			encoded, _, _, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH)
+		case imgview.ProtocolKitty:
+			encoded, _, _ = imgview.EncodeKitty(img, maxCols, maxRows, placementID)
 		default:
 			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
 		}
@@ -2521,7 +2668,7 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 		for i, img := range frames {
 			switch proto {
 			case imgview.ProtocolKitty:
-				encodedFrames[i], cols, rows = imgview.EncodeKitty(img, displayCols, displayRows)
+				encodedFrames[i], cols, rows = imgview.EncodeKitty(img, displayCols, displayRows, kittyModalPlacementID)
 			case imgview.ProtocolITerm2:
 				var err error
 				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows)

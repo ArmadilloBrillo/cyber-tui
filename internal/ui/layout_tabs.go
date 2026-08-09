@@ -86,8 +86,18 @@ func (l TabsLayout) View(a App) string {
 		return composed + fmt.Sprintf("\x1b[%d;%dH%s\x1b[%d;1H", imgRow, imgCol, a.imageModalEncoded, a.height)
 	}
 	if a.imageNeedsCleanup && a.graphicsProtocol == imgview.ProtocolKitty {
-		// Inject the Kitty delete-all command onto the line that held the modal's
-		// top border so Bubble Tea's diff renderer delivers it to the terminal.
+		// Inject the targeted delete for the modal's own reserved placement
+		// (kittyModalPlacementID) onto the line that held the modal's top
+		// border so Bubble Tea's diff renderer delivers it to the terminal.
+		// Never a blunt delete-all: that would also erase any inline
+		// images' placements, which can be on screen at the same time.
+		//
+		// This must fall through to the inline-image injection below rather
+		// than returning early: imageNeedsCleanup stays true indefinitely
+		// (see its doc comment — it's never auto-cleared, only cleared by the
+		// next modal image opening), so an early return here would silently
+		// stop all inline-image rendering for the rest of the session after
+		// the very first Kitty modal close.
 		modalH := a.imageModalRows + 2
 		yOff := (a.height - modalH) / 2
 		if yOff < 0 {
@@ -95,11 +105,12 @@ func (l TabsLayout) View(a App) string {
 		}
 		lines := strings.Split(base, "\n")
 		if yOff < len(lines) {
-			lines[yOff] = "\x1b_Ga=d,d=A\x1b\\" + lines[yOff]
+			lines[yOff] = imgview.DeleteKittyPlacement(kittyModalPlacementID) + lines[yOff]
 		}
-		return strings.Join(lines, "\n")
+		base = strings.Join(lines, "\n")
 	}
-	if slots := a.activeInlineImageSlots(); len(slots) > 0 {
+	slots := a.activeInlineImageSlots()
+	if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 {
 		return l.injectInlineImages(a, base, slots)
 	}
 	return base
@@ -112,6 +123,12 @@ func (l TabsLayout) View(a App) string {
 // blank text the screen already rendered into base. Row 1 is the tab bar,
 // row 2 the feed-pending/separator row, so content's own row 0 is ANSI row 3;
 // column 1 is the content pane's left edge (no left margin in this layout).
+//
+// Kitty's pendingKittyDeletes don't need cursor positioning — placements are
+// addressed by id, not screen coordinates — so they're just appended
+// anywhere in the frame. This is why the caller invokes this method even
+// when slots is empty: a delete can be pending with nothing currently
+// visible (e.g. every inline image just scrolled off-screen).
 func (l TabsLayout) injectInlineImages(a App, base string, slots []screens.InlineImageSlot) string {
 	var sb strings.Builder
 	sb.WriteString(base)
@@ -123,6 +140,9 @@ func (l TabsLayout) injectInlineImages(a App, base string, slots []screens.Inlin
 		row := 3 + slot.Row
 		col := 1 + slot.ColIndent
 		sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", row, col, encoded))
+	}
+	for id := range a.pendingKittyDeletes {
+		sb.WriteString(imgview.DeleteKittyPlacement(id))
 	}
 	sb.WriteString(fmt.Sprintf("\x1b[%d;1H", a.height))
 	return sb.String()

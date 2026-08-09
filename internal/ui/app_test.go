@@ -2949,3 +2949,105 @@ func TestInlineImageCacheKey_VariesByColsAndProtocol(t *testing.T) {
 		t.Error("expected a different protocol to produce a different key")
 	}
 }
+
+// TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops confirms the
+// placement-id lifecycle Kitty inline rendering depends on: a slot's id
+// stays the same across syncs as long as it's still visible, a slot that
+// drops out of the visible set is reported for deletion exactly once, and a
+// newly-visible slot gets a fresh distinct id.
+func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
+	var a App
+	slots1 := []screens.InlineImageSlot{{Key: "post:p1:0"}, {Key: "post:p2:0"}}
+	// The very first sync reports every slot as "revived" too (nothing was
+	// visible before), which is harmless: the caller's revive step just
+	// deletes from an empty pendingKittyDeletes map, a no-op.
+	a, ids1, toDelete1, _ := a.syncKittyPlacements(slots1)
+	if len(toDelete1) != 0 {
+		t.Errorf("expected no deletes on first sync, got %v", toDelete1)
+	}
+	id1, id2 := ids1["post:p1:0"], ids1["post:p2:0"]
+	if id1 == 0 || id2 == 0 || id1 == id2 {
+		t.Fatalf("expected distinct non-zero ids, got %d and %d", id1, id2)
+	}
+
+	// Same slots again: ids must stay stable, no deletes/revives.
+	a, ids2, toDelete2, revived2 := a.syncKittyPlacements(slots1)
+	if ids2["post:p1:0"] != id1 || ids2["post:p2:0"] != id2 {
+		t.Errorf("expected ids to stay stable across syncs, got %v", ids2)
+	}
+	if len(toDelete2) != 0 || len(revived2) != 0 {
+		t.Errorf("expected no deletes/revives when the visible set didn't change, got toDelete=%v revived=%v", toDelete2, revived2)
+	}
+
+	// p1 scrolls out of view, p3 comes into view.
+	slots2 := []screens.InlineImageSlot{{Key: "post:p2:0"}, {Key: "post:p3:0"}}
+	a, ids3, toDelete3, revived3 := a.syncKittyPlacements(slots2)
+	if len(toDelete3) != 1 || toDelete3[0] != id1 {
+		t.Errorf("expected exactly p1's id (%d) to be reported for deletion, got %v", id1, toDelete3)
+	}
+	if len(revived3) != 1 || revived3[0] != ids3["post:p3:0"] {
+		t.Errorf("expected p3 (newly visible) reported as revived, got %v", revived3)
+	}
+	if ids3["post:p2:0"] != id2 {
+		t.Errorf("expected p2's id to remain stable, got %d want %d", ids3["post:p2:0"], id2)
+	}
+	id3 := ids3["post:p3:0"]
+	if id3 == 0 || id3 == id1 || id3 == id2 {
+		t.Errorf("expected p3 to get a fresh distinct id, got %d", id3)
+	}
+
+	// p1 scrolls back into view: it must reuse its ORIGINAL id (not a fresh
+	// one) — this is what keeps its id-less cache entry (see
+	// inlineImageCacheKey) valid, and is reported as revived so the caller
+	// cancels its still-pending delete.
+	slots3 := []screens.InlineImageSlot{{Key: "post:p1:0"}, {Key: "post:p2:0"}, {Key: "post:p3:0"}}
+	_, ids4, toDelete4, revived4 := a.syncKittyPlacements(slots3)
+	if ids4["post:p1:0"] != id1 {
+		t.Errorf("expected p1 to be revived with its original id %d, got %d", id1, ids4["post:p1:0"])
+	}
+	if len(toDelete4) != 0 {
+		t.Errorf("expected no new deletes when p1 returns, got %v", toDelete4)
+	}
+	if len(revived4) != 1 || revived4[0] != id1 {
+		t.Errorf("expected p1's id (%d) reported as revived, got %v", id1, revived4)
+	}
+}
+
+// TestAccumulateKittyDeletes_SurvivesSkippedRenders is a regression test for
+// fast-scroll ghosting: a delete computed by one Update must not be lost if
+// Bubble Tea's throttled renderer processes several Updates (each recomputing
+// syncKittyPlacements' fresh, single-frame diff) before actually writing a
+// frame. A prior version of this used a resend countdown, decremented once
+// per Update — but a fast enough scroll can still rack up enough Updates
+// between two real flushes to exhaust that budget on nothing but
+// never-flushed intermediate renders, losing the delete. Simulates many such
+// skipped-render Updates (empty newlyDropped batches) and confirms an
+// earlier delete survives indefinitely, never expiring on its own.
+func TestAccumulateKittyDeletes_SurvivesSkippedRenders(t *testing.T) {
+	pending := accumulateKittyDeletes(nil, []int{7})
+	if _, ok := pending[7]; !ok {
+		t.Fatal("expected id 7 to be pending immediately after being seeded")
+	}
+
+	for i := 0; i < 50; i++ {
+		pending = accumulateKittyDeletes(pending, nil)
+		if _, ok := pending[7]; !ok {
+			t.Fatalf("id 7 disappeared after %d extra call(s), expected it to never auto-expire", i+1)
+		}
+	}
+}
+
+// TestAccumulateKittyDeletes_MergesRatherThanOverwrites confirms a second
+// batch of newly-dropped ids doesn't wipe out a still-pending id from an
+// earlier batch — the exact failure mode a single-value (not accumulating)
+// pendingKittyDeletes had.
+func TestAccumulateKittyDeletes_MergesRatherThanOverwrites(t *testing.T) {
+	pending := accumulateKittyDeletes(nil, []int{1})
+	pending = accumulateKittyDeletes(pending, []int{2})
+	if _, ok := pending[1]; !ok {
+		t.Errorf("expected id 1 to still be pending after a second batch introduced id 2, got %v", pending)
+	}
+	if _, ok := pending[2]; !ok {
+		t.Errorf("expected id 2 to be pending, got %v", pending)
+	}
+}

@@ -12,9 +12,9 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-const millerSidebarWidth = 22  // nav pane (21 chars) + "│" separator (1 char)
-const millerListMaxWidth = 70  // hard cap on the list pane; above this, excess goes to the detail pane
-const millerHeaderHeight = 1   // column title row at the top of the layout
+const millerSidebarWidth = 22 // nav pane (21 chars) + "│" separator (1 char)
+const millerListMaxWidth = 70 // hard cap on the list pane; above this, excess goes to the detail pane
+const millerHeaderHeight = 1  // column title row at the top of the layout
 
 // MillerLayout renders a left navigation sidebar alongside the active screen.
 type MillerLayout struct{}
@@ -154,6 +154,8 @@ func (l MillerLayout) View(a App) string {
 		return composed + fmt.Sprintf("\x1b[%d;%dH%s\x1b[%d;1H", imgRow, imgCol, a.imageModalEncoded, a.height)
 	}
 	if a.imageNeedsCleanup && a.graphicsProtocol == imgview.ProtocolKitty {
+		// Targeted delete for the modal's own reserved placement, not a
+		// blunt delete-all — see the matching comment in layout_tabs.go.
 		modalH := a.imageModalRows + 2
 		yOff := (a.height - modalH) / 2
 		if yOff < 0 {
@@ -161,7 +163,7 @@ func (l MillerLayout) View(a App) string {
 		}
 		lines := strings.Split(base, "\n")
 		if yOff < len(lines) {
-			lines[yOff] = "\x1b_Ga=d,d=A\x1b\\" + lines[yOff]
+			lines[yOff] = imgview.DeleteKittyPlacement(kittyModalPlacementID) + lines[yOff]
 		}
 		return strings.Join(lines, "\n")
 	}
