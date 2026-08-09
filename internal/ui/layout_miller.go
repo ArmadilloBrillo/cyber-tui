@@ -240,9 +240,15 @@ func (l MillerLayout) DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
 func (l MillerLayout) HasFocusedInput(a App) bool {
 	switch a.active {
 	case screenChatrooms:
-		return a.chatrooms.InputFocused()
+		// InputFocused is true for the entire time a room is open, not just
+		// while its compose box has the cursor — so it must also check that
+		// Miller's own focus hasn't already moved away to the spaces column
+		// (via HandleNav's left/h), or nav keys pressed there would still be
+		// swallowed into the backgrounded room instead of reaching
+		// navigateTabBy. Same reasoning for screenCMail below.
+		return a.focus != focusMenu && a.chatrooms.InputFocused()
 	case screenCMail:
-		return a.cmail.InputFocused()
+		return a.focus != focusMenu && a.cmail.InputFocused()
 	case screenPostDetail:
 		return a.postDetail.ComposeActive()
 	case screenFeed:

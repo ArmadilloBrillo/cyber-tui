@@ -623,3 +623,57 @@ func TestMillerLayoutView_InjectsInlineImages(t *testing.T) {
 		t.Errorf("expected MillerLayout.View to composite the cached inline image in the Feed detail pane, got: %q", out)
 	}
 }
+
+// --- MillerLayout.HasFocusedInput: backgrounded Circ/CMail room ---
+
+// TestMillerHasFocusedInput_ChatroomsDoesNotTrapNavAtFocusMenu is a
+// regression test: a Circ room stays in chatroomModeDetail (so
+// ChatroomsModel.InputFocused() stays true) for as long as it's open, even
+// after the user has pressed "left" to move Miller's own focus away to the
+// spaces column. Before this fix, HasFocusedInput only checked
+// InputFocused(), so every subsequent j/k/up/down was swallowed into the
+// backgrounded room's Update instead of reaching HandleNav's focusMenu case
+// (navigateTabBy) — the room was reachable but effectively un-leavable via
+// vertical nav.
+func TestMillerHasFocusedInput_ChatroomsDoesNotTrapNavAtFocusMenu(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{Slug: "r1", Name: "r1"}})
+	a.chatrooms, _ = a.chatrooms.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected the room to be open (InputFocused true)")
+	}
+
+	a.focus = focusList
+	if !(MillerLayout{}).HasFocusedInput(a) {
+		t.Error("expected HasFocusedInput true while focus is still on the room")
+	}
+
+	a.focus = focusMenu
+	if (MillerLayout{}).HasFocusedInput(a) {
+		t.Error("expected HasFocusedInput false once focus has moved to the spaces column, even with the room still open")
+	}
+}
+
+// TestMillerHasFocusedInput_CMailDoesNotTrapNavAtFocusMenu mirrors the Circ
+// case above for CMail, which has the identical mode-based InputFocused
+// pattern (cmailModeDetail).
+func TestMillerHasFocusedInput_CMailDoesNotTrapNavAtFocusMenu(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+	a.cmail = a.cmail.SetConversations([]model.Conversation{{ID: "c1"}})
+	a.cmail, _ = a.cmail.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !a.cmail.InputFocused() {
+		t.Fatal("setup: expected the conversation to be open (InputFocused true)")
+	}
+
+	a.focus = focusList
+	if !(MillerLayout{}).HasFocusedInput(a) {
+		t.Error("expected HasFocusedInput true while focus is still on the conversation")
+	}
+
+	a.focus = focusMenu
+	if (MillerLayout{}).HasFocusedInput(a) {
+		t.Error("expected HasFocusedInput false once focus has moved to the spaces column, even with the conversation still open")
+	}
+}
