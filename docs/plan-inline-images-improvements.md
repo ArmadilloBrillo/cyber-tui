@@ -17,78 +17,70 @@ were missed.
 
 ---
 
-## 1. Decide MillerLayout's fate (blocking, needs a decision)
+## 1. ~~Decide MillerLayout's fate~~ — Resolved: finished, not deleted
 
-**Files:** `internal/ui/app.go:431-433` (`layoutFromName`, discards its argument, always
-returns `TabsLayout{}`), `internal/ui/layout_miller.go` (whole file).
+**Files:** `internal/ui/app.go` (`layoutFromName`), `internal/ui/layout_miller.go`,
+`internal/ui/screens/settings.go`.
 
-`layoutFromName` predates this branch and makes `MillerLayout` unreachable by any user —
-there's also no settings-screen item to pick a layout at all. This feature nonetheless
-added real logic to `layout_miller.go` (a Kitty-cleanup fix matching the one applied to
-`layout_tabs.go`), and never wired inline-image compositing into it either. This is a
-product decision, not a code decision:
-
-- **(a) Delete** `layout_miller.go` and its dedicated tests (`layout_test.go:66,337,385`,
-  `app_test.go:317`) — it's dead code with no user-facing coverage, and every line added
-  to it is maintenance cost with no corresponding benefit.
-- **(b) Finish it** — fix `layoutFromName` to branch on its argument, add the missing
-  settings-screen item (`internal/ui/screens/settings.go:140-172` currently has no
-  layout picker even though `SettingsModel.layoutName` is tracked and round-tripped),
-  and only then treat it as a real second layout worth keeping in sync with `TabsLayout`.
-
-Resolve this before touching item 2 — it determines whether that item is "fix" or "n/a."
+Decided in follow-up discussion: the two-code-sets concern behind option (a) checked out
+as real but narrow (the overlay-compositing block specifically, not navigation/routing,
+which was already centralized) — so it was cheaper to fix the actual duplication than to
+delete the layout. `layoutFromName` now branches on its argument, Settings has a "layout"
+picker item (`tabs`/`miller`, cycles live via the existing save path), and Feed gained
+its own inline-image support for Miller's compact detail pane (post + reply images),
+which it never had before. See `docs/reviews/2026-08-09-inline-images-greenfield-critique.md`
+for the original analysis and commit `ebb4a64` for the implementation.
 
 ---
 
-## 2. Fix (or remove) the inline-image compositing gap
+## 2. ~~Fix (or remove) the inline-image compositing gap~~ — Resolved: hoisted
 
-**Files:** `internal/ui/layout_tabs.go:112-149` (`injectInlineImages`, only call site
-today) vs `internal/ui/layout_miller.go:147-166`.
+**Files:** `internal/ui/layout.go` (`compositeOverlays`, `modalRenderer`), replacing the
+duplicated tail of `internal/ui/layout_tabs.go`'s and `internal/ui/layout_miller.go`'s
+`View()` methods.
 
-- **If Miller is kept** (1b): hoist `injectInlineImages` and the modal-compositing block
-  to a single call site above both layouts — after `a.layout.View(a)` returns, before
-  the string is returned to the terminal — so a `Layout` implementation cannot forget to
-  call it. This is the shared-pipeline fix both reviews recommend over duplicating the
-  call into `layout_miller.go`.
-- **If Miller is deleted** (1a): this finding disappears with the file — no separate fix
-  needed.
+Implemented the shared-pipeline fix both reviews recommended: `compositeOverlays` is now
+the single place that composites the five simple modals, the fullscreen image modal, the
+Kitty placement-cleanup delete, and inline-image injection, called as the last line of
+both layouts' `View()`. Neither layout can independently forget a step or return early
+partway through anymore — the exact shape of the original MillerLayout bug. Golden-output
+tests (`internal/ui/layout_test.go`) assert on the composited escape sequences for both
+layouts, closing the test-coverage gap both reviews flagged. See commit `ebb4a64`.
 
----
-
-## 3. Bound `inlineImageCache` before removing the "experimental" label
-
-**Files:** `internal/ui/app.go:184-197` (`inlineImageCache`, keyed by slot × URL × column
-width × protocol, never evicted), `app.go:198-243` (`kittyPlacementIDs`,
-`kittyNextPlacementID`, `pendingKittyDeletes` — coupled to the same cut by design).
-
-Add an LRU bounded by encoded-payload byte size — `container/list` plus a map,
-evict-oldest on insert past the cap. Any eviction scheme needs to invalidate the
-matching `kittyPlacementIDs` entry when its cache entry is evicted, since a re-issued id
-without a matching cache invalidation would desync the two.
+A related bug surfaced and was fixed separately while verifying this work: Miller's
+`HasFocusedInput` for Circ/CMail didn't account for Miller's own focus state, trapping
+nav keys inside a backgrounded room — commit `6371452`.
 
 ---
 
-## 4. Compress the Kitty payload
+## 3. ~~Bound `inlineImageCache`~~ — Resolved
 
-**File:** `internal/ui/imgview/kitty.go:28-63` (`EncodeKitty`, currently emits raw
-32-bit RGBA via `f=32`, no compression).
-
-Switch to PNG (`f=100`) the way `EncodeITerm2` already does (`imgview/iterm2.go:21-25`,
-`image/png` is already a dependency). This directly shrinks the same cache memory
-problem as item 3, for the same amount of encoder code, and is cheap enough to bundle
-into the same change.
+`inlineImageCache` is now bounded by `inlineImageCacheMaxBytes` (16 MiB, a starting cap
+rather than a measured one), evicting the oldest-inserted entry first via
+`cacheInlineImage` (`container/list` + map, as scoped). `kittyPlacementIDs` was left
+untouched and permanent, as designed — eviction only removes the cache entry, and since
+`inlineImageCacheKey` doesn't embed the placement id, a slot whose entry gets evicted
+just re-fetches and re-encodes using its already-stable id on the next sync. No coupling
+to handle, since ids themselves are never evicted.
 
 ---
 
-## 5. Stop silently caching fetch failures as retryable blanks
+## 4. ~~Compress the Kitty payload~~ — Resolved
 
-**File:** `internal/ui/app.go:2607-2621` (`handleInlineImageFetched`).
+`EncodeKitty` now emits PNG (`f=100`, no `s=`/`v=` needed — the terminal reads pixel
+dimensions from the PNG header) instead of raw 32-bit RGBA (`f=32`), matching
+`EncodeITerm2`'s existing pattern exactly, including propagating a `png.Encode` error
+through a new `error` return (both real call sites and `encode_test.go` updated to
+match).
 
-On `err != nil`, the in-flight marker is cleared but nothing is written to
-`inlineImageCache`, so `syncInlineImages` retries the same dead URL on every subsequent
-`Update` the slot stays visible for — no backoff. Cache a distinct "failed" sentinel
-with a short cooldown so a permanently-broken image URL doesn't get hammered on every
-keystroke/tick while visible.
+---
+
+## 5. ~~Stop silently caching fetch failures as retryable blanks~~ — Resolved
+
+`handleInlineImageFetched` now records a failure timestamp (`inlineImageFailedAt`) on
+error; `syncInlineImages` skips refetching a key within `inlineImageFailureCooldown`
+(60s) of its last failure, and a subsequent success clears the record so a transient
+blip doesn't leave a stale cooldown once the URL recovers.
 
 ---
 
@@ -109,10 +101,6 @@ circumstances change (noted trigger in parentheses):
   pressure, or before this exact pattern gets reused elsewhere.
 - Sixel hardcoding 256 colors (`imgview/sixel.go:44`) — true for essentially every
   Sixel-capable terminal in practice; leave as a documented assumption.
-- Golden-output `View()` tests per layout/protocol — the test category that would have
-  caught both the MillerLayout gap and the two Ghostty lifecycle bugs; worth adding
-  alongside item 2 specifically (asserting the composited escape sequence appears in
-  `View()`'s output), not as a standalone backlog item.
 
 ---
 

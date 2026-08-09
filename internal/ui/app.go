@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -181,19 +182,29 @@ type App struct {
 	// network fetch. Cleared whenever the modal closes.
 	imageCache map[string]cachedImage
 
-	// inlineImageCache holds encoded inline-image escape sequences for the
-	// life of the session, keyed by inlineImageCacheKey (slot key + URL +
-	// column budget + protocol) — never evicted; see the plan's accepted
-	// spike-scope cut. inlineImageFetching tracks keys with a fetch already
-	// in flight, so syncInlineImages (called every Update) doesn't refire
-	// the same request every frame while it's pending. inlineImageLastSig is
-	// the previous frame's visible-slot signature (see
+	// inlineImageCache holds encoded inline-image escape sequences, keyed by
+	// inlineImageCacheKey (slot key + URL + column budget + protocol),
+	// bounded by inlineImageCacheMaxBytes — see cacheInlineImage, which
+	// evicts the oldest-inserted entry first once exceeded.
+	// inlineImageCacheOrder/inlineImageCacheElems/inlineImageCacheBytes are
+	// cacheInlineImage's bookkeeping for that eviction; nothing else should
+	// touch them. inlineImageFetching tracks keys with a fetch already in
+	// flight, so syncInlineImages (called every Update) doesn't refire the
+	// same request every frame while it's pending. inlineImageFailedAt
+	// records when a key last failed to fetch, so a permanently-broken URL
+	// gets a cooldown (inlineImageFailureCooldown) instead of being retried
+	// on every single Update its slot stays visible for. inlineImageLastSig
+	// is the previous frame's visible-slot signature (see
 	// inlineImageSignature), used to detect a scroll/selection change that
 	// requires a full clear for Sixel/iTerm2 (neither has a placement-delete
 	// primitive — Kitty does, see kittyPlacementIDs, and never uses this).
-	inlineImageCache    map[string]string
-	inlineImageFetching map[string]bool
-	inlineImageLastSig  string
+	inlineImageCache      map[string]string
+	inlineImageCacheOrder *list.List
+	inlineImageCacheElems map[string]*list.Element
+	inlineImageCacheBytes int
+	inlineImageFetching   map[string]bool
+	inlineImageFailedAt   map[string]time.Time
+	inlineImageLastSig    string
 
 	// kittyPlacementIDs assigns a stable id (used as both image id and
 	// placement id, see imgview.EncodeKitty) to each inline image slot ever
@@ -208,8 +219,14 @@ type App struct {
 	// after its first scroll-off. Keeping the id (and thus the cache entry)
 	// stable for a key's whole session lifetime avoids that entirely.
 	// kittyNextPlacementID is the session-lived counter handing out new ids —
-	// never reused/freed within a session, which is fine for a spike (see the
-	// plan's no-cache-eviction cut; the same reasoning applies here).
+	// never reused/freed within a session. This stays safe even now that
+	// inlineImageCache is bounded (see its doc comment): evicting a cache
+	// entry doesn't touch its id, since inlineImageCacheKey doesn't embed
+	// one — a slot whose entry got evicted just re-fetches and re-encodes
+	// using its already-stable id, same as any other cache miss. If ids were
+	// ever evicted too, that would have to happen in the same step as
+	// evicting the matching cache entry, or a reissued id could collide with
+	// a still-cached payload embedding the old one.
 	//
 	// kittyVisibleKeys is the set of slot keys visible as of the last sync
 	// call. Because kittyPlacementIDs is never pruned, "not in
@@ -2554,6 +2571,9 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		if a.inlineImageFetching[key] {
 			continue
 		}
+		if failedAt, failed := a.inlineImageFailedAt[key]; failed && time.Since(failedAt) < inlineImageFailureCooldown {
+			continue
+		}
 		a.inlineImageFetching[key] = true
 		placementID := 0
 		if isKitty {
@@ -2599,7 +2619,7 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, place
 			cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 			encoded, _, _, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH)
 		case imgview.ProtocolKitty:
-			encoded, _, _ = imgview.EncodeKitty(img, maxCols, maxRows, placementID)
+			encoded, _, _, err = imgview.EncodeKitty(img, maxCols, maxRows, placementID)
 		default:
 			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
 		}
@@ -2610,11 +2630,21 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, place
 	}
 }
 
+// inlineImageFailureCooldown bounds how often a permanently-broken image URL
+// gets refetched — without it, a dead link left visible while the user is
+// idle-scrolling elsewhere on the same screen fires a fresh HTTP request on
+// every single Update (keystroke, tick, anything) that includes its slot in
+// the visible set. Not tied to a resize/navigation-triggered retry: the slot
+// naturally gets another attempt on its own once the cooldown lapses.
+const inlineImageFailureCooldown = 60 * time.Second
+
 // handleInlineImageFetched processes an inlineImageFetchedMsg: on success,
-// caches the encoded result so the next frame's render picks it up; on
-// failure, just clears the in-flight marker so a future frame (e.g. after a
-// resize) can retry — there's no modal to fall back to here, the slot
-// simply stays blank.
+// caches the encoded result so the next frame's render picks it up, and
+// clears any earlier failure record for the key; on failure, records when it
+// failed (see inlineImageFailureCooldown) so syncInlineImages doesn't retry
+// it on every subsequent Update — there's no modal to fall back to here, the
+// slot simply stays blank until either the cooldown lapses or something
+// invalidates the key outright (e.g. a resize changing its column budget).
 func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
 	m, ok := msg.(inlineImageFetchedMsg)
 	if !ok {
@@ -2622,13 +2652,61 @@ func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
 	}
 	delete(a.inlineImageFetching, m.key)
 	if m.err != nil {
+		if a.inlineImageFailedAt == nil {
+			a.inlineImageFailedAt = make(map[string]time.Time)
+		}
+		a.inlineImageFailedAt[m.key] = time.Now()
 		return a, nil, true
 	}
+	delete(a.inlineImageFailedAt, m.key)
+	return a.cacheInlineImage(m.key, m.encoded), nil, true
+}
+
+// inlineImageCacheMaxBytes bounds inlineImageCache's total payload size —
+// see cacheInlineImage. A long scrolling session or a terminal resized many
+// times would otherwise grow the cache for the life of the process. Chosen
+// as a reasonable starting cap, not derived from measurement (ponytail:
+// revisit if real sessions show it's too tight or too loose in practice).
+const inlineImageCacheMaxBytes = 16 << 20 // 16 MiB
+
+// cacheInlineImage stores encoded under key in inlineImageCache, evicting
+// the oldest-inserted entries first once inlineImageCacheMaxBytes is
+// exceeded. Eviction only removes the cache entry, never the corresponding
+// kittyPlacementIDs id (see that field's doc comment) — cache keys don't
+// embed the id, so a slot whose entry gets evicted just re-fetches and
+// re-encodes using its already-stable id on the next sync, the same as any
+// other cache miss.
+func (a App) cacheInlineImage(key, encoded string) App {
+	return a.cacheInlineImageBounded(key, encoded, inlineImageCacheMaxBytes)
+}
+
+// cacheInlineImageBounded is cacheInlineImage with an injectable cap, so
+// tests can exercise eviction with a small maxBytes instead of megabytes of
+// fixture data.
+func (a App) cacheInlineImageBounded(key, encoded string, maxBytes int) App {
 	if a.inlineImageCache == nil {
 		a.inlineImageCache = make(map[string]string)
+		a.inlineImageCacheOrder = list.New()
+		a.inlineImageCacheElems = make(map[string]*list.Element)
 	}
-	a.inlineImageCache[m.key] = m.encoded
-	return a, nil, true
+	if old, exists := a.inlineImageCache[key]; exists {
+		a.inlineImageCacheBytes -= len(old)
+		a.inlineImageCacheOrder.MoveToBack(a.inlineImageCacheElems[key])
+	} else {
+		a.inlineImageCacheElems[key] = a.inlineImageCacheOrder.PushBack(key)
+	}
+	a.inlineImageCache[key] = encoded
+	a.inlineImageCacheBytes += len(encoded)
+
+	for a.inlineImageCacheBytes > maxBytes && a.inlineImageCacheOrder.Len() > 1 {
+		oldest := a.inlineImageCacheOrder.Front()
+		oldestKey := oldest.Value.(string)
+		a.inlineImageCacheBytes -= len(a.inlineImageCache[oldestKey])
+		delete(a.inlineImageCache, oldestKey)
+		delete(a.inlineImageCacheElems, oldestKey)
+		a.inlineImageCacheOrder.Remove(oldest)
+	}
+	return a
 }
 
 // openExternalURL opens u in the OS default browser as a fire-and-forget command.
@@ -2679,7 +2757,11 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 		for i, img := range frames {
 			switch proto {
 			case imgview.ProtocolKitty:
-				encodedFrames[i], cols, rows = imgview.EncodeKitty(img, displayCols, displayRows, kittyModalPlacementID)
+				var err error
+				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, kittyModalPlacementID)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
 			case imgview.ProtocolITerm2:
 				var err error
 				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows)

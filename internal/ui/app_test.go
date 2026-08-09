@@ -3016,6 +3016,81 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 // TestSyncInlineImages_DisablingClearsStaleKittyPlacements is a regression
 // test: syncInlineImages used to early-return the moment canInlineImages()
 // went false (e.g. the user toggled inline images off), skipping the
+// --- inline-image fetch-failure cooldown ---
+
+// feedAppWithOneImage builds an App on Feed/Tabs with one post whose image
+// is currently visible, for tests exercising syncInlineImages/
+// handleInlineImageFetched against a real slot rather than hand-built state.
+func feedAppWithOneImage(t *testing.T) (a App, key string) {
+	t.Helper()
+	a = loggedInApp()
+	a.width, a.height = 80, 40
+	a.inlineImages = true
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.feed, _ = a.feed.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	a.feed, _ = a.feed.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+	slots := a.feed.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("setup: expected 1 visible slot, got %d", len(slots))
+	}
+	return a, inlineImageCacheKey(slots[0], a.graphicsProtocol)
+}
+
+// TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses is a
+// regression test: before this fix, a failed fetch left no record at all, so
+// syncInlineImages (called on every Update) refired the same doomed request
+// every keystroke/tick the slot stayed visible.
+func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T) {
+	a, key := feedAppWithOneImage(t)
+
+	a, cmd := a.syncInlineImages()
+	if cmd == nil || !a.inlineImageFetching[key] {
+		t.Fatal("setup: expected the first sync to schedule a fetch")
+	}
+
+	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
+	if _, failed := a.inlineImageFailedAt[key]; !failed {
+		t.Fatal("expected the failure to be recorded")
+	}
+	if a.inlineImageFetching[key] {
+		t.Error("expected the in-flight marker to be cleared after the failure")
+	}
+
+	a, _ = a.syncInlineImages()
+	if a.inlineImageFetching[key] {
+		t.Error("expected syncInlineImages to skip refetching within the cooldown window")
+	}
+
+	// Backdate the failure past the cooldown and confirm it retries.
+	a.inlineImageFailedAt[key] = time.Now().Add(-inlineImageFailureCooldown - time.Second)
+	a, _ = a.syncInlineImages()
+	if !a.inlineImageFetching[key] {
+		t.Error("expected syncInlineImages to retry once the cooldown has lapsed")
+	}
+}
+
+// TestInlineImageFailureCooldown_ClearedBySubsequentSuccess confirms a
+// success wipes any earlier failure record, so a transient blip doesn't
+// leave a stale cooldown blocking future retries after the URL recovers.
+func TestInlineImageFailureCooldown_ClearedBySubsequentSuccess(t *testing.T) {
+	a, key := feedAppWithOneImage(t)
+	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
+	if _, failed := a.inlineImageFailedAt[key]; !failed {
+		t.Fatal("setup: expected the failure to be recorded")
+	}
+
+	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
+	if _, failed := a.inlineImageFailedAt[key]; failed {
+		t.Error("expected the failure record to be cleared after a subsequent success")
+	}
+	if got := a.inlineImageCache[key]; got != "\x1b_Gfake\x1b\\" {
+		t.Errorf("expected the successful encode to be cached, got %q", got)
+	}
+}
+
 // diff/delete logic entirely and leaving previously-drawn Kitty placements
 // on screen. It must still diff down to an empty slot list so every
 // previously-visible key gets queued for deletion.
@@ -3082,5 +3157,69 @@ func TestAccumulateKittyDeletes_MergesRatherThanOverwrites(t *testing.T) {
 	}
 	if _, ok := pending[2]; !ok {
 		t.Errorf("expected id 2 to be pending, got %v", pending)
+	}
+}
+
+// --- cacheInlineImage (bounded LRU) ---
+
+func TestCacheInlineImage_EvictsOldestFirstPastCap(t *testing.T) {
+	var a App
+	a = a.cacheInlineImageBounded("k1", "aaaaa", 12) // 5 bytes
+	a = a.cacheInlineImageBounded("k2", "bbbbb", 12) // 10 bytes total, still under cap
+	a = a.cacheInlineImageBounded("k3", "ccccc", 12) // 15 bytes would exceed 12 — evict k1
+
+	if _, ok := a.inlineImageCache["k1"]; ok {
+		t.Error("expected k1 (oldest) to be evicted once the cap was exceeded")
+	}
+	if _, ok := a.inlineImageCache["k2"]; !ok {
+		t.Error("expected k2 to survive")
+	}
+	if _, ok := a.inlineImageCache["k3"]; !ok {
+		t.Error("expected k3 (just inserted) to survive")
+	}
+	if a.inlineImageCacheBytes != 10 {
+		t.Errorf("expected inlineImageCacheBytes to track only the surviving entries (10), got %d", a.inlineImageCacheBytes)
+	}
+}
+
+// TestCacheInlineImage_ReinsertMovesToBackWithoutDoubleCounting confirms
+// re-caching an existing key (e.g. a resize that re-encodes the same slot)
+// updates its size correctly rather than accumulating stale bytes, and
+// treats it as freshly inserted for eviction ordering rather than leaving it
+// at its original (now stale) position.
+func TestCacheInlineImage_ReinsertMovesToBackWithoutDoubleCounting(t *testing.T) {
+	var a App
+	a = a.cacheInlineImageBounded("k1", "aaaaa", 12)   // 5 bytes
+	a = a.cacheInlineImageBounded("k2", "bb", 12)      // 7 bytes total
+	a = a.cacheInlineImageBounded("k1", "aaaaaaa", 12) // k1 grows to 7 bytes: 7+2=9, still under cap
+
+	if got := a.inlineImageCache["k1"]; got != "aaaaaaa" {
+		t.Errorf("expected k1's value to be updated, got %q", got)
+	}
+	if a.inlineImageCacheBytes != 9 {
+		t.Errorf("expected inlineImageCacheBytes=9 (7+2, not double-counting k1's old 5), got %d", a.inlineImageCacheBytes)
+	}
+
+	// Now push over the cap: k2 (never re-touched) should be evicted first,
+	// not k1 (re-inserted more recently, even though it existed earlier).
+	a = a.cacheInlineImageBounded("k3", "c", 12)    // 9+1=10, still under 12... push further
+	a = a.cacheInlineImageBounded("k4", "dddd", 12) // 10+4=14 > 12: evict oldest (k2)
+	if _, ok := a.inlineImageCache["k2"]; ok {
+		t.Error("expected k2 to be evicted first — it's the least-recently-(re)inserted key")
+	}
+	if _, ok := a.inlineImageCache["k1"]; !ok {
+		t.Error("expected k1 to survive — it was re-inserted after k2 and moved to the back of eviction order")
+	}
+}
+
+// TestCacheInlineImage_NeverEvictsTheJustInsertedEntry confirms a single
+// entry larger than the whole cap is still kept (better to go over budget by
+// one entry than to evict the image that was just fetched for the frame
+// asking for it).
+func TestCacheInlineImage_NeverEvictsTheJustInsertedEntry(t *testing.T) {
+	var a App
+	a = a.cacheInlineImageBounded("k1", "aaaaaaaaaaaaaaaaaaaa", 5) // 20 bytes >> cap of 5
+	if _, ok := a.inlineImageCache["k1"]; !ok {
+		t.Error("expected the sole, just-inserted entry to survive even though it alone exceeds the cap")
 	}
 }
