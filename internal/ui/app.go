@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	neturl "net/url"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -916,7 +917,22 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.cmail, _ = a.cmail.Update(contentMsg)
 			a.chatrooms, _ = a.chatrooms.Update(contentMsg)
 		}
-		return a, a.afterLoginCmd(), true
+		loginCmd := a.afterLoginCmd()
+		// Windows-only notice: every graphics protocol this app supports has
+		// turned up a confirmed or documented Windows-specific rendering bug
+		// during the WezTerm/ConPTY investigation (see
+		// docs/plan-inline-images-improvements.md §9) — not fixable from
+		// here, so surface it rather than silently leaving images broken.
+		// Fired here (not Init()) since the notify banner only renders in
+		// the post-login layouts and has a short TTL that would tick away
+		// unseen during login if set any earlier.
+		if !a.ephemeral && a.graphicsProtocol != imgview.ProtocolNone &&
+			a.imageViewer != "browser" && runtime.GOOS == "windows" {
+			var notifyCmd tea.Cmd
+			a, notifyCmd = a.notify(notifyWarn, "images may not render correctly on Windows (known ConPTY issue) — try Settings → Image Viewer: browser")
+			return a, tea.Batch(loginCmd, notifyCmd), true
+		}
+		return a, loginCmd, true
 	case screens.LoginErrMsg:
 		var cmd tea.Cmd
 		a.login, cmd = a.login.Update(msg)
