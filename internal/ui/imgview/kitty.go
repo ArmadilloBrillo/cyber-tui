@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"strings"
 )
 
 // EncodeKitty encodes img for display via the Kitty terminal graphics
@@ -51,19 +52,62 @@ func EncodeKitty(img image.Image, maxCols, maxRows, cellPxW, cellPxH, placementI
 	// the terminal reads pixel dimensions from the PNG data itself (unlike the
 	// raw-RGBA f=32 this used to send, which required them explicitly). c/r:
 	// display size in terminal columns/rows (Kitty scales to fit, preserving
-	// aspect ratio). m=0: final chunk. q=2: suppress the terminal's OK/error
-	// response — by default (q unset) the terminal writes one back over the
-	// same stream used for keyboard input, and Bubble Tea's input reader has
-	// no way to tell it apart from a real keystroke. The fullscreen modal
-	// treats any keypress while open as "close" (see app.go), so that
-	// phantom response was closing the modal the instant it opened — every
-	// single time.
+	// aspect ratio). q=2: suppress the terminal's OK/error response — by
+	// default (q unset) the terminal writes one back over the same stream
+	// used for keyboard input, and Bubble Tea's input reader has no way to
+	// tell it apart from a real keystroke. The fullscreen modal treats any
+	// keypress while open as "close" (see app.go), so that phantom response
+	// was closing the modal the instant it opened — every single time.
+	var control string
 	if placementID == 0 {
-		encoded = fmt.Sprintf("\x1b_Ga=d,d=A\x1b\\\x1b_Ga=T,f=100,c=%d,r=%d,m=0,q=2;%s\x1b\\", cols, rows, payload)
+		control = fmt.Sprintf("a=T,f=100,c=%d,r=%d,q=2", cols, rows)
 	} else {
-		encoded = fmt.Sprintf("\x1b_Ga=T,f=100,c=%d,r=%d,m=0,q=2,i=%d,p=%d;%s\x1b\\", cols, rows, placementID, placementID, payload)
+		control = fmt.Sprintf("a=T,f=100,c=%d,r=%d,q=2,i=%d,p=%d", cols, rows, placementID, placementID)
+	}
+	chunked := chunkKittyPayload(control, payload)
+	if placementID == 0 {
+		encoded = "\x1b_Ga=d,d=A\x1b\\" + chunked
+	} else {
+		encoded = chunked
 	}
 	return
+}
+
+// kittyChunkSize is the Kitty graphics protocol's maximum payload size per
+// APC sequence (all chunks but the last must be a multiple of 4). Terminals
+// reached through Windows' ConPTY layer (e.g. WezTerm's local-process panes
+// on Windows) have been observed failing to render a large image sent as one
+// giant unchunked sequence — ConPTY is a known source of interference with
+// long or unrecognized escape sequences. Chunking is also simply what the
+// protocol spec expects for large payloads, independent of that.
+const kittyChunkSize = 4096
+
+// chunkKittyPayload splits payload into kittyChunkSize-byte APC sequences per
+// the Kitty graphics protocol's chunked-transmission mode: the first chunk
+// carries control (the full a=/f=/c=/r=/q=/i=/p= control data) plus m=1 if
+// more chunks follow; every subsequent chunk carries only m (m=1, or m=0 on
+// the last) and optionally q — no other control keys repeated, per spec. If
+// payload fits in a single chunk, this degenerates to exactly the old
+// single-sequence output (m=0, full control data, one APC block).
+func chunkKittyPayload(control, payload string) string {
+	if len(payload) <= kittyChunkSize {
+		return fmt.Sprintf("\x1b_G%s,m=0;%s\x1b\\", control, payload)
+	}
+	var sb strings.Builder
+	for i := 0; i < len(payload); i += kittyChunkSize {
+		end := min(i+kittyChunkSize, len(payload))
+		last := end == len(payload)
+		m := 1
+		if last {
+			m = 0
+		}
+		if i == 0 {
+			fmt.Fprintf(&sb, "\x1b_G%s,m=%d;%s\x1b\\", control, m, payload[i:end])
+		} else {
+			fmt.Fprintf(&sb, "\x1b_Gm=%d,q=2;%s\x1b\\", m, payload[i:end])
+		}
+	}
+	return sb.String()
 }
 
 // DeleteKittyPlacement returns the escape sequence to delete exactly one
