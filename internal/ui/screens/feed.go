@@ -761,8 +761,9 @@ func (m FeedModel) buildContent() (string, []int, [][]postImageSlot) {
 
 // feedBodyCacheEntry is a memoized renderPostBody result plus the inputs it
 // was computed from, so a stale hit (width resize, bookmark/watch toggle, an
-// edited post body, or the inline-images setting changing) can be detected
-// and recomputed instead of served.
+// edited post body, the inline-images setting changing, or a theme switch
+// recoloring the baked-in ANSI) can be detected and recomputed instead of
+// served.
 type feedBodyCacheEntry struct {
 	body                string
 	imgSlots            []postImageSlot
@@ -771,6 +772,7 @@ type feedBodyCacheEntry struct {
 	watched             bool
 	content             string
 	inlineImagesEnabled bool
+	themeName           string
 }
 
 func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageSlot) {
@@ -778,12 +780,12 @@ func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageS
 	_, watched := m.watchedPostIDs[p.ID]
 
 	body, imgSlots, ok := "", []postImageSlot(nil), false
-	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.inlineImagesEnabled == m.inlineImagesEnabled {
+	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.inlineImagesEnabled == m.inlineImagesEnabled && e.themeName == theme.CurrentName() {
 		body, imgSlots, ok = e.body, e.imgSlots, true
 	}
 	if !ok {
 		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
-		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, inlineImagesEnabled: m.inlineImagesEnabled}
+		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, inlineImagesEnabled: m.inlineImagesEnabled, themeName: theme.CurrentName()}
 	}
 
 	boxStyle := theme.Border
