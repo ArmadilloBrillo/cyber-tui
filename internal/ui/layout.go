@@ -227,6 +227,18 @@ func forceRowsDirty(base string, rows []int) string {
 // full-screen erase) an ordinary scroll already gets for free. This used to
 // be a tea.ClearScreen instead, which does a real full-screen erase and was
 // visibly flashing on every touching selection change.
+//
+// A WezTerm/Windows attempt was made to reorder this so no CSI followed an
+// image's OSC (working around a suspected ConPTY reordering bug,
+// microsoft/terminal#17314) — reverted, since it turned out not to matter:
+// Bubble Tea's own renderer (standard_renderer.go flush(), v1.3.10)
+// unconditionally appends its own trailing CursorPosition CSI after all
+// diffed line content in alt-screen mode, in the same underlying Write()
+// call, regardless of what order this function builds its own content in.
+// That's outside this package's control short of bypassing Bubble Tea's
+// renderer entirely for image writes. See
+// docs/plan-inline-images-improvements.md section 9 — inline/fullscreen
+// images on WezTerm/Windows are a known, accepted limitation.
 func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, rowOrigin, colOrigin int) string {
 	base = forceRowsDirty(base, a.inlineImageStaleRows)
 	var sb strings.Builder

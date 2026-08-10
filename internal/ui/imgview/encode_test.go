@@ -206,6 +206,48 @@ func TestEncodeKitty_ChunksLargePayloads(t *testing.T) {
 	}
 }
 
+// TestEncodeITerm2_DownscalesLargeSourceToTargetBox and its Kitty
+// counterpart below are regression tests for a real bug: EncodeITerm2/
+// EncodeKitty used to PNG-encode the full source resolution regardless of
+// how small the target display box was, relying on the terminal's own
+// scale-to-fit to shrink it visually — wasteful for a small inline
+// thumbnail slot (observed: a 365x512 source produced a 521KB payload for
+// a 6-row inline band). EncodeSixel already downscaled in pixel space
+// first (no terminal-side scale-to-fit to rely on); this confirms
+// EncodeITerm2/EncodeKitty now do the same via the shared downscaleToBox
+// helper — a large noisy (incompressible) source encoded for a small
+// target box should be dramatically smaller than the same source encoded
+// for a target box close to its own size.
+func TestEncodeITerm2_DownscalesLargeSourceToTargetBox(t *testing.T) {
+	img := noisyImage(400, 400)
+	small, _, _, err := imgview.EncodeITerm2(img, 4, 2, 10, 20)
+	if err != nil {
+		t.Fatalf("EncodeITerm2 (small box): %v", err)
+	}
+	large, _, _, err := imgview.EncodeITerm2(img, 200, 200, 10, 20)
+	if err != nil {
+		t.Fatalf("EncodeITerm2 (large box): %v", err)
+	}
+	if len(small) >= len(large)/4 {
+		t.Errorf("EncodeITerm2: small-box payload (%d bytes) not meaningfully smaller than large-box payload (%d bytes) — downscaling doesn't appear to be engaging", len(small), len(large))
+	}
+}
+
+func TestEncodeKitty_DownscalesLargeSourceToTargetBox(t *testing.T) {
+	img := noisyImage(400, 400)
+	small, _, _, err := imgview.EncodeKitty(img, 4, 2, 10, 20, 0)
+	if err != nil {
+		t.Fatalf("EncodeKitty (small box): %v", err)
+	}
+	large, _, _, err := imgview.EncodeKitty(img, 200, 200, 10, 20, 0)
+	if err != nil {
+		t.Fatalf("EncodeKitty (large box): %v", err)
+	}
+	if len(small) >= len(large)/4 {
+		t.Errorf("EncodeKitty: small-box payload (%d bytes) not meaningfully smaller than large-box payload (%d bytes) — downscaling doesn't appear to be engaging", len(small), len(large))
+	}
+}
+
 func TestDeleteKittyPlacement_TargetsExactIDPair(t *testing.T) {
 	seq := imgview.DeleteKittyPlacement(7)
 	if !strings.HasPrefix(seq, "\x1b_G") || !strings.HasSuffix(seq, "\x1b\\") {

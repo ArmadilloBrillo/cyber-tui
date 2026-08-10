@@ -27,13 +27,13 @@ func EncodeITerm2(img image.Image, maxCols, maxRows, cellPxW, cellPxH int) (enco
 	bounds := img.Bounds()
 	w := bounds.Max.X - bounds.Min.X
 	h := bounds.Max.Y - bounds.Min.Y
+	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH)
 
 	var buf bytes.Buffer
-	if encErr := png.Encode(&buf, img); encErr != nil {
+	if encErr := png.Encode(&buf, downscaleToBox(img, cols, rows, cellPxW, cellPxH)); encErr != nil {
 		return "", 0, 0, fmt.Errorf("imgview: png encode: %w", encErr)
 	}
 	payload := base64.StdEncoding.EncodeToString(buf.Bytes())
-	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH)
 	// width/height without suffix means terminal character cells in iTerm2.
 	// doNotMoveCursor=1 is a WezTerm extension (ignored by real iTerm2, which
 	// tolerates unknown keys): without it, WezTerm scrolls its whole screen
