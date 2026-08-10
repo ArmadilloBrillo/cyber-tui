@@ -129,26 +129,26 @@ func (l MillerLayout) View(a App) string {
 // Feed's detail pane in particular has no other source of truth for its
 // current width, since it's derived fresh from paneWidths on every View()
 // call rather than stored anywhere Update() can see.
-func (l MillerLayout) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int) {
+func (l MillerLayout) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int, string) {
 	const rowOrigin = 2 // 1: header row, so content's own row 0 is ANSI row 2
 	contentH := a.height - 1 - millerHeaderHeight
 	contentW := a.width - millerSidebarWidth
 
 	if r := l.activeCompactRenderer(a); r != nil {
 		if a.active != screenFeed {
-			return nil, 0, 0
+			return nil, 0, 0, ""
 		}
 		listW, detailW := l.paneWidths(contentW)
 		if cc, ok := r.(CompactComposer); ok && cc.ComposeActive() {
 			contentH = max(0, contentH-cc.ComposeHeight())
 		}
 		colOrigin := millerSidebarWidth + 1 + listW + 1
-		return a.feed.VisibleDetailInlineImages(detailW, contentH), rowOrigin, colOrigin
+		return a.feed.VisibleDetailInlineImages(detailW, contentH), rowOrigin, colOrigin, a.feed.DetailSelectionKey()
 	}
 	if a.active == screenPostDetail {
-		return a.postDetail.VisibleInlineImages(), rowOrigin, millerSidebarWidth + 1
+		return a.postDetail.VisibleInlineImages(), rowOrigin, millerSidebarWidth + 1, a.postDetail.SelectedReplyID()
 	}
-	return nil, 0, 0
+	return nil, 0, 0, ""
 }
 
 func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {

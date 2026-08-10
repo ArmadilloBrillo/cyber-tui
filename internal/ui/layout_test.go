@@ -536,8 +536,8 @@ func (f fakeModalRenderer) renderPathPrompt(a App) string  { return "" }
 func (f fakeModalRenderer) renderHelpModal(a App) string   { return "" }
 func (f fakeModalRenderer) renderURLPicker(a App) string   { return "" }
 func (f fakeModalRenderer) renderImageModal(a App) string  { return "" }
-func (f fakeModalRenderer) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int) {
-	return f.slots, f.rowOrigin, f.colOrigin
+func (f fakeModalRenderer) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int, string) {
+	return f.slots, f.rowOrigin, f.colOrigin, ""
 }
 
 // TestCompositeOverlays_KittyCleanupFallsThroughToInlineImages is a
@@ -612,7 +612,7 @@ func TestMillerLayoutView_InjectsInlineImages(t *testing.T) {
 	}, "")
 	a.feed, _ = a.feed.Update(screens.FeedDetailRepliesMsg{PostID: "p1", Replies: nil})
 
-	slots, _, _ := MillerLayout{}.InlineImageSlots(a)
+	slots, _, _, _ := MillerLayout{}.InlineImageSlots(a)
 	if len(slots) != 1 {
 		t.Fatalf("setup: expected 1 slot from Miller's Feed detail pane, got %d: %+v", len(slots), slots)
 	}

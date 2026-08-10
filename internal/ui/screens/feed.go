@@ -992,6 +992,26 @@ func (m FeedModel) IsAtTop() bool { return m.selectedIndex == 0 }
 // PostCount returns the number of currently visible posts (respects NSFW filter).
 func (m FeedModel) PostCount() int { return len(m.visiblePosts()) }
 
+// SelectedPostID returns the ID of the currently selected post in the list,
+// or "" if none — used by App to detect a selection-only move that doesn't
+// otherwise change VisibleInlineImages' signature (a selection change
+// recolors the (de)selected card's border, including its inline-image band
+// rows, without moving anything).
+func (m FeedModel) SelectedPostID() string {
+	visible := m.visiblePosts()
+	if m.selectedIndex < 0 || m.selectedIndex >= len(visible) {
+		return ""
+	}
+	return visible[m.selectedIndex].ID
+}
+
+// DetailSelectionKey is SelectedPostID's Miller-detail-pane analog: it also
+// folds in detailReplyIndex, since the detail pane's reply-border
+// highlighting depends on it just like selectedIndex does for list cards.
+func (m FeedModel) DetailSelectionKey() string {
+	return fmt.Sprintf("%s:%d", m.SelectedPostID(), m.detailReplyIndex)
+}
+
 // NextCursor returns the pagination cursor for the next page of feed posts.
 func (m FeedModel) NextCursor() string { return m.nextCursor }
 

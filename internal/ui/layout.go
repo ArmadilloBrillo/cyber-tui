@@ -30,13 +30,15 @@ type Layout interface {
 	// column at the given terminal height. Returns 0 if the layout has no compact list column.
 	// App uses this to auto-fetch additional pages after the initial load.
 	NeedsCompactAutoFill(termHeight int) int
-	// InlineImageSlots returns the active screen's visible inline-image slots
-	// and this layout's screen origin for them — see modalRenderer's method
-	// of the same name (Layout and modalRenderer both need it: App.syncInlineImages
-	// calls it via the Layout interface to know what to fetch, independent of
-	// rendering, while compositeOverlays calls it via modalRenderer to know
-	// where to composite the result).
-	InlineImageSlots(a App) (slots []screens.InlineImageSlot, rowOrigin, colOrigin int)
+	// InlineImageSlots returns the active screen's visible inline-image slots,
+	// this layout's screen origin for them, and a selection identity for the
+	// active screen — see modalRenderer's method of the same name (Layout and
+	// modalRenderer both need it: App.syncInlineImages calls it via the
+	// Layout interface to know what to fetch and to detect a selection-only
+	// move that requires a repaint, independent of rendering, while
+	// compositeOverlays calls it via modalRenderer to know where to composite
+	// the result).
+	InlineImageSlots(a App) (slots []screens.InlineImageSlot, rowOrigin, colOrigin int, selKey string)
 }
 
 // modalRenderer is implemented by both TabsLayout and MillerLayout so
@@ -57,8 +59,10 @@ type modalRenderer interface {
 	// InlineImageSlots returns the active screen's visible inline-image
 	// slots plus this layout's screen origin (rowOrigin, colOrigin) for
 	// them — the origin varies per layout (and, within Miller, per screen)
-	// since it depends on chrome that differs between layouts.
-	InlineImageSlots(a App) (slots []screens.InlineImageSlot, rowOrigin, colOrigin int)
+	// since it depends on chrome that differs between layouts. selKey is
+	// unused by compositeOverlays (it only needs positioning) but is part of
+	// the signature since this is the same physical method as Layout's.
+	InlineImageSlots(a App) (slots []screens.InlineImageSlot, rowOrigin, colOrigin int, selKey string)
 }
 
 // compositeOverlays applies every overlay — the five simple modals, the
@@ -126,7 +130,7 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		}
 		base = strings.Join(lines, "\n")
 	}
-	slots, rowOrigin, colOrigin := l.InlineImageSlots(a)
+	slots, rowOrigin, colOrigin, _ := l.InlineImageSlots(a)
 	if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 {
 		return injectInlineImages(a, base, slots, rowOrigin, colOrigin)
 	}

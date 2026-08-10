@@ -14,7 +14,7 @@ import (
 func TestEncodeKitty_ContainsAPC(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.Set(0, 0, color.RGBA{R: 255, A: 255})
-	seq, cols, rows, err := imgview.EncodeKitty(img, 40, 20, 0)
+	seq, cols, rows, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestEncodeKitty_ContainsAPC(t *testing.T) {
 func TestEncodeKitty_CapsRows(t *testing.T) {
 	// Tall portrait image: without a row cap this would need 50 rows at 10 cols.
 	img := image.NewRGBA(image.Rect(0, 0, 100, 1000))
-	_, cols, rows, err := imgview.EncodeKitty(img, 40, 20, 0)
+	_, cols, rows, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestEncodeKitty_PrependsDeleteAllPlacements(t *testing.T) {
 	// close-cleanup frame never reached the terminal (e.g. dropped behind a
 	// slow flush of a large prior image).
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0)
+	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestEncodeKitty_PrependsDeleteAllPlacements(t *testing.T) {
 
 	// Back-to-back calls (as would happen opening several images in a row)
 	// must each still lead with the delete-all command.
-	seq2, _, _, err := imgview.EncodeKitty(img, 40, 20, 0)
+	seq2, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestEncodeKitty_PrependsDeleteAllPlacements(t *testing.T) {
 // target it precisely later.
 func TestEncodeKitty_NamedPlacement_NeverBluntDeletes(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 7)
+	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 7)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestEncodeKitty_NamedPlacement_NeverBluntDeletes(t *testing.T) {
 func TestEncodeKitty_SuppressesTerminalResponse(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 
-	seqAnon, _, _, err := imgview.EncodeKitty(img, 40, 20, 0)
+	seqAnon, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestEncodeKitty_SuppressesTerminalResponse(t *testing.T) {
 		t.Errorf("anonymous-mode EncodeKitty must set q=2, got %q", seqAnon)
 	}
 
-	seqNamed, _, _, err := imgview.EncodeKitty(img, 40, 20, 7)
+	seqNamed, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 7)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestEncodeKitty_SuppressesTerminalResponse(t *testing.T) {
 func TestEncodeKitty_UsesPNGFormat(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
 	img.Set(1, 1, color.RGBA{B: 255, A: 255})
-	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0)
+	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestDeleteKittyPlacement_TargetsExactIDPair(t *testing.T) {
 func TestEncodeITerm2_ContainsOSC(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.Set(0, 0, color.RGBA{G: 255, A: 255})
-	seq, cols, rows, err := imgview.EncodeITerm2(img, 80, 40)
+	seq, cols, rows, err := imgview.EncodeITerm2(img, 80, 40, 0, 0)
 	if err != nil {
 		t.Fatalf("EncodeITerm2: %v", err)
 	}
@@ -183,6 +183,48 @@ func TestEncodeITerm2_ContainsOSC(t *testing.T) {
 	}
 	if rows < 1 {
 		t.Errorf("EncodeITerm2: rows=%d, want >= 1", rows)
+	}
+}
+
+// TestEncodeITerm2_UsesRealCellSize mirrors TestEncodeSixel_UsesRealCellSize:
+// a 4x larger real cell size should need fewer cols/rows than the default
+// assumed cell size, confirming cellPxW/cellPxH actually drives the sizing
+// math (and, unlike Kitty, directly determines how much blank space iTerm2's
+// preserveAspectRatio letterboxing leaves — see EncodeITerm2's doc comment).
+func TestEncodeITerm2_UsesRealCellSize(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 400, 400))
+	_, defaultCols, defaultRows, err := imgview.EncodeITerm2(img, 200, 200, 0, 0)
+	if err != nil {
+		t.Fatalf("EncodeITerm2 (default cell size): %v", err)
+	}
+	_, largeCellCols, largeCellRows, err := imgview.EncodeITerm2(img, 200, 200, 40, 80)
+	if err != nil {
+		t.Fatalf("EncodeITerm2 (large cell size): %v", err)
+	}
+	if largeCellCols >= defaultCols {
+		t.Errorf("EncodeITerm2: cols with a 4x larger cell size = %d, want < default cols = %d", largeCellCols, defaultCols)
+	}
+	if largeCellRows >= defaultRows {
+		t.Errorf("EncodeITerm2: rows with a 4x larger cell size = %d, want < default rows = %d", largeCellRows, defaultRows)
+	}
+}
+
+// TestEncodeKitty_UsesRealCellSize mirrors TestEncodeSixel_UsesRealCellSize.
+func TestEncodeKitty_UsesRealCellSize(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 400, 400))
+	_, defaultCols, defaultRows, err := imgview.EncodeKitty(img, 200, 200, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("EncodeKitty (default cell size): %v", err)
+	}
+	_, largeCellCols, largeCellRows, err := imgview.EncodeKitty(img, 200, 200, 40, 80, 0)
+	if err != nil {
+		t.Fatalf("EncodeKitty (large cell size): %v", err)
+	}
+	if largeCellCols >= defaultCols {
+		t.Errorf("EncodeKitty: cols with a 4x larger cell size = %d, want < default cols = %d", largeCellCols, defaultCols)
+	}
+	if largeCellRows >= defaultRows {
+		t.Errorf("EncodeKitty: rows with a 4x larger cell size = %d, want < default rows = %d", largeCellRows, defaultRows)
 	}
 }
 

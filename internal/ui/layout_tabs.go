@@ -50,8 +50,8 @@ func (l TabsLayout) View(a App) string {
 // this layout's fixed screen origin for them: row 1 is the tab bar, row 2 the
 // feed-pending/separator row, so content's own row 0 is ANSI row 3; column 1
 // is the content pane's left edge (no left margin in this layout).
-func (l TabsLayout) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int) {
-	return a.activeInlineImageSlots(), 3, 1
+func (l TabsLayout) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int, string) {
+	return a.activeInlineImageSlots(), 3, 1, a.activeSelectionKey()
 }
 
 // HandleNav processes navigation key presses for the tabs layout: the "1"-"9"

@@ -2429,14 +2429,36 @@ func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
 	}
 }
 
-// inlineImageSignature summarizes a slot list's identity and position —
-// used to detect "did the visible set of inline images change at all this
-// frame" cheaply, without deep-comparing slices.
-func inlineImageSignature(slots []screens.InlineImageSlot) string {
+// activeSelectionKey returns an identity for whatever's currently selected on
+// the active screen — used alongside inlineImageSignature so a selection-only
+// move (no slot's Key/Row changes, e.g. arrow-selecting an already-visible
+// post) still invalidates the iTerm2/Sixel repaint signature: selection
+// changes the (de)selected card's border color across every one of its
+// lines, including its inline-image band rows, which erases the image
+// pixels there without moving anything syncInlineImages already tracks.
+func (a App) activeSelectionKey() string {
+	switch a.active {
+	case screenPostDetail:
+		return a.postDetail.SelectedReplyID()
+	case screenFeed:
+		return a.feed.SelectedPostID()
+	default:
+		return ""
+	}
+}
+
+// inlineImageSignature summarizes a slot list's identity, position, and the
+// active screen's selection — used to detect "did anything change that could
+// have erased or moved an on-screen image this frame" cheaply, without
+// deep-comparing slices. selKey is folded in because a selection move can
+// erase an image without changing any slot's Key/Row (see
+// activeSelectionKey).
+func inlineImageSignature(slots []screens.InlineImageSlot, selKey string) string {
 	var sb strings.Builder
 	for _, s := range slots {
 		fmt.Fprintf(&sb, "%s@%d;", s.Key, s.Row)
 	}
+	sb.WriteString(selKey)
 	return sb.String()
 }
 
@@ -2541,8 +2563,9 @@ func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[in
 // handling).
 func (a App) syncInlineImages() (App, tea.Cmd) {
 	var slots []screens.InlineImageSlot
+	var selKey string
 	if a.canInlineImages() {
-		slots, _, _ = a.layout.InlineImageSlots(a)
+		slots, _, _, selKey = a.layout.InlineImageSlots(a)
 	}
 	var cmds []tea.Cmd
 
@@ -2555,7 +2578,7 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 			delete(a.pendingKittyDeletes, id)
 		}
 		a.pendingKittyDeletes = accumulateKittyDeletes(a.pendingKittyDeletes, toDelete)
-	} else if sig := inlineImageSignature(slots); sig != a.inlineImageLastSig {
+	} else if sig := inlineImageSignature(slots, selKey); sig != a.inlineImageLastSig {
 		a.inlineImageLastSig = sig
 		cmds = append(cmds, tea.ClearScreen)
 	}
@@ -2612,14 +2635,14 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, place
 			return inlineImageFetchedMsg{key: key, err: err}
 		}
 		var encoded string
+		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 		switch proto {
 		case imgview.ProtocolITerm2:
-			encoded, _, _, err = imgview.EncodeITerm2(img, maxCols, maxRows)
+			encoded, _, _, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH)
 		case imgview.ProtocolSixel:
-			cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 			encoded, _, _, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH)
 		case imgview.ProtocolKitty:
-			encoded, _, _, err = imgview.EncodeKitty(img, maxCols, maxRows, placementID)
+			encoded, _, _, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID)
 		default:
 			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
 		}
@@ -2754,23 +2777,23 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 		}
 		encodedFrames := make([]string, len(frames))
 		var cols, rows int
+		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 		for i, img := range frames {
 			switch proto {
 			case imgview.ProtocolKitty:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, kittyModalPlacementID)
+				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, cellW, cellH, kittyModalPlacementID)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			case imgview.ProtocolITerm2:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows)
+				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows, cellW, cellH)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			case imgview.ProtocolSixel:
 				var err error
-				cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}

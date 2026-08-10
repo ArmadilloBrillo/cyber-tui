@@ -27,7 +27,16 @@ import (
 //     a=T again with the same id/placement (e.g. after scrolling) replaces
 //     the existing placement in place per the protocol spec — this is how
 //     an inline image "moves" without a separate reposition command.
-func EncodeKitty(img image.Image, maxCols, maxRows, placementID int) (encoded string, cols, rows int, err error) {
+//
+// cellPxW/cellPxH is the terminal's real cell pixel size (from
+// TerminalCellPixelSize); if <= 0 (real size unavailable), falls back to the
+// assumed default cell size. Kitty stretches the image to exactly fill the
+// computed c/r box regardless, so this only affects how closely the aspect
+// ratio is preserved, not whether blank space appears.
+func EncodeKitty(img image.Image, maxCols, maxRows, cellPxW, cellPxH, placementID int) (encoded string, cols, rows int, err error) {
+	if cellPxW <= 0 || cellPxH <= 0 {
+		cellPxW, cellPxH = pxPerCol, 2*pxPerCol
+	}
 	bounds := img.Bounds()
 	w := bounds.Max.X - bounds.Min.X
 	h := bounds.Max.Y - bounds.Min.Y
@@ -37,7 +46,7 @@ func EncodeKitty(img image.Image, maxCols, maxRows, placementID int) (encoded st
 		return "", 0, 0, fmt.Errorf("imgview: png encode: %w", encErr)
 	}
 	payload := base64.StdEncoding.EncodeToString(buf.Bytes())
-	cols, rows = fitBox(w, h, maxCols, maxRows, pxPerCol, 2*pxPerCol)
+	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH)
 	// a=T: transmit and display. f=100: PNG-encoded payload — no s=/v= needed,
 	// the terminal reads pixel dimensions from the PNG data itself (unlike the
 	// raw-RGBA f=32 this used to send, which required them explicitly). c/r:

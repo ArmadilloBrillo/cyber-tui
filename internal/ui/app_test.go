@@ -2912,18 +2912,26 @@ func TestHandlePathPrompt_Import_Failure_NotifiesAndLeavesCustomPaletteUntouched
 func TestInlineImageSignature_DistinguishesPositionAndIdentity(t *testing.T) {
 	a := []screens.InlineImageSlot{{Key: "post:p1", Row: 3}, {Key: "reply:r1", Row: 20}}
 	b := []screens.InlineImageSlot{{Key: "post:p1", Row: 3}, {Key: "reply:r1", Row: 20}}
-	if inlineImageSignature(a) != inlineImageSignature(b) {
-		t.Error("expected identical slot lists to produce the same signature")
+	if inlineImageSignature(a, "p1") != inlineImageSignature(b, "p1") {
+		t.Error("expected identical slot lists and selection to produce the same signature")
 	}
 
 	scrolled := []screens.InlineImageSlot{{Key: "post:p1", Row: 2}, {Key: "reply:r1", Row: 19}}
-	if inlineImageSignature(a) == inlineImageSignature(scrolled) {
+	if inlineImageSignature(a, "p1") == inlineImageSignature(scrolled, "p1") {
 		t.Error("expected a scroll (Row change) to change the signature")
 	}
 
 	oneGone := []screens.InlineImageSlot{{Key: "post:p1", Row: 3}}
-	if inlineImageSignature(a) == inlineImageSignature(oneGone) {
+	if inlineImageSignature(a, "p1") == inlineImageSignature(oneGone, "p1") {
 		t.Error("expected a removed slot to change the signature")
+	}
+
+	// A selection-only move (no slot's Key/Row changes) must still change the
+	// signature: the (de)selected card's border color changes across every
+	// line, including any inline-image band rows, which erases the image
+	// pixels there without moving anything the Row/Key comparison would catch.
+	if inlineImageSignature(a, "p1") == inlineImageSignature(a, "r1") {
+		t.Error("expected a selection change with unchanged slots to change the signature")
 	}
 }
 
