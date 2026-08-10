@@ -12,9 +12,13 @@ import (
 // docs/plan-inline-images-improvements.md §9): every graphics protocol this
 // app supports turned up a confirmed or documented Windows-specific
 // rendering bug, so the notice is scoped to the OS, not a specific
-// terminal — it should fire whenever images are enabled on Windows,
-// regardless of TERM_PROGRAM, and never fire on other platforms or when the
-// user has already opted into browser-based viewing.
+// terminal or even a successfully detected protocol — it should fire
+// whenever the user has terminal image viewing enabled on Windows,
+// regardless of TERM_PROGRAM or whether imgview.DetectProtocol happened to
+// recognize the terminal (mintty/Git Bash sets no TERM_PROGRAM at all and
+// detects as ProtocolNone, but still goes through the same ConPTY layer as
+// any other Windows terminal) — and never fire on other platforms or when
+// the user has already opted into browser-based viewing.
 func TestLoginSuccess_WindowsImageNotice(t *testing.T) {
 	base := func() App {
 		a := newTestApp()
@@ -47,12 +51,16 @@ func TestLoginSuccess_WindowsImageNotice(t *testing.T) {
 		}
 	})
 
-	t.Run("does not fire when no graphics protocol detected", func(t *testing.T) {
+	t.Run("still fires when no graphics protocol was detected (e.g. Git Bash/mintty)", func(t *testing.T) {
 		a := base()
 		a.graphicsProtocol = imgview.ProtocolNone
 		a, _, _ = a.handleAuth(loginSuccessMsg{})
-		if a.notifyText != "" {
-			t.Errorf("notifyText = %q, want empty when no protocol detected", a.notifyText)
+		if runtime.GOOS == "windows" {
+			if a.notifyText == "" {
+				t.Error("expected the notice even when DetectProtocol found nothing, on Windows")
+			}
+		} else if a.notifyText != "" {
+			t.Errorf("notifyText = %q, want empty on non-Windows", a.notifyText)
 		}
 	})
 

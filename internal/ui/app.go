@@ -923,11 +923,17 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 		// during the WezTerm/ConPTY investigation (see
 		// docs/plan-inline-images-improvements.md §9) — not fixable from
 		// here, so surface it rather than silently leaving images broken.
-		// Fired here (not Init()) since the notify banner only renders in
-		// the post-login layouts and has a short TTL that would tick away
-		// unseen during login if set any earlier.
-		if !a.ephemeral && a.graphicsProtocol != imgview.ProtocolNone &&
-			a.imageViewer != "browser" && runtime.GOOS == "windows" {
+		// Deliberately does NOT require a.graphicsProtocol != ProtocolNone:
+		// that's our own detection heuristic succeeding (env-var based, see
+		// imgview.DetectProtocol), not the user's intent — mintty/Git Bash on
+		// Windows, for one, sets no TERM_PROGRAM at all and detects as
+		// ProtocolNone, but still goes through the same ConPTY layer as any
+		// other Windows terminal, so the user should still be warned if
+		// they've asked for terminal image viewing. Fired here (not Init())
+		// since the notify banner only renders in the post-login layouts and
+		// has a short TTL that would tick away unseen during login if set
+		// any earlier.
+		if !a.ephemeral && a.imageViewer != "browser" && runtime.GOOS == "windows" {
 			var notifyCmd tea.Cmd
 			a, notifyCmd = a.notify(notifyWarn, "images may not render correctly on Windows (known ConPTY issue) — try Settings → Image Viewer: browser")
 			return a, tea.Batch(loginCmd, notifyCmd), true
