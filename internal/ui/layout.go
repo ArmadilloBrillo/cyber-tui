@@ -194,11 +194,20 @@ func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, row
 	// Iterated in sorted key order: Go map iteration is randomized, and a
 	// non-deterministic byte order here would make Bubble Tea's line-diff
 	// think this line changed even when the erasure set itself didn't.
+	// Uses ansi.EraseCharacter (CSI n X) rather than literal spaces: this
+	// whole line's bytes are counted by Bubble Tea's ansi.Truncate against
+	// the terminal's printable-width budget before being written, and a
+	// slot-sized run of literal spaces (MaxCols x MaxRows, several times the
+	// terminal's own width) blows that budget — truncating mid-erasure and
+	// silently dropping everything after it on the line, including the
+	// current-frame image redraws and the paint-gen marker below. CSI
+	// sequences are zero-width to that budget, so this erases without
+	// consuming it.
 	for _, key := range sortedInlineImageEraseKeys(a.pendingInlineImageErasures) {
 		r := a.pendingInlineImageErasures[key]
-		blank := strings.Repeat(" ", r.Cols)
+		erase := ansi.EraseCharacter(r.Cols)
 		for i := 0; i < r.Rows; i++ {
-			sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", r.Row+i, r.Col, blank))
+			sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", r.Row+i, r.Col, erase))
 		}
 	}
 	for _, slot := range slots {

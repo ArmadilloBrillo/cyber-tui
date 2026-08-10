@@ -619,12 +619,12 @@ func TestInjectInlineImages_BlanksPendingErasures(t *testing.T) {
 	a := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, pendingInlineImageErasures: pending}
 
 	out := injectInlineImages(a, "base", nil, 0, 0)
-	blank := strings.Repeat(" ", 20)
+	erase := ansi.EraseCharacter(20)
 	for i := 0; i < 3; i++ {
-		if want := fmt.Sprintf("\x1b[%d;9H%s", 6+i, blank); !strings.Contains(out, want) {
+		if want := fmt.Sprintf("\x1b[%d;9H%s", 6+i, erase); !strings.Contains(out, want) {
 			t.Errorf("expected blank-fill %q for post:p1:0's rect in output, got %q", want, out)
 		}
-		if want := fmt.Sprintf("\x1b[%d;9H%s", 12+i, blank); !strings.Contains(out, want) {
+		if want := fmt.Sprintf("\x1b[%d;9H%s", 12+i, erase); !strings.Contains(out, want) {
 			t.Errorf("expected blank-fill %q for reply:r1:0's rect in output, got %q", want, out)
 		}
 	}

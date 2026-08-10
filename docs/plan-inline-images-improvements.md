@@ -168,3 +168,19 @@ not one atomic replace). Two fixes were considered and rejected:
   `feed.go`/`postdetail.go`. Judged too large/risky for the cosmetic gain; revisit if this
   flash becomes a bigger complaint or the border-rendering code gets touched for other
   reasons anyway.
+
+**Follow-up fix**: the stale-partial-pixels fix above (`5dd18aa`'s
+`pendingInlineImageErasures`) turned out to still leave ghost pixels on real iTerm2,
+reported after pulling `dev` to a Mac. Root cause: `injectInlineImages` blank-filled
+stale rects with literal repeated space characters, and everything this function builds
+is deliberately packed onto one physical line (see the doc comment on
+`injectInlineImages`) so Bubble Tea's per-line diff treats it as one unit. But Bubble
+Tea's renderer (`standard_renderer.go`, `ansi.Truncate`) truncates every line to the
+terminal's printable-width budget before writing it, and literal spaces count against
+that budget while CSI/OSC escapes don't. A single pending erasure's blank-fill
+(`MaxCols x MaxRows`, several times the terminal's own width) blew that budget on
+essentially every real scroll, truncating mid-erasure and silently dropping the
+current-frame image redraws and the `inlineImagePaintGen` marker that followed it in
+the same builder. Fixed by swapping the literal-space blank-fill for
+`ansi.EraseCharacter` (`CSI n X`), which erases the same cells but is zero-width to the
+truncation budget like the function's other CSI sequences already were.
