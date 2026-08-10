@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -132,22 +131,29 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		base = strings.Join(lines, "\n")
 	}
 	slots, rowOrigin, colOrigin, _ := l.InlineImageSlots(a)
-	if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 || len(a.pendingInlineImageErasures) > 0 {
+	if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 || len(a.inlineImageStaleRows) > 0 {
 		return injectInlineImages(a, base, slots, rowOrigin, colOrigin)
 	}
 	return base
 }
 
-// sortedInlineImageEraseKeys returns pending's keys in sorted order — see
-// injectInlineImages' doc comment for why deterministic iteration order
-// matters here (Go map iteration is randomized).
-func sortedInlineImageEraseKeys(pending map[string]inlineImageRect) []string {
-	keys := make([]string, 0, len(pending))
-	for k := range pending {
-		keys = append(keys, k)
+// forceRowsDirty appends an inert SGR-reset marker to each of the given
+// absolute (1-indexed) rows in base, forcing Bubble Tea's per-line diff to
+// resend that row's real, always-correct content instead of leaving whatever
+// an earlier out-of-band inline-image write left behind — see
+// syncInlineImageErasures. Mirrors the Kitty-modal-cleanup line edit above
+// (strings.Split/Join by "\n", index by absolute row - 1).
+func forceRowsDirty(base string, rows []int) string {
+	if len(rows) == 0 {
+		return base
 	}
-	sort.Strings(keys)
-	return keys
+	lines := strings.Split(base, "\n")
+	for _, row := range rows {
+		if idx := row - 1; idx >= 0 && idx < len(lines) {
+			lines[idx] += "\x1b[0m"
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // injectInlineImages appends absolute-cursor-positioned escape sequences for
@@ -165,16 +171,23 @@ func sortedInlineImageEraseKeys(pending map[string]inlineImageRect) []string {
 // when slots is empty: a delete can be pending with nothing currently
 // visible (e.g. every inline image just scrolled off-screen).
 //
-// Everything this function builds lands on one physical line — the whole
-// return value is appended after base's last "\n", so Bubble Tea's renderer
-// treats it as a single line in its per-frame line-diff. That diff skips
-// resending a line whose bytes are byte-identical to last frame
-// (canSkip in bubbletea's standard_renderer.go) — normally the right call,
-// but for iTerm2/Sixel it's actively wrong when a selection change recolors
-// a band row elsewhere without touching which images are visible or their
-// cache contents: this line's bytes don't change, so the diff skips it, and
-// the image's raster pixels (already overwritten by the recolored band
-// row's own line, written earlier in the same frame) never get repainted.
+// A moved or removed image's stale rows (a.inlineImageStaleRows — see
+// syncInlineImageErasures) are forced dirty in base directly, via
+// forceRowsDirty, before any of the below is appended — that goes through
+// Bubble Tea's own per-line diff/resend for those specific lines, so it's
+// unaffected by the "one physical line" note below.
+//
+// Everything else this function builds — image draws, Kitty deletes, the
+// trailing paint-gen marker — lands on one physical line: the whole return
+// value is appended after base's last "\n", so Bubble Tea's renderer treats
+// it as a single line in its per-frame line-diff. That diff skips resending
+// a line whose bytes are byte-identical to last frame (canSkip in
+// bubbletea's standard_renderer.go) — normally the right call, but for
+// iTerm2/Sixel it's actively wrong when a selection change recolors a band
+// row elsewhere without touching which images are visible or their cache
+// contents: this line's bytes don't change, so the diff skips it, and the
+// image's raster pixels (already overwritten by the recolored band row's
+// own line, written earlier in the same frame) never get repainted.
 // syncInlineImages tracks that condition and bumps inlineImagePaintGen when
 // it happens; the trailing inert SGR-reset below toggles in step with that
 // generation purely to make this line's bytes differ from last frame on
@@ -184,32 +197,9 @@ func sortedInlineImageEraseKeys(pending map[string]inlineImageRect) []string {
 // be a tea.ClearScreen instead, which does a real full-screen erase and was
 // visibly flashing on every touching selection change.
 func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, rowOrigin, colOrigin int) string {
+	base = forceRowsDirty(base, a.inlineImageStaleRows)
 	var sb strings.Builder
 	sb.WriteString(base)
-	// Blank-fill every pending erasure (a moved or removed image's stale
-	// on-screen rectangle — see syncInlineImageErasures) before drawing
-	// current slots, so a real scroll's old image position is explicitly
-	// cleared rather than relying on incidental line-diff overwrite (which
-	// misses it whenever old and new footprints only partially overlap).
-	// Iterated in sorted key order: Go map iteration is randomized, and a
-	// non-deterministic byte order here would make Bubble Tea's line-diff
-	// think this line changed even when the erasure set itself didn't.
-	// Uses ansi.EraseCharacter (CSI n X) rather than literal spaces: this
-	// whole line's bytes are counted by Bubble Tea's ansi.Truncate against
-	// the terminal's printable-width budget before being written, and a
-	// slot-sized run of literal spaces (MaxCols x MaxRows, several times the
-	// terminal's own width) blows that budget — truncating mid-erasure and
-	// silently dropping everything after it on the line, including the
-	// current-frame image redraws and the paint-gen marker below. CSI
-	// sequences are zero-width to that budget, so this erases without
-	// consuming it.
-	for _, key := range sortedInlineImageEraseKeys(a.pendingInlineImageErasures) {
-		r := a.pendingInlineImageErasures[key]
-		erase := ansi.EraseCharacter(r.Cols)
-		for i := 0; i < r.Rows; i++ {
-			sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", r.Row+i, r.Col, erase))
-		}
-	}
 	for _, slot := range slots {
 		encoded, ok := a.inlineImageCache[inlineImageCacheKey(slot, a.graphicsProtocol)]
 		if !ok {

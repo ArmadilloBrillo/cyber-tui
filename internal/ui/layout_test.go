@@ -603,42 +603,50 @@ func TestInjectInlineImages_PaintGenTogglesTrailingLineBytes(t *testing.T) {
 	}
 }
 
-// TestInjectInlineImages_BlanksPendingErasures confirms a pending erasure
-// (a moved or removed image's stale rectangle — see
-// syncInlineImageErasures) actually produces blank-fill escape sequences in
-// injectInlineImages' output, and that iteration order is deterministic —
-// two calls with equal-content but distinct map instances (Go map
-// iteration is randomized) must produce byte-identical output, since a
-// non-deterministic byte order would make Bubble Tea's line-diff think the
-// line changed even when the erasure set itself didn't.
-func TestInjectInlineImages_BlanksPendingErasures(t *testing.T) {
-	pending := map[string]inlineImageRect{
-		"post:p1:0":  {Row: 6, Col: 9, Cols: 20, Rows: 3},
-		"reply:r1:0": {Row: 12, Col: 9, Cols: 20, Rows: 3},
+// TestForceRowsDirty confirms it appends the inert SGR-reset marker to
+// exactly the requested absolute rows (1-indexed) of base, leaving every
+// other line untouched, and is a no-op for a row index out of base's range.
+func TestForceRowsDirty(t *testing.T) {
+	lines := make([]string, 15)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line%d", i+1)
 	}
-	a := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, pendingInlineImageErasures: pending}
+	base := strings.Join(lines, "\n")
 
-	out := injectInlineImages(a, "base", nil, 0, 0)
-	erase := ansi.EraseCharacter(20)
-	for i := 0; i < 3; i++ {
-		if want := fmt.Sprintf("\x1b[%d;9H%s", 6+i, erase); !strings.Contains(out, want) {
-			t.Errorf("expected blank-fill %q for post:p1:0's rect in output, got %q", want, out)
-		}
-		if want := fmt.Sprintf("\x1b[%d;9H%s", 12+i, erase); !strings.Contains(out, want) {
-			t.Errorf("expected blank-fill %q for reply:r1:0's rect in output, got %q", want, out)
-		}
+	out := forceRowsDirty(base, []int{6, 12, 999})
+	outLines := strings.Split(out, "\n")
+	if outLines[5] != "line6\x1b[0m" {
+		t.Errorf("expected row 6 forced dirty, got %q", outLines[5])
 	}
+	if outLines[11] != "line12\x1b[0m" {
+		t.Errorf("expected row 12 forced dirty, got %q", outLines[11])
+	}
+	if outLines[0] != "line1" {
+		t.Errorf("expected row 1 untouched, got %q", outLines[0])
+	}
+	if len(outLines) != len(lines) {
+		t.Errorf("expected out-of-range row 999 to be ignored, got %d lines want %d", len(outLines), len(lines))
+	}
+}
 
-	// A fresh map instance with the same logical contents (different
-	// insertion order, since Go maps don't preserve one) must still
-	// produce byte-identical output.
-	pending2 := map[string]inlineImageRect{
-		"reply:r1:0": {Row: 12, Col: 9, Cols: 20, Rows: 3},
-		"post:p1:0":  {Row: 6, Col: 9, Cols: 20, Rows: 3},
+// TestInjectInlineImages_ForcesStaleRowsDirty confirms App.inlineImageStaleRows
+// (a moved or removed image's stale rows — see syncInlineImageErasures)
+// actually reaches base via forceRowsDirty in injectInlineImages' output,
+// rather than the old out-of-band blank-fill.
+func TestInjectInlineImages_ForcesStaleRowsDirty(t *testing.T) {
+	lines := make([]string, 15)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line%d", i+1)
 	}
-	a2 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, pendingInlineImageErasures: pending2}
-	if out2 := injectInlineImages(a2, "base", nil, 0, 0); out2 != out {
-		t.Errorf("expected deterministic output regardless of map insertion order, got %q vs %q", out2, out)
+	base := strings.Join(lines, "\n")
+	a := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageStaleRows: []int{6, 12}}
+
+	out := injectInlineImages(a, base, nil, 0, 0)
+	if !strings.Contains(out, "line6\x1b[0m") {
+		t.Errorf("expected row 6 forced dirty in output, got %q", out)
+	}
+	if !strings.Contains(out, "line12\x1b[0m") {
+		t.Errorf("expected row 12 forced dirty in output, got %q", out)
 	}
 }
 

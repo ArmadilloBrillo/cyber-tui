@@ -184,3 +184,37 @@ current-frame image redraws and the `inlineImagePaintGen` marker that followed i
 the same builder. Fixed by swapping the literal-space blank-fill for
 `ansi.EraseCharacter` (`CSI n X`), which erases the same cells but is zero-width to the
 truncation budget like the function's other CSI sequences already were.
+
+**Second follow-up fix — the erasure mechanism itself replaced, not just patched**: once
+the erasure escape actually reached the terminal, a deeper bug in `pendingInlineImageErasures`'
+bookkeeping became visibly destructive — reported as post card borders missing their top
+and bottom lines, reproducing on Feed itself while scrolling (no tab switch needed). Root
+cause: a pending entry's only exit condition was `claimed()`, requiring some *currently
+visible* image to land on that exact rect again — which almost never happens once an image
+scrolls off-screen, moves, or the active tab switches to a screen with no images. The entry
+became permanently orphaned, and its out-of-band absolute-cursor blank-fill kept re-firing
+every subsequent frame, corrupting whatever unrelated content (a different post's border)
+later rendered at that screen position.
+
+A first-pass fix (bounding each entry to a fixed number of frames before dropping it
+regardless of claim status) was considered and rejected as a magic-number retry-count
+papering over the real defect, rather than fixing it.
+
+The actual fix replaces the mechanism: instead of guessing "blank" is the correct
+replacement for a stale row (out-of-band, invisible to Bubble Tea's own per-line diff
+cache, and wrong the moment different real content later occupies that row),
+`syncInlineImageErasures` now returns the affected absolute row numbers, and a new
+`forceRowsDirty` helper (mirroring the Kitty-modal-cleanup line edit already in
+`injectInlineImages`) appends an inert SGR-reset marker directly to those specific lines
+of `base` — the same technique `inlineImagePaintGen` already uses for the
+selection-touch case, just scoped to arbitrary rows instead of only the trailing line.
+Bubble Tea's own diff then resends each row's real, always-correct content. This is safe
+to recompute fresh every `Update()` with no carry-forward: even losing a transition to
+Bubble Tea's renderer coalescing several `Update()` calls before a flush (confirmed real —
+`Update()`→`View()` is 1:1 and synchronous, but physical writes happen on a decoupled 60fps
+ticker that can drop an intermediate buffered frame) just leaves a row stale a little
+longer, self-healing as soon as that row's content next changes — never the permanent
+corruption of unrelated content the unclaimed out-of-band blank-fill risked. This also
+uniformly fixes the cross-tab case with no special-casing: switching to a screen with zero
+images diffs every previously-visible row as stale exactly once, forces it dirty for that
+one transition frame, and — since staleness is computed fresh each call — never repeats.

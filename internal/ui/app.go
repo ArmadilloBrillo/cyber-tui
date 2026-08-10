@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"maps"
 	"math"
 	"math/rand"
 	neturl "net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -200,15 +200,24 @@ type App struct {
 	// kittyPlacementIDs) and need two independent mechanisms:
 	//
 	//   - inlineImageVisibleRects (previous frame's key->rect map) and
-	//     pendingInlineImageErasures (a Kitty-pendingKittyDeletes-style
-	//     accumulator of stale rects awaiting an explicit blank-fill) —
-	//     see syncInlineImageErasures' doc comment — handle a moved or
-	//     removed image, whose old and new screen position can differ. A
-	//     full tea.ClearScreen used to be needed here (an image's old
-	//     footprint doesn't reliably get overwritten by incidental
-	//     Bubble Tea line-diffing alone), but was visibly flashing on
-	//     every scroll; explicit targeted erasure fixes the same bug
-	//     without the flash.
+	//     inlineImageStaleRows (this frame's absolute row numbers whose
+	//     previously-drawn image content is now stale — a moved or removed
+	//     image, whose old and new screen position can differ) — see
+	//     syncInlineImageErasures' doc comment. These rows get an inert
+	//     dirty marker (forceRowsDirty in layout.go) rather than a manual
+	//     blank-fill: Bubble Tea's own per-line diff then resends each
+	//     row's real, always-correct current content. Earlier designs tried
+	//     a full tea.ClearScreen (flashed on every scroll) and then an
+	//     out-of-band absolute-cursor blank-fill that accumulated forever
+	//     waiting for an exact-rect "claim" that, for a scrolled-off or
+	//     tab-switched-away image, could never come — corrupting whatever
+	//     unrelated content later rendered at that same screen position.
+	//     Forcing a real resend of the row's true content sidesteps both:
+	//     it's always correct (not a guessed replacement), and it only
+	//     needs to fire for the one transition frame — recomputed fresh
+	//     every Update with no carry-forward — since even losing that one
+	//     frame to Bubble Tea's renderer coalescing self-heals as soon as
+	//     that row's content next changes, rather than corrupting anything.
 	//   - inlineImageLastSelKey (previous frame's activeSelectionKey) and
 	//     inlineImagePaintGen (bumped for a selection change that touches
 	//     a visible image, read by injectInlineImages to force its
@@ -246,10 +255,10 @@ type App struct {
 	inlineImageCacheBytes      int
 	inlineImageFetching        map[string]bool
 	inlineImageFailedAt        map[string]time.Time
-	inlineImageVisibleRects    map[string]inlineImageRect
-	pendingInlineImageErasures map[string]inlineImageRect
-	inlineImageLastSelKey      string
-	inlineImagePaintGen        int
+	inlineImageVisibleRects map[string]inlineImageRect
+	inlineImageStaleRows    []int
+	inlineImageLastSelKey   string
+	inlineImagePaintGen     int
 
 	// kittyPlacementIDs assigns a stable id (used as both image id and
 	// placement id, see imgview.EncodeKitty) to each inline image slot ever
@@ -2518,8 +2527,9 @@ func selectionTouchesSlot(id string, slots []screens.InlineImageSlot) bool {
 // inline image occupies or occupied. Cols/Rows come from
 // InlineImageSlot.MaxCols/MaxRows (the reserved band bounds), which are
 // always >= the image's actual displayed size (see imgview's fitBox), so
-// blanking exactly this rectangle always fully erases whatever was drawn
-// there regardless of the image's real aspect-ratio-fitted extent.
+// Row/Rows always cover the image's full footprint regardless of the
+// image's real aspect-ratio-fitted extent — see syncInlineImageErasures,
+// which uses that range to compute which screen rows to force redrawn.
 type inlineImageRect struct {
 	Row, Col, Cols, Rows int
 }
@@ -2527,42 +2537,38 @@ type inlineImageRect struct {
 // syncInlineImageErasures computes this frame's key->rect map from slots
 // (resolving each slot's viewport-relative position to an absolute one via
 // rowOrigin/colOrigin) and diffs it against prevRects, the previous frame's
-// map, to update pending: any key that's gone or moved gets its OLD rect
-// added (or updated, if already pending and it moved again before ever
-// being redrawn). Any pending entry whose exact rect is now claimed by ANY
-// current slot — the same key revived at that position, or a different key
-// now occupying it — is removed, since blanking it would erase legitimate
-// current content. Mirrors syncKittyPlacements' toDelete/revived shape
-// (app.go), generalized from "id" to "rectangle": pending accumulates and
-// persists (never expires on its own) so a stale rect is guaranteed to
-// eventually get blanked even if Bubble Tea's renderer batches several
-// Update() calls before the next actual flush.
-func syncInlineImageErasures(slots []screens.InlineImageSlot, rowOrigin, colOrigin int, prevRects, pending map[string]inlineImageRect) (current, newPending map[string]inlineImageRect) {
+// map, to find rows whose previously-drawn image content is now stale: any
+// key that's gone or moved contributes its OLD rect's row range. Rather than
+// guessing "blank" is the right replacement for those rows — an out-of-band
+// write invisible to Bubble Tea's own per-line diff cache, and wrong the
+// moment different real content later renders there — the caller
+// (forceRowsDirty in layout.go) uses the returned row numbers to force
+// Bubble Tea's own diff to resend each row's real, always-correct content,
+// the same technique inlineImagePaintGen already uses for the
+// selection-touch case. That makes this safe to recompute fresh every call
+// with no carry-forward: even losing a transition to Bubble Tea's renderer
+// coalescing several Update() calls before a flush just leaves a row stale
+// a little longer, self-healing as soon as that row's content next changes
+// — never the permanent corruption of unrelated content an unclaimed
+// out-of-band blank-fill risked.
+func syncInlineImageErasures(slots []screens.InlineImageSlot, rowOrigin, colOrigin int, prevRects map[string]inlineImageRect) (current map[string]inlineImageRect, staleRows []int) {
 	current = make(map[string]inlineImageRect, len(slots))
 	for _, s := range slots {
 		current[s.Key] = inlineImageRect{Row: rowOrigin + s.Row, Col: colOrigin + s.ColIndent, Cols: s.MaxCols, Rows: s.MaxRows}
 	}
-	newPending = make(map[string]inlineImageRect, len(pending))
-	maps.Copy(newPending, pending)
+	seen := make(map[int]bool)
 	for key, oldRect := range prevRects {
 		if newRect, stillThere := current[key]; !stillThere || newRect != oldRect {
-			newPending[key] = oldRect
-		}
-	}
-	claimed := func(r inlineImageRect) bool {
-		for _, cr := range current {
-			if cr == r {
-				return true
+			for r := oldRect.Row; r < oldRect.Row+oldRect.Rows; r++ {
+				if !seen[r] {
+					seen[r] = true
+					staleRows = append(staleRows, r)
+				}
 			}
 		}
-		return false
 	}
-	for key, rect := range newPending {
-		if claimed(rect) {
-			delete(newPending, key)
-		}
-	}
-	return current, newPending
+	sort.Ints(staleRows)
+	return current, staleRows
 }
 
 // inlineImageCacheKey identifies one encoded rendering of a slot's image —
@@ -2665,13 +2671,16 @@ func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[in
 //   - A moved or removed image (a scroll changed a slot's Row, or the slot
 //     disappeared) means its old and new screen position can differ, and
 //     injectInlineImages only ever draws at the *current* position
-//     (layout.go, "row := rowOrigin + slot.Row") — nothing there erases
+//     (layout.go, "row := rowOrigin + slot.Row") — nothing there fixes up
 //     the old one. syncInlineImageErasures tracks each image's actual
-//     on-screen rectangle frame to frame and explicitly blank-fills
-//     exactly the stale ones (see its doc comment) — no reliance on
-//     incidental Bubble Tea line-diff overwrite, and no full-screen
-//     tea.ClearScreen (an earlier version used one; it's guaranteed
-//     correct but was visibly flashing on every scroll).
+//     on-screen rectangle frame to frame and returns the stale rows (see
+//     its doc comment); forceRowsDirty (layout.go) forces Bubble Tea's own
+//     per-line diff to resend those rows' real, always-correct content — no
+//     reliance on incidental line-diff overwrite, no full-screen
+//     tea.ClearScreen (an earlier version used one; flashed on every
+//     scroll), and no out-of-band blank-fill guess (a later version used
+//     one; could never be safely dropped once unclaimed, corrupting
+//     whatever unrelated content later rendered at that screen position).
 //   - A selection change that touches a visible image (see
 //     selectionTouchesSlot) never moves any slot's Row, so old and new
 //     position are always identical — reissuing the same paint in place is
@@ -2687,8 +2696,8 @@ func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[in
 //     earlier, since-fixed regression). A scroll needs no paint-gen bump
 //     of its own: a moved slot's own cursor-jump text already differs in
 //     bytes purely because its row/col changed, so Bubble Tea's line-diff
-//     already resends it, and a changed pendingInlineImageErasures set
-//     independently changes the trailing line's content too.
+//     already resends it, and a changed inlineImageStaleRows set
+//     independently forces the affected rows dirty too.
 func (a App) syncInlineImages() (App, tea.Cmd) {
 	var slots []screens.InlineImageSlot
 	var rowOrigin, colOrigin int
@@ -2707,10 +2716,11 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 			delete(a.pendingKittyDeletes, id)
 		}
 		a.pendingKittyDeletes = accumulateKittyDeletes(a.pendingKittyDeletes, toDelete)
+		a.inlineImageStaleRows = nil
 	} else {
-		current, pending := syncInlineImageErasures(slots, rowOrigin, colOrigin, a.inlineImageVisibleRects, a.pendingInlineImageErasures)
+		current, staleRows := syncInlineImageErasures(slots, rowOrigin, colOrigin, a.inlineImageVisibleRects)
 		a.inlineImageVisibleRects = current
-		a.pendingInlineImageErasures = pending
+		a.inlineImageStaleRows = staleRows
 
 		selChanged := selKey != a.inlineImageLastSelKey
 		touchesVisible := selChanged && (selectionTouchesSlot(selKey, slots) || selectionTouchesSlot(a.inlineImageLastSelKey, slots))

@@ -6,6 +6,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2934,71 +2935,61 @@ func TestSelectionTouchesSlot(t *testing.T) {
 	}
 }
 
-// TestSyncInlineImageErasures covers the accumulate-until-revived erasure
-// tracking that replaced tea.ClearScreen for scroll-triggered repaints: a
-// moved or removed image's old rectangle must end up pending (so
-// injectInlineImages blanks it), and a pending rectangle must be cancelled
-// exactly when something legitimate re-claims that exact screen position —
-// whether that's the same image reappearing there, or (rarer) a different
-// image now occupying it — since blanking either would erase real content.
+// TestSyncInlineImageErasures covers the stale-row detection that replaced
+// both tea.ClearScreen and the later accumulate-until-exact-rect-reclaimed
+// erasure design for scroll-triggered repaints: a moved or removed image's
+// old row range must come back in staleRows (so forceRowsDirty forces
+// Bubble Tea to resend that row's real content), computed fresh from a
+// single prevRects/current diff with no carry-forward or "claim" concept.
 func TestSyncInlineImageErasures(t *testing.T) {
-	rectA := inlineImageRect{Row: 5, Col: 3, Cols: 20, Rows: 6}
-	rectB := inlineImageRect{Row: 9, Col: 3, Cols: 20, Rows: 6}
+	rectA := inlineImageRect{Row: 5, Col: 3, Cols: 20, Rows: 3}
+	rectB := inlineImageRect{Row: 9, Col: 3, Cols: 20, Rows: 3}
 
-	t.Run("unchanged slot produces no pending erasure", func(t *testing.T) {
-		slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 3, ColIndent: 3, MaxCols: 20, MaxRows: 6}}
+	t.Run("unchanged slot produces no stale rows", func(t *testing.T) {
+		slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 3, ColIndent: 3, MaxCols: 20, MaxRows: 3}}
 		prev := map[string]inlineImageRect{"post:p1:0": rectA}
-		current, pending := syncInlineImageErasures(slots, 2, 0, prev, nil)
-		if len(pending) != 0 {
-			t.Errorf("expected no pending erasures, got %v", pending)
+		current, staleRows := syncInlineImageErasures(slots, 2, 0, prev)
+		if len(staleRows) != 0 {
+			t.Errorf("expected no stale rows, got %v", staleRows)
 		}
 		if current["post:p1:0"] != rectA {
 			t.Errorf("expected current rect to match, got %v", current["post:p1:0"])
 		}
 	})
 
-	t.Run("moved slot pends its old rect", func(t *testing.T) {
+	t.Run("moved slot returns its old rect's row range", func(t *testing.T) {
 		// Same key, but Row moved from 3 to 7 (rectB instead of rectA).
-		slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 7, ColIndent: 3, MaxCols: 20, MaxRows: 6}}
+		slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 7, ColIndent: 3, MaxCols: 20, MaxRows: 3}}
 		prev := map[string]inlineImageRect{"post:p1:0": rectA}
-		current, pending := syncInlineImageErasures(slots, 2, 0, prev, nil)
-		if pending["post:p1:0"] != rectA {
-			t.Errorf("expected old rect pending, got %v", pending["post:p1:0"])
+		current, staleRows := syncInlineImageErasures(slots, 2, 0, prev)
+		want := []int{5, 6, 7}
+		if !slices.Equal(staleRows, want) {
+			t.Errorf("expected old rect's row range %v pending, got %v", want, staleRows)
 		}
 		if current["post:p1:0"] != rectB {
 			t.Errorf("expected current rect updated to new position, got %v", current["post:p1:0"])
 		}
 	})
 
-	t.Run("removed slot pends its old rect", func(t *testing.T) {
+	t.Run("removed slot returns its old rect's row range", func(t *testing.T) {
 		prev := map[string]inlineImageRect{"post:p1:0": rectA}
-		current, pending := syncInlineImageErasures(nil, 2, 0, prev, nil)
-		if pending["post:p1:0"] != rectA {
-			t.Errorf("expected old rect pending, got %v", pending["post:p1:0"])
+		current, staleRows := syncInlineImageErasures(nil, 2, 0, prev)
+		want := []int{5, 6, 7}
+		if !slices.Equal(staleRows, want) {
+			t.Errorf("expected old rect's row range %v pending, got %v", want, staleRows)
 		}
 		if len(current) != 0 {
 			t.Errorf("expected no current rects, got %v", current)
 		}
 	})
 
-	t.Run("same key revived at the same rect cancels the pending erasure", func(t *testing.T) {
-		slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 3, ColIndent: 3, MaxCols: 20, MaxRows: 6}}
-		pending := map[string]inlineImageRect{"post:p1:0": rectA}
-		_, newPending := syncInlineImageErasures(slots, 2, 0, nil, pending)
-		if len(newPending) != 0 {
-			t.Errorf("expected revival to cancel the pending erasure, got %v", newPending)
-		}
-	})
-
-	t.Run("a different key claiming a pending rect cancels it too", func(t *testing.T) {
-		// post:p1:0's old rect is pending; post:p2:0 now legitimately
-		// occupies that exact screen position (e.g. p1 scrolled away and
-		// p2 scrolled into its old spot) — must not blank p2's content.
-		slots := []screens.InlineImageSlot{{Key: "post:p2:0", Row: 3, ColIndent: 3, MaxCols: 20, MaxRows: 6}}
-		pending := map[string]inlineImageRect{"post:p1:0": rectA}
-		_, newPending := syncInlineImageErasures(slots, 2, 0, nil, pending)
-		if len(newPending) != 0 {
-			t.Errorf("expected a different key claiming the same rect to cancel the pending erasure, got %v", newPending)
+	t.Run("two removed keys whose old rects share a row dedup that row", func(t *testing.T) {
+		rectC := inlineImageRect{Row: 7, Col: 30, Cols: 20, Rows: 3} // rows 7-9, overlaps rectA's rows 5-7 at row 7
+		prev := map[string]inlineImageRect{"post:p1:0": rectA, "post:p2:0": rectC}
+		_, staleRows := syncInlineImageErasures(nil, 2, 0, prev)
+		want := []int{5, 6, 7, 8, 9}
+		if !slices.Equal(staleRows, want) {
+			t.Errorf("expected deduped, sorted row range %v, got %v", want, staleRows)
 		}
 	})
 }
