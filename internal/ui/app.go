@@ -195,9 +195,14 @@ type App struct {
 	// gets a cooldown (inlineImageFailureCooldown) instead of being retried
 	// on every single Update its slot stays visible for. inlineImageLastSig
 	// is the previous frame's visible-slot signature (see
-	// inlineImageSignature), used to detect a scroll/selection change that
-	// requires a full clear for Sixel/iTerm2 (neither has a placement-delete
-	// primitive — Kitty does, see kittyPlacementIDs, and never uses this).
+	// inlineImageSignature), used to detect a scroll that requires a full
+	// clear for Sixel/iTerm2 (neither has a placement-delete primitive —
+	// Kitty does, see kittyPlacementIDs, and never uses this).
+	// inlineImageLastSelKey is the previous frame's activeSelectionKey,
+	// tracked separately so a selection change can be checked against
+	// selectionTouchesSlot instead of blindly forcing a clear on every
+	// selection move (that blindness was a shipped regression — see
+	// selectionTouchesSlot's doc comment).
 	inlineImageCache      map[string]string
 	inlineImageCacheOrder *list.List
 	inlineImageCacheElems map[string]*list.Element
@@ -205,6 +210,7 @@ type App struct {
 	inlineImageFetching   map[string]bool
 	inlineImageFailedAt   map[string]time.Time
 	inlineImageLastSig    string
+	inlineImageLastSelKey string
 
 	// kittyPlacementIDs assigns a stable id (used as both image id and
 	// placement id, see imgview.EncodeKitty) to each inline image slot ever
@@ -2429,13 +2435,14 @@ func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
 	}
 }
 
-// activeSelectionKey returns an identity for whatever's currently selected on
-// the active screen — used alongside inlineImageSignature so a selection-only
-// move (no slot's Key/Row changes, e.g. arrow-selecting an already-visible
-// post) still invalidates the iTerm2/Sixel repaint signature: selection
-// changes the (de)selected card's border color across every one of its
-// lines, including its inline-image band rows, which erases the image
-// pixels there without moving anything syncInlineImages already tracks.
+// activeSelectionKey returns the ID of whatever's currently selected on the
+// active screen (a post or reply ID, matching the format embedded in
+// InlineImageSlot.Key) — used by syncInlineImages/selectionTouchesSlot to
+// detect a selection change that recolors a card hosting a currently-visible
+// inline image: selection changes the (de)selected card's border color
+// across every one of its lines, including its inline-image band rows,
+// which erases the image pixels there without moving anything
+// inlineImageSignature (position-only) tracks.
 func (a App) activeSelectionKey() string {
 	switch a.active {
 	case screenPostDetail:
@@ -2447,18 +2454,37 @@ func (a App) activeSelectionKey() string {
 	}
 }
 
-// inlineImageSignature summarizes a slot list's identity, position, and the
-// active screen's selection — used to detect "did anything change that could
-// have erased or moved an on-screen image this frame" cheaply, without
-// deep-comparing slices. selKey is folded in because a selection move can
-// erase an image without changing any slot's Key/Row (see
-// activeSelectionKey).
-func inlineImageSignature(slots []screens.InlineImageSlot, selKey string) string {
+// selectionTouchesSlot reports whether id (from activeSelectionKey or
+// FeedModel.DetailSelectionKey) belongs to any currently-visible
+// inline-image slot — i.e. whether a selection change involving id could
+// have recolored a card that hosts an on-screen image. Slot keys are always
+// "post:<id>:<n>" or "reply:<id>:<n>" (see feed.go/postdetail.go's
+// VisibleInlineImages), so a ":id:" substring match catches both without
+// needing to know which, and the leading/trailing ":" delimiters keep an id
+// that's merely a substring of another id from matching.
+func selectionTouchesSlot(id string, slots []screens.InlineImageSlot) bool {
+	if id == "" {
+		return false
+	}
+	needle := ":" + id + ":"
+	for _, s := range slots {
+		if strings.Contains(s.Key, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// inlineImageSignature summarizes a slot list's identity and position — used
+// to detect "did the visible set of inline images change at all this frame"
+// cheaply, without deep-comparing slices. Selection changes are handled
+// separately (see selectionTouchesSlot) since they can erase an image
+// without changing any slot's Key/Row.
+func inlineImageSignature(slots []screens.InlineImageSlot) string {
 	var sb strings.Builder
 	for _, s := range slots {
 		fmt.Fprintf(&sb, "%s@%d;", s.Key, s.Row)
 	}
-	sb.WriteString(selKey)
 	return sb.String()
 }
 
@@ -2557,10 +2583,15 @@ func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[in
 // has already processed the message. Kitty gets precise per-image
 // create/delete via kittyPlacementIDs/pendingKittyDeletes (see
 // syncKittyPlacements); Sixel/iTerm2 have no placement-delete primitive, so
-// any change in the visible-slot signature instead forces a full-screen
-// clear — a moved or removed image can otherwise leave stray pixels behind
-// (the same reasoning already applied to the fullscreen modal's close/cycle
-// handling).
+// a change in the visible-slot signature (a scroll) or a selection change
+// that touches a visible image (see selectionTouchesSlot) instead forces a
+// full-screen clear — a moved, removed, or (de)selection-recolored image
+// can otherwise leave stray pixels behind (the same reasoning already
+// applied to the fullscreen modal's close/cycle handling). Selection
+// changes that don't touch any visible image skip the clear entirely — an
+// earlier version cleared on every selection move regardless, which caused
+// a visible full-screen blink on every single arrow-key step through a
+// feed with any inline image on screen.
 func (a App) syncInlineImages() (App, tea.Cmd) {
 	var slots []screens.InlineImageSlot
 	var selKey string
@@ -2578,9 +2609,16 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 			delete(a.pendingKittyDeletes, id)
 		}
 		a.pendingKittyDeletes = accumulateKittyDeletes(a.pendingKittyDeletes, toDelete)
-	} else if sig := inlineImageSignature(slots, selKey); sig != a.inlineImageLastSig {
+	} else {
+		sig := inlineImageSignature(slots)
+		selChanged := selKey != a.inlineImageLastSelKey
+		needsClear := sig != a.inlineImageLastSig ||
+			(selChanged && (selectionTouchesSlot(selKey, slots) || selectionTouchesSlot(a.inlineImageLastSelKey, slots)))
 		a.inlineImageLastSig = sig
-		cmds = append(cmds, tea.ClearScreen)
+		a.inlineImageLastSelKey = selKey
+		if needsClear {
+			cmds = append(cmds, tea.ClearScreen)
+		}
 	}
 
 	if a.inlineImageFetching == nil {

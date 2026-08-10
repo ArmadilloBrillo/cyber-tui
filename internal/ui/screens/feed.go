@@ -1005,11 +1005,17 @@ func (m FeedModel) SelectedPostID() string {
 	return visible[m.selectedIndex].ID
 }
 
-// DetailSelectionKey is SelectedPostID's Miller-detail-pane analog: it also
-// folds in detailReplyIndex, since the detail pane's reply-border
-// highlighting depends on it just like selectedIndex does for list cards.
+// DetailSelectionKey returns the ID of whatever's selected in the Miller
+// detail pane — the post itself (detailReplyIndex < 0) or the selected
+// reply — so App can check whether a selection change could have recolored
+// a card hosting a currently-visible inline image (see
+// App.selectionTouchesSlot): slot keys embed a reply's actual ID, not its
+// index into detailFlatTree, so this must return the ID to be matchable.
 func (m FeedModel) DetailSelectionKey() string {
-	return fmt.Sprintf("%s:%d", m.SelectedPostID(), m.detailReplyIndex)
+	if m.detailReplyIndex < 0 || m.detailReplyIndex >= len(m.detailFlatTree) {
+		return m.SelectedPostID()
+	}
+	return m.detailFlatTree[m.detailReplyIndex].Reply.ID
 }
 
 // NextCursor returns the pagination cursor for the next page of feed posts.
