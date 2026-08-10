@@ -35,8 +35,16 @@ func EncodeITerm2(img image.Image, maxCols, maxRows, cellPxW, cellPxH int) (enco
 	payload := base64.StdEncoding.EncodeToString(buf.Bytes())
 	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH)
 	// width/height without suffix means terminal character cells in iTerm2.
+	// doNotMoveCursor=1 is a WezTerm extension (ignored by real iTerm2, which
+	// tolerates unknown keys): without it, WezTerm scrolls its whole screen
+	// whenever an image's footprint reaches the terminal's last line
+	// (https://github.com/wezterm/wezterm/issues/3266), which desyncs every
+	// absolute-cursor-positioned draw that follows. Safe here regardless of
+	// terminal since injectInlineImages always repositions the cursor
+	// absolutely before every draw and parks it explicitly after — nothing
+	// relies on the terminal's own post-image cursor advance.
 	encoded = fmt.Sprintf(
-		"\x1b]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1:%s\x07",
+		"\x1b]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\x07",
 		cols, rows, payload,
 	)
 	return
