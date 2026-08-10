@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -131,10 +132,22 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		base = strings.Join(lines, "\n")
 	}
 	slots, rowOrigin, colOrigin, _ := l.InlineImageSlots(a)
-	if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 {
+	if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 || len(a.pendingInlineImageErasures) > 0 {
 		return injectInlineImages(a, base, slots, rowOrigin, colOrigin)
 	}
 	return base
+}
+
+// sortedInlineImageEraseKeys returns pending's keys in sorted order — see
+// injectInlineImages' doc comment for why deterministic iteration order
+// matters here (Go map iteration is randomized).
+func sortedInlineImageEraseKeys(pending map[string]inlineImageRect) []string {
+	keys := make([]string, 0, len(pending))
+	for k := range pending {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // injectInlineImages appends absolute-cursor-positioned escape sequences for
@@ -173,6 +186,21 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, rowOrigin, colOrigin int) string {
 	var sb strings.Builder
 	sb.WriteString(base)
+	// Blank-fill every pending erasure (a moved or removed image's stale
+	// on-screen rectangle — see syncInlineImageErasures) before drawing
+	// current slots, so a real scroll's old image position is explicitly
+	// cleared rather than relying on incidental line-diff overwrite (which
+	// misses it whenever old and new footprints only partially overlap).
+	// Iterated in sorted key order: Go map iteration is randomized, and a
+	// non-deterministic byte order here would make Bubble Tea's line-diff
+	// think this line changed even when the erasure set itself didn't.
+	for _, key := range sortedInlineImageEraseKeys(a.pendingInlineImageErasures) {
+		r := a.pendingInlineImageErasures[key]
+		blank := strings.Repeat(" ", r.Cols)
+		for i := 0; i < r.Rows; i++ {
+			sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", r.Row+i, r.Col, blank))
+		}
+	}
 	for _, slot := range slots {
 		encoded, ok := a.inlineImageCache[inlineImageCacheKey(slot, a.graphicsProtocol)]
 		if !ok {

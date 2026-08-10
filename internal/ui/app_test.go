@@ -2904,29 +2904,6 @@ func TestHandlePathPrompt_Import_Failure_NotifiesAndLeavesCustomPaletteUntouched
 	}
 }
 
-// TestInlineImageSignature_DistinguishesPositionAndIdentity confirms the
-// signature used to detect "did the visible inline-image set change this
-// frame" actually changes when a slot's Key or Row changes, and stays equal
-// for an identical slot list — the one thing syncInlineImages depends on to
-// decide whether Sixel/iTerm2 need a full-screen clear.
-func TestInlineImageSignature_DistinguishesPositionAndIdentity(t *testing.T) {
-	a := []screens.InlineImageSlot{{Key: "post:p1", Row: 3}, {Key: "reply:r1", Row: 20}}
-	b := []screens.InlineImageSlot{{Key: "post:p1", Row: 3}, {Key: "reply:r1", Row: 20}}
-	if inlineImageSignature(a) != inlineImageSignature(b) {
-		t.Error("expected identical slot lists to produce the same signature")
-	}
-
-	scrolled := []screens.InlineImageSlot{{Key: "post:p1", Row: 2}, {Key: "reply:r1", Row: 19}}
-	if inlineImageSignature(a) == inlineImageSignature(scrolled) {
-		t.Error("expected a scroll (Row change) to change the signature")
-	}
-
-	oneGone := []screens.InlineImageSlot{{Key: "post:p1", Row: 3}}
-	if inlineImageSignature(a) == inlineImageSignature(oneGone) {
-		t.Error("expected a removed slot to change the signature")
-	}
-}
-
 // TestSelectionTouchesSlot confirms the substring match syncInlineImages
 // relies on to decide whether a selection change actually recolored a card
 // hosting a visible image, rather than blindly clearing on every selection
@@ -2957,45 +2934,73 @@ func TestSelectionTouchesSlot(t *testing.T) {
 	}
 }
 
-// TestDecideInlineImageRepaint_RoutesPositionAndSelectionDifferently is a
-// regression test: an earlier version routed both a scroll (position
-// change) and a selection-only touch through the same flash-free
-// paint-gen-bump strategy, which is only safe when old and new image
-// position are identical (true for a selection touch, false for a scroll —
-// see inlineImageRepaintAction's doc comments). A scroll must route to
-// repaintPositionChanged (tea.ClearScreen, the only strategy that
-// guarantees a moved image's old footprint is fully erased even when it
-// only partially overlaps the new one) — not repaintSelectionTouch.
-func TestDecideInlineImageRepaint_RoutesPositionAndSelectionDifferently(t *testing.T) {
-	slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 3}}
+// TestSyncInlineImageErasures covers the accumulate-until-revived erasure
+// tracking that replaced tea.ClearScreen for scroll-triggered repaints: a
+// moved or removed image's old rectangle must end up pending (so
+// injectInlineImages blanks it), and a pending rectangle must be cancelled
+// exactly when something legitimate re-claims that exact screen position —
+// whether that's the same image reappearing there, or (rarer) a different
+// image now occupying it — since blanking either would erase real content.
+func TestSyncInlineImageErasures(t *testing.T) {
+	rectA := inlineImageRect{Row: 5, Col: 3, Cols: 20, Rows: 6}
+	rectB := inlineImageRect{Row: 9, Col: 3, Cols: 20, Rows: 6}
 
-	if got := decideInlineImageRepaint("sig-a", "sig-a", "p1", "p1", slots); got != repaintNone {
-		t.Errorf("unchanged position and selection: got %v, want repaintNone", got)
-	}
+	t.Run("unchanged slot produces no pending erasure", func(t *testing.T) {
+		slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 3, ColIndent: 3, MaxCols: 20, MaxRows: 6}}
+		prev := map[string]inlineImageRect{"post:p1:0": rectA}
+		current, pending := syncInlineImageErasures(slots, 2, 0, prev, nil)
+		if len(pending) != 0 {
+			t.Errorf("expected no pending erasures, got %v", pending)
+		}
+		if current["post:p1:0"] != rectA {
+			t.Errorf("expected current rect to match, got %v", current["post:p1:0"])
+		}
+	})
 
-	// Position changed (a scroll moved the slot's Row) — must clear, even
-	// though the selection also happens to be unchanged.
-	if got := decideInlineImageRepaint("sig-b", "sig-a", "p1", "p1", slots); got != repaintPositionChanged {
-		t.Errorf("position changed: got %v, want repaintPositionChanged", got)
-	}
+	t.Run("moved slot pends its old rect", func(t *testing.T) {
+		// Same key, but Row moved from 3 to 7 (rectB instead of rectA).
+		slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 7, ColIndent: 3, MaxCols: 20, MaxRows: 6}}
+		prev := map[string]inlineImageRect{"post:p1:0": rectA}
+		current, pending := syncInlineImageErasures(slots, 2, 0, prev, nil)
+		if pending["post:p1:0"] != rectA {
+			t.Errorf("expected old rect pending, got %v", pending["post:p1:0"])
+		}
+		if current["post:p1:0"] != rectB {
+			t.Errorf("expected current rect updated to new position, got %v", current["post:p1:0"])
+		}
+	})
 
-	// Selection changed onto a card with a visible image, position stable
-	// — must use the flash-free in-place reissue, not a full clear.
-	if got := decideInlineImageRepaint("sig-a", "sig-a", "p1", "", slots); got != repaintSelectionTouch {
-		t.Errorf("selection touched a visible slot: got %v, want repaintSelectionTouch", got)
-	}
+	t.Run("removed slot pends its old rect", func(t *testing.T) {
+		prev := map[string]inlineImageRect{"post:p1:0": rectA}
+		current, pending := syncInlineImageErasures(nil, 2, 0, prev, nil)
+		if pending["post:p1:0"] != rectA {
+			t.Errorf("expected old rect pending, got %v", pending["post:p1:0"])
+		}
+		if len(current) != 0 {
+			t.Errorf("expected no current rects, got %v", current)
+		}
+	})
 
-	// Selection changed but touches nothing visible — no repaint needed.
-	if got := decideInlineImageRepaint("sig-a", "sig-a", "p2", "p3", slots); got != repaintNone {
-		t.Errorf("selection touched nothing visible: got %v, want repaintNone", got)
-	}
+	t.Run("same key revived at the same rect cancels the pending erasure", func(t *testing.T) {
+		slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 3, ColIndent: 3, MaxCols: 20, MaxRows: 6}}
+		pending := map[string]inlineImageRect{"post:p1:0": rectA}
+		_, newPending := syncInlineImageErasures(slots, 2, 0, nil, pending)
+		if len(newPending) != 0 {
+			t.Errorf("expected revival to cancel the pending erasure, got %v", newPending)
+		}
+	})
 
-	// Both position and selection changed — position change must win
-	// (only it guarantees complete erasure of a moved image's old
-	// footprint).
-	if got := decideInlineImageRepaint("sig-b", "sig-a", "p1", "", slots); got != repaintPositionChanged {
-		t.Errorf("position and selection both changed: got %v, want repaintPositionChanged", got)
-	}
+	t.Run("a different key claiming a pending rect cancels it too", func(t *testing.T) {
+		// post:p1:0's old rect is pending; post:p2:0 now legitimately
+		// occupies that exact screen position (e.g. p1 scrolled away and
+		// p2 scrolled into its old spot) — must not blank p2's content.
+		slots := []screens.InlineImageSlot{{Key: "post:p2:0", Row: 3, ColIndent: 3, MaxCols: 20, MaxRows: 6}}
+		pending := map[string]inlineImageRect{"post:p1:0": rectA}
+		_, newPending := syncInlineImageErasures(slots, 2, 0, nil, pending)
+		if len(newPending) != 0 {
+			t.Errorf("expected a different key claiming the same rect to cancel the pending erasure, got %v", newPending)
+		}
+	})
 }
 
 // TestInlineImageCacheKey_VariesByColsAndProtocol confirms the cache key

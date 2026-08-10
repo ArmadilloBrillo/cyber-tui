@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -599,6 +600,45 @@ func TestInjectInlineImages_PaintGenTogglesTrailingLineBytes(t *testing.T) {
 	}
 	if out0 != out2 {
 		t.Error("expected two even paint generations to produce identical output")
+	}
+}
+
+// TestInjectInlineImages_BlanksPendingErasures confirms a pending erasure
+// (a moved or removed image's stale rectangle — see
+// syncInlineImageErasures) actually produces blank-fill escape sequences in
+// injectInlineImages' output, and that iteration order is deterministic —
+// two calls with equal-content but distinct map instances (Go map
+// iteration is randomized) must produce byte-identical output, since a
+// non-deterministic byte order would make Bubble Tea's line-diff think the
+// line changed even when the erasure set itself didn't.
+func TestInjectInlineImages_BlanksPendingErasures(t *testing.T) {
+	pending := map[string]inlineImageRect{
+		"post:p1:0":  {Row: 6, Col: 9, Cols: 20, Rows: 3},
+		"reply:r1:0": {Row: 12, Col: 9, Cols: 20, Rows: 3},
+	}
+	a := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, pendingInlineImageErasures: pending}
+
+	out := injectInlineImages(a, "base", nil, 0, 0)
+	blank := strings.Repeat(" ", 20)
+	for i := 0; i < 3; i++ {
+		if want := fmt.Sprintf("\x1b[%d;9H%s", 6+i, blank); !strings.Contains(out, want) {
+			t.Errorf("expected blank-fill %q for post:p1:0's rect in output, got %q", want, out)
+		}
+		if want := fmt.Sprintf("\x1b[%d;9H%s", 12+i, blank); !strings.Contains(out, want) {
+			t.Errorf("expected blank-fill %q for reply:r1:0's rect in output, got %q", want, out)
+		}
+	}
+
+	// A fresh map instance with the same logical contents (different
+	// insertion order, since Go maps don't preserve one) must still
+	// produce byte-identical output.
+	pending2 := map[string]inlineImageRect{
+		"reply:r1:0": {Row: 12, Col: 9, Cols: 20, Rows: 3},
+		"post:p1:0":  {Row: 6, Col: 9, Cols: 20, Rows: 3},
+	}
+	a2 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, pendingInlineImageErasures: pending2}
+	if out2 := injectInlineImages(a2, "base", nil, 0, 0); out2 != out {
+		t.Errorf("expected deterministic output regardless of map insertion order, got %q vs %q", out2, out)
 	}
 }
 
