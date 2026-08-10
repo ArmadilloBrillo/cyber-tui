@@ -2957,6 +2957,47 @@ func TestSelectionTouchesSlot(t *testing.T) {
 	}
 }
 
+// TestDecideInlineImageRepaint_RoutesPositionAndSelectionDifferently is a
+// regression test: an earlier version routed both a scroll (position
+// change) and a selection-only touch through the same flash-free
+// paint-gen-bump strategy, which is only safe when old and new image
+// position are identical (true for a selection touch, false for a scroll —
+// see inlineImageRepaintAction's doc comments). A scroll must route to
+// repaintPositionChanged (tea.ClearScreen, the only strategy that
+// guarantees a moved image's old footprint is fully erased even when it
+// only partially overlaps the new one) — not repaintSelectionTouch.
+func TestDecideInlineImageRepaint_RoutesPositionAndSelectionDifferently(t *testing.T) {
+	slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 3}}
+
+	if got := decideInlineImageRepaint("sig-a", "sig-a", "p1", "p1", slots); got != repaintNone {
+		t.Errorf("unchanged position and selection: got %v, want repaintNone", got)
+	}
+
+	// Position changed (a scroll moved the slot's Row) — must clear, even
+	// though the selection also happens to be unchanged.
+	if got := decideInlineImageRepaint("sig-b", "sig-a", "p1", "p1", slots); got != repaintPositionChanged {
+		t.Errorf("position changed: got %v, want repaintPositionChanged", got)
+	}
+
+	// Selection changed onto a card with a visible image, position stable
+	// — must use the flash-free in-place reissue, not a full clear.
+	if got := decideInlineImageRepaint("sig-a", "sig-a", "p1", "", slots); got != repaintSelectionTouch {
+		t.Errorf("selection touched a visible slot: got %v, want repaintSelectionTouch", got)
+	}
+
+	// Selection changed but touches nothing visible — no repaint needed.
+	if got := decideInlineImageRepaint("sig-a", "sig-a", "p2", "p3", slots); got != repaintNone {
+		t.Errorf("selection touched nothing visible: got %v, want repaintNone", got)
+	}
+
+	// Both position and selection changed — position change must win
+	// (only it guarantees complete erasure of a moved image's old
+	// footprint).
+	if got := decideInlineImageRepaint("sig-b", "sig-a", "p1", "", slots); got != repaintPositionChanged {
+		t.Errorf("position and selection both changed: got %v, want repaintPositionChanged", got)
+	}
+}
+
 // TestInlineImageCacheKey_VariesByColsAndProtocol confirms the cache key
 // changes when the column budget (resize) or protocol changes, and stays
 // stable otherwise — a resize or protocol switch must invalidate stale

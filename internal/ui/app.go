@@ -195,19 +195,45 @@ type App struct {
 	// gets a cooldown (inlineImageFailureCooldown) instead of being retried
 	// on every single Update its slot stays visible for. inlineImageLastSig
 	// is the previous frame's visible-slot signature (see
-	// inlineImageSignature), used to detect a scroll that requires a
-	// repaint for Sixel/iTerm2 (neither has a placement-delete primitive —
-	// Kitty does, see kittyPlacementIDs, and never uses this).
-	// inlineImageLastSelKey is the previous frame's activeSelectionKey,
-	// tracked separately so a selection change can be checked against
-	// selectionTouchesSlot instead of blindly forcing a repaint on every
-	// selection move (that blindness was a shipped regression — see
-	// selectionTouchesSlot's doc comment). inlineImagePaintGen is bumped
-	// whenever a repaint is needed and read by injectInlineImages to force
-	// its trailing paint line to look "changed" to Bubble Tea's per-line
-	// diff (see injectInlineImages' doc comment) — this avoids
-	// tea.ClearScreen's full-screen erase-then-redraw, which caused a
-	// visible flash on every selection change that touched a visible image.
+	// inlineImageSignature), used to detect a scroll (Sixel/iTerm2 have no
+	// placement-delete primitive — Kitty does, see kittyPlacementIDs, and
+	// never uses this). inlineImageLastSelKey is the previous frame's
+	// activeSelectionKey, tracked separately so a selection change can be
+	// checked against selectionTouchesSlot instead of blindly forcing a
+	// repaint on every selection move (that blindness was a shipped
+	// regression — see selectionTouchesSlot's doc comment).
+	// inlineImagePaintGen is bumped only for a selection change that
+	// touches a visible image (position unchanged — see syncInlineImages'
+	// doc comment for why a scroll uses tea.ClearScreen instead) and read
+	// by injectInlineImages to force its trailing paint line to look
+	// "changed" to Bubble Tea's per-line diff (see injectInlineImages' doc
+	// comment) — this avoids tea.ClearScreen's full-screen erase-then-redraw,
+	// which caused a visible flash on every selection change that touched a
+	// visible image. Trying to also cover scrolls this way (an earlier,
+	// since-reverted version did) causes a worse bug: an image's old and
+	// new screen position can differ on a scroll, and reissuing only the
+	// new position leaves stale pixels wherever the old footprint doesn't
+	// overlap the new one — see syncInlineImages' doc comment.
+	//
+	// A smaller single-line flash still remains on the selection-touches-
+	// image case and is an accepted ceiling, not an unnoticed gap: Lip
+	// Gloss regenerates a card's whole bordered box as one string whenever
+	// its border color changes (selection), so the image band row's bytes
+	// differ too (border color chars) even though its interior content
+	// didn't conceptually change — Bubble Tea's line-diff rewrites that
+	// line, incidentally overwriting the image pixels, and
+	// inlineImagePaintGen's reissue happens right after but is still a
+	// second, visible terminal-side paint. The clean fix would be Bubble
+	// Tea shipping DECSET 2026 synchronized-output support (v1.3.10, the
+	// latest release, doesn't have it); hand-rolling begin/end markers
+	// ourselves was evaluated and rejected — Bubble Tea's renderer diffs
+	// and skips lines independently, so a mismatched pair could leave the
+	// terminal stuck buffering indefinitely, a worse regression than the
+	// flash. The other alternative — keeping the image band's border color
+	// constant regardless of selection, so those rows never need rewriting
+	// — would fix it at the source but requires replacing Lip Gloss's
+	// single-call box styling with manual per-line border construction in
+	// feed.go/postdetail.go, judged too large/risky for this.
 	inlineImageCache      map[string]string
 	inlineImageCacheOrder *list.List
 	inlineImageCacheElems map[string]*list.Element
@@ -2481,6 +2507,42 @@ func selectionTouchesSlot(id string, slots []screens.InlineImageSlot) bool {
 	return false
 }
 
+// inlineImageRepaintAction is syncInlineImages' non-Kitty repaint decision —
+// extracted as a pure function so the routing logic (which trigger gets
+// which repaint strategy, and why) is directly testable without driving
+// tea.Cmd/App machinery.
+type inlineImageRepaintAction int
+
+const (
+	repaintNone inlineImageRepaintAction = iota
+	// repaintPositionChanged means a visible slot's Row changed (a real
+	// scroll) — old and new image positions can differ, so only
+	// tea.ClearScreen's guaranteed-complete erase is correct (see
+	// syncInlineImages' doc comment for why reissuing only the new
+	// position, as an earlier version did, leaves stale pixels behind).
+	repaintPositionChanged
+	// repaintSelectionTouch means positions are unchanged but the
+	// selection moved onto or off a card hosting a visible image — old and
+	// new position are identical here, so reissuing the same paint in
+	// place (inlineImagePaintGen) is safe and flash-free.
+	repaintSelectionTouch
+)
+
+// decideInlineImageRepaint compares this frame's slot-position signature and
+// selection key against the previous frame's to decide which repaint
+// strategy (if any) syncInlineImages needs. See inlineImageRepaintAction's
+// doc comments for why position changes and selection-only touches need
+// different strategies.
+func decideInlineImageRepaint(sig, lastSig, selKey, lastSelKey string, slots []screens.InlineImageSlot) inlineImageRepaintAction {
+	if sig != lastSig {
+		return repaintPositionChanged
+	}
+	if selKey != lastSelKey && (selectionTouchesSlot(selKey, slots) || selectionTouchesSlot(lastSelKey, slots)) {
+		return repaintSelectionTouch
+	}
+	return repaintNone
+}
+
 // inlineImageSignature summarizes a slot list's identity and position — used
 // to detect "did the visible set of inline images change at all this frame"
 // cheaply, without deep-comparing slices. Selection changes are handled
@@ -2589,20 +2651,35 @@ func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[in
 // has already processed the message. Kitty gets precise per-image
 // create/delete via kittyPlacementIDs/pendingKittyDeletes (see
 // syncKittyPlacements); Sixel/iTerm2 have no placement-delete primitive, so
-// a change in the visible-slot signature (a scroll) or a selection change
-// that touches a visible image (see selectionTouchesSlot) instead bumps
-// inlineImagePaintGen, which injectInlineImages uses to force a repaint of
-// its trailing paint line — a moved, removed, or (de)selection-recolored
-// image can otherwise leave stray pixels behind (the same reasoning already
-// applied to the fullscreen modal's close/cycle handling). This used to be
-// a tea.ClearScreen, but that does a genuine full-screen erase-then-redraw
-// and was visibly flashing on every touching selection change; bumping the
-// generation instead lets Bubble Tea's own per-line diff repaint just the
-// affected line, the same seamless mechanism an ordinary scroll already
-// uses. Selection changes that don't touch any visible image skip this
-// entirely — an earlier version bumped/cleared on every selection move
-// regardless, which caused a visible blink on every arrow-key step through
-// a feed with any inline image on screen.
+// they need two different repaint strategies depending on what changed:
+//
+//   - A position change (inlineImageSignature differs — a real scroll moved
+//     a slot's Row) means an image's old and new screen positions can
+//     differ, and injectInlineImages only ever draws at the *current*
+//     position (layout.go, "row := rowOrigin + slot.Row") — nothing
+//     explicitly erases the old one. Erasure has only ever happened as an
+//     incidental side effect of Bubble Tea's line-diff rewriting text that
+//     changed, and for a small scroll a band row's rendered text (blank
+//     interior + border) can be byte-identical before and after at a given
+//     physical row index, so Bubble Tea skips resending it — leaving stale
+//     pixels behind wherever the old footprint doesn't overlap the new one.
+//     Only a full clear is guaranteed correct here, and a scroll already
+//     rewrites virtually the whole visible screen anyway, so tea.ClearScreen
+//     isn't perceptually a flash the way it is for a static selection
+//     change — the surrounding content is already moving.
+//   - A selection change that touches a visible image (see
+//     selectionTouchesSlot) never moves any slot's Row, so old and new
+//     position are always identical — reissuing the same paint in place is
+//     guaranteed to fully recover whatever the border recolor incidentally
+//     erased, with no risk of a partial-footprint gap. Bumping
+//     inlineImagePaintGen (which injectInlineImages reads to force its
+//     trailing paint line dirty) gets Bubble Tea's own per-line diff to
+//     repaint just that line — the same seamless mechanism an ordinary
+//     scroll already uses — without tea.ClearScreen's visible full-screen
+//     flash. Selection changes that don't touch any visible image skip
+//     this entirely — bumping/clearing on every selection move regardless
+//     caused a visible blink on every arrow-key step through a feed with
+//     any inline image on screen (an earlier, since-fixed regression).
 func (a App) syncInlineImages() (App, tea.Cmd) {
 	var slots []screens.InlineImageSlot
 	var selKey string
@@ -2622,12 +2699,13 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		a.pendingKittyDeletes = accumulateKittyDeletes(a.pendingKittyDeletes, toDelete)
 	} else {
 		sig := inlineImageSignature(slots)
-		selChanged := selKey != a.inlineImageLastSelKey
-		needsRepaint := sig != a.inlineImageLastSig ||
-			(selChanged && (selectionTouchesSlot(selKey, slots) || selectionTouchesSlot(a.inlineImageLastSelKey, slots)))
+		action := decideInlineImageRepaint(sig, a.inlineImageLastSig, selKey, a.inlineImageLastSelKey, slots)
 		a.inlineImageLastSig = sig
 		a.inlineImageLastSelKey = selKey
-		if needsRepaint {
+		switch action {
+		case repaintPositionChanged:
+			cmds = append(cmds, tea.ClearScreen)
+		case repaintSelectionTouch:
 			a.inlineImagePaintGen++
 		}
 	}
