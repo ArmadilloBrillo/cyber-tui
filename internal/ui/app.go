@@ -179,6 +179,20 @@ type App struct {
 	// single-image view (existing behavior, arrows never shown).
 	imageCarouselItems []string
 	imageCarouselIndex int
+	// carouselCycleGen is bumped on every left/right carousel keypress and
+	// captured by the debounce tick cycleImageCarousel schedules (see its
+	// doc comment) — holding the key down just moves imageCarouselIndex and
+	// reschedules the tick; only the tick whose gen still matches when it
+	// fires actually starts the (expensive: real decode+encode work even on
+	// a cache hit, see openImageInTerminal) fetch for wherever the index
+	// ended up. Without this, holding the key fired one fetch per repeat,
+	// almost all wasted on results that would just be discarded by
+	// imageFetchGen's newest-wins guard — confirmed live to leave the
+	// carousel's counter racing far ahead of the displayed image, and,
+	// after enough of a backlog, an occasional black screen (needing a
+	// keypress to recover) plausibly from the sheer volume of near-
+	// simultaneous full-frame renders that backlog produced.
+	carouselCycleGen int
 	// imageCache holds decoded images already fetched during the current
 	// modal's lifetime, keyed by URL, so cycling back to one skips the
 	// network fetch. Cleared whenever the modal closes.
@@ -260,6 +274,21 @@ type App struct {
 	inlineImageStaleRows    []int
 	inlineImageLastSelKey   string
 	inlineImagePaintGen     int
+	// sixelRepaintGen is a monotonically incrementing counter, bumped
+	// (never reset — same never-auto-expire posture as pendingKittyDeletes)
+	// each time a Sixel full-screen repaint is newly triggered (a stale row
+	// in syncInlineImages, or a size-changed carousel cycle in
+	// handleImageViewer). sixelFullRepaint (layout.go) encodes it into a
+	// zero-width true-color SGR marker so two consecutive *actually
+	// flushed* repaint frames never produce identical bytes for an
+	// unchanged row — a fixed marker (like inlineImagePaintGen's %2
+	// toggle) isn't enough here: Bubble Tea's per-line diff would skip
+	// resending any row whose bytes match the last flushed frame, and
+	// after sixelFullRepaint's real erase, a skipped row comes back
+	// genuinely blank rather than merely stale. Confirmed live: this
+	// showed up as stale pixels on fast scroll and, worse, the whole
+	// screen going black on fast carousel cycling.
+	sixelRepaintGen int
 
 	// kittyPlacementIDs assigns a stable id (used as both image id and
 	// placement id, see imgview.EncodeKitty) to each inline image slot ever
@@ -605,7 +634,8 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 		a.imageNeedsCleanup = (a.graphicsProtocol == imgview.ProtocolKitty)
 		a.imageCarouselItems = nil
 		a.imageCarouselIndex = 0
-		a.imageFetchGen++ // invalidate anything still in flight
+		a.imageFetchGen++    // invalidate anything still in flight
+		a.carouselCycleGen++ // invalidate any pending debounce tick — see its doc comment for why a stale one firing after imageCarouselItems is nil'd would panic
 		a.imageCache = nil
 		if a.graphicsProtocol == imgview.ProtocolSixel {
 			// Sixel has no delete-placement primitive like Kitty's a=d,d=A, and
@@ -2747,15 +2777,41 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		a.pendingKittyDeletes = accumulateKittyDeletes(a.pendingKittyDeletes, toDelete)
 		a.inlineImageStaleRows = nil
 	} else {
+		// iTerm2 and Sixel both need to know which rows just went stale (a
+		// moved or removed image) — the two protocols just do different
+		// things with that fact in View() (see injectInlineImages,
+		// layout.go): iTerm2 resends the row's real content in place with no
+		// erase (forceRowsDirty), which was proven sufficient on real
+		// iTerm2. Sixel needs an actual full-screen erase — proven, on real
+		// Konsole hardware across three rounds of live testing, to be the
+		// only thing that reliably clears its raster pixels at all — done as
+		// a single write from View() (ansi.EraseEntireScreen prepended to
+		// the frame plus every row forced dirty) rather than a tea.ClearScreen
+		// Cmd, whose immediate erase-write followed by a delayed content
+		// flush on the next render tick is what caused the bad flicker in
+		// the tea.ClearScreen attempt (confirmed by reading bubbletea's
+		// standardRenderer.clearScreen()/flush(), v1.3.10).
 		current, staleRows := syncInlineImageErasures(slots, rowOrigin, colOrigin, a.inlineImageVisibleRects)
 		a.inlineImageVisibleRects = current
 		a.inlineImageStaleRows = staleRows
+		if a.graphicsProtocol == imgview.ProtocolSixel && len(staleRows) > 0 {
+			a.sixelRepaintGen++
+		}
 
 		selChanged := selKey != a.inlineImageLastSelKey
 		touchesVisible := selChanged && (selectionTouchesSlot(selKey, slots) || selectionTouchesSlot(a.inlineImageLastSelKey, slots))
 		a.inlineImageLastSelKey = selKey
 		if touchesVisible {
 			a.inlineImagePaintGen++
+			if a.graphicsProtocol == imgview.ProtocolSixel {
+				// See sixelRepaintGen's doc comment (App struct): a
+				// selection recolor without a position change never
+				// touches inlineImageStaleRows, so this is the only
+				// trigger for that case — needed so injectInlineImages'
+				// trailing-line marker (layout.go) is collision-proof here
+				// too, not just for the stale-row full-repaint case.
+				a.sixelRepaintGen++
+			}
 		}
 	}
 
@@ -3005,14 +3061,26 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 			}
 			return a, openExternalURL(m.rawURL), true
 		}
-		// Snapshot the outgoing box size only if the modal was already open
-		// (a real carousel cycle) — a fresh o-open or reopen-after-close has
-		// no previous on-screen box to worry about. compositeOverlays uses
-		// this to force just the previous box's row range dirty if the new
-		// image is a different size, instead of a full tea.ClearScreen.
-		if a.imageModalOpen {
+		// wasOpen is true only for a genuine carousel cycle (the modal was
+		// already open), not a fresh o-open or reopen-after-close, which
+		// have no previous on-screen box to worry about.
+		wasOpen := a.imageModalOpen
+		// Snapshot the outgoing box size only for a genuine cycle.
+		// compositeOverlays uses this, when the new image is a different
+		// size, to force the previous box's row range dirty (iTerm2) or
+		// trigger a full single-write repaint (Sixel) — see its doc comment.
+		if wasOpen {
 			a.imageModalPrevRows = a.imageModalRows
 			a.imageModalPrevCols = a.imageModalCols
+			if a.graphicsProtocol == imgview.ProtocolSixel && (a.imageModalRows != m.rows || a.imageModalCols != m.cols) {
+				// Same trigger compositeOverlays' "cycled" check (layout.go)
+				// will make from imageModalPrevRows/Cols vs the new dims —
+				// computed here too, one step earlier, since both dims are
+				// already in hand. See sixelRepaintGen's doc comment (App
+				// struct) for why this needs its own generation bump rather
+				// than a fixed marker.
+				a.sixelRepaintGen++
+			}
 		} else {
 			a.imageModalPrevRows = 0
 			a.imageModalPrevCols = 0
@@ -3038,17 +3106,43 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageModalEncoded = m.encodedFrames[m.idx]
 		nextIdx := (m.idx + 1) % len(m.encodedFrames)
 		return a, gifFrameTickCmd(m.encodedFrames, m.delays, nextIdx, m.delays[m.idx], m.gen), true
+	case carouselCycleSettledMsg:
+		if m.gen != a.carouselCycleGen {
+			return a, nil, true // superseded by a later left/right press
+		}
+		a2, cmd := a.openImageInTerminal(a.imageCarouselItems[a.imageCarouselIndex])
+		return a2, cmd, true
 	}
 	return a, nil, false
 }
 
+// carouselCycleDebounce bounds how long cycleImageCarousel waits after the
+// last left/right press before actually starting a fetch — see
+// carouselCycleGen's doc comment (App struct) for why.
+const carouselCycleDebounce = 120 * time.Millisecond
+
+// carouselCycleSettledMsg fires carouselCycleDebounce after a left/right
+// carousel press; only acted on if gen still matches a.carouselCycleGen
+// (handleImageViewer), i.e. no further press has happened since.
+type carouselCycleSettledMsg struct{ gen int }
+
 // cycleImageCarousel moves to the next/prev image in imageCarouselItems
-// (wrapping around) and starts fetching it. The currently displayed image
-// stays on screen until the new one arrives.
+// (wrapping around) — the counter/displayed index updates immediately, so
+// holding the key down feels responsive — but doesn't start fetching it
+// directly. See carouselCycleGen's doc comment (App struct): fetching is
+// real, non-trivial work (openImageInTerminal decodes+encodes even on an
+// image-bytes cache hit), so firing one per keypress while a key is held
+// wastes almost all of it on results imageFetchGen's newest-wins guard
+// would just discard anyway. Debouncing via carouselCycleDebounce means a
+// held key only ever fetches the image the user actually lands on.
 func (a App) cycleImageCarousel(delta int) (App, tea.Cmd) {
 	n := len(a.imageCarouselItems)
 	a.imageCarouselIndex = (a.imageCarouselIndex + delta + n) % n
-	return a.openImageInTerminal(a.imageCarouselItems[a.imageCarouselIndex])
+	a.carouselCycleGen++
+	gen := a.carouselCycleGen
+	return a, tea.Tick(carouselCycleDebounce, func(time.Time) tea.Msg {
+		return carouselCycleSettledMsg{gen: gen}
+	})
 }
 
 // handleURLPickerKey processes keyboard input while the URL picker overlay is open.

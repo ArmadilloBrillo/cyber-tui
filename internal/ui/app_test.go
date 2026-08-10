@@ -2284,6 +2284,14 @@ func TestHandleURLPickerKey_Enter_SingleImage_NoCarousel(t *testing.T) {
 	}
 }
 
+// TestUpdate_ImageModal_LeftRight_CyclesWithoutClosing confirms a left/right
+// press updates the carousel index and schedules a debounce tick
+// (carouselCycleGen bumped, a non-nil cmd) but does NOT start the real
+// fetch immediately — see cycleImageCarousel's doc comment for why: holding
+// the key down should feel responsive (index moves right away) without
+// firing one expensive fetch per repeat. The fetch only actually starts
+// once the debounce tick lands (simulated here via carouselCycleSettledMsg)
+// and its gen still matches, i.e. nothing superseded it.
 func TestUpdate_ImageModal_LeftRight_CyclesWithoutClosing(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolKitty
@@ -2304,16 +2312,57 @@ func TestUpdate_ImageModal_LeftRight_CyclesWithoutClosing(t *testing.T) {
 		t.Error("expected carousel items to survive cycling")
 	}
 	if cmd == nil {
-		t.Fatal("expected a fetch cmd for the newly cycled-to image")
+		t.Fatal("expected a debounce-tick cmd scheduled for the newly cycled-to image")
 	}
-	if a2.imageFetchGen == genBefore {
-		t.Error("expected imageFetchGen to advance on cycle")
+	if a2.imageFetchGen != genBefore {
+		t.Error("expected imageFetchGen NOT to advance yet — the fetch is debounced")
+	}
+	if a2.carouselCycleGen == a.carouselCycleGen {
+		t.Error("expected carouselCycleGen bumped on cycle")
+	}
+
+	m3, cmd3, ok := a2.handleImageViewer(carouselCycleSettledMsg{gen: a2.carouselCycleGen})
+	if !ok {
+		t.Fatal("expected carouselCycleSettledMsg to be handled")
+	}
+	if cmd3 == nil {
+		t.Fatal("expected the real fetch cmd once the debounce tick lands")
+	}
+	if m3.imageFetchGen == genBefore {
+		t.Error("expected imageFetchGen to advance once the debounce tick fires")
 	}
 
 	m2, _ := a2.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	a3 := m2.(App)
 	if a3.imageCarouselIndex != 0 {
 		t.Errorf("expected carousel index to wrap/return to 0 after left, got %d", a3.imageCarouselIndex)
+	}
+}
+
+// TestCycleImageCarousel_SupersededTickDoesNothing confirms a debounce tick
+// whose gen no longer matches a.carouselCycleGen (a later left/right press
+// happened before it fired) is a no-op — the whole point of debouncing is
+// that holding the key only ever fetches the image the user lands on, not
+// every intermediate one.
+func TestCycleImageCarousel_SupersededTickDoesNothing(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	genBefore := a.imageFetchGen
+
+	a2, _ := a.cycleImageCarousel(+1)  // gen N
+	a3, _ := a2.cycleImageCarousel(+1) // gen N+1, supersedes the first tick
+
+	m, cmd, ok := a3.handleImageViewer(carouselCycleSettledMsg{gen: a2.carouselCycleGen})
+	if !ok {
+		t.Fatal("expected carouselCycleSettledMsg to be handled even when superseded")
+	}
+	if cmd != nil {
+		t.Error("expected no fetch cmd for a superseded debounce tick")
+	}
+	if m.imageFetchGen != genBefore {
+		t.Error("expected imageFetchGen untouched by a superseded debounce tick")
 	}
 }
 
@@ -2526,6 +2575,74 @@ func TestHandleImageViewer_ITerm2CycleSuccess_SnapshotsPrevDimsNoClearScreen(t *
 	}
 	if a2.imageModalRows != 4 || a2.imageModalCols != 8 {
 		t.Errorf("expected current dims updated to the new image (8x4), got %dx%d", a2.imageModalCols, a2.imageModalRows)
+	}
+}
+
+// TestHandleImageViewer_SixelCycleSuccess_NoClearScreen covers a real
+// carousel cycle on Sixel to a different-sized image (mirrors the iTerm2
+// case above): still no Cmd queued — the repaint decision is made in
+// View() from a.sixelRepaintGen, not a one-shot Update()-side command (see
+// its doc comment, App struct, for why) — but the generation bump that
+// triggers sixelFullRepaint in compositeOverlays must have happened.
+func TestHandleImageViewer_SixelCycleSuccess_NoClearScreen(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolSixel
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	a.imageModalOpen = true
+	a.imageModalCols = 20
+	a.imageModalRows = 10
+	startGen := a.sixelRepaintGen
+
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 8, rows: 4})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd on a Sixel carousel cycle")
+	}
+	if a2.imageModalRows != 4 || a2.imageModalCols != 8 {
+		t.Errorf("expected current dims updated to the new image (8x4), got %dx%d", a2.imageModalCols, a2.imageModalRows)
+	}
+	if a2.sixelRepaintGen == startGen {
+		t.Error("expected sixelRepaintGen bumped on a size-changed Sixel cycle")
+	}
+}
+
+// TestHandleImageViewer_SixelCycleSameSize_NoRepaintGenBump confirms a
+// cycle to a same-sized image doesn't bump sixelRepaintGen — nothing would
+// be left over to repaint, since the new image's footprint exactly covers
+// the old one.
+func TestHandleImageViewer_SixelCycleSameSize_NoRepaintGenBump(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolSixel
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	a.imageModalOpen = true
+	a.imageModalCols = 8
+	a.imageModalRows = 4
+	startGen := a.sixelRepaintGen
+
+	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 8, rows: 4})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if a2.sixelRepaintGen != startGen {
+		t.Error("expected sixelRepaintGen unchanged for a same-size Sixel cycle")
+	}
+}
+
+// TestHandleImageViewer_SixelFreshOpen_NoClearScreen covers a fresh o-open
+// on Sixel (modal not already open): no ClearScreen, same as every other
+// Sixel case — see TestHandleImageViewer_SixelCycleSuccess_NoClearScreen.
+func TestHandleImageViewer_SixelFreshOpen_NoClearScreen(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolSixel
+
+	_, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", encoded: "seq", cols: 10, rows: 5})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if cmd != nil {
+		t.Error("expected no ClearScreen on a fresh Sixel open — nothing previous to clean up")
 	}
 }
 
@@ -3206,6 +3323,55 @@ func TestSyncInlineImages_DisablingClearsStaleKittyPlacements(t *testing.T) {
 	}
 	if _, ok := a.pendingKittyDeletes[2]; !ok {
 		t.Errorf("expected placement id 2 to be queued for deletion, got %v", a.pendingKittyDeletes)
+	}
+}
+
+// TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2 confirms Sixel and
+// iTerm2 both compute inlineImageStaleRows identically — the two protocols
+// only diverge in what View() does with that fact (see injectInlineImages/
+// sixelFullRepaint in layout.go), not in whether Update() tracks it.
+// Neither queues a Cmd: the repaint decision (forceRowsDirty for iTerm2,
+// sixelFullRepaint for Sixel) is made in View() from this same tracked
+// state, not from a one-shot Update()-side command — deliberately, since a
+// one-shot tea.ClearScreen Cmd both flashed badly (confirmed live) and, per
+// this codebase's own established Bubble Tea pitfall (see the
+// pendingKittyDeletes/inlineImageStaleRows pattern this mirrors), risks
+// being silently dropped by the renderer's throttling.
+func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
+	stale := map[string]inlineImageRect{
+		"post:gone:0": {Row: 3, Col: 1, Cols: 10, Rows: 4},
+	}
+
+	sixel := App{
+		graphicsProtocol:        imgview.ProtocolSixel,
+		inlineImages:            false, // canInlineImages() false: current slots stay empty, so the tracked entry above reads as stale
+		inlineImageVisibleRects: stale,
+	}
+	sixelOut, cmd := sixel.syncInlineImages()
+	if cmd != nil {
+		t.Error("expected no cmd for Sixel — the repaint decision is made in View(), not queued here")
+	}
+	if len(sixelOut.inlineImageStaleRows) == 0 {
+		t.Error("expected inlineImageStaleRows populated for Sixel, same as iTerm2")
+	}
+	if sixelOut.sixelRepaintGen == sixel.sixelRepaintGen {
+		t.Error("expected sixelRepaintGen bumped for a stale Sixel row")
+	}
+
+	iterm := App{
+		graphicsProtocol:        imgview.ProtocolITerm2,
+		inlineImages:            false,
+		inlineImageVisibleRects: stale,
+	}
+	itermOut, cmd := iterm.syncInlineImages()
+	if cmd != nil {
+		t.Error("expected no cmd for a stale iTerm2 row — it relies on forceRowsDirty in View(), not a cmd")
+	}
+	if len(itermOut.inlineImageStaleRows) != len(sixelOut.inlineImageStaleRows) {
+		t.Errorf("expected iTerm2 and Sixel to track the same stale rows, got %v vs %v", itermOut.inlineImageStaleRows, sixelOut.inlineImageStaleRows)
+	}
+	if itermOut.sixelRepaintGen != iterm.sixelRepaintGen {
+		t.Error("expected sixelRepaintGen untouched for iTerm2")
 	}
 }
 

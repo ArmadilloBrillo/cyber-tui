@@ -571,6 +571,32 @@ func TestCompositeOverlays_KittyCleanupFallsThroughToInlineImages(t *testing.T) 
 	}
 }
 
+// TestCompositeOverlays_ImageModalOpen_StillDrawsInlineImagesBehindIt
+// confirms inline-image thumbnails still get drawn into the frame while the
+// fullscreen modal is open, rather than being skipped entirely as before.
+// Needed so sixelFullRepaint (a real full-screen erase, fired on a
+// size-changed Sixel carousel cycle) has something to restore them from —
+// before this fix, a Sixel cycle wiped the whole screen and nothing put the
+// thumbnails back until the modal closed (confirmed live).
+func TestCompositeOverlays_ImageModalOpen_StillDrawsInlineImagesBehindIt(t *testing.T) {
+	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
+	a := App{
+		width: 40, height: 10,
+		graphicsProtocol: imgview.ProtocolKitty,
+		imageModalOpen:   true,
+		inlineImageCache: map[string]string{inlineImageCacheKey(slot, imgview.ProtocolKitty): "\x1b_Gfake\x1b\\"},
+	}
+	l := fakeModalRenderer{slots: []screens.InlineImageSlot{slot}, rowOrigin: 5, colOrigin: 7}
+	out := compositeOverlays(l, a, strings.Repeat("x\n", 9)+"x")
+
+	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
+		t.Error("expected the inline image's cached escape sequence in the output even while the modal is open")
+	}
+	if !strings.Contains(out, "\x1b[6;9H") { // rowOrigin(5)+slot.Row(1)=6, colOrigin(7)+slot.ColIndent(2)=9
+		t.Errorf("expected the inline image positioned at rowOrigin+Row, colOrigin+ColIndent; got %q", out)
+	}
+}
+
 // TestCompositeOverlays_ImageModalCycle_ForcesPrevBoxRowsDirty confirms a
 // carousel cycle to a differently-sized image (imageModalPrevRows/Cols
 // differing from the current dims) forces the previous box's row range
@@ -628,6 +654,39 @@ func TestCompositeOverlays_ImageModalCycle_ForcesPrevBoxRowsDirty(t *testing.T) 
 	}
 }
 
+// TestCompositeOverlays_ImageModalCycle_SixelGetsFullRepaint confirms Sixel
+// doesn't go through the iTerm2 forceRowsDirty prev-box block above — it
+// gets sixelFullRepaint instead (a real erase, prepended once, plus every
+// row forced dirty), the only mechanism live-confirmed on real Konsole
+// hardware to actually clear stray Sixel pixels on a size-changed cycle.
+func TestCompositeOverlays_ImageModalCycle_SixelGetsFullRepaint(t *testing.T) {
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line%d", i+1)
+	}
+	base := strings.Join(lines, "\n")
+
+	a := App{
+		width:              40,
+		height:             20,
+		graphicsProtocol:   imgview.ProtocolSixel,
+		imageModalOpen:     true,
+		imageCarouselItems: []string{"https://x.com/a.jpg", "https://x.com/b.jpg"},
+		imageModalPrevRows: 10,
+		imageModalPrevCols: 20,
+		imageModalRows:     3,
+		imageModalCols:     20,
+	}
+
+	out := compositeOverlays(TabsLayout{}, a, base)
+	if !strings.HasPrefix(out, "\x1b[2J\x1b[H") {
+		t.Errorf("expected a full-screen erase prepended to the frame, got %q", out)
+	}
+	if !strings.Contains(out, "line1"+sixelDirtyMarker(a.sixelRepaintGen)) {
+		t.Errorf("expected every row forced dirty (e.g. row 1), got %q", out)
+	}
+}
+
 // TestInjectInlineImages_PaintGenTogglesTrailingLineBytes confirms the
 // inlineImagePaintGen dirty-marker mechanism actually does what
 // syncInlineImages/injectInlineImages depend on it for: without it, a
@@ -660,6 +719,32 @@ func TestInjectInlineImages_PaintGenTogglesTrailingLineBytes(t *testing.T) {
 	}
 }
 
+// TestInjectInlineImages_SixelRepaintGenAlwaysDiffersOnChange is the Sixel
+// equivalent of TestInjectInlineImages_PaintGenTogglesTrailingLineBytes,
+// but for sixelRepaintGen instead of inlineImagePaintGen's %2 toggle: a
+// fixed 2-way toggle has the same collision class the round-5 fix closed
+// for sixelFullRepaint (two consecutive *actually flushed* frames landing
+// on the same parity are byte-identical, so Bubble Tea wrongly skips
+// resending this line — which carries the real per-slot image draws).
+// Every distinct gen must differ, not just odd-vs-even ones.
+func TestInjectInlineImages_SixelRepaintGenAlwaysDiffersOnChange(t *testing.T) {
+	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
+	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolSixel): "\x1bPq...fake\x1b\\"}
+	slots := []screens.InlineImageSlot{slot}
+
+	a1 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolSixel, inlineImageCache: cache, sixelRepaintGen: 1}
+	a2 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolSixel, inlineImageCache: cache, sixelRepaintGen: 2}
+	a3 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolSixel, inlineImageCache: cache, sixelRepaintGen: 3}
+
+	out1 := injectInlineImages(a1, "base", slots, 5, 7)
+	out2 := injectInlineImages(a2, "base", slots, 5, 7)
+	out3 := injectInlineImages(a3, "base", slots, 5, 7)
+
+	if out1 == out2 || out2 == out3 || out1 == out3 {
+		t.Error("expected every distinct sixelRepaintGen to produce different output, not just odd-vs-even")
+	}
+}
+
 // TestForceRowsDirty confirms it appends the inert SGR-reset marker to
 // exactly the requested absolute rows (1-indexed) of base, leaving every
 // other line untouched, and is a no-op for a row index out of base's range.
@@ -670,7 +755,7 @@ func TestForceRowsDirty(t *testing.T) {
 	}
 	base := strings.Join(lines, "\n")
 
-	out := forceRowsDirty(base, []int{6, 12, 999})
+	out := forceRowsDirty(base, []int{6, 12, 999}, "\x1b[0m")
 	outLines := strings.Split(out, "\n")
 	if outLines[5] != "line6\x1b[0m" {
 		t.Errorf("expected row 6 forced dirty, got %q", outLines[5])
@@ -683,6 +768,54 @@ func TestForceRowsDirty(t *testing.T) {
 	}
 	if len(outLines) != len(lines) {
 		t.Errorf("expected out-of-range row 999 to be ignored, got %d lines want %d", len(outLines), len(lines))
+	}
+}
+
+// TestSixelFullRepaint confirms it prepends a real full-screen erase and
+// forces every row dirty, not just a subset — see its doc comment for why:
+// a real erase requires every line to be resent afterward, or a line
+// Bubble Tea's diff thinks is unchanged would come back genuinely blank
+// rather than stale.
+func TestSixelFullRepaint(t *testing.T) {
+	lines := make([]string, 5)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line%d", i+1)
+	}
+	base := strings.Join(lines, "\n")
+
+	out := sixelFullRepaint(base, len(lines), 42)
+	if !strings.HasPrefix(out, "\x1b[2J\x1b[H") {
+		t.Fatalf("expected the erase+home escapes prepended, got %q", out)
+	}
+	body := strings.TrimPrefix(out, "\x1b[2J\x1b[H")
+	outLines := strings.Split(body, "\n")
+	if len(outLines) != len(lines) {
+		t.Fatalf("expected %d lines, got %d", len(lines), len(outLines))
+	}
+	marker := sixelDirtyMarker(42)
+	for i, line := range outLines {
+		want := fmt.Sprintf("line%d%s", i+1, marker)
+		if line != want {
+			t.Errorf("row %d: expected %q, got %q", i+1, want, line)
+		}
+	}
+}
+
+// TestSixelFullRepaint_DifferentGensNeverCollide is the actual regression
+// test for the bug this round fixes: two consecutive *actually flushed*
+// repaint frames (which, under fast scroll/cycle, can legitimately both be
+// sixelFullRepaint calls — see its doc comment) must never produce
+// byte-identical output for a row whose real content didn't change,
+// because Bubble Tea's per-line diff would then wrongly skip resending it
+// after the real erase, leaving it genuinely blank. A fixed marker (the
+// pre-fix behavior) fails this immediately; sixelDirtyMarker(gen) must not.
+func TestSixelFullRepaint_DifferentGensNeverCollide(t *testing.T) {
+	base := "unchanged line"
+
+	out1 := sixelFullRepaint(base, 1, 1)
+	out2 := sixelFullRepaint(base, 1, 2)
+	if out1 == out2 {
+		t.Errorf("expected different gens to produce different output for an unchanged row, both got %q", out1)
 	}
 }
 

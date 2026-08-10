@@ -348,3 +348,110 @@ reliably render on WezTerm/Windows — known, accepted limitation, not planned t
 Both the scroll fix (PR #103) and the downscaling improvement are kept — genuinely correct
 and useful independent of this outcome, and downscaling benefits every terminal/platform by
 cutting transmitted payload size for small thumbnail slots.
+
+---
+
+## 10. Sixel/Konsole: stale pixels on scroll and carousel-cycle — seven rounds to a working fix
+
+Reported on Konsole (Sixel protocol): inline images left stale/ghost pixels behind on
+scroll, and the fullscreen carousel left stale pixels on cycle. Suspected at first as a
+same-day regression from an unrelated rework (`d9aa58f` onward, earlier that day) that had
+added a selection-recolor repaint fix for a bug found on **iTerm2** and applied it jointly to
+`iTerm2 || Sixel` via a shared code path. Seven live-tested rounds, on real Konsole hardware
+each time (the sandbox has no Sixel-capable terminal), converged on a working fix — the
+findings below correct several wrong turns along the way, kept here so the next person
+doesn't retread them.
+
+**Round 1 — targeted `CSI 2K` line erase, reverted.** Tried prepending an Erase-in-Line
+escape to each stale row before Bubble Tea's normal per-line resend. Live result: didn't
+clear the stale pixels, and additionally corrupted unrelated on-screen text on the carousel's
+first cycle (`CSI 2K` erases the *entire* line, including content outside the image's own
+footprint that the resend afterward didn't always cover).
+
+**Round 2 — `tea.ClearScreen` Cmd, reverted.** The one mechanism already proven to work
+elsewhere in this codebase (the pre-existing Sixel modal-close handler, `app.go`, already
+used it). Live result: pixels *did* clear, but with a bad flash, and — a real correctness bug
+— wiped inline-image thumbnails behind the fullscreen modal until it closed, since
+`compositeOverlays` never redrew anything behind an open modal and nothing else repainted it.
+
+**Round 3 — revert Sixel to its pre-`d9aa58f` baseline (no erasure at all), reverted.** The
+user recalled Sixel/Konsole working fine before that day's rework, and the code from just
+before it really did have zero erasure/repaint machinery for Sixel — worth checking whether
+"stop doing anything" was itself the fix. Live result: **also broken** — "the same issues
+persist." This ruled out the regression theory: Sixel's stale-pixel problem predates the
+iTerm2-motivated rework; it isn't collateral damage, and doing nothing isn't an option.
+
+**Root cause, established across rounds 1–3**: no *in-place* resend or erase — full-line,
+partial, or none at all — reliably clears Sixel raster pixels on Konsole. Only a genuine
+full-screen erase does (confirmed both by the pre-existing modal-close handler and by round
+2's live test). Every fix that had worked for iTerm2 that day (`forceRowsDirty`: resend real
+content, no erase) had already been applied to Sixel via the shared code path and had already
+failed — it just hadn't been noticed as Sixel-specific before this investigation.
+
+**Round 4 — single-write full repaint.** `tea.ClearScreen` flashes because
+`standardRenderer.clearScreen()` (`bubbletea@v1.3.10/standard_renderer.go`) does two
+*separate* writes: it executes the erase immediately when the Cmd is processed, then just
+marks the render cache empty — the actual content redraw only happens on the next framerate
+tick (up to ~16ms later by default), a real visible blank gap, confirmed by reading the
+library source. Fix: emit the same erase (`ansi.EraseEntireScreen` + `ansi.CursorHomePosition`)
+as the first bytes of `View()`'s own return value instead, so the erase and the full redraw
+travel in one write with nothing in between — `sixelFullRepaint` (`layout.go`). Since a real
+erase means any row Bubble Tea's diff decides to *skip* (because its bytes happen to match
+last frame) would come back genuinely blank rather than stale, every row is also forced dirty
+via `forceRowsDirty`, not just the ones known to have moved. Triggered from state already
+tracked safely against Bubble Tea's render-throttling (`inlineImageStaleRows` for scroll, an
+`imageModalPrevRows/Cols` size mismatch for carousel-cycle) instead of a one-shot Cmd. Also
+fixed the round-2 hidden-thumbnails bug in the same pass, by having `compositeOverlays` draw
+inline images into the frame *before* compositing the modal on top, not skip that step
+entirely while the modal is open.
+
+**Round 5 — the fixed marker collision.** Live result: slow scroll clean, fast scroll still
+stale; carousel worked but occasionally turned the *entire screen* black. `forceRowsDirty`
+force-dirties a row by appending a marker — a fixed `"\x1b[0m"` was fine for a single
+repainted-vs-normal comparison, but under fast input Bubble Tea can drop several intermediate
+`View()` calls before a flush (confirmed by reading `flush()`'s ticker loop), so two
+*actually delivered* frames can both be repaints. Two repaints with the same fixed marker
+produce byte-identical output for any row whose real text didn't change between them —
+Bubble Tea's diff then skips resending it, and since a real erase already wiped the screen,
+a skipped row comes back genuinely blank rather than stale. The more rows involved (the
+carousel case touches the whole screen), the more visible the failure — hence occasional
+full blackouts specifically there. Fixed with a collision-proof marker: `App.sixelRepaintGen`,
+a monotonic counter bumped at both trigger points, encoded as a zero-width 24-bit true-color
+SGR set immediately followed by a hard reset (`sixelDirtyMarker`, `layout.go`) — no characters
+in between, so nothing is ever actually colored, and ~16.7 million distinct values before two
+real flushes could coincidentally collide (not realistic from keyboard input).
+`forceRowsDirty` took a `marker` parameter so iTerm2's existing fixed-marker call sites stay
+byte-for-byte unchanged.
+
+**Round 6 — the same collision, one more spot.** Live result: fast scroll much better, "almost
+okay," not fully clean. `injectInlineImages`' trailing line — the one carrying the actual
+per-slot image draws — still used `inlineImagePaintGen`'s original fixed `%2` parity toggle
+for Sixel (deliberately left alone in round 5, since it wasn't yet confirmed broken). Fast
+scrolling in this app typically moves the arrow-key selection at the same time it scrolls the
+viewport, so the selection-touch trigger and the position-change trigger fire on the same
+Updates — the parity toggle's identical collision risk was still live there. Fixed by having
+`touchesVisible` also bump `sixelRepaintGen` for Sixel, and using `sixelDirtyMarker` there
+unconditionally instead of the toggle (still exactly a fixed marker for iTerm2).
+
+**Round 7 — the carousel's remaining black screen.** Live result: fast scroll "barely any
+stale pixels" — solved. Carousel: holding the cycle key raced the on-screen index counter far
+ahead of the displayed image, and after the burst "caught up," the screen went black except
+the tab bar until any keypress. `openImageInTerminal` (`app.go`) redoes the full decode+encode
+work on *every* cycle — real CPU cost — even on an image-bytes cache hit; `cycleImageCarousel`
+fired one of these per keypress with no debouncing. `imageFetchGen`'s newest-wins guard
+already discarded all but the last *result*, but did nothing to stop the wasted work or the
+resulting flood of Update/View cycles while a key was held — which matched the "counter races
+ahead of the image" symptom exactly, though this round couldn't fully confirm it as the exact
+mechanism behind the black screen without further hardware access. Fixed by debouncing:
+`cycleImageCarousel` moves the index immediately (counter stays responsive) but the real fetch
+now waits `carouselCycleDebounce` (120ms) via a `carouselCycleGen`-guarded `tea.Tick` —
+mirrors the existing `notify()`/`gifFrameTickCmd` gen+tick pattern already used elsewhere in
+this file. Live result: "carousel works much better." Considered resolved.
+
+**Current state**: Sixel and iTerm2 now use genuinely different repaint mechanisms — iTerm2
+resends real content with no erase (`forceRowsDirty`, unchanged since round 4), Sixel does a
+real single-write full-screen erase with a collision-proof dirty marker
+(`sixelFullRepaint`/`sixelDirtyMarker`, `sixelRepaintGen`). Kitty was never part of any of
+this — its placement-delete primitive means it never needed erasure or resend tricks at all.
+No known open issues; a true marker collision remains theoretically possible but requires
+~16.7 million repaint triggers between two actual flushes, not realistic from keyboard input.

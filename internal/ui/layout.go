@@ -83,12 +83,24 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 	case a.urlPickerOpen:
 		return overlayCenter(base, l.renderURLPicker(a), a.width, a.height)
 	}
+	slots, rowOrigin, colOrigin, _ := l.InlineImageSlots(a)
 	if a.imageModalOpen {
-		if (a.graphicsProtocol == imgview.ProtocolITerm2 || a.graphicsProtocol == imgview.ProtocolSixel) &&
-			a.imageModalPrevRows != 0 &&
-			(a.imageModalPrevRows != a.imageModalRows || a.imageModalPrevCols != a.imageModalCols) {
+		// Redraw inline-image thumbnails behind the modal before compositing
+		// it on top. Previously skipped entirely while the modal was open —
+		// harmless as long as nothing else touched the screen underneath,
+		// but the Sixel full-screen repaint below does, so without this a
+		// cycle would erase and never restore any thumbnail visible around
+		// the modal's edges (confirmed live: exactly this happened before
+		// this fix). Harmless no-op for iTerm2/Kitty, which don't erase
+		// anything behind the modal.
+		if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 || len(a.inlineImageStaleRows) > 0 {
+			base = injectInlineImages(a, base, slots, rowOrigin, colOrigin)
+		}
+		cycled := a.imageModalPrevRows != 0 &&
+			(a.imageModalPrevRows != a.imageModalRows || a.imageModalPrevCols != a.imageModalCols)
+		if a.graphicsProtocol == imgview.ProtocolITerm2 && cycled {
 			// A cycled-to image is a different size than the one it
-			// replaced. iTerm2/Sixel have no Kitty-style delete-by-placement
+			// replaced. iTerm2 has no Kitty-style delete-by-placement
 			// primitive, so stray raster pixels from the previous (possibly
 			// larger or differently-positioned) box can persist outside the
 			// new box's footprint. Force the previous box's full row range
@@ -113,7 +125,18 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 			for r := prevYOff + 1; r <= prevYOff+prevH; r++ {
 				rows = append(rows, r)
 			}
-			base = forceRowsDirty(base, rows)
+			base = forceRowsDirty(base, rows, "\x1b[0m")
+		} else if a.graphicsProtocol == imgview.ProtocolSixel && cycled {
+			// Sixel has no delete-by-placement primitive either, and a
+			// targeted prev-box erase (mirroring the iTerm2 technique above)
+			// was live-confirmed on real Konsole hardware to leave stray
+			// pixels and, in one case, corrupt unrelated on-screen text —
+			// only a real full-screen erase reliably clears Sixel raster
+			// there. See sixelFullRepaint's doc comment for why this is a
+			// single View()-side write rather than a tea.ClearScreen Cmd,
+			// and why gen (a.sixelRepaintGen, bumped in handleImageViewer)
+			// is needed rather than a fixed marker.
+			base = sixelFullRepaint(base, a.height, a.sixelRepaintGen)
 		}
 		textModal := l.renderImageModal(a)
 		composed := overlayCenter(base, textModal, a.width, a.height)
@@ -161,30 +184,90 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		}
 		base = strings.Join(lines, "\n")
 	}
-	slots, rowOrigin, colOrigin, _ := l.InlineImageSlots(a)
 	if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 || len(a.inlineImageStaleRows) > 0 {
 		return injectInlineImages(a, base, slots, rowOrigin, colOrigin)
 	}
 	return base
 }
 
-// forceRowsDirty appends an inert SGR-reset marker to each of the given
-// absolute (1-indexed) rows in base, forcing Bubble Tea's per-line diff to
-// resend that row's real, always-correct content instead of leaving whatever
-// an earlier out-of-band inline-image write left behind — see
-// syncInlineImageErasures. Mirrors the Kitty-modal-cleanup line edit above
-// (strings.Split/Join by "\n", index by absolute row - 1).
-func forceRowsDirty(base string, rows []int) string {
+// forceRowsDirty appends marker to each of the given absolute (1-indexed)
+// rows in base, forcing Bubble Tea's per-line diff to resend that row's
+// real, always-correct content instead of leaving whatever an earlier
+// out-of-band inline-image write left behind — see syncInlineImageErasures.
+// Mirrors the Kitty-modal-cleanup line edit above (strings.Split/Join by
+// "\n", index by absolute row - 1).
+//
+// marker must differ from whatever was appended to that same row in the
+// last frame Bubble Tea actually flushed to the terminal (not merely the
+// immediately-preceding View() call, which may never reach the terminal at
+// all under render-throttling) — an inert-but-fixed marker like "\x1b[0m"
+// only guarantees that for a single repainted-vs-normal comparison. See
+// sixelFullRepaint's doc comment for the case where that's not enough.
+func forceRowsDirty(base string, rows []int, marker string) string {
 	if len(rows) == 0 {
 		return base
 	}
 	lines := strings.Split(base, "\n")
 	for _, row := range rows {
 		if idx := row - 1; idx >= 0 && idx < len(lines) {
-			lines[idx] += "\x1b[0m"
+			lines[idx] += marker
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// sixelDirtyMarker builds a forceRowsDirty marker that's unique to gen: a
+// zero-width 24-bit true-color SGR set immediately followed by a hard
+// reset, with no characters in between to actually color — provably inert
+// visually, and distinct for any of gen's ~16.7 million values before it
+// wraps. See sixelFullRepaint's doc comment for why a fixed marker isn't
+// enough here.
+func sixelDirtyMarker(gen int) string {
+	r := byte(gen >> 16)
+	g := byte(gen >> 8)
+	b := byte(gen)
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm\x1b[0m", r, g, b)
+}
+
+// sixelFullRepaint prepends a real full-screen erase (ansi.EraseEntireScreen
+// + ansi.CursorHomePosition — the same two escapes bubbletea's own
+// standardRenderer.clearScreen() sends for a tea.ClearScreen command,
+// v1.3.10) to base and forces every row dirty via forceRowsDirty, so Bubble
+// Tea's per-line diff resends every line's real content rather than
+// skipping any that happen to match last frame's cache — which, after a
+// real erase, would otherwise leave a genuinely blank hole rather than a
+// stale-pixel one.
+//
+// This exists because a tea.ClearScreen Cmd was live-confirmed on real
+// Konsole hardware to be the only thing that reliably clears Sixel's raster
+// pixels there (no partial/targeted erase or plain resend worked, across
+// three rounds of live testing) — but it flashed badly. Reading
+// standardRenderer.clearScreen()/flush() explains why: clearScreen() writes
+// the erase immediately when the Cmd is processed, then just marks the
+// renderer's line cache empty; the actual content redraw only happens on
+// the next framerate tick (up to ~16ms later by default) — a real, visible
+// blank gap between the two writes, not just an inefficiency. Emitting the
+// same erase ourselves as the first bytes of View()'s own return value
+// keeps the erase and the full content redraw in one write, with nothing
+// in between for the terminal to paint.
+//
+// gen (App.sixelRepaintGen) must be threaded through rather than using a
+// fixed marker for every row: under fast scrolling/cycling, Bubble Tea can
+// drop several intermediate View() calls before a flush (confirmed by
+// reading flush()'s ticker loop), so two *actually flushed* frames can both
+// be repaints. A fixed marker makes those two frames byte-identical for any
+// row whose real text didn't change between them — Bubble Tea's diff then
+// skips resending it, and since a real erase just wiped the screen, that
+// row comes back genuinely blank rather than stale. Confirmed live as
+// stale pixels on fast scroll and, worse, the whole screen going black on
+// fast carousel cycling. sixelDirtyMarker(gen) is unique per trigger
+// instead, so two flushed repaints essentially never collide.
+func sixelFullRepaint(base string, height, gen int) string {
+	rows := make([]int, height)
+	for i := range rows {
+		rows[i] = i + 1
+	}
+	return ansi.EraseEntireScreen + ansi.CursorHomePosition + forceRowsDirty(base, rows, sixelDirtyMarker(gen))
 }
 
 // injectInlineImages appends absolute-cursor-positioned escape sequences for
@@ -203,10 +286,14 @@ func forceRowsDirty(base string, rows []int) string {
 // visible (e.g. every inline image just scrolled off-screen).
 //
 // A moved or removed image's stale rows (a.inlineImageStaleRows — see
-// syncInlineImageErasures) are forced dirty in base directly, via
-// forceRowsDirty, before any of the below is appended — that goes through
-// Bubble Tea's own per-line diff/resend for those specific lines, so it's
-// unaffected by the "one physical line" note below.
+// syncInlineImageErasures) are handled before any of the below is appended,
+// differently per protocol: iTerm2 forces just those rows dirty via
+// forceRowsDirty (a resend with no erase, proven sufficient on real iTerm2);
+// Sixel needs sixelFullRepaint's real full-screen erase instead (proven, on
+// real Konsole hardware, to be the only thing that actually clears its
+// raster pixels — see its doc comment). Both go through Bubble Tea's own
+// per-line diff/resend, so both are unaffected by the "one physical line"
+// note below.
 //
 // Everything else this function builds — image draws, Kitty deletes, the
 // trailing paint-gen marker — lands on one physical line: the whole return
@@ -240,7 +327,11 @@ func forceRowsDirty(base string, rows []int) string {
 // docs/plan-inline-images-improvements.md section 9 — inline/fullscreen
 // images on WezTerm/Windows are a known, accepted limitation.
 func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, rowOrigin, colOrigin int) string {
-	base = forceRowsDirty(base, a.inlineImageStaleRows)
+	if a.graphicsProtocol == imgview.ProtocolSixel && len(a.inlineImageStaleRows) > 0 {
+		base = sixelFullRepaint(base, a.height, a.sixelRepaintGen)
+	} else {
+		base = forceRowsDirty(base, a.inlineImageStaleRows, "\x1b[0m")
+	}
 	var sb strings.Builder
 	sb.WriteString(base)
 	for _, slot := range slots {
@@ -256,7 +347,21 @@ func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, row
 		sb.WriteString(imgview.DeleteKittyPlacement(id))
 	}
 	sb.WriteString(fmt.Sprintf("\x1b[%d;1H", a.height))
-	if a.inlineImagePaintGen%2 == 1 {
+	if a.graphicsProtocol == imgview.ProtocolSixel {
+		// Sixel gets the same collision-proof marker as sixelFullRepaint
+		// (sixelDirtyMarker), unconditionally rather than toggled on parity:
+		// a fixed 2-way toggle has the identical class of bug sixelRepaintGen
+		// was introduced to fix (two consecutive *actually flushed* frames
+		// landing on the same parity produce identical bytes, so this line
+		// — which carries the real per-slot image draws — gets wrongly
+		// skipped). Since sixelRepaintGen only advances when
+		// syncInlineImages actually detected something worth repainting
+		// (a stale row or a selection touching a visible image), appending
+		// it unconditionally still only forces a resend on frames that
+		// need one: unchanged gen + unchanged surrounding content is still
+		// byte-identical to last frame and correctly skippable.
+		sb.WriteString(sixelDirtyMarker(a.sixelRepaintGen))
+	} else if a.inlineImagePaintGen%2 == 1 {
 		// ponytail: a synthetic dirty marker working around the lack of a
 		// public "force this line dirty" API in Bubble Tea (it has an
 		// internal repaintMsg that does exactly this, but it's unexported —
