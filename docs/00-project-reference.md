@@ -370,6 +370,7 @@ Home feed of posts from followed users.
 - `d` on the selected post (own posts only) shows a y/n confirmation overlay; on `y` emits `DeletePostMsg`
 - Dense/relaxed display modes; post content truncated to 4 lines in list view
 - Timezone-aware timestamps via `displayTime()`
+- Every eligible inline image in a post's body renders inline (not just the first) when the InlineImages setting is on and a graphics protocol was detected (`VisibleInlineImages()`, `internal/ui/screens/inlineimage.go`) — see the `internal/ui/imgview` package section for protocol details and `docs/plan-inline-images-improvements.md` for the iTerm2/Sixel repaint workarounds this depends on
 
 Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg` (Content, Title, Topics, IsPublic, IsNSFW), `DeletePostMsg`  
 Key function: `ParseTopics(s string) []string` — splits comma-separated string, caps at 3  
@@ -387,6 +388,7 @@ Single post with all its replies in a scrollable pager.
 - `ScrollToReply(replyID)` scrolls to a specific reply (used by Notifications to deep-link)
 - **Persists across tab switches**: switching away from PostDetail (any nav key) no longer closes it — `PostDetailModel.SetPost` (the only thing that resets its state) isn't called again until a *different* post is opened, so the open post, its scroll position, and any in-progress reply draft just sit there until you come back. `activateScreen` (`layout.go`) checks `PostDetailModel.HasPost()`: landing on the origin tab *from elsewhere* resumes the post instead of showing that tab's own list; re-navigating to the origin tab *from PostDetail itself* (its own key/chord, or plain/ctrl `←`/`→` landing back on it, though cycling never does in one step — see `tabIndexOf`) is the escape hatch that actually closes it, matching Circ/C-Mail's re-press-the-tab-key convention. If the post was opened from inside a browsed Guild/Topic, closing it lands back on that same guild/topic, not the top-level list — Guilds/Topics' own browse state is untouched throughout, and PostDetail's check runs first in `activateScreen` so it "wins" while open. Mirrors Circ's background-room persistence (`docs/33-circ.md`) but architecturally simpler: pure REST content, no live subscription to keep alive. The tab-bar/nav "in detail" marker (`docs/02-menu-bar-navigation.md`) reflects this the same way it does for Circ/Guilds/Topics.
 - Plain `←`/`→` cycle tabs from PostDetail exactly like `ctrl+←`/`ctrl+→` already did (previously excluded — a live bug, not intentional). Cycling's tab-position lookup (`tabIndexOf`) resolves `screenPostDetail` to `postDetailReturn`'s position rather than defaulting to Feed's, so cycling away is anchored to wherever the post was actually opened from.
+- Inline images render for both the post and its replies (`VisibleInlineImages()`) — same gating/mechanism as Feed's, see that section
 
 Key types: `PostDetailModel`, `BackToFeedMsg`, `SubmitReplyMsg` (postID, parentReplyID, content), `DeletePostMsg`, `DeleteReplyMsg`  
 Key methods: `SetCurrentUsername(username)`, `RemoveReply(replyID)`, `HasPost()`, `Close()`
@@ -442,6 +444,8 @@ Settings are organised into static `settingsGroups`, each containing `settingsIt
 | Display | timeDisplayFormat (enum) |
 
 **Deferred fields** (read from API, never patched): `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics`
+
+**Local-only fields** (persisted to `~/.cyber-tui.json`, never sent to the API): `imageViewer` (enum, "terminal"/"browser" — "terminal" tries inline/fullscreen-modal rendering via `internal/ui/imgview` when a graphics protocol was detected, falling back to the browser only if none was; "browser" always opens images externally regardless of protocol detection), `inlineImages` (bool, gates Feed/Post Detail's automatic inline rendering independent of the fullscreen modal), `layoutName` ("tabs"/"miller" — see `internal/ui/layout.go`'s `layoutFromName`)
 
 - `j`/`k` navigate; Space/Enter toggle booleans or cycle enum options
 - ctrl+s emits `SaveSettingsMsg` with the updated settings; ESC discards
@@ -645,6 +649,27 @@ Because all colors are package variables, styles automatically inherit the new p
 
 ---
 
+### `internal/ui/imgview`
+
+Fetches and displays images in the terminal using native graphics protocols (Kitty, iTerm2, Sixel). Used by Feed/Post Detail's inline rendering and the fullscreen image modal (`o` key). See `docs/plan-inline-images-improvements.md` for the feature's build-out history and known workarounds.
+
+**Protocol detection** (`protocol.go`):
+
+| Identifier | Kind | Purpose |
+|---|---|---|
+| `GraphicsProtocol` | type | `ProtocolNone`, `ProtocolKitty` (Kitty, Ghostty), `ProtocolITerm2` (iTerm2, WezTerm), `ProtocolSixel` (xterm, foot, mlterm, contour, mintty, yaft, …) |
+| `DetectProtocol() GraphicsProtocol` | func | Env-var based (`KITTY_WINDOW_ID`, `TERM_PROGRAM`); returns `ProtocolNone` for an unrecognized terminal, including any Sixel-capable one — Sixel has no reliable env-var signal |
+| `ProbeSixel(stdin, stdout *os.File) bool` | func | Active DA1 (Primary Device Attributes) terminal query, only run when `DetectProtocol` returns none; must run before Bubble Tea takes over stdin. Returns `false` on any error, timeout, or non-terminal stdin |
+| `ParseDA1SixelSupport(resp []byte) bool` | func | Pure parser for a raw DA1 response, checking for attribute `4` — exported so `ProbeSixel`'s parsing is unit-testable independent of live terminal I/O |
+
+**Encoders** (one file per protocol — `kitty.go`, `iterm2.go`, `sixel.go`): each takes `(img image.Image, maxCols, maxRows, cellPxW, cellPxH int, ...)` and returns the ready-to-write escape sequence plus the computed display size in terminal columns/rows, never upscaling beyond the image's natural pixel size. `cellPxW`/`cellPxH` (from `TerminalCellPixelSize`, `<= 0` falls back to an assumed 10×20px cell) matter most for iTerm2 — its `preserveAspectRatio=1` letterboxes against the terminal's real font metrics, so a wrong guess leaves visible blank space; Kitty instead stretches to exactly fill the given box, so a wrong guess there only mildly distorts. `EncodeKitty` additionally takes `placementID`: `0` for the fullscreen modal's anonymous mode (self-heals via a blunt `a=d,d=A` delete-all), non-zero for inline rendering's named placements (never blunt-deletes — see `DeleteKittyPlacement`, which targets exactly one placement). `EncodeSixel` has no terminal-side scale-to-fit, so it downscales in pixel space itself before encoding (256 colors, hardcoded — true for essentially every Sixel-capable terminal in practice).
+
+**Fetching** (`fetch.go`, `frames.go`): `Fetch(ctx, url) (image.Image, error)` and `FetchGIF(ctx, url) (*gif.GIF, error)` (PNG/JPEG/WebP/GIF), capped at 10 MiB response body and ~52 megapixels declared dimensions before decode (matching the API/RTDB client's response cap and guarding against a small file claiming huge dimensions). `GIFFrames(g) (frames, delays)` composites each frame into its own full-canvas RGBA image for the fullscreen modal's animation, bounded at 512 frames and 64M combined frame×width×height pixels.
+
+**Cell geometry** (`cellsize_unix.go` real impl via `TIOCGWINSZ`, `cellsize_windows.go` stub always returning `ok=false`): `TerminalCellPixelSize(fd int) (cellW, cellH int, ok bool)` — real terminal cell pixel size when available, used by all three encoders' `cellPxW`/`cellPxH` fallback logic above.
+
+---
+
 ## Configuration File
 
 Location: `~/.cyber-tui.json`  
@@ -776,7 +801,7 @@ Other global keys:
 | `?` | Help modal (no ctrl-twin exists — `ctrl+?` is indistinguishable from `ctrl+backspace`/DEL in most terminals) |
 | `t` | Theme picker |
 | `ctrl+t` | Same as `t`, but reaches the handler even while a compose input is focused |
-| `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused |
+| `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused. An image opens in the fullscreen modal if a graphics protocol was detected and the Image Viewer setting isn't "browser" (otherwise it opens in the OS browser); `←`/`→` cycle multiple images from the same post without closing the modal, any other key closes it |
 | `ctrl+o` | Same as `o`, but reaches the handler even while a compose input is focused — the only way to open links in CIRC/C-Mail, since their input is focused for the entire detail view, not just a transient compose sub-mode |
 | `q` / `ctrl+c` | Quit |
 | `ctrl+q` | Same as `q`, but reaches the handler even while a compose input is focused (`ctrl+c` already worked as a hard escape hatch; `ctrl+q` matches the bare-key mnemonic) |
@@ -958,8 +983,15 @@ Listed from `go.mod`. Only direct dependencies:
 | `github.com/charmbracelet/lipgloss` | v1.1.0 | Terminal styling: colors, borders, layout |
 | `github.com/charmbracelet/ssh` | v0.0.0-20250826160808-ebfa259c7309 | SSH protocol library |
 | `github.com/charmbracelet/wish` | v1.4.7 | SSH server middleware wrapping Bubble Tea |
+| `github.com/mattn/go-sixel` | v0.0.12 | Sixel graphics protocol encoding (`internal/ui/imgview`) |
+| `github.com/muesli/cancelreader` | v0.2.2 | Cancelable stdin reads for the Sixel DA1 capability probe (`imgview.ProbeSixel`) |
+| `golang.org/x/image` | v0.44.0 | WebP decoding and image scaling (`internal/ui/imgview`) |
+| `golang.org/x/term` | v0.44.0 | Raw terminal mode for the Sixel DA1 probe |
 
-32 transitive dependencies cover color detection, terminal input, crypto (SSH), and other library support.
+Several other direct dependencies (`goldmark` for markdown, `go-colorful`/`go-runewidth` for
+theming/rendering, etc.) predate this table's last update and aren't listed above — see
+`go.mod` for the authoritative current list. 32+ transitive dependencies cover color
+detection, terminal input, crypto (SSH), and other library support.
 
 ---
 
@@ -999,7 +1031,8 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized. `mutedUsersByRoom` is also read but excluded from PATCH for a different reason — it's server-managed via `/mute` slash commands only (see `docs/37-circ-mute.md`), never client-patched |
 | **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |
 | **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |
-| **Attachments** | Image and YouTube audio attachments on posts/replies are not supported in the TUI |
+| **Attachments** | Images render inline (Feed/Post Detail, gated by the InlineImages setting) and open in a fullscreen modal (`o`) via `internal/ui/imgview` (Kitty/iTerm2/Sixel, falling back to the OS browser when no protocol is detected or the Image Viewer setting is "browser"). YouTube audio attachments are still not supported |
+| **iTerm2/Sixel inline-image repaint workarounds** | First real-terminal testing of the feature (native macOS iTerm2, this was previously only eyeballed on Kitty) found several rendering bugs whose fixes lean on genuine workarounds rather than clean solutions — an inert dirty-marker byte to force Bubble Tea's per-line diff to reissue a line, and explicit on-screen-rectangle tracking to erase stale image pixels (iTerm2/Sixel have no placement/compositing concept like Kitty's). A residual single-line flash on a selection change touching a visible image was evaluated and accepted rather than fixed. See `docs/plan-inline-images-improvements.md` §8 for what each workaround depends on and when to revisit it. On Windows specifically, Sixel detection via `imgview.ProbeSixel`'s DA1 query has been observed to never receive a response from WezTerm — `DetectProtocol()`'s env-var check (`TERM_PROGRAM=WezTerm` → iTerm2 protocol) is the reliable path there instead |
 | **Note revision pagination** | `GetNoteRevisions` cursor is implemented in the API client but the UI loads only the first page |
 | **Profile navigation depth** | Navigating from a Following/Followers tab to another user's profile is single-level; ESC returns to the original `profileReturn` destination, not the intermediate profile |
 | **Feed position — deep pagination** | When returning to the Feed tab, the selected post is restored by ID from the fresh first-page load. If the post was reached via pagination it will not be in page 1 and the feed falls back to the top. Fix options: re-fetch pages sequentially until found (expensive), or skip the tab-switch reload (stale data). Neither is warranted for typical usage. |
