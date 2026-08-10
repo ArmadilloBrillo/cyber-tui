@@ -571,6 +571,63 @@ func TestCompositeOverlays_KittyCleanupFallsThroughToInlineImages(t *testing.T) 
 	}
 }
 
+// TestCompositeOverlays_ImageModalCycle_ForcesPrevBoxRowsDirty confirms a
+// carousel cycle to a differently-sized image (imageModalPrevRows/Cols
+// differing from the current dims) forces the previous box's row range
+// dirty via forceRowsDirty, instead of the tea.ClearScreen this replaced.
+// Only checks rows outside the new (smaller) box's own footprint, since
+// overlayCenter splices its own box content into overlapping rows.
+func TestCompositeOverlays_ImageModalCycle_ForcesPrevBoxRowsDirty(t *testing.T) {
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line%d", i+1)
+	}
+	base := strings.Join(lines, "\n")
+
+	a := App{
+		width:              40,
+		height:             20,
+		graphicsProtocol:   imgview.ProtocolITerm2,
+		imageModalOpen:     true,
+		imageCarouselItems: []string{"https://x.com/a.jpg", "https://x.com/b.jpg"},
+		imageModalPrevRows: 10,
+		imageModalPrevCols: 20,
+		imageModalRows:     3,
+		imageModalCols:     20,
+	}
+
+	rowRange := func(dims App) (yOff, h int) {
+		modal := TabsLayout{}.renderImageModal(dims)
+		h = len(strings.Split(modal, "\n"))
+		yOff = (a.height - h) / 2
+		if yOff < 0 {
+			yOff = 0
+		}
+		return
+	}
+	prevA := a
+	prevA.imageModalRows, prevA.imageModalCols = a.imageModalPrevRows, a.imageModalPrevCols
+	prevYOff, prevH := rowRange(prevA)
+	curYOff, curH := rowRange(a)
+
+	out := compositeOverlays(TabsLayout{}, a, base)
+
+	checked := 0
+	for r := prevYOff + 1; r <= prevYOff+prevH; r++ {
+		if r >= curYOff+1 && r <= curYOff+curH {
+			continue // covered by the new box too; overlayCenter may splice over the marker there
+		}
+		checked++
+		want := fmt.Sprintf("line%d\x1b[0m", r)
+		if !strings.Contains(out, want) {
+			t.Errorf("expected row %d (outside the new box) forced dirty (%q) in output", r, want)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("test setup produced no non-overlapping rows to check — adjust prev/current dims")
+	}
+}
+
 // TestInjectInlineImages_PaintGenTogglesTrailingLineBytes confirms the
 // inlineImagePaintGen dirty-marker mechanism actually does what
 // syncInlineImages/injectInlineImages depend on it for: without it, a

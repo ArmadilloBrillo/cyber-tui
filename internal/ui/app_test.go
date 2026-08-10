@@ -2498,20 +2498,34 @@ func TestHandleImageViewer_ErrorNoModalOpen_FallsBackToBrowser(t *testing.T) {
 	}
 }
 
-func TestHandleImageViewer_ITerm2CycleSuccess_ForcesClearScreen(t *testing.T) {
+// TestHandleImageViewer_ITerm2CycleSuccess_SnapshotsPrevDimsNoClearScreen
+// covers a real carousel cycle (modal already open, per the a.imageModalOpen
+// gate at app.go's key handling — cycling is unreachable otherwise): no
+// tea.ClearScreen is emitted anymore, and the outgoing box's dimensions are
+// snapshotted into imageModalPrevRows/Cols for compositeOverlays to use.
+func TestHandleImageViewer_ITerm2CycleSuccess_SnapshotsPrevDimsNoClearScreen(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolITerm2
 	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	a.imageModalOpen = true
+	a.imageModalCols = 20
+	a.imageModalRows = 10
 
-	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 10, rows: 5})
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 8, rows: 4})
 	if !ok {
 		t.Fatal("expected imageFetchedMsg to be handled")
 	}
 	if !a2.imageModalOpen {
 		t.Fatal("expected the image to open")
 	}
-	if cmd == nil {
-		t.Error("expected tea.ClearScreen to force a full repaint on an iTerm2 carousel cycle")
+	if cmd != nil {
+		t.Error("expected no tea.ClearScreen on an iTerm2 carousel cycle")
+	}
+	if a2.imageModalPrevRows != 10 || a2.imageModalPrevCols != 20 {
+		t.Errorf("expected prev dims snapshotted from the outgoing box (20x10), got %dx%d", a2.imageModalPrevCols, a2.imageModalPrevRows)
+	}
+	if a2.imageModalRows != 4 || a2.imageModalCols != 8 {
+		t.Errorf("expected current dims updated to the new image (8x4), got %dx%d", a2.imageModalCols, a2.imageModalRows)
 	}
 }
 
@@ -2519,6 +2533,7 @@ func TestHandleImageViewer_KittyCycleSuccess_NoClearScreen(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolKitty
 	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	a.imageModalOpen = true
 
 	_, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 10, rows: 5})
 	if !ok {
@@ -2529,16 +2544,22 @@ func TestHandleImageViewer_KittyCycleSuccess_NoClearScreen(t *testing.T) {
 	}
 }
 
+// TestHandleImageViewer_SingleImageSuccess_NoClearScreen covers a fresh
+// o-open (modal not already open): no tea.ClearScreen, and no previous box
+// to track since nothing was on screen before.
 func TestHandleImageViewer_SingleImageSuccess_NoClearScreen(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolITerm2 // even on iTerm2
 
-	_, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", encoded: "seq", cols: 10, rows: 5})
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", encoded: "seq", cols: 10, rows: 5})
 	if !ok {
 		t.Fatal("expected imageFetchedMsg to be handled")
 	}
 	if cmd != nil {
 		t.Error("expected no ClearScreen outside a carousel")
+	}
+	if a2.imageModalPrevRows != 0 || a2.imageModalPrevCols != 0 {
+		t.Errorf("expected no previous box tracked on a fresh open, got %dx%d", a2.imageModalPrevCols, a2.imageModalPrevRows)
 	}
 }
 

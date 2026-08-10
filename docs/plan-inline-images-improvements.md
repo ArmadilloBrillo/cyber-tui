@@ -218,3 +218,26 @@ corruption of unrelated content the unclaimed out-of-band blank-fill risked. Thi
 uniformly fixes the cross-tab case with no special-casing: switching to a screen with zero
 images diffs every previously-visible row as stale exactly once, forces it dirty for that
 one transition frame, and — since staleness is computed fresh each call — never repeats.
+
+**Third follow-up fix — the fullscreen image-carousel flash (`o` to open, left/right to
+cycle a multi-image post)**: a different, unrelated bug — not a line-diff/erasure-tracking
+issue, but a literal, intentional `tea.ClearScreen` in `handleImageViewer`'s success branch,
+gated to iTerm2/Sixel and firing on every carousel cycle (`len(a.imageCarouselItems) > 1`).
+The concern behind it was real: the modal box is a fixed-position, size-varying bordered box
+re-centered per image (`compositeOverlays`, `xOff/yOff` derived from `imageModalCols/Rows`),
+so a cycled-to smaller image's box leaves the previous, larger image's raster pixels
+extending outside the new box's footprint — and iTerm2/Sixel have no Kitty-style
+delete-by-placement primitive to reclaim exactly that footprint. But nuking the whole screen
+to fix it produced the flash. Replaced with the same `forceRowsDirty` technique: the outgoing
+box's dimensions are snapshotted (`imageModalPrevRows/Cols`, only when a modal was already
+open — i.e. a genuine cycle, not a fresh open) before being overwritten, and
+`compositeOverlays` renders what the *previous* box's row range was (via `l.renderImageModal`
+with the previous dims substituted in — reusing the real layout-specific renderer rather than
+a duplicated size formula, since `TabsLayout` adds a carousel-index hint line that
+`MillerLayout` doesn't) and forces exactly those rows dirty before compositing the current
+frame's box. Kitty is unaffected (already self-heals via `kittyModalPlacementID`) and keeps
+skipping this entirely.
+
+**Not yet touched**: a second `tea.ClearScreen` remains on modal *close* for Sixel
+specifically (`app.go`, gated to `imgview.ProtocolSixel`, not iTerm2) — out of scope for the
+iTerm2 carousel-cycle report above; worth revisiting if Sixel close-flash is ever reported.

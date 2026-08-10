@@ -249,12 +249,12 @@ type App struct {
 	// — would fix it at the source but requires replacing Lip Gloss's
 	// single-call box styling with manual per-line border construction in
 	// feed.go/postdetail.go, judged too large/risky for this.
-	inlineImageCache           map[string]string
-	inlineImageCacheOrder      *list.List
-	inlineImageCacheElems      map[string]*list.Element
-	inlineImageCacheBytes      int
-	inlineImageFetching        map[string]bool
-	inlineImageFailedAt        map[string]time.Time
+	inlineImageCache        map[string]string
+	inlineImageCacheOrder   *list.List
+	inlineImageCacheElems   map[string]*list.Element
+	inlineImageCacheBytes   int
+	inlineImageFetching     map[string]bool
+	inlineImageFailedAt     map[string]time.Time
 	inlineImageVisibleRects map[string]inlineImageRect
 	inlineImageStaleRows    []int
 	inlineImageLastSelKey   string
@@ -388,8 +388,15 @@ type App struct {
 	imageModalEncoded string
 	imageModalCols    int
 	imageModalRows    int
-	imageNeedsCleanup bool // true after modal closes until a delete-placement frame reaches the terminal
-	imageFetchGen     int  // bumped on every fetch and on close; stale imageFetchedMsg results are dropped
+	// imageModalPrevRows/Cols are the modal's interior size as of the
+	// previous frame — 0 means no previous box to worry about (a fresh
+	// open, not a carousel cycle). Used by compositeOverlays to force the
+	// previous box's row range dirty when a cycle changes its size, instead
+	// of a full tea.ClearScreen — see compositeOverlays' doc comment.
+	imageModalPrevRows int
+	imageModalPrevCols int
+	imageNeedsCleanup  bool // true after modal closes until a delete-placement frame reaches the terminal
+	imageFetchGen      int  // bumped on every fetch and on close; stale imageFetchedMsg results are dropped
 
 	// ephemeral marks an SSH-hosted session whose state must never be read from
 	// or written to the host operator's config file.
@@ -2976,6 +2983,18 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 			}
 			return a, openExternalURL(m.rawURL), true
 		}
+		// Snapshot the outgoing box size only if the modal was already open
+		// (a real carousel cycle) — a fresh o-open or reopen-after-close has
+		// no previous on-screen box to worry about. compositeOverlays uses
+		// this to force just the previous box's row range dirty if the new
+		// image is a different size, instead of a full tea.ClearScreen.
+		if a.imageModalOpen {
+			a.imageModalPrevRows = a.imageModalRows
+			a.imageModalPrevCols = a.imageModalCols
+		} else {
+			a.imageModalPrevRows = 0
+			a.imageModalPrevCols = 0
+		}
 		a.imageModalEncoded = m.encoded
 		a.imageModalCols = m.cols
 		a.imageModalRows = m.rows
@@ -2986,12 +3005,6 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		a.imageCache[m.rawURL] = cachedImage{frames: m.frames, delays: m.delays}
 		var cmds []tea.Cmd
-		if (a.graphicsProtocol == imgview.ProtocolITerm2 || a.graphicsProtocol == imgview.ProtocolSixel) && len(a.imageCarouselItems) > 1 {
-			// iTerm2/WezTerm and Sixel have no Kitty-style delete-all self-heal;
-			// force a full repaint so a cycled-to smaller image can't leave
-			// stray pixels from the previous one in rows the new frame skips.
-			cmds = append(cmds, tea.ClearScreen)
-		}
 		if len(m.encodedFrames) > 1 {
 			cmds = append(cmds, gifFrameTickCmd(m.encodedFrames, m.delays, 1, m.delays[0], m.gen))
 		}

@@ -84,6 +84,37 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		return overlayCenter(base, l.renderURLPicker(a), a.width, a.height)
 	}
 	if a.imageModalOpen {
+		if (a.graphicsProtocol == imgview.ProtocolITerm2 || a.graphicsProtocol == imgview.ProtocolSixel) &&
+			a.imageModalPrevRows != 0 &&
+			(a.imageModalPrevRows != a.imageModalRows || a.imageModalPrevCols != a.imageModalCols) {
+			// A cycled-to image is a different size than the one it
+			// replaced. iTerm2/Sixel have no Kitty-style delete-by-placement
+			// primitive, so stray raster pixels from the previous (possibly
+			// larger or differently-positioned) box can persist outside the
+			// new box's footprint. Force the previous box's full row range
+			// dirty so Bubble Tea's own diff resends real current content
+			// there — same technique as the inline-image fix
+			// (forceRowsDirty) — instead of a tea.ClearScreen, which used to
+			// flash the whole screen on every cycle. Rendered via
+			// l.renderImageModal with the previous dimensions substituted
+			// in, not a duplicated size formula, since the rendered height
+			// differs by layout (TabsLayout adds a carousel-index hint
+			// line, MillerLayout doesn't).
+			prevApp := a
+			prevApp.imageModalRows = a.imageModalPrevRows
+			prevApp.imageModalCols = a.imageModalPrevCols
+			prevModal := l.renderImageModal(prevApp)
+			prevH := len(strings.Split(prevModal, "\n"))
+			prevYOff := (a.height - prevH) / 2
+			if prevYOff < 0 {
+				prevYOff = 0
+			}
+			rows := make([]int, 0, prevH)
+			for r := prevYOff + 1; r <= prevYOff+prevH; r++ {
+				rows = append(rows, r)
+			}
+			base = forceRowsDirty(base, rows)
+		}
 		textModal := l.renderImageModal(a)
 		composed := overlayCenter(base, textModal, a.width, a.height)
 		// Compute the same offsets overlayCenter used so we can position
