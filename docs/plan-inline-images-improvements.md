@@ -295,9 +295,56 @@ it's delivered through Bubble Tea's renderer instead.
 
 `DetectProtocol` has been reverted to map WezTerm back to `ProtocolITerm2` unconditionally.
 
-**Next step, not yet done**: byte-level comparison of `EncodeITerm2`'s actual emitted
-sequence (captured from a live WezTerm/Windows session) against a known-working reference
-(`wezterm imgcat` / `timg -pi` on the same source image), plus testing whether a manual
-replay of the captured bytes outside Bubble Tea's renderer displays correctly — narrows the
-black-render bug down to cyber-tui's encoding vs. how `injectInlineImages` (`layout.go`)
-delivers it, before attempting another fix.
+**Byte-level diagnostic added**: temporary `CYBER_TUI_DEBUG_LOG`/`CYBER_TUI_DEBUG_IMG_DUMP`
+hooks in `fetchInlineImageCmd` (`app.go`) and a startup line in `main.go` (both since
+removed — this investigation is concluded), logging fetch/encode success or failure and
+dumping the raw encoded sequence. First finding: fetch and encode both succeeded — a
+365×512 WebP produced a 521,087-byte (~509KB) single-line OSC 1337 sequence. That ruled out
+a silently-failing fetch (the other live hypothesis at the time).
+
+**Downscaling fix (kept, independently useful)**: `EncodeITerm2`/`EncodeKitty` were PNG-
+encoding the *full source resolution* regardless of how small the target display box was,
+relying on the terminal's own scale-to-fit — unlike `EncodeSixel`, which already downscaled
+in pixel space first (Sixel has no terminal-side scale-to-fit to rely on). Added a shared
+`downscaleToBox` helper (`imgview/scale.go`) and wired it into all three encoders. Cut the
+521KB payload to 25,991 bytes (~20x) for the same image. **The black render was unchanged**
+— ruling out payload size as the cause, and (combined with the same image rendering fine on
+real iTerm2/macOS at the original 521KB size) ruling out "OSC sequences over some size
+threshold" as a blanket ConPTY limitation.
+
+**Root cause found via isolated replay**: captured the 26KB sequence and replayed it
+directly to a plain WezTerm pane with a standalone tool that writes one clean `CUP` escape,
+then the image, and nothing else in the same write — **it rendered correctly**. The same
+bytes that fail inside the running app succeed in isolation; the only difference is
+delivery. `injectInlineImages` batches every visible slot's `CUP`+OSC pair, Kitty deletes,
+and a trailing "park cursor at bottom" `CUP` into one line, which Bubble Tea's renderer
+writes in a single syscall alongside the rest of the frame. That's the shape
+[microsoft/terminal#17314](https://github.com/microsoft/terminal/issues/17314) ("OSC
+sequences received out-of-order in 3rd-party terminals") describes: ConPTY can defer/reorder
+an OSC relative to a CSI that follows it in the same write, so the image renders wherever a
+later cursor-move pointed instead of its own — matching the fragment-in-the-wrong-place
+symptom exactly, and explaining why every earlier attempt (protocol switch, downscaling)
+left it unchanged: none of them touched the batching/ordering.
+
+**Attempted fix, reverted — the batching isn't ours to fix**: reordered `injectInlineImages`
+so no CSI followed any image's OSC (park-cursor and paint-gen marker moved before the image
+loop). Rebuilt and retested: **still didn't render, still the same wrong-place fragment**.
+Traced into Bubble Tea's vendored `standard_renderer.go` (`flush()`, v1.3.10): in alt-screen
+mode, it unconditionally appends its own trailing `CursorPosition` CSI *after* all diffed
+line content, in the same single `Write()` call — regardless of what order our own code
+builds its content in. That's the actual last-CSI-after-OSC, and it's baked into the
+library, not reachable from `injectInlineImages`. Reverted the reorder (no benefit, and it
+introduced a real cosmetic regression — the terminal cursor visibly resting on the last
+image instead of parked at the bottom row — on every platform, iTerm2/Sixel/Kitty alike,
+since none of them set a cursor-suppression flag strong enough to survive it).
+
+**Decision: stop here.** A real fix would mean bypassing Bubble Tea's renderer entirely for
+image writes (writing to stdout in a separate syscall, outside the library's render
+pipeline) — a genuine architectural change with real risk of new bugs (flicker, timing/race
+issues) and no guarantee it resolves ConPTY's exact reordering rule even if built correctly.
+Given this is fundamentally a Windows-only ConPTY subsystem bug, not something in cyber-tui's
+control, the user chose not to pursue it further. **Inline and fullscreen images do not
+reliably render on WezTerm/Windows — known, accepted limitation, not planned to be fixed.**
+Both the scroll fix (PR #103) and the downscaling improvement are kept — genuinely correct
+and useful independent of this outcome, and downscaling benefits every terminal/platform by
+cutting transmitted payload size for small thumbnail slots.

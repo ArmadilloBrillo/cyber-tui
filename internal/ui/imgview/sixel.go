@@ -6,7 +6,6 @@ import (
 	"image"
 
 	"github.com/mattn/go-sixel"
-	"golang.org/x/image/draw"
 )
 
 // EncodeSixel encodes img for display via the DECSIXEL graphics protocol,
@@ -29,15 +28,7 @@ func EncodeSixel(img image.Image, maxCols, maxRows, cellPxW, cellPxH int) (encod
 	h := bounds.Dy()
 
 	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH)
-	targetW := cols * cellPxW
-	targetH := rows * cellPxH
-
-	src := img
-	if targetW < w || targetH < h {
-		dst := image.NewRGBA(image.Rect(0, 0, targetW, targetH))
-		draw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, bounds, draw.Src, nil)
-		src = dst
-	}
+	src := downscaleToBox(img, cols, rows, cellPxW, cellPxH)
 
 	var buf bytes.Buffer
 	enc := sixel.NewEncoder(&buf)

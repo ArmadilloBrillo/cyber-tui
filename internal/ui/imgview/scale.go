@@ -1,5 +1,33 @@
 package imgview
 
+import (
+	"image"
+
+	"golang.org/x/image/draw"
+)
+
+// downscaleToBox resamples img down to fit a cols x rows display box in real
+// pixels (cols*cellPxW x rows*cellPxH), preserving img unchanged if it's
+// already smaller than that box — never upscales. Kitty/iTerm2 have a
+// terminal-side scale-to-fit (their c=/r= and width=/height= parameters), so
+// skipping this and sending the full source resolution still displays
+// correctly, but wastes bandwidth transmitting far more pixel data than a
+// small thumbnail slot will ever show — e.g. a 365x512 source shown in a
+// 6-row inline band produced a 521KB single-line escape sequence before this
+// existed. Sixel has no such terminal-side scaling at all, so it always
+// needed this step; EncodeITerm2/EncodeKitty now use the same helper.
+func downscaleToBox(img image.Image, cols, rows, cellPxW, cellPxH int) image.Image {
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	targetW, targetH := cols*cellPxW, rows*cellPxH
+	if targetW >= w && targetH >= h {
+		return img
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, targetW, targetH))
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), img, bounds, draw.Src, nil)
+	return dst
+}
+
 // pxPerCol is the assumed terminal column width in pixels, used as a default
 // when the real cell size isn't known. Conservative across common terminal
 // fonts and DPI settings. Cell height is assumed to be 2×pxPerCol (a 2:1
