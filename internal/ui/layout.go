@@ -151,6 +151,25 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 // anywhere in the frame. This is why the caller invokes this function even
 // when slots is empty: a delete can be pending with nothing currently
 // visible (e.g. every inline image just scrolled off-screen).
+//
+// Everything this function builds lands on one physical line — the whole
+// return value is appended after base's last "\n", so Bubble Tea's renderer
+// treats it as a single line in its per-frame line-diff. That diff skips
+// resending a line whose bytes are byte-identical to last frame
+// (canSkip in bubbletea's standard_renderer.go) — normally the right call,
+// but for iTerm2/Sixel it's actively wrong when a selection change recolors
+// a band row elsewhere without touching which images are visible or their
+// cache contents: this line's bytes don't change, so the diff skips it, and
+// the image's raster pixels (already overwritten by the recolored band
+// row's own line, written earlier in the same frame) never get repainted.
+// syncInlineImages tracks that condition and bumps inlineImagePaintGen when
+// it happens; the trailing inert SGR-reset below toggles in step with that
+// generation purely to make this line's bytes differ from last frame on
+// exactly those frames, so Bubble Tea's own per-line diff reissues it — the
+// same seamless single-line repaint (erase-to-end-of-line, not a
+// full-screen erase) an ordinary scroll already gets for free. This used to
+// be a tea.ClearScreen instead, which does a real full-screen erase and was
+// visibly flashing on every touching selection change.
 func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, rowOrigin, colOrigin int) string {
 	var sb strings.Builder
 	sb.WriteString(base)
@@ -167,6 +186,13 @@ func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, row
 		sb.WriteString(imgview.DeleteKittyPlacement(id))
 	}
 	sb.WriteString(fmt.Sprintf("\x1b[%d;1H", a.height))
+	if a.inlineImagePaintGen%2 == 1 {
+		// ponytail: a synthetic dirty marker working around the lack of a
+		// public "force this line dirty" API in Bubble Tea (it has an
+		// internal repaintMsg that does exactly this, but it's unexported —
+		// see renderer.go). Replace with a direct call if one ever ships.
+		sb.WriteString("\x1b[0m")
+	}
 	return sb.String()
 }
 

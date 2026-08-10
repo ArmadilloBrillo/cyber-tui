@@ -195,14 +195,19 @@ type App struct {
 	// gets a cooldown (inlineImageFailureCooldown) instead of being retried
 	// on every single Update its slot stays visible for. inlineImageLastSig
 	// is the previous frame's visible-slot signature (see
-	// inlineImageSignature), used to detect a scroll that requires a full
-	// clear for Sixel/iTerm2 (neither has a placement-delete primitive —
+	// inlineImageSignature), used to detect a scroll that requires a
+	// repaint for Sixel/iTerm2 (neither has a placement-delete primitive —
 	// Kitty does, see kittyPlacementIDs, and never uses this).
 	// inlineImageLastSelKey is the previous frame's activeSelectionKey,
 	// tracked separately so a selection change can be checked against
-	// selectionTouchesSlot instead of blindly forcing a clear on every
+	// selectionTouchesSlot instead of blindly forcing a repaint on every
 	// selection move (that blindness was a shipped regression — see
-	// selectionTouchesSlot's doc comment).
+	// selectionTouchesSlot's doc comment). inlineImagePaintGen is bumped
+	// whenever a repaint is needed and read by injectInlineImages to force
+	// its trailing paint line to look "changed" to Bubble Tea's per-line
+	// diff (see injectInlineImages' doc comment) — this avoids
+	// tea.ClearScreen's full-screen erase-then-redraw, which caused a
+	// visible flash on every selection change that touched a visible image.
 	inlineImageCache      map[string]string
 	inlineImageCacheOrder *list.List
 	inlineImageCacheElems map[string]*list.Element
@@ -211,6 +216,7 @@ type App struct {
 	inlineImageFailedAt   map[string]time.Time
 	inlineImageLastSig    string
 	inlineImageLastSelKey string
+	inlineImagePaintGen   int
 
 	// kittyPlacementIDs assigns a stable id (used as both image id and
 	// placement id, see imgview.EncodeKitty) to each inline image slot ever
@@ -2584,14 +2590,19 @@ func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[in
 // create/delete via kittyPlacementIDs/pendingKittyDeletes (see
 // syncKittyPlacements); Sixel/iTerm2 have no placement-delete primitive, so
 // a change in the visible-slot signature (a scroll) or a selection change
-// that touches a visible image (see selectionTouchesSlot) instead forces a
-// full-screen clear — a moved, removed, or (de)selection-recolored image
-// can otherwise leave stray pixels behind (the same reasoning already
-// applied to the fullscreen modal's close/cycle handling). Selection
-// changes that don't touch any visible image skip the clear entirely — an
-// earlier version cleared on every selection move regardless, which caused
-// a visible full-screen blink on every single arrow-key step through a
-// feed with any inline image on screen.
+// that touches a visible image (see selectionTouchesSlot) instead bumps
+// inlineImagePaintGen, which injectInlineImages uses to force a repaint of
+// its trailing paint line — a moved, removed, or (de)selection-recolored
+// image can otherwise leave stray pixels behind (the same reasoning already
+// applied to the fullscreen modal's close/cycle handling). This used to be
+// a tea.ClearScreen, but that does a genuine full-screen erase-then-redraw
+// and was visibly flashing on every touching selection change; bumping the
+// generation instead lets Bubble Tea's own per-line diff repaint just the
+// affected line, the same seamless mechanism an ordinary scroll already
+// uses. Selection changes that don't touch any visible image skip this
+// entirely — an earlier version bumped/cleared on every selection move
+// regardless, which caused a visible blink on every arrow-key step through
+// a feed with any inline image on screen.
 func (a App) syncInlineImages() (App, tea.Cmd) {
 	var slots []screens.InlineImageSlot
 	var selKey string
@@ -2612,12 +2623,12 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 	} else {
 		sig := inlineImageSignature(slots)
 		selChanged := selKey != a.inlineImageLastSelKey
-		needsClear := sig != a.inlineImageLastSig ||
+		needsRepaint := sig != a.inlineImageLastSig ||
 			(selChanged && (selectionTouchesSlot(selKey, slots) || selectionTouchesSlot(a.inlineImageLastSelKey, slots)))
 		a.inlineImageLastSig = sig
 		a.inlineImageLastSelKey = selKey
-		if needsClear {
-			cmds = append(cmds, tea.ClearScreen)
+		if needsRepaint {
+			a.inlineImagePaintGen++
 		}
 	}
 

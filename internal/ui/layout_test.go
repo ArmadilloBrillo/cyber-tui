@@ -570,6 +570,38 @@ func TestCompositeOverlays_KittyCleanupFallsThroughToInlineImages(t *testing.T) 
 	}
 }
 
+// TestInjectInlineImages_PaintGenTogglesTrailingLineBytes confirms the
+// inlineImagePaintGen dirty-marker mechanism actually does what
+// syncInlineImages/injectInlineImages depend on it for: without it, a
+// selection change that recolors a band row elsewhere (but doesn't change
+// which images are visible or their cache contents) leaves this function's
+// output byte-identical to last frame, so Bubble Tea's per-line diff skips
+// resending it and the image never gets repainted — this was the reason a
+// tea.ClearScreen (later replaced by this mechanism) was needed at all. The
+// output must differ whenever inlineImagePaintGen's parity differs, and be
+// identical when parity is unchanged, since that parity flip is the only
+// signal that forces Bubble Tea to reissue the line.
+func TestInjectInlineImages_PaintGenTogglesTrailingLineBytes(t *testing.T) {
+	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
+	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolITerm2): "\x1b]1337;fake\x07"}
+	slots := []screens.InlineImageSlot{slot}
+
+	a0 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageCache: cache, inlineImagePaintGen: 0}
+	a1 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageCache: cache, inlineImagePaintGen: 1}
+	a2 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageCache: cache, inlineImagePaintGen: 2}
+
+	out0 := injectInlineImages(a0, "base", slots, 5, 7)
+	out1 := injectInlineImages(a1, "base", slots, 5, 7)
+	out2 := injectInlineImages(a2, "base", slots, 5, 7)
+
+	if out0 == out1 {
+		t.Error("expected an odd paint generation to produce different output than an even one")
+	}
+	if out0 != out2 {
+		t.Error("expected two even paint generations to produce identical output")
+	}
+}
+
 // TestTabsLayoutView_InjectsInlineImages is the golden-output test category
 // both prior architecture reviews flagged as missing: an assertion on
 // TabsLayout.View()'s actual composited output, not just the pure diff
