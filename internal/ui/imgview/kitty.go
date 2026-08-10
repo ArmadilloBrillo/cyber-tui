@@ -41,13 +41,13 @@ func EncodeKitty(img image.Image, maxCols, maxRows, cellPxW, cellPxH, placementI
 	bounds := img.Bounds()
 	w := bounds.Max.X - bounds.Min.X
 	h := bounds.Max.Y - bounds.Min.Y
+	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH)
 
 	var buf bytes.Buffer
-	if encErr := png.Encode(&buf, img); encErr != nil {
+	if encErr := png.Encode(&buf, downscaleToBox(img, cols, rows, cellPxW, cellPxH)); encErr != nil {
 		return "", 0, 0, fmt.Errorf("imgview: png encode: %w", encErr)
 	}
 	payload := base64.StdEncoding.EncodeToString(buf.Bytes())
-	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH)
 	// a=T: transmit and display. f=100: PNG-encoded payload — no s=/v= needed,
 	// the terminal reads pixel dimensions from the PNG data itself (unlike the
 	// raw-RGBA f=32 this used to send, which required them explicitly). c/r:
