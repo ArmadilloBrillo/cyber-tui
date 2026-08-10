@@ -31,6 +31,15 @@ const (
 // terminal's graphics protocol support. Returns ProtocolNone when the terminal
 // is unknown or unsupported. Sixel terminals don't reliably set an env var, so
 // they're not detected here — see ProbeSixel.
+//
+// WezTerm supports both the Kitty and iTerm2 protocols on Linux, but its
+// Windows build does not implement Kitty graphics at all
+// (wezterm/wezterm#5757) — only iTerm2-protocol images work there. Mapped to
+// ProtocolITerm2 unconditionally rather than splitting on GOOS, since that's
+// the one protocol guaranteed to work across all of WezTerm's platforms; see
+// docs/plan-inline-images-improvements.md for the Kitty-protocol experiment
+// this reverts (it hit that Windows limitation) and the still-open black-
+// image-render investigation on the iTerm2 path.
 func DetectProtocol() GraphicsProtocol {
 	if os.Getenv("KITTY_WINDOW_ID") != "" {
 		return ProtocolKitty

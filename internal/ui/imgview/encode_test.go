@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"image"
 	"image/color"
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -149,6 +150,59 @@ func TestEncodeKitty_UsesPNGFormat(t *testing.T) {
 	}
 	if len(raw) < 8 || !bytes.HasPrefix(raw, []byte("\x89PNG\r\n\x1a\n")) {
 		t.Errorf("expected the payload to be a PNG (magic bytes), got %d bytes starting %x", len(raw), raw[:min(len(raw), 8)])
+	}
+}
+
+// noisyImage returns a deterministic pseudo-random RGBA image — PNG
+// compresses a uniform test image far below the Kitty protocol's 4096-byte
+// chunk size, so chunking tests need incompressible pixel data to actually
+// force multiple chunks.
+func noisyImage(w, h int) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	rng := rand.New(rand.NewSource(1))
+	for y := range h {
+		for x := range w {
+			img.Set(x, y, color.RGBA{
+				R: byte(rng.Intn(256)), G: byte(rng.Intn(256)),
+				B: byte(rng.Intn(256)), A: 255,
+			})
+		}
+	}
+	return img
+}
+
+// TestEncodeKitty_ChunksLargePayloads is a regression test for WezTerm on
+// Windows failing to render images sent as one giant unchunked APC sequence
+// (suspected ConPTY interference) — EncodeKitty must split a payload over
+// the protocol's 4096-byte chunk size into multiple APC sequences, each
+// wrapped in its own ESC_G...ESC\, m=1 on every chunk but the last (m=0),
+// and continuation chunks must carry no control keys besides m/q.
+func TestEncodeKitty_ChunksLargePayloads(t *testing.T) {
+	img := noisyImage(200, 200)
+	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 7)
+	if err != nil {
+		t.Fatalf("EncodeKitty: %v", err)
+	}
+	chunks := strings.Split(strings.TrimSuffix(seq, "\x1b\\"), "\x1b\\\x1b_G")
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks for a large payload, got %d (seq len %d)", len(chunks), len(seq))
+	}
+	for i, c := range chunks {
+		last := i == len(chunks)-1
+		wantM := "m=1"
+		if last {
+			wantM = "m=0"
+		}
+		if !strings.Contains(c, wantM) {
+			t.Errorf("chunk %d: expected %s, got control data %q", i, wantM, c[:min(len(c), 40)])
+		}
+		if i > 0 {
+			for _, key := range []string{"a=", "f=", "c=", "r=", "i=", "p="} {
+				if strings.Contains(c, key) {
+					t.Errorf("chunk %d: continuation chunk must not repeat control key %q, got %q", i, key, c[:min(len(c), 40)])
+				}
+			}
+		}
 	}
 }
 

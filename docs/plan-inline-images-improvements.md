@@ -241,3 +241,63 @@ skipping this entirely.
 **Not yet touched**: a second `tea.ClearScreen` remains on modal *close* for Sixel
 specifically (`app.go`, gated to `imgview.ProtocolSixel`, not iTerm2) — out of scope for the
 iTerm2 carousel-cycle report above; worth revisiting if Sixel close-flash is ever reported.
+
+---
+
+## 9. WezTerm on Windows: scroll bug fixed; Kitty-protocol experiment ruled out, black image still open
+
+First real-world testing on WezTerm (Windows), reported by the user as a scrolled-into-view
+image causing the status bar to balloon by several lines and the image to render partially,
+offset from its intended position.
+
+**Root cause and fix (merged, PR #103)**: WezTerm has a confirmed bug in its iTerm2-protocol
+implementation — with the default `doNotMoveCursor=0`, it scrolls its whole screen when an
+image's footprint reaches the terminal's last line
+([wezterm/wezterm#3266](https://github.com/wezterm/wezterm/issues/3266)). That unrequested
+scroll desyncs every subsequent absolute-cursor-positioned draw `injectInlineImages` issues.
+Fixed by sending `doNotMoveCursor=1` unconditionally in `EncodeITerm2` — a WezTerm extension
+to OSC 1337 that real iTerm2 tolerates as an unrecognized key, so no `TERM_PROGRAM` branching
+was needed. The app never relied on the terminal's own post-image cursor advance anyway.
+
+**Second bug found once the first was fixed**: the inline image's reserved space rendered
+solid black, and the fullscreen modal (`o`) did too, with a garbled fragment visible
+elsewhere on screen. Likely present all along, just visually masked by the scroll
+distortion. Suspected cause: the app is a native Windows console process, so WezTerm's
+local-process panes on Windows are necessarily backed by ConPTY — a documented source of
+interference with long or unrecognized escape sequences
+([microsoft/terminal#15551](https://github.com/microsoft/terminal/issues/15551),
+[#17314](https://github.com/microsoft/terminal/issues/17314)). `EncodeITerm2` sends the
+whole image as one giant unchunked OSC 1337 sequence (several KB on one physical line) —
+a shape ConPTY is known to mishandle, and OSC 1337 has no official chunking mechanism to
+work around it.
+
+**Experiment (branch `fix/wezterm-kitty-graphics`, reverted)**: `DetectProtocol` was
+temporarily switched to map `TERM_PROGRAM=WezTerm` to `ProtocolKitty` instead of
+`ProtocolITerm2` — this had never been an explicit decision in the first place (see
+`protocol.go`'s original mapping, introduced in `71ff4e1` without discussion of the
+Kitty-vs-iTerm2 tradeoff for WezTerm specifically). `EncodeKitty` also gained chunked
+transmission (`chunkKittyPayload`, splitting large base64 payloads into 4096-byte pieces
+per the protocol's official chunked-transmission mode) as part of the same experiment —
+that code is harmless and spec-compliant on its own, independent of the WezTerm mapping
+question, and may be worth keeping/re-proposing separately.
+
+**Result: ruled out for Windows.** The user tested on WezTerm/Windows — the image still
+rendered black, just without the stray garbled fragment seen on the iTerm2 path. Research
+turned up [wezterm/wezterm#5757](https://github.com/wezterm/wezterm/issues/5757): **the
+Windows build of WezTerm does not implement the Kitty graphics protocol at all** — only
+iTerm2-protocol images work there (Linux supports both). So the black render was WezTerm
+silently ignoring an entirely unrecognized escape sequence, not evidence of anything fixed.
+That same issue also undermines the original ConPTY-corruption theory for the iTerm2 path:
+it notes a third-party tool (`timg -pi`) using the same iTerm2/OSC 1337 protocol renders
+correctly on WezTerm/Windows through the same ConPTY layer — so the transport itself isn't
+the problem, which points at something specific to cyber-tui's own OSC 1337 output or how
+it's delivered through Bubble Tea's renderer instead.
+
+`DetectProtocol` has been reverted to map WezTerm back to `ProtocolITerm2` unconditionally.
+
+**Next step, not yet done**: byte-level comparison of `EncodeITerm2`'s actual emitted
+sequence (captured from a live WezTerm/Windows session) against a known-working reference
+(`wezterm imgcat` / `timg -pi` on the same source image), plus testing whether a manual
+replay of the captured bytes outside Bubble Tea's renderer displays correctly — narrows the
+black-render bug down to cyber-tui's encoding vs. how `injectInlineImages` (`layout.go`)
+delivers it, before attempting another fix.
