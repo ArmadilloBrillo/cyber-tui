@@ -186,6 +186,23 @@ func TestEncodeITerm2_ContainsOSC(t *testing.T) {
 	}
 }
 
+// TestEncodeITerm2_SetsDoNotMoveCursor is a regression test: without
+// doNotMoveCursor=1, WezTerm scrolls its whole screen once an inline image's
+// footprint reaches the terminal's last line (wezterm/wezterm#3266), which
+// desyncs every absolute-cursor-positioned draw injectInlineImages issues
+// afterward. The app never relies on the terminal's own post-image cursor
+// advance, so this is safe to always send.
+func TestEncodeITerm2_SetsDoNotMoveCursor(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	seq, _, _, err := imgview.EncodeITerm2(img, 80, 40, 0, 0)
+	if err != nil {
+		t.Fatalf("EncodeITerm2: %v", err)
+	}
+	if !strings.Contains(seq, "doNotMoveCursor=1") {
+		t.Errorf("EncodeITerm2: expected doNotMoveCursor=1, got %q", seq)
+	}
+}
+
 // TestEncodeITerm2_UsesRealCellSize mirrors TestEncodeSixel_UsesRealCellSize:
 // a 4x larger real cell size should need fewer cols/rows than the default
 // assumed cell size, confirming cellPxW/cellPxH actually drives the sizing
