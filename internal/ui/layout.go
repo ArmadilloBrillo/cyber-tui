@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"log"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 
@@ -343,6 +345,24 @@ func sixelFullRepaint(base string, height, gen int) string {
 // renderer entirely for image writes. See
 // docs/plan-inline-images-improvements.md section 9 — inline/fullscreen
 // images on WezTerm/Windows are a known, accepted limitation.
+// debugLastDrawnByScreen/debugLogDrawSetIfChanged are temporary diagnostic
+// state (docs/plan-inline-images-improvements.md Round 6) — not part of
+// App, since View() is called with App by value and has no way to persist
+// state back into the model; a package-level var is the pragmatic option
+// for throwaway instrumentation. Single-threaded (Bubble Tea's render loop
+// runs View() on one goroutine), so no locking. Keyed per-screen so
+// switching screens doesn't itself look like a "draw set changed" event
+// worth logging.
+var debugLastDrawnByScreen = map[screen]map[string]int{}
+
+func debugLogDrawSetIfChanged(active screen, drawn map[string]int) {
+	if reflect.DeepEqual(debugLastDrawnByScreen[active], drawn) {
+		return
+	}
+	log.Printf("image: draw set changed on screen %v: %v -> %v", active, debugLastDrawnByScreen[active], drawn)
+	debugLastDrawnByScreen[active] = drawn
+}
+
 func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, rowOrigin, colOrigin int) string {
 	if a.graphicsProtocol == imgview.ProtocolSixel && len(a.inlineImageStaleRows) > 0 {
 		base = sixelFullRepaint(base, a.height, a.imageRepaintGen)
@@ -351,6 +371,22 @@ func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, row
 	}
 	var sb strings.Builder
 	sb.WriteString(base)
+	// ponytail: temporary diagnostic (docs/plan-inline-images-improvements.md
+	// Round 6) — the app-level stale-row log only fires when a slot goes
+	// stale/moves, never on a slot reappearing, so it can't show whether a
+	// redraw actually happens when e.g. returning to PostDetail after a
+	// tab-away. This logs the drawn {key: row} set only when it changes
+	// from the last logged call, so a genuine redraw (or its absence) on
+	// reappear is directly visible instead of inferred.
+	if a.debug {
+		drawn := make(map[string]int, len(slots))
+		for _, slot := range slots {
+			if _, ok := a.inlineImageCache[inlineImageCacheKey(slot, a.graphicsProtocol)]; ok {
+				drawn[slot.Key] = rowOrigin + slot.Row
+			}
+		}
+		debugLogDrawSetIfChanged(a.active, drawn)
+	}
 	for _, slot := range slots {
 		encoded, ok := a.inlineImageCache[inlineImageCacheKey(slot, a.graphicsProtocol)]
 		if !ok {
