@@ -448,10 +448,34 @@ now waits `carouselCycleDebounce` (120ms) via a `carouselCycleGen`-guarded `tea.
 mirrors the existing `notify()`/`gifFrameTickCmd` gen+tick pattern already used elsewhere in
 this file. Live result: "carousel works much better." Considered resolved.
 
-**Current state**: Sixel and iTerm2 now use genuinely different repaint mechanisms — iTerm2
-resends real content with no erase (`forceRowsDirty`, unchanged since round 4), Sixel does a
-real single-write full-screen erase with a collision-proof dirty marker
-(`sixelFullRepaint`/`sixelDirtyMarker`, `sixelRepaintGen`). Kitty was never part of any of
-this — its placement-delete primitive means it never needed erasure or resend tricks at all.
-No known open issues; a true marker collision remains theoretically possible but requires
-~16.7 million repaint triggers between two actual flushes, not realistic from keyboard input.
+**Round 8 — the same collision, left open for iTerm2.** Reported on real iTerm2: an inline
+image occasionally not drawn fully on feed scroll/refresh — no stale/ghost pixels (unlike the
+Konsole/Sixel symptom), consistent with iTerm2's resend-only strategy: a *skipped* resend
+silently leaves old-but-real content in place rather than a blank hole, so it reads as "didn't
+finish drawing" rather than "left pixels behind." Root cause: rounds 5–6 above gave Sixel a
+collision-proof marker (`sixelRepaintGen`/`sixelDirtyMarker`) but deliberately left iTerm2 on
+its original fixed/low-entropy markers — a plain `"\x1b[0m"` for the stale-row resend
+(`forceRowsDirty` in `injectInlineImages`) and an `inlineImagePaintGen % 2` parity toggle for
+the trailing per-frame marker — on the reasoning that iTerm2's in-place resend (no erase) had
+already been "proven sufficient on real iTerm2," which wasn't tested under the same
+fast-scroll/fast-refresh stress that surfaced the bug for Sixel. Both call sites, plus a third
+(the carousel-cycle prev-box cleanup in `compositeOverlays`, also iTerm2-only), have the exact
+same collision: two consecutive *actually flushed* frames can share the same fixed marker and
+get wrongly skipped by Bubble Tea's line diff.
+
+**Fix**: generalized the mechanism instead of duplicating it — `sixelRepaintGen`/
+`sixelDirtyMarker` renamed to protocol-neutral `imageRepaintGen`/`imageDirtyMarker` and shared
+by both protocols; the `graphicsProtocol == ProtocolSixel` gates around the counter bumps in
+`syncInlineImages` and the carousel-cycle handler were removed so iTerm2 bumps it under the
+same triggers Sixel already did (a stale row, a selection touching a visible image, a
+size-changed carousel cycle); all three iTerm2 call sites now use `imageDirtyMarker(gen)`
+instead of a fixed marker or parity toggle.
+
+**Current state**: Sixel and iTerm2 still use different repaint *mechanisms* — iTerm2 resends
+real content with no erase (`forceRowsDirty`), Sixel does a real single-write full-screen erase
+(`sixelFullRepaint`) — but both now share the same collision-proof dirty-marker/generation-
+counter machinery (`imageDirtyMarker`, `imageRepaintGen`) rather than Sixel alone having it.
+Kitty was never part of any of this — its placement-delete primitive means it never needed
+erasure or resend tricks at all. No known open issues; a true marker collision remains
+theoretically possible but requires ~16.7 million repaint triggers between two actual flushes,
+not realistic from keyboard input.

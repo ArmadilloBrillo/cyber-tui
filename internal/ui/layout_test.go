@@ -644,7 +644,7 @@ func TestCompositeOverlays_ImageModalCycle_ForcesPrevBoxRowsDirty(t *testing.T) 
 			continue // covered by the new box too; overlayCenter may splice over the marker there
 		}
 		checked++
-		want := fmt.Sprintf("line%d\x1b[0m", r)
+		want := fmt.Sprintf("line%d%s", r, imageDirtyMarker(a.imageRepaintGen))
 		if !strings.Contains(out, want) {
 			t.Errorf("expected row %d (outside the new box) forced dirty (%q) in output", r, want)
 		}
@@ -682,66 +682,63 @@ func TestCompositeOverlays_ImageModalCycle_SixelGetsFullRepaint(t *testing.T) {
 	if !strings.HasPrefix(out, "\x1b[2J\x1b[H") {
 		t.Errorf("expected a full-screen erase prepended to the frame, got %q", out)
 	}
-	if !strings.Contains(out, "line1"+sixelDirtyMarker(a.sixelRepaintGen)) {
+	if !strings.Contains(out, "line1"+imageDirtyMarker(a.imageRepaintGen)) {
 		t.Errorf("expected every row forced dirty (e.g. row 1), got %q", out)
 	}
 }
 
-// TestInjectInlineImages_PaintGenTogglesTrailingLineBytes confirms the
-// inlineImagePaintGen dirty-marker mechanism actually does what
-// syncInlineImages/injectInlineImages depend on it for: without it, a
-// selection change that recolors a band row elsewhere (but doesn't change
-// which images are visible or their cache contents) leaves this function's
-// output byte-identical to last frame, so Bubble Tea's per-line diff skips
-// resending it and the image never gets repainted — this was the reason a
-// tea.ClearScreen (later replaced by this mechanism) was needed at all. The
-// output must differ whenever inlineImagePaintGen's parity differs, and be
-// identical when parity is unchanged, since that parity flip is the only
-// signal that forces Bubble Tea to reissue the line.
-func TestInjectInlineImages_PaintGenTogglesTrailingLineBytes(t *testing.T) {
+// TestInjectInlineImages_ITerm2RepaintGenAlwaysDiffersOnChange confirms the
+// imageRepaintGen dirty-marker mechanism actually does what
+// syncInlineImages/injectInlineImages depend on it for, for iTerm2: without
+// it, a selection change that recolors a band row elsewhere (but doesn't
+// change which images are visible or their cache contents) leaves this
+// function's output byte-identical to last frame, so Bubble Tea's per-line
+// diff skips resending it and the image never gets repainted — this was the
+// reason a tea.ClearScreen (later replaced by this mechanism) was needed at
+// all. Every distinct gen must produce different output, not just
+// odd-vs-even ones — a fixed %2 toggle has the same collision class the
+// round-5/6 fix closed for Sixel (two consecutive *actually flushed* frames
+// landing on the same parity are byte-identical, so Bubble Tea wrongly skips
+// resending this line), which iTerm2 was originally left exposed to until
+// imageRepaintGen was extended to cover both protocols.
+func TestInjectInlineImages_ITerm2RepaintGenAlwaysDiffersOnChange(t *testing.T) {
 	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
 	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolITerm2): "\x1b]1337;fake\x07"}
 	slots := []screens.InlineImageSlot{slot}
 
-	a0 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageCache: cache, inlineImagePaintGen: 0}
-	a1 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageCache: cache, inlineImagePaintGen: 1}
-	a2 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageCache: cache, inlineImagePaintGen: 2}
-
-	out0 := injectInlineImages(a0, "base", slots, 5, 7)
-	out1 := injectInlineImages(a1, "base", slots, 5, 7)
-	out2 := injectInlineImages(a2, "base", slots, 5, 7)
-
-	if out0 == out1 {
-		t.Error("expected an odd paint generation to produce different output than an even one")
-	}
-	if out0 != out2 {
-		t.Error("expected two even paint generations to produce identical output")
-	}
-}
-
-// TestInjectInlineImages_SixelRepaintGenAlwaysDiffersOnChange is the Sixel
-// equivalent of TestInjectInlineImages_PaintGenTogglesTrailingLineBytes,
-// but for sixelRepaintGen instead of inlineImagePaintGen's %2 toggle: a
-// fixed 2-way toggle has the same collision class the round-5 fix closed
-// for sixelFullRepaint (two consecutive *actually flushed* frames landing
-// on the same parity are byte-identical, so Bubble Tea wrongly skips
-// resending this line — which carries the real per-slot image draws).
-// Every distinct gen must differ, not just odd-vs-even ones.
-func TestInjectInlineImages_SixelRepaintGenAlwaysDiffersOnChange(t *testing.T) {
-	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
-	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolSixel): "\x1bPq...fake\x1b\\"}
-	slots := []screens.InlineImageSlot{slot}
-
-	a1 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolSixel, inlineImageCache: cache, sixelRepaintGen: 1}
-	a2 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolSixel, inlineImageCache: cache, sixelRepaintGen: 2}
-	a3 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolSixel, inlineImageCache: cache, sixelRepaintGen: 3}
+	a1 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageCache: cache, imageRepaintGen: 1}
+	a2 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageCache: cache, imageRepaintGen: 2}
+	a3 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageCache: cache, imageRepaintGen: 3}
 
 	out1 := injectInlineImages(a1, "base", slots, 5, 7)
 	out2 := injectInlineImages(a2, "base", slots, 5, 7)
 	out3 := injectInlineImages(a3, "base", slots, 5, 7)
 
 	if out1 == out2 || out2 == out3 || out1 == out3 {
-		t.Error("expected every distinct sixelRepaintGen to produce different output, not just odd-vs-even")
+		t.Error("expected every distinct imageRepaintGen to produce different output, not just odd-vs-even")
+	}
+}
+
+// TestInjectInlineImages_SixelRepaintGenAlwaysDiffersOnChange is the Sixel
+// equivalent of TestInjectInlineImages_ITerm2RepaintGenAlwaysDiffersOnChange
+// — both protocols share the same imageRepaintGen/imageDirtyMarker
+// mechanism, this just confirms it holds with a Sixel-encoded cache entry
+// and the Sixel protocol path through injectInlineImages too.
+func TestInjectInlineImages_SixelRepaintGenAlwaysDiffersOnChange(t *testing.T) {
+	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
+	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolSixel): "\x1bPq...fake\x1b\\"}
+	slots := []screens.InlineImageSlot{slot}
+
+	a1 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolSixel, inlineImageCache: cache, imageRepaintGen: 1}
+	a2 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolSixel, inlineImageCache: cache, imageRepaintGen: 2}
+	a3 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolSixel, inlineImageCache: cache, imageRepaintGen: 3}
+
+	out1 := injectInlineImages(a1, "base", slots, 5, 7)
+	out2 := injectInlineImages(a2, "base", slots, 5, 7)
+	out3 := injectInlineImages(a3, "base", slots, 5, 7)
+
+	if out1 == out2 || out2 == out3 || out1 == out3 {
+		t.Error("expected every distinct imageRepaintGen to produce different output, not just odd-vs-even")
 	}
 }
 
@@ -792,7 +789,7 @@ func TestSixelFullRepaint(t *testing.T) {
 	if len(outLines) != len(lines) {
 		t.Fatalf("expected %d lines, got %d", len(lines), len(outLines))
 	}
-	marker := sixelDirtyMarker(42)
+	marker := imageDirtyMarker(42)
 	for i, line := range outLines {
 		want := fmt.Sprintf("line%d%s", i+1, marker)
 		if line != want {
@@ -808,7 +805,7 @@ func TestSixelFullRepaint(t *testing.T) {
 // byte-identical output for a row whose real content didn't change,
 // because Bubble Tea's per-line diff would then wrongly skip resending it
 // after the real erase, leaving it genuinely blank. A fixed marker (the
-// pre-fix behavior) fails this immediately; sixelDirtyMarker(gen) must not.
+// pre-fix behavior) fails this immediately; imageDirtyMarker(gen) must not.
 func TestSixelFullRepaint_DifferentGensNeverCollide(t *testing.T) {
 	base := "unchanged line"
 
@@ -832,10 +829,11 @@ func TestInjectInlineImages_ForcesStaleRowsDirty(t *testing.T) {
 	a := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageStaleRows: []int{6, 12}}
 
 	out := injectInlineImages(a, base, nil, 0, 0)
-	if !strings.Contains(out, "line6\x1b[0m") {
+	marker := imageDirtyMarker(a.imageRepaintGen)
+	if !strings.Contains(out, "line6"+marker) {
 		t.Errorf("expected row 6 forced dirty in output, got %q", out)
 	}
-	if !strings.Contains(out, "line12\x1b[0m") {
+	if !strings.Contains(out, "line12"+marker) {
 		t.Errorf("expected row 12 forced dirty in output, got %q", out)
 	}
 }

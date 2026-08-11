@@ -274,21 +274,28 @@ type App struct {
 	inlineImageStaleRows    []int
 	inlineImageLastSelKey   string
 	inlineImagePaintGen     int
-	// sixelRepaintGen is a monotonically incrementing counter, bumped
+	// imageRepaintGen is a monotonically incrementing counter, bumped
 	// (never reset — same never-auto-expire posture as pendingKittyDeletes)
-	// each time a Sixel full-screen repaint is newly triggered (a stale row
-	// in syncInlineImages, or a size-changed carousel cycle in
-	// handleImageViewer). sixelFullRepaint (layout.go) encodes it into a
+	// each time an inline-image repaint is newly triggered for either
+	// protocol (a stale row in syncInlineImages, a selection change that
+	// touches a visible image, or a size-changed carousel cycle in
+	// handleImageViewer). Encoded via imageDirtyMarker (layout.go) into a
 	// zero-width true-color SGR marker so two consecutive *actually
 	// flushed* repaint frames never produce identical bytes for an
-	// unchanged row — a fixed marker (like inlineImagePaintGen's %2
-	// toggle) isn't enough here: Bubble Tea's per-line diff would skip
-	// resending any row whose bytes match the last flushed frame, and
-	// after sixelFullRepaint's real erase, a skipped row comes back
-	// genuinely blank rather than merely stale. Confirmed live: this
-	// showed up as stale pixels on fast scroll and, worse, the whole
-	// screen going black on fast carousel cycling.
-	sixelRepaintGen int
+	// unchanged row — a fixed marker (or a %2 toggle) isn't enough here:
+	// Bubble Tea's per-line diff would skip resending any row whose bytes
+	// match the last flushed frame, which for Sixel's real erase
+	// (sixelFullRepaint) means a skipped row comes back genuinely blank
+	// rather than merely stale, and for iTerm2's in-place resend
+	// (forceRowsDirty) means a skipped row silently keeps its old content —
+	// confirmed live for Sixel as stale pixels on fast scroll and, worse,
+	// the whole screen going black on fast carousel cycling; the identical
+	// mechanism affects iTerm2's resend path, just with a less visually
+	// obvious symptom (an occasional not-fully-drawn image on fast feed
+	// scroll/refresh) — originally scoped to Sixel only in the round-5/6
+	// fix (docs/plan-inline-images-improvements.md §10), extended to both
+	// protocols once the same collision was confirmed possible for iTerm2.
+	imageRepaintGen int
 
 	// kittyPlacementIDs assigns a stable id (used as both image id and
 	// placement id, see imgview.EncodeKitty) to each inline image slot ever
@@ -2781,21 +2788,25 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		// moved or removed image) — the two protocols just do different
 		// things with that fact in View() (see injectInlineImages,
 		// layout.go): iTerm2 resends the row's real content in place with no
-		// erase (forceRowsDirty), which was proven sufficient on real
-		// iTerm2. Sixel needs an actual full-screen erase — proven, on real
-		// Konsole hardware across three rounds of live testing, to be the
-		// only thing that reliably clears its raster pixels at all — done as
-		// a single write from View() (ansi.EraseEntireScreen prepended to
-		// the frame plus every row forced dirty) rather than a tea.ClearScreen
-		// Cmd, whose immediate erase-write followed by a delayed content
-		// flush on the next render tick is what caused the bad flicker in
-		// the tea.ClearScreen attempt (confirmed by reading bubbletea's
-		// standardRenderer.clearScreen()/flush(), v1.3.10).
+		// erase (forceRowsDirty). Sixel needs an actual full-screen erase —
+		// proven, on real Konsole hardware across three rounds of live
+		// testing, to be the only thing that reliably clears its raster
+		// pixels at all — done as a single write from View()
+		// (ansi.EraseEntireScreen prepended to the frame plus every row
+		// forced dirty) rather than a tea.ClearScreen Cmd, whose immediate
+		// erase-write followed by a delayed content flush on the next render
+		// tick is what caused the bad flicker in the tea.ClearScreen attempt
+		// (confirmed by reading bubbletea's
+		// standardRenderer.clearScreen()/flush(), v1.3.10). Both protocols
+		// need imageRepaintGen bumped here regardless: whichever repaint
+		// mechanism runs, it must be collision-proof against Bubble Tea
+		// dropping intermediate View() calls under fast input — see
+		// imageRepaintGen's doc comment (App struct).
 		current, staleRows := syncInlineImageErasures(slots, rowOrigin, colOrigin, a.inlineImageVisibleRects)
 		a.inlineImageVisibleRects = current
 		a.inlineImageStaleRows = staleRows
-		if a.graphicsProtocol == imgview.ProtocolSixel && len(staleRows) > 0 {
-			a.sixelRepaintGen++
+		if len(staleRows) > 0 {
+			a.imageRepaintGen++
 		}
 
 		selChanged := selKey != a.inlineImageLastSelKey
@@ -2803,15 +2814,13 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		a.inlineImageLastSelKey = selKey
 		if touchesVisible {
 			a.inlineImagePaintGen++
-			if a.graphicsProtocol == imgview.ProtocolSixel {
-				// See sixelRepaintGen's doc comment (App struct): a
-				// selection recolor without a position change never
-				// touches inlineImageStaleRows, so this is the only
-				// trigger for that case — needed so injectInlineImages'
-				// trailing-line marker (layout.go) is collision-proof here
-				// too, not just for the stale-row full-repaint case.
-				a.sixelRepaintGen++
-			}
+			// See imageRepaintGen's doc comment (App struct): a selection
+			// recolor without a position change never touches
+			// inlineImageStaleRows, so this is the only trigger for that
+			// case — needed so injectInlineImages' trailing-line marker
+			// (layout.go) is collision-proof here too, not just for the
+			// stale-row case.
+			a.imageRepaintGen++
 		}
 	}
 
@@ -3072,14 +3081,14 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		if wasOpen {
 			a.imageModalPrevRows = a.imageModalRows
 			a.imageModalPrevCols = a.imageModalCols
-			if a.graphicsProtocol == imgview.ProtocolSixel && (a.imageModalRows != m.rows || a.imageModalCols != m.cols) {
+			if a.imageModalRows != m.rows || a.imageModalCols != m.cols {
 				// Same trigger compositeOverlays' "cycled" check (layout.go)
 				// will make from imageModalPrevRows/Cols vs the new dims —
 				// computed here too, one step earlier, since both dims are
-				// already in hand. See sixelRepaintGen's doc comment (App
+				// already in hand. See imageRepaintGen's doc comment (App
 				// struct) for why this needs its own generation bump rather
-				// than a fixed marker.
-				a.sixelRepaintGen++
+				// than a fixed marker — both Sixel and iTerm2 need it.
+				a.imageRepaintGen++
 			}
 		} else {
 			a.imageModalPrevRows = 0

@@ -2581,7 +2581,7 @@ func TestHandleImageViewer_ITerm2CycleSuccess_SnapshotsPrevDimsNoClearScreen(t *
 // TestHandleImageViewer_SixelCycleSuccess_NoClearScreen covers a real
 // carousel cycle on Sixel to a different-sized image (mirrors the iTerm2
 // case above): still no Cmd queued — the repaint decision is made in
-// View() from a.sixelRepaintGen, not a one-shot Update()-side command (see
+// View() from a.imageRepaintGen, not a one-shot Update()-side command (see
 // its doc comment, App struct, for why) — but the generation bump that
 // triggers sixelFullRepaint in compositeOverlays must have happened.
 func TestHandleImageViewer_SixelCycleSuccess_NoClearScreen(t *testing.T) {
@@ -2591,7 +2591,7 @@ func TestHandleImageViewer_SixelCycleSuccess_NoClearScreen(t *testing.T) {
 	a.imageModalOpen = true
 	a.imageModalCols = 20
 	a.imageModalRows = 10
-	startGen := a.sixelRepaintGen
+	startGen := a.imageRepaintGen
 
 	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 8, rows: 4})
 	if !ok {
@@ -2603,13 +2603,13 @@ func TestHandleImageViewer_SixelCycleSuccess_NoClearScreen(t *testing.T) {
 	if a2.imageModalRows != 4 || a2.imageModalCols != 8 {
 		t.Errorf("expected current dims updated to the new image (8x4), got %dx%d", a2.imageModalCols, a2.imageModalRows)
 	}
-	if a2.sixelRepaintGen == startGen {
-		t.Error("expected sixelRepaintGen bumped on a size-changed Sixel cycle")
+	if a2.imageRepaintGen == startGen {
+		t.Error("expected imageRepaintGen bumped on a size-changed Sixel cycle")
 	}
 }
 
 // TestHandleImageViewer_SixelCycleSameSize_NoRepaintGenBump confirms a
-// cycle to a same-sized image doesn't bump sixelRepaintGen — nothing would
+// cycle to a same-sized image doesn't bump imageRepaintGen — nothing would
 // be left over to repaint, since the new image's footprint exactly covers
 // the old one.
 func TestHandleImageViewer_SixelCycleSameSize_NoRepaintGenBump(t *testing.T) {
@@ -2619,14 +2619,14 @@ func TestHandleImageViewer_SixelCycleSameSize_NoRepaintGenBump(t *testing.T) {
 	a.imageModalOpen = true
 	a.imageModalCols = 8
 	a.imageModalRows = 4
-	startGen := a.sixelRepaintGen
+	startGen := a.imageRepaintGen
 
 	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 8, rows: 4})
 	if !ok {
 		t.Fatal("expected imageFetchedMsg to be handled")
 	}
-	if a2.sixelRepaintGen != startGen {
-		t.Error("expected sixelRepaintGen unchanged for a same-size Sixel cycle")
+	if a2.imageRepaintGen != startGen {
+		t.Error("expected imageRepaintGen unchanged for a same-size Sixel cycle")
 	}
 }
 
@@ -3329,7 +3329,11 @@ func TestSyncInlineImages_DisablingClearsStaleKittyPlacements(t *testing.T) {
 // TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2 confirms Sixel and
 // iTerm2 both compute inlineImageStaleRows identically — the two protocols
 // only diverge in what View() does with that fact (see injectInlineImages/
-// sixelFullRepaint in layout.go), not in whether Update() tracks it.
+// sixelFullRepaint in layout.go), not in whether Update() tracks it. Both
+// also bump imageRepaintGen for a stale row: iTerm2's forceRowsDirty resend
+// needs the same collision-proof marker Sixel's full repaint does (see
+// imageRepaintGen's doc comment, App struct) — a fixed marker there was the
+// original bug this test's sibling coverage exists to prevent regressing.
 // Neither queues a Cmd: the repaint decision (forceRowsDirty for iTerm2,
 // sixelFullRepaint for Sixel) is made in View() from this same tracked
 // state, not from a one-shot Update()-side command — deliberately, since a
@@ -3354,8 +3358,8 @@ func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
 	if len(sixelOut.inlineImageStaleRows) == 0 {
 		t.Error("expected inlineImageStaleRows populated for Sixel, same as iTerm2")
 	}
-	if sixelOut.sixelRepaintGen == sixel.sixelRepaintGen {
-		t.Error("expected sixelRepaintGen bumped for a stale Sixel row")
+	if sixelOut.imageRepaintGen == sixel.imageRepaintGen {
+		t.Error("expected imageRepaintGen bumped for a stale Sixel row")
 	}
 
 	iterm := App{
@@ -3370,8 +3374,8 @@ func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
 	if len(itermOut.inlineImageStaleRows) != len(sixelOut.inlineImageStaleRows) {
 		t.Errorf("expected iTerm2 and Sixel to track the same stale rows, got %v vs %v", itermOut.inlineImageStaleRows, sixelOut.inlineImageStaleRows)
 	}
-	if itermOut.sixelRepaintGen != iterm.sixelRepaintGen {
-		t.Error("expected sixelRepaintGen untouched for iTerm2")
+	if itermOut.imageRepaintGen == iterm.imageRepaintGen {
+		t.Error("expected imageRepaintGen bumped for a stale iTerm2 row too, same as Sixel")
 	}
 }
 
