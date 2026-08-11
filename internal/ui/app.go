@@ -2939,6 +2939,7 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 
 		selChanged := selKey != a.inlineImageLastSelKey
 		touchesVisible := selChanged && (selectionTouchesSlot(selKey, slots) || selectionTouchesSlot(a.inlineImageLastSelKey, slots))
+		prevSelKey := a.inlineImageLastSelKey
 		a.inlineImageLastSelKey = selKey
 		if touchesVisible {
 			a.inlineImagePaintGen++
@@ -2949,6 +2950,15 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 			// (layout.go) is collision-proof here too, not just for the
 			// stale-row case.
 			a.imageRepaintGen++
+			// ponytail: temporary diagnostic — a previously un-instrumented
+			// trigger distinct from the stale-rows log above: a selection
+			// change (e.g. the post's border recoloring active/inactive
+			// when a reply gets selected) that touches a visible image's
+			// row WITHOUT moving it. See docs/plan-inline-images-
+			// improvements.md Round 6/14.
+			if a.debug {
+				log.Printf("image: selection touched visible image active=%v prevSel=%q newSel=%q paintGen=%d gen=%d", a.active, prevSelKey, selKey, a.inlineImagePaintGen, a.imageRepaintGen)
+			}
 		}
 	}
 
