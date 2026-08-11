@@ -748,3 +748,47 @@ PostDetail repro never needed live iTerm2 access to diagnose, only to notice it 
 again instead of continuing to chase terminal-timing theories. The manual-feed-refresh-at-top
 blackout (distinct repro, not yet explained by this fix) and general live re-confirmation on
 real iTerm2 remain open.
+
+**Round 14 — Round 13 didn't fix the live repro either; found via live logging what static
+reading of `revealAbove` couldn't have caught.** Live re-test, this time isolating tab-switching
+entirely (staying on PostDetail, only pressing down/up): still went black. The debug log for
+that exact run showed **zero** stale-row events for the down/up presses at all — meaning the
+post fit within the viewport this time (no scrolling actually happened, so Round 13's fix,
+which only applies when a post is taller than the pane, was never in play) — yet the image still
+failed. That pointed at a completely different, previously un-instrumented trigger: `syncInlineImages`'s
+`touchesVisible` check (a selection change recoloring a card without moving anything — the
+mechanism `inlineImagePaintGen` was originally built for, per §9's history). Added a log line
+for it and re-tested: it fired exactly once, on first entering PostDetail (carrying over Feed's
+own non-empty selection key), and never again despite the user repeatedly toggling between the
+post and its reply selected.
+
+**Root cause**: `App.activeSelectionKey()` (`app.go`) returns `a.postDetail.SelectedReplyID()`
+directly for `screenPostDetail` — which is `""` when the post itself is selected (as opposed to
+a reply). `selectionTouchesSlot` explicitly treats `""` as "nothing selected" and always returns
+`false` for it (by design — see `TestSelectionTouchesSlot`, since a bare empty id would
+otherwise match everything). The result: toggling selection between the post and a reply —
+which recolors the post's border across every row it spans, including the rows its own inline
+image sits in — **never registers as touching that image at all**. `imageRepaintGen` never
+bumps, so nothing forces the trailing composite line (which carries the actual image draw) to
+be reissued after the border's own legitimate resend overwrites the image's raster pixels in
+passing. Confirmed by direct code reading matching the log exactly: the one time it *did* fire
+was entering PostDetail from Feed, where Feed's selection key (`a.feed.SelectedPostID()`, always
+non-empty) was still the "previous" key being compared — every subsequent in-PostDetail toggle
+compared `""` against a reply ID or vice versa, silently no-op every time. `MillerLayout.InlineImageSlots`
+(`layout_miller.go`) had the identical bug independently (`a.postDetail.SelectedReplyID()` used
+directly as `selKey`) — confirmed unaffected by cross-checking `FeedModel.DetailSelectionKey()`
+(`feed.go`), which already had the equivalent fallback, so this was specific to PostDetail's two
+call sites, not a systemic pattern.
+
+**Fix**: both call sites (`App.activeSelectionKey` for `TabsLayout`, and `MillerLayout.InlineImageSlots`
+directly) now fall back to `a.postDetail.PostID()` (the accessor added in Round 5) when
+`SelectedReplyID()` is `""`, so the post's own selection state always carries a matchable,
+non-empty identity — the same convention `FeedModel.DetailSelectionKey()` already used.
+
+**Current state**: shipped, alongside a regression test (`TestActiveSelectionKey_PostDetailFallsBackToPostID`)
+that would have caught this immediately had it existed before. Live re-test on real iTerm2
+pending. This round's diagnosis depended entirely on the live debug-logging infrastructure
+(Round 6) reaching a code path Round 4's earlier static analysis never considered — the
+selection-recolor mechanism was known to exist (built in an earlier round, §9) but had never
+been suspected as a live PostDetail cause until the log showed everything *else* checking out
+clean.

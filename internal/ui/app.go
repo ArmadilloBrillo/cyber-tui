@@ -2629,7 +2629,24 @@ func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
 func (a App) activeSelectionKey() string {
 	switch a.active {
 	case screenPostDetail:
-		return a.postDetail.SelectedReplyID()
+		// SelectedReplyID returns "" when the post itself is selected (not
+		// a reply) — but selectionTouchesSlot treats "" as "nothing
+		// selected" and always returns false for it (its own doc comment:
+		// an id that's merely a substring of another id must not match, and
+		// "" would match everything). Without this fallback, toggling
+		// between the post and a reply selected — recoloring the post's
+		// own border, including the rows its inline image sits in — never
+		// registers as touching that image at all, so imageRepaintGen
+		// never bumps and the image can be silently wiped by the border's
+		// own legitimate resend with nothing forcing it back. Confirmed
+		// live and via debug logging (docs/plan-inline-images-
+		// improvements.md Round 14) — this fired once on entering
+		// PostDetail (Feed's own non-empty selection key) but never again
+		// for any subsequent post/reply toggle within PostDetail itself.
+		if id := a.postDetail.SelectedReplyID(); id != "" {
+			return id
+		}
+		return a.postDetail.PostID()
 	case screenFeed:
 		return a.feed.SelectedPostID()
 	default:

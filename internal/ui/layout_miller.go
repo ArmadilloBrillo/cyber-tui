@@ -146,7 +146,18 @@ func (l MillerLayout) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, i
 		return a.feed.VisibleDetailInlineImages(detailW, contentH), rowOrigin, colOrigin, a.feed.DetailSelectionKey()
 	}
 	if a.active == screenPostDetail {
-		return a.postDetail.VisibleInlineImages(), rowOrigin, millerSidebarWidth + 1, a.postDetail.SelectedReplyID()
+		// selKey falls back to the post's own ID when SelectedReplyID()
+		// is "" (post itself selected, not a reply) — see
+		// App.activeSelectionKey's doc comment (app.go) for why: without
+		// it, toggling between the post and a reply selected never
+		// registers as touching the post's own inline image via
+		// selectionTouchesSlot, so a border recolor there can silently
+		// wipe the image with nothing forcing a redraw.
+		selKey := a.postDetail.SelectedReplyID()
+		if selKey == "" {
+			selKey = a.postDetail.PostID()
+		}
+		return a.postDetail.VisibleInlineImages(), rowOrigin, millerSidebarWidth + 1, selKey
 	}
 	return nil, 0, 0, ""
 }

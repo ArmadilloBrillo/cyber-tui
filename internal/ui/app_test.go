@@ -3113,6 +3113,36 @@ func TestSelectionTouchesSlot(t *testing.T) {
 	}
 }
 
+// TestActiveSelectionKey_PostDetailFallsBackToPostID is the regression test
+// for a real bug found via live debug logging (docs/plan-inline-images-
+// improvements.md Round 14): PostDetailModel.SelectedReplyID() returns ""
+// when the post itself is selected (not a reply), but selectionTouchesSlot
+// treats "" as "nothing selected" and always returns false for it (see
+// TestSelectionTouchesSlot above). Without this fallback to the post's own
+// ID, toggling selection between the post and a reply — which recolors the
+// post's border, including the rows its own inline image sits in — never
+// registers as touching that image, so imageRepaintGen never bumps and a
+// legitimate border-recolor resend can silently wipe the image with
+// nothing forcing it back. Confirmed live: this fired once on entering
+// PostDetail (Feed's own non-empty selection key carrying over) but never
+// again for any subsequent post/reply toggle within PostDetail itself.
+func TestActiveSelectionKey_PostDetailFallsBackToPostID(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1"})
+
+	// Post itself selected (SelectedReplyID() == "") — must fall back to
+	// the post's own ID, not "".
+	if got := a.activeSelectionKey(); got != "p1" {
+		t.Errorf("expected activeSelectionKey to fall back to the post ID %q when the post itself is selected, got %q", "p1", got)
+	}
+
+	slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 3}}
+	if !selectionTouchesSlot(a.activeSelectionKey(), slots) {
+		t.Error("expected the post's own selection key to touch its own visible image slot")
+	}
+}
+
 // TestSyncInlineImageErasures covers the stale-row detection that replaced
 // both tea.ClearScreen and the later accumulate-until-exact-rect-reclaimed
 // erasure design for scroll-triggered repaints: a moved or removed image's
