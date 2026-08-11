@@ -311,6 +311,20 @@ type App struct {
 	// protocols once the same collision was confirmed possible for iTerm2.
 	imageRepaintGen int
 
+	// screenSwitchedAt is when a.active last changed (App.Update, comparing
+	// active before/after updateInner). injectInlineImages (layout.go) uses
+	// it to briefly hold back inline image draws right after a screen
+	// switch — see inlineImageSwitchSettleDelay's doc comment for why: live
+	// debug-log evidence (docs/plan-inline-images-improvements.md Round 7)
+	// showed the app correctly recomputes and reissues the exact right
+	// draw command on returning to a screen after a fast switch away and
+	// back, yet the image still failed to render on real iTerm2 — pointing
+	// at the terminal still processing the large, unrelated screen-redraw
+	// content when the image's OSC sequence arrives, the same class of
+	// issue already mitigated for the fullscreen carousel
+	// (carouselCycleDebounce).
+	screenSwitchedAt time.Time
+
 	// kittyPlacementIDs assigns a stable id (used as both image id and
 	// placement id, see imgview.EncodeKitty) to each inline image slot ever
 	// seen, keyed by InlineImageSlot.Key. Entries are PERMANENT — never
@@ -635,7 +649,14 @@ func (a App) Init() tea.Cmd {
 // change from this same message — batching its command (if any) with
 // whatever updateInner returned.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	prevActive := a.active
 	a2, cmd := a.updateInner(msg)
+	if a2.active != prevActive {
+		// See screenSwitchedAt's doc comment (App struct) and
+		// inlineImageSwitchSettleDelay's — injectInlineImages uses this to
+		// briefly hold back inline image draws right after a screen switch.
+		a2.screenSwitchedAt = time.Now()
+	}
 	a3, syncCmd := a2.syncInlineImages()
 	if syncCmd == nil {
 		return a3, cmd
@@ -3310,6 +3331,18 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 // terminal-side timing constraint this app can't measure directly, not a
 // structural fix — revisit if it's still reported after this change.
 const carouselCycleDebounce = 300 * time.Millisecond
+
+// inlineImageSwitchSettleDelay bounds how long injectInlineImages
+// (layout.go) holds back inline image draws after a screen switch — see
+// App.screenSwitchedAt's doc comment for the live-log evidence this
+// responds to. Between carouselCycleDebounce (300ms) and
+// inlineImageStaleGrace (500ms): long enough to give the terminal real
+// headroom after a large screen-redraw write, short enough that the delay
+// before an image reappears on switching to its screen stays barely
+// perceptible. A mitigation for a suspected terminal-side timing
+// constraint this app can't measure directly, not a structural fix —
+// revisit if it's still reported after this change.
+const inlineImageSwitchSettleDelay = 250 * time.Millisecond
 
 // carouselCycleSettledMsg fires carouselCycleDebounce after a left/right
 // carousel press; only acted on if gen still matches a.carouselCycleGen

@@ -648,3 +648,56 @@ bugs, either of which plausibly explains a delayed no-interaction blackout:
 Round 4 PostDetail scroll-away/back-doesn't-redraw repro (`5a`-`5d` in that round's notes) remains
 open and uninvestigated by this round — it may or may not share a root cause with the above;
 revisit separately once this round's fixes are confirmed live.
+
+**Round 12 — Round 11 didn't fix it either; live-instrumented and the app's own logic is
+vindicated.** Live re-test after Round 11: both the manual-refresh-at-top and PostDetail
+quick-tab-switch blackouts persisted. Rather than guess a fourth mechanism from static reading,
+added temporary `log.Printf` diagnostics gated behind a new `App.debug`/`WithDebug` (mirroring
+`api.HTTPClient.WithDebug`, wired from `cfg.Debug` in `cmd/cyber-tui/main.go`, redirected to
+`cyber-tui-debug.log` the same way existing verbose RTDB output already is) to every mechanism
+investigated but not yet confirmed with certainty: stale-row/repaint-gen events, cache
+hit/miss/eviction, fetch completion, `repliesLoadedMsg` apply/drop, the feed's 15s background
+poll, and (added after the first live capture revealed a blind spot) the actual `{key: row}`
+draw set `injectInlineImages` builds each frame, logged only when it changes — first keyed
+purely by value, which turned out to hide exactly the case that mattered (a screen re-entering
+its own prior state looks identical to a silent redraw failure), so it was reworked to always
+log at least once whenever the active screen changes, closing that blind spot.
+
+Two live-captured sessions on real iTerm2 (`cyber-tui-debug.log`) showed, conclusively: no cache
+evictions, no cache misses after the initial load, stale-row tracking firing exactly when
+expected, and — critically — the corrected draw-set diagnostic confirmed the app **correctly
+recomputes and reissues the exact right image draw command** on returning to PostDetail
+immediately after a fast switch away and back (`draw set on screen 6 after switch: map[]`
+immediately followed by `draw set on screen 5 after switch: map[post:...:7]`). The user
+confirmed the image still went black during that exact captured run. Also read Bubble Tea's
+`standardRenderer.flush()` (`bubbletea@v1.3.10/standard_renderer.go`) directly and traced the
+exact leave/return sequence against it, including the case where its ~16ms ticker coalesces
+several `View()` calls into one flush — the trailing composite line's `imageRepaintGen` marker
+still differs between the "leaving" and "returning" frames in every traced scenario (a real
+stale-row event bumps it in between), so Bubble Tea's own per-line diff should still catch and
+resend the difference. No gap found there either. Also checked `ansi.Truncate`/`ansi.StringWidth`
+(`charmbracelet/x/ansi@v0.11.6`) for a naive-width-miscounting-OSC-sequences theory — ruled out
+as the general explanation, since the identical code path demonstrably works for the image's
+first appearance and for ordinary scroll redraws.
+
+**Conclusion**: with Go-level logic and Bubble Tea's own diff mechanism both cleared by direct
+evidence (not just static reasoning, this time backed by two live captures), the leading
+remaining explanation is the same class of issue already found and mitigated for the fullscreen
+carousel (Round 9/`carouselCycleDebounce`): iTerm2 receiving a new inline-image OSC 1337 write
+while still processing a large, unrelated burst of content — here, an entire screen's worth of
+redraw from switching tabs, not just a small isolated diff. The user's own earlier observation
+("does not appear to happen when tabbing is done slowly") is exactly the signature a
+terminal-side pacing issue produces, not a logic bug.
+
+**Mitigation**: added `App.screenSwitchedAt` (set in `App.Update` whenever `a.active` changes)
+and `inlineImageSwitchSettleDelay` (250ms, between `carouselCycleDebounce`'s 300ms and
+`inlineImageStaleGrace`'s 500ms). `injectInlineImages` now withholds the per-slot image draws
+(not the stale-row `forceRowsDirty` resend, which stays immediate) until that long after a
+screen switch, so the image's OSC write lands on its own frame after the switch's own large
+redraw has had time to reach the terminal, rather than racing it. Explicitly framed as a
+mitigation for a suspected terminal-side timing constraint, not a guaranteed structural fix —
+same posture as the carousel debounce.
+
+**Current state**: shipped; live re-test on real iTerm2 pending. Debug logging (`App.debug`,
+gated `log.Printf` calls, the draw-set diagnostic in `layout.go`) is left in place rather than
+stripped back out, in case another round is needed.

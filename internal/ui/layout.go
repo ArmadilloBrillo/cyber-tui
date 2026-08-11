@@ -5,6 +5,7 @@ import (
 	"log"
 	"reflect"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -401,14 +402,26 @@ func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, row
 		}
 		debugLogDrawSetIfChanged(a.active, drawn)
 	}
-	for _, slot := range slots {
-		encoded, ok := a.inlineImageCache[inlineImageCacheKey(slot, a.graphicsProtocol)]
-		if !ok {
-			continue
+	// Hold back the actual image draws (not the stale-row resend above,
+	// which stays immediate) for inlineImageSwitchSettleDelay after a
+	// screen switch — see its doc comment and App.screenSwitchedAt's for
+	// why: live evidence showed the app correctly recomputes and reissues
+	// the right draw command on returning to a screen after a fast switch,
+	// yet iTerm2 still failed to render it, consistent with the terminal
+	// still processing the switch's own large, unrelated redraw. The image
+	// simply appears on the first frame after the delay elapses instead —
+	// syncInlineImages keeps re-running on every subsequent Update either
+	// way, ticks included.
+	if time.Since(a.screenSwitchedAt) >= inlineImageSwitchSettleDelay {
+		for _, slot := range slots {
+			encoded, ok := a.inlineImageCache[inlineImageCacheKey(slot, a.graphicsProtocol)]
+			if !ok {
+				continue
+			}
+			row := rowOrigin + slot.Row
+			col := colOrigin + slot.ColIndent
+			sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", row, col, encoded))
 		}
-		row := rowOrigin + slot.Row
-		col := colOrigin + slot.ColIndent
-		sb.WriteString(fmt.Sprintf("\x1b[%d;%dH%s", row, col, encoded))
 	}
 	for id := range a.pendingKittyDeletes {
 		sb.WriteString(imgview.DeleteKittyPlacement(id))

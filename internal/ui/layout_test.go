@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -835,6 +836,37 @@ func TestInjectInlineImages_ForcesStaleRowsDirty(t *testing.T) {
 	}
 	if !strings.Contains(out, "line12"+marker) {
 		t.Errorf("expected row 12 forced dirty in output, got %q", out)
+	}
+}
+
+// TestInjectInlineImages_HoldsBackDrawsWithinSwitchSettleDelay is the
+// regression test for the Round 7 mitigation: live debug-log evidence
+// showed the app correctly recomputes and reissues the right image draw
+// command on returning to a screen after a fast switch away and back, yet
+// real iTerm2 still failed to render it — consistent with the terminal
+// still processing the switch's own large, unrelated redraw. Draws are
+// held back for inlineImageSwitchSettleDelay after a.screenSwitchedAt, but
+// the stale-row resend itself (forceRowsDirty, unrelated to this slot)
+// must still happen immediately regardless.
+func TestInjectInlineImages_HoldsBackDrawsWithinSwitchSettleDelay(t *testing.T) {
+	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
+	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolITerm2): "\x1b]1337;fake\x07"}
+	slots := []screens.InlineImageSlot{slot}
+
+	withinDelay := App{
+		width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2,
+		inlineImageCache: cache, screenSwitchedAt: time.Now(),
+	}
+	out := injectInlineImages(withinDelay, "base", slots, 5, 7)
+	if strings.Contains(out, "fake") {
+		t.Errorf("expected the image draw withheld within the settle delay, got %q", out)
+	}
+
+	pastDelay := withinDelay
+	pastDelay.screenSwitchedAt = time.Now().Add(-inlineImageSwitchSettleDelay - time.Second)
+	out = injectInlineImages(pastDelay, "base", slots, 5, 7)
+	if !strings.Contains(out, "fake") {
+		t.Errorf("expected the image draw included once the settle delay elapsed, got %q", out)
 	}
 }
 
