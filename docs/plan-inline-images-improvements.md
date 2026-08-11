@@ -541,3 +541,55 @@ appending the marker to that line too.
 **Current state**: both fixes shipped; live re-test on real iTerm2 pending (sandbox has none).
 No known open issues beyond the theoretical ~16.7 million-collision marker case (see Round 5/6)
 and the carousel fix being a pacing mitigation rather than a structural guarantee.
+
+**Round 10 — Round 9's feed fix had a gap: any unrelated Update could still clear it.**
+Re-tested live on real iTerm2 after Round 9 shipped. Carousel: confirmed better; the small
+delay between a keypress and the next image showing is the intended 300ms debounce, not a bug.
+Feed: much better too — the user confirmed ordinary scrolling no longer reproduces the
+partial-draw at all — but it still happened specifically **when refreshing the feed while
+scrolled to the top** (new posts merging in, pushing existing posts/images down briefly).
+
+Root cause: `App.Update` (`app.go`) calls `syncInlineImages()` unconditionally after *every*
+`tea.Msg` the whole app processes, not just feed-related ones — and this app runs several
+independent `tea.Tick` loops regardless of the active screen (chat/RTDB heartbeats,
+notification polls, gif-frame ticks). Round 9's `accumulateStaleRows` fix cleared
+`a.inlineImageStaleRows` the moment any single `syncInlineImages` call computed zero *new*
+staleRows, on the assumption that a quiet call meant the position had settled. It doesn't: the
+moment a stale row is detected, `a.inlineImageVisibleRects` is immediately advanced to the new
+position in that same call, so the *very next* Update of any kind — including a totally
+unrelated background tick — diffs against that already-advanced position, finds nothing new,
+and wipes the accumulator regardless of whether Bubble Tea has actually flushed a frame with
+the forced-dirty resend yet.
+
+This explains exactly why ordinary scrolling was already fixed but the top-of-feed merge
+wasn't: a user's own keypress *is* the next Update and always produces fresh staleRows itself,
+so the accumulator is never idle long enough to get prematurely cleared. The top-of-feed
+background-poll merge, traced in `internal/ui/screens/feed.go`, is a genuine two-phase,
+two-Update animation — not one atomic change: pressing up/k with staged posts pending shows a
+"fetching new posts..." banner (shifting existing content/images down by one line immediately),
+then `tea.Tick(feedMergeAnimDelay, …)` (`feedMergeAnimDelay = 200ms`) fires 200ms later and
+`MergePendingNew()` actually prepends the real posts (shifting everything again). That fixed
+~200ms gap between two feed-affecting Updates, with no user input in between, is exactly the
+window in which one of this app's several concurrent background ticks can (and evidently did)
+land and clear the accumulator before either transition's resend was necessarily flushed. (This
+differs from the manual pull-to-top `RefreshFeedMsg`/`SetPosts` path, a single atomic content
+replacement with no synthetic animation gap — consistent with the user never reporting this on
+a plain manual refresh.) Compounding it: the affected row is likely row 0 — a post's top border
+line, byte-identical box-drawing text regardless of which post occupies it, so Bubble Tea's own
+diff has nothing to "notice" there across frames; the forced-dirty marker is the only thing
+that resends real content and clears stale iTerm2 pixels at that row, and if it's wiped before
+delivery the row can stay stuck until something unrelated later happens to touch it.
+
+**Fix**: replaced the "clear on the next quiet Update" condition with a wall-clock grace period,
+mirroring the existing `inlineImageFailedAt`/`inlineImageFailureCooldown` pattern already used
+in this file for an analogous problem. `App.inlineImageStaleSince` (a `time.Time`) is set/reset
+to `time.Now()` whenever new staleRows are accumulated; `a.inlineImageStaleRows` is only cleared
+once a quiet Update is observed *and* `inlineImageStaleGrace` (500ms — comfortably larger than
+the known 200ms `feedMergeAnimDelay` gap) has elapsed since then. Bounded on the other end too:
+row indices are capped at the terminal's height, and the set always clears within
+`inlineImageStaleGrace` of the last real change, so it can't degrade into "resend everything
+forever" the way a true never-clear accumulator (mirroring `pendingKittyDeletes` exactly) would
+risk on a long session with heavy scrolling.
+
+**Current state**: shipped; live re-test on real iTerm2 pending for this specific top-of-feed
+repro. No known open issues.

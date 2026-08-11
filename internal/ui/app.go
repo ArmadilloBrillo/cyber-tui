@@ -272,7 +272,20 @@ type App struct {
 	inlineImageFailedAt     map[string]time.Time
 	inlineImageVisibleRects map[string]inlineImageRect
 	inlineImageStaleRows    []int
-	inlineImageLastSelKey   string
+	// inlineImageStaleSince is when a row was last newly added to
+	// inlineImageStaleRows. syncInlineImages runs after every tea.Msg the
+	// whole app processes, including several independent tea.Tick loops
+	// unrelated to the active screen (chat/RTDB heartbeats, notification
+	// polls, gif-frame ticks) — so "the very next Update computed nothing
+	// new" is not a reliable signal that a forced-dirty resend actually got
+	// flushed to the terminal; it just as easily means an unrelated tick
+	// fired first. Clearing inlineImageStaleRows requires both a quiet
+	// Update AND inlineImageStaleGrace elapsed since this timestamp (see
+	// syncInlineImages) — long enough to comfortably outlast known
+	// multi-Update gaps like the feed's feedMergeAnimDelay, regardless of
+	// how many unrelated Updates interleave.
+	inlineImageStaleSince time.Time
+	inlineImageLastSelKey string
 	inlineImagePaintGen     int
 	// imageRepaintGen is a monotonically incrementing counter, bumped
 	// (never reset — same never-auto-expire posture as pendingKittyDeletes)
@@ -2842,14 +2855,17 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		// against only the immediately preceding Update's tracked position
 		// can miss the row that's actually still stale on the real,
 		// last-flushed terminal screen if several Updates get coalesced into
-		// one flush. Cleared once a quiet Update (no new staleRows) confirms
-		// the position has settled.
+		// one flush. Cleared only once a quiet Update (no new staleRows) AND
+		// inlineImageStaleGrace has elapsed since inlineImageStaleSince — see
+		// its doc comment (App struct) for why "the very next quiet Update"
+		// alone isn't a safe clear signal in this app.
 		current, staleRows := syncInlineImageErasures(slots, rowOrigin, colOrigin, a.inlineImageVisibleRects)
 		a.inlineImageVisibleRects = current
 		if len(staleRows) > 0 {
 			a.inlineImageStaleRows = accumulateStaleRows(a.inlineImageStaleRows, staleRows)
+			a.inlineImageStaleSince = time.Now()
 			a.imageRepaintGen++
-		} else {
+		} else if time.Since(a.inlineImageStaleSince) > inlineImageStaleGrace {
 			a.inlineImageStaleRows = nil
 		}
 
@@ -2937,6 +2953,16 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, place
 		return inlineImageFetchedMsg{key: key, encoded: encoded}
 	}
 }
+
+// inlineImageStaleGrace bounds how soon a.inlineImageStaleRows can be
+// cleared after its last addition — see inlineImageStaleSince's doc comment
+// (App struct) for why a single quiet Update isn't a safe clear signal on
+// its own. Chosen comfortably larger than the feed's known multi-Update gap
+// (feedMergeAnimDelay, 200ms — the top-of-feed background-poll merge
+// animation) so the accumulator survives however many unrelated ticks land
+// in between, while still clearing well within a second of the last real
+// change rather than accumulating indefinitely.
+const inlineImageStaleGrace = 500 * time.Millisecond
 
 // inlineImageFailureCooldown bounds how often a permanently-broken image URL
 // gets refetched — without it, a dead link left visible while the user is

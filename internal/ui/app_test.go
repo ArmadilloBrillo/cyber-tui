@@ -3393,7 +3393,12 @@ func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
 // screen. Simulates two separate images going stale in two consecutive
 // syncInlineImages calls (mimicking two coalesced Updates) and confirms both
 // rows are present after the second call, then confirms a subsequent quiet
-// call (nothing new stale) clears the accumulated set.
+// call within inlineImageStaleGrace does NOT clear the accumulated set (the
+// bug this test's sibling, TestSyncInlineImages_StaleRowsSurviveQuietTick,
+// covers directly — a single quiet Update isn't a safe clear signal, since
+// this app has several tea.Tick loops unrelated to the feed that can supply
+// that quiet Update before a resend actually flushes), and that it does
+// clear once the grace period has elapsed.
 func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 	a := App{
 		graphicsProtocol: imgview.ProtocolITerm2,
@@ -3424,11 +3429,53 @@ func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 	}
 
 	// A quiet call (nothing newly stale — a2.inlineImageVisibleRects is
-	// already {}) should clear the accumulated set rather than holding onto
-	// it forever.
+	// already {}) immediately afterward, well within inlineImageStaleGrace,
+	// must NOT clear the accumulated set yet.
 	a3, _ := a2.syncInlineImages()
-	if len(a3.inlineImageStaleRows) != 0 {
-		t.Errorf("expected accumulated staleRows cleared after a quiet call, got %v", a3.inlineImageStaleRows)
+	if len(a3.inlineImageStaleRows) == 0 {
+		t.Fatalf("expected accumulated staleRows to survive a quiet call within the grace period, got %v", a3.inlineImageStaleRows)
+	}
+
+	// Once the grace period has elapsed, the next quiet call clears it.
+	a3.inlineImageStaleSince = time.Now().Add(-inlineImageStaleGrace - time.Second)
+	a4, _ := a3.syncInlineImages()
+	if len(a4.inlineImageStaleRows) != 0 {
+		t.Errorf("expected accumulated staleRows cleared after the grace period elapsed, got %v", a4.inlineImageStaleRows)
+	}
+}
+
+// TestSyncInlineImages_StaleRowsSurviveQuietTick is the direct regression
+// test for the top-of-feed background-poll repro: syncInlineImages runs
+// after every tea.Msg the whole app processes (App.Update calls it
+// unconditionally), including messages from tea.Tick loops that have
+// nothing to do with the feed (chat/RTDB heartbeats, notification polls,
+// gif-frame ticks). Before inlineImageStaleSince/inlineImageStaleGrace, a
+// single such unrelated "quiet" Update landing between two feed-affecting
+// Updates (e.g. during the feed's ~200ms feedMergeAnimDelay merge-animation
+// gap) would immediately wipe the accumulated staleRows, even though
+// nothing about the feed itself had settled yet. Simulates exactly that:
+// a stale row, then an entirely unrelated quiet call (as an unrelated tick's
+// Update would produce), and confirms the row is still there.
+func TestSyncInlineImages_StaleRowsSurviveQuietTick(t *testing.T) {
+	a := App{
+		graphicsProtocol: imgview.ProtocolITerm2,
+		inlineImages:     false,
+		inlineImageVisibleRects: map[string]inlineImageRect{
+			"post:A:0": {Row: 10, Col: 1, Cols: 10, Rows: 4},
+		},
+	}
+
+	a1, _ := a.syncInlineImages()
+	if len(a1.inlineImageStaleRows) == 0 {
+		t.Fatalf("setup: expected staleRows populated after the first call, got %v", a1.inlineImageStaleRows)
+	}
+
+	// An unrelated quiet call — a1.inlineImageVisibleRects is already {},
+	// so this computes zero new staleRows, standing in for an unrelated
+	// background tick's Update firing before the resend has flushed.
+	a2, _ := a1.syncInlineImages()
+	if !slices.Contains(a2.inlineImageStaleRows, 10) {
+		t.Errorf("expected row 10 to survive an unrelated quiet Update within the grace period, got %v", a2.inlineImageStaleRows)
 	}
 }
 
