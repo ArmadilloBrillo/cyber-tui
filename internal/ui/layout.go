@@ -345,17 +345,31 @@ func sixelFullRepaint(base string, height, gen int) string {
 // renderer entirely for image writes. See
 // docs/plan-inline-images-improvements.md section 9 — inline/fullscreen
 // images on WezTerm/Windows are a known, accepted limitation.
-// debugLastDrawnByScreen/debugLogDrawSetIfChanged are temporary diagnostic
-// state (docs/plan-inline-images-improvements.md Round 6) — not part of
-// App, since View() is called with App by value and has no way to persist
-// state back into the model; a package-level var is the pragmatic option
-// for throwaway instrumentation. Single-threaded (Bubble Tea's render loop
-// runs View() on one goroutine), so no locking. Keyed per-screen so
-// switching screens doesn't itself look like a "draw set changed" event
-// worth logging.
-var debugLastDrawnByScreen = map[screen]map[string]int{}
+// debugLastDrawnByScreen/debugLastActiveScreen/debugLogDrawSetIfChanged are
+// temporary diagnostic state (docs/plan-inline-images-improvements.md
+// Round 6) — not part of App, since View() is called with App by value and
+// has no way to persist state back into the model; a package-level var is
+// the pragmatic option for throwaway instrumentation. Single-threaded
+// (Bubble Tea's render loop runs View() on one goroutine), so no locking.
+var (
+	debugLastDrawnByScreen = map[screen]map[string]int{}
+	debugLastActiveScreen  = screen(-1) // sentinel: no screen has rendered yet
+)
 
 func debugLogDrawSetIfChanged(active screen, drawn map[string]int) {
+	if active != debugLastActiveScreen {
+		// The active screen just changed (including returning to one seen
+		// before). Always log its current draw state instead of diffing
+		// against debugLastDrawnByScreen[active], which can still hold
+		// whatever that screen looked like before we left it — comparing
+		// against that would make a silent redraw failure on return look
+		// byte-identical to a correct one, which is exactly the ambiguity
+		// this diagnostic exists to close.
+		log.Printf("image: draw set on screen %v after switch: %v", active, drawn)
+		debugLastActiveScreen = active
+		debugLastDrawnByScreen[active] = drawn
+		return
+	}
 	if reflect.DeepEqual(debugLastDrawnByScreen[active], drawn) {
 		return
 	}
