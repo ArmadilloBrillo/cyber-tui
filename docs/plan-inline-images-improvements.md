@@ -701,3 +701,50 @@ same posture as the carousel debounce.
 **Current state**: shipped; live re-test on real iTerm2 pending. Debug logging (`App.debug`,
 gated `log.Printf` calls, the draw-set diagnostic in `layout.go`) is left in place rather than
 stripped back out, in case another round is needed.
+
+**Round 13 — Round 12's pacing mitigation didn't help, and it turned out not to be a timing bug
+at all.** Live re-test: the settle delay made no difference. Asked whether slow (not just fast)
+tab-switching still reproduced it — it did, with the image reappearing after "5-6 seconds
+sometimes." A fresh debug-log capture showed exactly what that gap was: the user waiting ~5
+seconds between switching away and switching back (`feedPollTickMsg`-adjacent timestamps 15s
+apart matched a real pause, not an app-induced delay) — the draw command was, once again,
+confirmed correctly issued the instant they returned, regardless of how long they'd waited. That
+ruled out timing/pacing entirely. A follow-up question — can this be reproduced by pure in-screen
+scrolling within PostDetail, with no tab switch at all — got a clear **yes**, redirecting
+attention back to the original Round 4 repro (`5a`-`5d`) that had been set aside three rounds
+earlier in favor of the (ultimately wrong) timing theory.
+
+Unlike every round since Round 4, this repro is fully deterministic Go state with no terminal
+timing involved, so — finally following through on Round 4's own "stop guessing, let a test
+pinpoint it" plan instead of pivoting away from it again — wrote
+`TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack`
+(`internal/ui/screens/postdetail_test.go`): builds a `PostDetailModel` with a post (containing an
+image) taller than its pane, presses down until a reply is selected (image correctly scrolls out
+of view), then presses up until the post is reselected, and asserts the image slot is visible
+again. It failed immediately, and a temporary `t.Logf` pinpointed the exact moment: **the instant
+`SelectedReplyID()` returns to `""` (crossing back onto the post), `VisibleInlineImages()` is
+already empty** — confirmed as a genuine viewport-positioning bug, not a redraw/timing issue.
+
+**Root cause**: `millerPageNav`'s `revealAbove` (`miller_pager.go`), for an item taller than the
+pane, bottom-aligned the viewport instead of top-aligning it — flagged as a real asymmetry back
+in Round 4 (`revealBelow` top-aligns its taller-than-pane case; `feed.go`'s `ensureSelectedVisible`
+always top-aligns) but left unconfirmed at the time as possibly-intentional "continuous scroll"
+ergonomics. It wasn't: scrolling back onto a tall post/thread landed the viewport on its *bottom*,
+leaving the top — where an image band typically sits — still scrolled out of view, exactly
+matching every symptom reported: 100% reproducible, independent of tab-switching, and "several
+seconds to reappear" simply because that's how long it took the user to keep pressing up (or do
+something else that happened to touch that row) until the viewport organically drifted back over
+the image's actual position.
+
+**Fix**: `revealAbove` now always top-aligns (`clamp(itemStart)`), matching `revealBelow`'s
+taller-than-pane behavior and `feed.go`'s equivalent. `millerPageNav` is shared by
+`chatrooms.go`, `guilds.go`, `feed.go`, and `topics.go` in addition to `postdetail.go` — full
+suite re-run after the change with no regressions in any of them, so nothing else relied on the
+old bottom-aligning behavior.
+
+**Current state**: shipped. This is the first fix in this entire investigation (Rounds 8-13)
+confirmed by an automated, deterministic test rather than inference from live logs — the
+PostDetail repro never needed live iTerm2 access to diagnose, only to notice it was worth trying
+again instead of continuing to chase terminal-timing theories. The manual-feed-refresh-at-top
+blackout (distinct repro, not yet explained by this fix) and general live re-confirmation on
+real iTerm2 remain open.

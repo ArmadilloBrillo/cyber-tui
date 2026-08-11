@@ -290,6 +290,71 @@ func TestPostDetail_VisibleInlineImages_MultipleImagesInOnePost(t *testing.T) {
 	}
 }
 
+// TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack is the
+// regression test for a 100%-reproducible live bug: with a post containing
+// an inline image taller than the viewport, pressing down to select the
+// first reply (scrolling the image out of view) and then pressing up just
+// enough to reselect the post (scrolling back onto it) left the image
+// failing to reappear on real iTerm2 — confirmed live to reproduce via
+// pure in-screen scrolling alone, no tab switch involved, and confirmed
+// here as a genuine viewport-positioning bug, not a redraw/timing issue:
+// millerPageNav's revealAbove (miller_pager.go) bottom-aligned the
+// viewport when scrolling back onto an item taller than the pane, leaving
+// its top — where an image band usually sits — still scrolled out of view.
+// Fixed by top-aligning revealAbove unconditionally, matching revealBelow.
+// See docs/plan-inline-images-improvements.md Round 4/13.
+func TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack(t *testing.T) {
+	m := initPostDetail()
+	// Small pane so the post (image band + text) is taller than it —
+	// otherwise millerPageNav's reveal-above/below logic for tall items
+	// never engages.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 15})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+
+	post := pdPost("p1")
+	post.Content = "hi\n\n![a](https://example.com/a.png)\n\nsome more text to pad out the post body a bit"
+	m = m.SetPost(post)
+	m = m.SetReplies([]model.Reply{
+		pdReply("r1", "", "alice", time.Now()),
+		pdReply("r2", "", "bob", time.Now().Add(time.Minute)),
+	})
+
+	initialSlots := m.VisibleInlineImages()
+	if len(initialSlots) != 1 {
+		t.Fatalf("setup: expected the image visible initially, got %d slots: %+v", len(initialSlots), initialSlots)
+	}
+
+	// Press down enough times to move selection off the post and onto a
+	// reply (scrolling the image out of view). The post is taller than the
+	// pane by design (see above), so millerPageNav scrolls one line at a
+	// time before it crosses into the reply — needs many presses, not few.
+	for i := 0; i < 60 && m.SelectedReplyID() == ""; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	}
+	if m.SelectedReplyID() == "" {
+		t.Fatal("setup: expected a reply selected after pressing down repeatedly")
+	}
+	if slots := m.VisibleInlineImages(); len(slots) != 0 {
+		t.Fatalf("setup: expected the image scrolled out of view once a reply is selected, got %+v", slots)
+	}
+
+	// Press up just enough to cross back onto the post (selection clears)
+	// — deliberately not settling any further, since a real user presses
+	// up only until the post is reselected, not dozens more times past
+	// that.
+	for i := 0; i < 60 && m.SelectedReplyID() != ""; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	}
+	if id := m.SelectedReplyID(); id != "" {
+		t.Fatalf("setup: expected back on the post after pressing up repeatedly, got reply %q selected", id)
+	}
+
+	finalSlots := m.VisibleInlineImages()
+	if len(finalSlots) != 1 {
+		t.Errorf("expected the image visible again immediately on scrolling back onto the post, got %d slots: %+v", len(finalSlots), finalSlots)
+	}
+}
+
 // TestPostDetail_DepthCap verifies that a chain deeper than 3 levels does not
 // panic and that all replies remain reachable via navigation.
 func TestPostDetail_DepthCap(t *testing.T) {
