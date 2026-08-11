@@ -2726,6 +2726,41 @@ func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[in
 	return pending
 }
 
+// accumulateStaleRows unions fresh into pending instead of replacing it — the
+// same "never lose a transition to Bubble Tea's throttled renderer coalescing
+// several Updates before a flush" reasoning as accumulateKittyDeletes, applied
+// to inlineImageStaleRows. Without this, a row that goes stale in an Update
+// whose View() never actually gets flushed (superseded by a later Update
+// before the next render tick) is silently lost: the *next* Update diffs
+// against its own freshly tracked position, not against whatever was last
+// really painted on the terminal, so the row nothing ever resends can be a
+// completely different one than the row that's actually still showing stale
+// image pixels on the real screen. Bounded and cheap regardless — row indices
+// are capped at the terminal's height — and the caller (syncInlineImages)
+// clears the accumulated set once a quiet Update reports no new staleRows,
+// so this doesn't grow or persist forever.
+func accumulateStaleRows(pending, fresh []int) []int {
+	if len(fresh) == 0 {
+		return pending
+	}
+	seen := make(map[int]bool, len(pending)+len(fresh))
+	merged := make([]int, 0, len(pending)+len(fresh))
+	for _, r := range pending {
+		if !seen[r] {
+			seen[r] = true
+			merged = append(merged, r)
+		}
+	}
+	for _, r := range fresh {
+		if !seen[r] {
+			seen[r] = true
+			merged = append(merged, r)
+		}
+	}
+	sort.Ints(merged)
+	return merged
+}
+
 // syncInlineImages diffs the active screen's current VisibleInlineImages()
 // against inlineImageCache and returns a command that fetches+encodes
 // anything missing. It's called once per Update, after the active screen
@@ -2802,11 +2837,20 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		// mechanism runs, it must be collision-proof against Bubble Tea
 		// dropping intermediate View() calls under fast input — see
 		// imageRepaintGen's doc comment (App struct).
+		// Accumulate rather than overwrite a.inlineImageStaleRows: see
+		// accumulateStaleRows' doc comment for why a fresh staleRows computed
+		// against only the immediately preceding Update's tracked position
+		// can miss the row that's actually still stale on the real,
+		// last-flushed terminal screen if several Updates get coalesced into
+		// one flush. Cleared once a quiet Update (no new staleRows) confirms
+		// the position has settled.
 		current, staleRows := syncInlineImageErasures(slots, rowOrigin, colOrigin, a.inlineImageVisibleRects)
 		a.inlineImageVisibleRects = current
-		a.inlineImageStaleRows = staleRows
 		if len(staleRows) > 0 {
+			a.inlineImageStaleRows = accumulateStaleRows(a.inlineImageStaleRows, staleRows)
 			a.imageRepaintGen++
+		} else {
+			a.inlineImageStaleRows = nil
 		}
 
 		selChanged := selKey != a.inlineImageLastSelKey
@@ -3081,19 +3125,18 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		if wasOpen {
 			a.imageModalPrevRows = a.imageModalRows
 			a.imageModalPrevCols = a.imageModalCols
-			if a.imageModalRows != m.rows || a.imageModalCols != m.cols {
-				// Same trigger compositeOverlays' "cycled" check (layout.go)
-				// will make from imageModalPrevRows/Cols vs the new dims —
-				// computed here too, one step earlier, since both dims are
-				// already in hand. See imageRepaintGen's doc comment (App
-				// struct) for why this needs its own generation bump rather
-				// than a fixed marker — both Sixel and iTerm2 need it.
-				a.imageRepaintGen++
-			}
 		} else {
 			a.imageModalPrevRows = 0
 			a.imageModalPrevCols = 0
 		}
+		// Bumped unconditionally, not just when the box size changed: the
+		// "cycled" prev-box cleanup below still reads this same counter (see
+		// compositeOverlays' doc comment), and compositeOverlays' modal
+		// image-draw line also needs it on every change so it can use
+		// imageDirtyMarker(a.imageRepaintGen) rather than relying only on the
+		// payload bytes happening to differ — see imageDirtyMarker's doc
+		// comment (App struct) for why a fixed/absent marker isn't enough.
+		a.imageRepaintGen++
 		a.imageModalEncoded = m.encoded
 		a.imageModalCols = m.cols
 		a.imageModalRows = m.rows
@@ -3127,8 +3170,19 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 
 // carouselCycleDebounce bounds how long cycleImageCarousel waits after the
 // last left/right press before actually starting a fetch — see
-// carouselCycleGen's doc comment (App struct) for why.
-const carouselCycleDebounce = 120 * time.Millisecond
+// carouselCycleGen's doc comment (App struct) for why. 300ms rather than the
+// original 120ms: live-reported on real iTerm2, fast/held cycling (but never
+// slow deliberate presses) occasionally leaves the modal black. No erase is
+// ever sent on the iTerm2 path (confirmed — the only tea.ClearScreen/
+// EraseEntireScreen in this file are Sixel-gated), so this isn't a Bubble
+// Tea diff/flush bug; the most plausible mechanism is the terminal itself —
+// iTerm2 decoding one large, unchunked base64 OSC 1337 payload per image
+// with no pacing, and the next debounced write landing before it's finished.
+// A larger debounce gives it more real wall-clock headroom between actual
+// image writes under sustained key-repeat. This is a mitigation for a
+// terminal-side timing constraint this app can't measure directly, not a
+// structural fix — revisit if it's still reported after this change.
+const carouselCycleDebounce = 300 * time.Millisecond
 
 // carouselCycleSettledMsg fires carouselCycleDebounce after a left/right
 // carousel press; only acted on if gen still matches a.carouselCycleGen

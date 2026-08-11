@@ -476,6 +476,68 @@ real content with no erase (`forceRowsDirty`), Sixel does a real single-write fu
 (`sixelFullRepaint`) — but both now share the same collision-proof dirty-marker/generation-
 counter machinery (`imageDirtyMarker`, `imageRepaintGen`) rather than Sixel alone having it.
 Kitty was never part of any of this — its placement-delete primitive means it never needed
-erasure or resend tricks at all. No known open issues; a true marker collision remains
-theoretically possible but requires ~16.7 million repaint triggers between two actual flushes,
-not realistic from keyboard input.
+erasure or resend tricks at all.
+
+**Round 9 — Round 8 didn't fix it; two different root causes, not one.** Re-tested live on
+real iTerm2 after Round 8 shipped: both symptoms persisted unchanged. Two clarifying questions
+to the user pinned down that the two symptoms are actually unrelated bugs:
+- Carousel black screen: **only on rapid/held cycling**, never slow deliberate presses — a
+  timing/pacing signature, not a state-tracking one.
+- Feed partial-draw: **stays broken until the user acts** (scroll away and back, refresh) —
+  rules out a transient terminal decode delay that self-heals on its own; something in the
+  app's tracked state genuinely isn't correcting itself.
+
+**Feed root cause**: `syncInlineImageErasures` diffs the current slot positions against
+`a.inlineImageVisibleRects` — the *previous Update's* tracked positions, not what's actually
+still painted on the real, last-*flushed* terminal. `syncInlineImages` then **overwrote**
+`a.inlineImageStaleRows` fresh every `Update()` rather than accumulating. Since `syncInlineImages`
+runs unconditionally on every `Update()` but Bubble Tea's renderer can coalesce several
+`Update()`s into one flush, a burst of layout-changing Updates (e.g. a feed refresh merging in
+new posts, described by the user as posts "moving down for just part of a second") can compute
+a *different* stale row on each intermediate Update; if only the last one's frame ever flushes,
+the row that's actually still showing stale image pixels on the real screen can be silently
+dropped from the delivered `inlineImageStaleRows` entirely. Nothing else touches that physical
+row unless its ordinary text happens to change for an unrelated reason later — exactly matching
+"stays broken until I act": scrolling away and back cycles that row through several different
+pieces of real feed text, and one of those coincidentally-differing comparisons is what finally
+forces Bubble Tea to resend it, not any logic in this app. This is the identical class of bug
+`pendingKittyDeletes`/`accumulateKittyDeletes` was already built to survive for Kitty's
+placement-delete list (see `TestAccumulateKittyDeletes_SurvivesSkippedRenders`'s doc comment) —
+just never applied to `inlineImageStaleRows`, which has the same exposure.
+
+**Feed fix**: `accumulateStaleRows` (`app.go`) unions each Update's freshly computed
+`staleRows` into `a.inlineImageStaleRows` instead of replacing it, so a row survives across
+however many `Update()`s get coalesced into one flush; the accumulated set is cleared once a
+quiet Update reports no new staleRows (position settled) — bounded and cheap regardless, since
+row indices are capped at the terminal's height.
+
+**Carousel root cause**: confirmed by direct code reading that **no full-screen erase or
+`tea.ClearScreen` is ever sent on the iTerm2 code path** — the only live `tea.ClearScreen` is
+gated to `graphicsProtocol == ProtocolSixel`, and `ansi.EraseEntireScreen` only appears in
+`sixelFullRepaint`, called only from Sixel branches. This rules out the Round 5/6
+erase-then-skipped-resend mechanism as an explanation for an iTerm2 black screen — there's no
+erase to leave a hole in the first place. `a.imageModalEncoded` is also confirmed never
+cleared/reset during a cycle, so the modal always has some valid payload to draw. Combined with
+the confirmed repro (only rapid/held cycling), the most plausible mechanism is terminal-side:
+`EncodeITerm2` sends one large, unchunked base64 OSC 1337 payload per image with no pacing, and
+the existing 120ms `carouselCycleDebounce` may not give real iTerm2 enough wall-clock headroom
+to finish decoding+rasterizing a large image before the next debounced write lands under
+sustained key-repeat — a terminal-side interruption, not something this app's Bubble Tea
+diff/flush logic controls or can fully verify without live access to measure actual decode time.
+
+**Carousel fix (mitigation, not structural)**: `carouselCycleDebounce` raised from 120ms to
+300ms, giving the terminal more real headroom between actual image writes under sustained
+cycling. Flagged to the user as a mitigation aimed at the confirmed repro condition, not a
+guaranteed fix — revisit if still reported.
+
+**Secondary gap closed in the same pass**: `compositeOverlays`' modal image-draw line
+(`layout.go`) never appended `imageDirtyMarker(a.imageRepaintGen)` the way
+`injectInlineImages`' equivalent line does — it relied only on `a.imageModalEncoded`'s payload
+bytes happening to differ from last frame. Not proven to be the cause of either live symptom,
+but a real asymmetry versus the rest of the shared mechanism; closed by bumping
+`a.imageRepaintGen` on every successful `imageFetchedMsg` (not just a size-changed cycle) and
+appending the marker to that line too.
+
+**Current state**: both fixes shipped; live re-test on real iTerm2 pending (sandbox has none).
+No known open issues beyond the theoretical ~16.7 million-collision marker case (see Round 5/6)
+and the carousel fix being a pacing mitigation rather than a structural guarantee.

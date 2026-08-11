@@ -2608,11 +2608,13 @@ func TestHandleImageViewer_SixelCycleSuccess_NoClearScreen(t *testing.T) {
 	}
 }
 
-// TestHandleImageViewer_SixelCycleSameSize_NoRepaintGenBump confirms a
-// cycle to a same-sized image doesn't bump imageRepaintGen — nothing would
-// be left over to repaint, since the new image's footprint exactly covers
-// the old one.
-func TestHandleImageViewer_SixelCycleSameSize_NoRepaintGenBump(t *testing.T) {
+// TestHandleImageViewer_SixelCycleSameSize_StillBumpsRepaintGen confirms a
+// cycle to a same-sized image still bumps imageRepaintGen: the prev-box
+// cleanup itself has nothing to do for a same-size cycle, but
+// compositeOverlays' own modal image-draw line also reads this counter (see
+// imageDirtyMarker's doc comment) and needs a fresh value on every displayed
+// image change, not just a size-changed one.
+func TestHandleImageViewer_SixelCycleSameSize_StillBumpsRepaintGen(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
@@ -2625,8 +2627,8 @@ func TestHandleImageViewer_SixelCycleSameSize_NoRepaintGenBump(t *testing.T) {
 	if !ok {
 		t.Fatal("expected imageFetchedMsg to be handled")
 	}
-	if a2.imageRepaintGen != startGen {
-		t.Error("expected imageRepaintGen unchanged for a same-size Sixel cycle")
+	if a2.imageRepaintGen == startGen {
+		t.Error("expected imageRepaintGen bumped even for a same-size Sixel cycle")
 	}
 }
 
@@ -3376,6 +3378,57 @@ func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
 	}
 	if itermOut.imageRepaintGen == iterm.imageRepaintGen {
 		t.Error("expected imageRepaintGen bumped for a stale iTerm2 row too, same as Sixel")
+	}
+}
+
+// TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates is the regression
+// test for the bug accumulateStaleRows fixes: syncInlineImages runs on every
+// Update(), but Bubble Tea's renderer can coalesce several Updates into one
+// flush (the same premise TestAccumulateKittyDeletes_SurvivesSkippedRenders
+// covers for Kitty deletes). Before the fix, a.inlineImageStaleRows was
+// overwritten fresh each call, so a row that went stale in an earlier Update
+// whose View() never got flushed could be silently replaced by a later
+// Update's unrelated stale row instead of accumulating — losing the row that
+// actually still has stale image pixels on the real, last-flushed terminal
+// screen. Simulates two separate images going stale in two consecutive
+// syncInlineImages calls (mimicking two coalesced Updates) and confirms both
+// rows are present after the second call, then confirms a subsequent quiet
+// call (nothing new stale) clears the accumulated set.
+func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
+	a := App{
+		graphicsProtocol: imgview.ProtocolITerm2,
+		inlineImages:     false, // canInlineImages() false: slots stay empty, so any tracked entry reads as stale
+		inlineImageVisibleRects: map[string]inlineImageRect{
+			"post:A:0": {Row: 10, Col: 1, Cols: 10, Rows: 4},
+		},
+	}
+
+	a1, _ := a.syncInlineImages()
+	if !slices.Contains(a1.inlineImageStaleRows, 10) {
+		t.Fatalf("setup: expected row 10 stale after the first call, got %v", a1.inlineImageStaleRows)
+	}
+
+	// Simulate a second, separate image going stale in what would be a
+	// second coalesced Update — a1.inlineImageVisibleRects is already {}
+	// (computed fresh from the still-empty slots), so this stands in for a
+	// new image having been tracked and then dropped between calls.
+	a1.inlineImageVisibleRects = map[string]inlineImageRect{
+		"post:B:0": {Row: 20, Col: 1, Cols: 10, Rows: 4},
+	}
+	a2, _ := a1.syncInlineImages()
+	if !slices.Contains(a2.inlineImageStaleRows, 10) {
+		t.Errorf("expected row 10 from the first call to survive into the second call's accumulated staleRows, got %v", a2.inlineImageStaleRows)
+	}
+	if !slices.Contains(a2.inlineImageStaleRows, 20) {
+		t.Errorf("expected row 20 from the second call also present, got %v", a2.inlineImageStaleRows)
+	}
+
+	// A quiet call (nothing newly stale — a2.inlineImageVisibleRects is
+	// already {}) should clear the accumulated set rather than holding onto
+	// it forever.
+	a3, _ := a2.syncInlineImages()
+	if len(a3.inlineImageStaleRows) != 0 {
+		t.Errorf("expected accumulated staleRows cleared after a quiet call, got %v", a3.inlineImageStaleRows)
 	}
 }
 

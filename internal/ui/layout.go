@@ -161,7 +161,14 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		// ANSI cursor sequences are 1-indexed; the border top row is yOff+1.
 		imgRow := yOff + 2
 		imgCol := xOff + 3
-		return composed + fmt.Sprintf("\x1b[%d;%dH%s\x1b[%d;1H", imgRow, imgCol, a.imageModalEncoded, a.height)
+		// imageDirtyMarker(a.imageRepaintGen) appended so this line is
+		// brought under the same collision-proof mechanism as
+		// injectInlineImages' trailing marker, rather than relying only on
+		// a.imageModalEncoded's payload bytes happening to differ from last
+		// frame — see imageDirtyMarker's doc comment. gen is bumped on every
+		// successful imageFetchedMsg (handleImageViewer), not just a
+		// size-changed cycle.
+		return composed + fmt.Sprintf("\x1b[%d;%dH%s\x1b[%d;1H%s", imgRow, imgCol, a.imageModalEncoded, a.height, imageDirtyMarker(a.imageRepaintGen))
 	}
 	if a.imageNeedsCleanup && a.graphicsProtocol == imgview.ProtocolKitty {
 		// Inject the targeted delete for the modal's own reserved placement
