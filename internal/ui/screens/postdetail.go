@@ -204,6 +204,11 @@ func (m PostDetailModel) HasTheme() bool { return m.currentTheme() != nil }
 // origin tab should resume it instead of that tab's own list.
 func (m PostDetailModel) HasPost() bool { return m.post.ID != "" }
 
+// PostID returns the currently open post's ID (empty if none) — used by
+// App to detect a repliesLoadedMsg superseded by navigating to a different
+// post before the request resolved.
+func (m PostDetailModel) PostID() string { return m.post.ID }
+
 // Close resets PostDetailModel back to "no post open" — called on Esc or on
 // re-navigating to the post's own origin tab (the escape hatch out of a
 // persisted PostDetail — see activateScreen). Preserves layout/broadcast-only

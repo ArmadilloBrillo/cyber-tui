@@ -1081,6 +1081,14 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case repliesLoadedMsg:
+		if msg.postID != a.postDetail.PostID() {
+			// Superseded: the user navigated away from this post (and,
+			// possibly, back to a different one) before this request
+			// resolved. Applying it anyway would silently rewrite the
+			// current post's reply tree with another post's data — see
+			// repliesLoadedMsg's doc comment.
+			return a, nil, true
+		}
 		a.postDetail = a.postDetail.SetReplies(msg.replies)
 		if a.pendingReplyID != "" {
 			a.postDetail = a.postDetail.ScrollToReply(a.pendingReplyID)
@@ -2890,6 +2898,7 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 	for _, slot := range slots {
 		key := inlineImageCacheKey(slot, a.graphicsProtocol)
 		if _, cached := a.inlineImageCache[key]; cached {
+			a.touchInlineImageCache(key)
 			continue
 		}
 		if a.inlineImageFetching[key] {
@@ -3002,6 +3011,28 @@ func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
 // as a reasonable starting cap, not derived from measurement (ponytail:
 // revisit if real sessions show it's too tight or too loose in practice).
 const inlineImageCacheMaxBytes = 16 << 20 // 16 MiB
+
+// touchInlineImageCache marks key as most-recently-used without changing its
+// cached value — called for every cache hit on a currently-visible slot
+// (syncInlineImages), so a still-on-screen image is never the oldest entry
+// and therefore never the one cacheInlineImageBounded evicts first. Without
+// this, inlineImageCacheOrder only ever moved on write (cacheInlineImage),
+// making eviction FIFO-by-insertion rather than truly LRU: an image that's
+// been sitting on screen the whole time could still get evicted purely
+// because other images were fetched more recently, leaving its row a cache
+// miss (injectInlineImages, layout.go) — a real, no-user-action image
+// blackout distinct from any of the scroll/redraw-timing bugs fixed
+// earlier. inlineImageCacheOrder/inlineImageCacheElems are reference types
+// (*list.List, map), so mutating through the pointer/map here is visible
+// without needing to reassign or return App.
+func (a App) touchInlineImageCache(key string) {
+	if a.inlineImageCacheOrder == nil {
+		return
+	}
+	if elem, ok := a.inlineImageCacheElems[key]; ok {
+		a.inlineImageCacheOrder.MoveToBack(elem)
+	}
+}
 
 // cacheInlineImage stores encoded under key in inlineImageCache, evicting
 // the oldest-inserted entries first once inlineImageCacheMaxBytes is
@@ -3441,7 +3472,14 @@ type userProfileLoadedMsg struct {
 }
 type followResultMsg struct{ followID string }
 type unfollowResultMsg struct{}
-type repliesLoadedMsg struct{ replies []model.Reply }
+// repliesLoadedMsg carries postID so a request superseded by the user
+// navigating to a different post before it resolves can be detected and
+// dropped instead of silently overwriting the now-current post's reply tree
+// — see loadRepliesCmd and its handler in handlePostDetail.
+type repliesLoadedMsg struct {
+	postID  string
+	replies []model.Reply
+}
 type replyCreatedMsg struct{ postID, replyID string }
 type replyDeletedMsg struct{ replyID string }
 type postCreatedMsg struct{}
@@ -3941,7 +3979,7 @@ func (a *App) loadRepliesCmd(postID string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		return repliesLoadedMsg{replies: replies}
+		return repliesLoadedMsg{postID: postID, replies: replies}
 	}
 }
 

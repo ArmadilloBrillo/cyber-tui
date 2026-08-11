@@ -864,6 +864,7 @@ func TestCreateReplyCmd_ReturnsReplyID(t *testing.T) {
 func TestReplyCreatedMsg_SetsPendingReplyID(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1"})
 
 	m, cmd := a.Update(replyCreatedMsg{postID: "p1", replyID: "reply-new-1"})
 	a2 := m.(App)
@@ -888,6 +889,43 @@ func TestReplyCreatedMsg_SetsPendingReplyID(t *testing.T) {
 	}
 	if a2.pendingReplyID != "" {
 		t.Errorf("expected pendingReplyID cleared after replies loaded, got %q", a2.pendingReplyID)
+	}
+}
+
+// TestRepliesLoadedMsg_DropsStaleReplyForDifferentPost is the regression
+// test for a delayed-blackout bug: loadRepliesCmd fires a real network
+// request with no cancellation on navigation-away, and its result
+// (repliesLoadedMsg) used to be applied unconditionally — so a request
+// still in flight when the user opens a *different* post before it resolves
+// could land seconds later and silently overwrite that different post's
+// reply tree (which rebuilds replyOffsets/replyImages and, via
+// viewport.SetContent's internal GotoBottom() when content shrinks, can
+// even reposition the scroll away from an inline image with zero user
+// input). repliesLoadedMsg now carries postID so a stale delivery for a
+// post the user has since navigated away from is dropped instead.
+func TestRepliesLoadedMsg_DropsStaleReplyForDifferentPost(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1"})
+
+	// Navigate to a different post before the stale request "resolves".
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p2"})
+
+	m, _, ok := a.handlePostDetail(repliesLoadedMsg{
+		postID:  "p1",
+		replies: []model.Reply{{ID: "r1", PostID: "p1"}},
+	})
+	if !ok {
+		t.Fatal("expected repliesLoadedMsg to be handled")
+	}
+	a2 := m
+	if a2.postDetail.PostID() != "p2" {
+		t.Fatalf("setup broken: expected post p2 still open, got %q", a2.postDetail.PostID())
+	}
+	// SetPost leaves Loading() true until SetReplies clears it; a dropped
+	// stale reply load must leave p2's own (still in-flight) load untouched.
+	if !a2.postDetail.Loading() {
+		t.Error("expected p2 to still be Loading() — a stale reply load for a different post must not clear it")
 	}
 }
 
@@ -3579,5 +3617,36 @@ func TestCacheInlineImage_NeverEvictsTheJustInsertedEntry(t *testing.T) {
 	a = a.cacheInlineImageBounded("k1", "aaaaaaaaaaaaaaaaaaaa", 5) // 20 bytes >> cap of 5
 	if _, ok := a.inlineImageCache["k1"]; !ok {
 		t.Error("expected the sole, just-inserted entry to survive even though it alone exceeds the cap")
+	}
+}
+
+// TestTouchInlineImageCache_SurvivesEvictionOverUntouchedEntry is the
+// regression test for a real, no-user-action image blackout: before
+// touchInlineImageCache existed, inlineImageCacheOrder only ever moved on
+// write, so a still-on-screen image whose slot kept hitting the cache
+// (never re-fetched, since it was already cached) could still be evicted
+// purely because *other* images got fetched more recently — eviction was
+// FIFO-by-insertion, not actually LRU-by-access. syncInlineImages now calls
+// touchInlineImageCache on every cache hit for a currently-visible slot
+// (app.go), so k1 here stands in for an image that's stayed visible across
+// several other fetches: it must survive eviction pressure that an
+// equally-old, never-revisited key does not.
+func TestTouchInlineImageCache_SurvivesEvictionOverUntouchedEntry(t *testing.T) {
+	var a App
+	a = a.cacheInlineImageBounded("k1", "aaaaa", 12) // 5 bytes — the still-visible image
+	a = a.cacheInlineImageBounded("k2", "bbbbb", 12) // 10 bytes total — never revisited
+
+	// k1 stays visible (simulates a cache hit on every subsequent frame);
+	// k2 does not.
+	a.touchInlineImageCache("k1")
+
+	a = a.cacheInlineImageBounded("k3", "c", 12)    // 10+1=11, still under 12
+	a = a.cacheInlineImageBounded("k4", "dddd", 12) // 11+4=15 > 12: evict oldest untouched (k2)
+
+	if _, ok := a.inlineImageCache["k1"]; !ok {
+		t.Error("expected k1 (touched — simulating it stayed visible) to survive eviction")
+	}
+	if _, ok := a.inlineImageCache["k2"]; ok {
+		t.Error("expected k2 (never touched) to be evicted first, not k1")
 	}
 }

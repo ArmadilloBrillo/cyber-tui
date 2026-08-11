@@ -593,3 +593,58 @@ risk on a long session with heavy scrolling.
 
 **Current state**: shipped; live re-test on real iTerm2 pending for this specific top-of-feed
 repro. No known open issues.
+
+**Round 11 — a different bug shape entirely: delayed, no-interaction blackouts.** Live re-test
+after Round 10: the top-of-feed merge and ordinary scrolling were both confirmed fixed. But two
+new reports didn't fit any mechanism fixed so far — both share "renders correctly, then goes
+black several seconds later with zero further user input," which rules out every scroll/redraw
+mechanism above (all of those are triggered directly by the user's own next keystroke):
+- Manual feed refresh at the top: image black several seconds after the refresh (worst observed:
+  9 seconds later).
+- PostDetail: switching to another tab and back *quickly* makes a post's image and a reply's
+  image reappear correctly, then both spontaneously go black several seconds later. Does not
+  happen when tab-switching is done slowly.
+
+Traced every `tea.Tick` in the 1-15s range and every async completion path touching inline
+images or PostDetail's content. Ruled out `notify()`/`notifyExpireMsg` (its banner renders only
+on the bottom status line in both `TabsLayout`/`MillerLayout`, never overlapping the rows images
+live on, and nothing calls it from an image/feed-refresh path anyway) and the
+logo/idle/unread-poll ticks (touch only tab-bar-corner/badge state). Found two independent, real
+bugs, either of which plausibly explains a delayed no-interaction blackout:
+
+1. **`repliesLoadedMsg` had no staleness guard.** `loadRepliesCmd(postID)` fires a real network
+   request with no cancellation on navigation-away and returned `repliesLoadedMsg{replies}` —
+   no `postID`, no generation counter — applied unconditionally by its handler. Switching away
+   from a post before its in-flight reply request resolves, then to a different post, left a
+   stale request that could land seconds later and silently rewrite the *current* post's reply
+   tree. The mechanism that turns this into a visible blackout: `SetReplies` →
+   `refreshContent()` → `viewport.SetContent(content)` (bubbles `viewport.Model`, confirmed in
+   the vendored source) calls `GotoBottom()` internally if the new content is shorter than the
+   viewport's *current* `YOffset` — silently snapping the viewport away from wherever the user
+   was, with no message announcing it. That explains both "several seconds later" (network
+   latency) and "only on fast tab-switching" (slow switching lets the original request resolve
+   *before* you leave, so there's no stale request left to land later) precisely.
+
+   **Fix**: `repliesLoadedMsg` now carries `postID` (`loadRepliesCmd` already has it in scope);
+   `PostDetailModel` got a small `PostID()` accessor (mirroring the existing `HasPost()`); the
+   handler drops the message if `msg.postID != a.postDetail.PostID()` instead of applying it.
+
+2. **`inlineImageCache` eviction was FIFO-by-insertion, not LRU-by-access.**
+   `cacheInlineImageBounded`'s eviction list (`inlineImageCacheOrder`) was only ever touched on
+   *write* — every read path (`syncInlineImages`'s hit-check, `injectInlineImages`'s draw
+   lookup) never marked an entry as recently used. So a still-visible, currently-displayed
+   image's cache entry could be evicted purely because *other* images were fetched later, even
+   though the original never left the screen — a real "LRU" cache that wasn't actually LRU. The
+   next incidental resend trigger for that row then found a cache miss and drew nothing, while a
+   fresh fetch quietly re-populated the cache in the background — a delayed blackout with a
+   *variable* delay (governed by whatever else populated the cache), fitting "several seconds,
+   worst case 9" better than any fixed-interval tick would.
+
+   **Fix**: added `touchInlineImageCache(key)`, called from `syncInlineImages` on every cache
+   hit for a currently-visible slot, so a still-on-screen image's entry is always the
+   most-recently-touched and therefore always evicted last.
+
+**Current state**: both fixes shipped; live re-test on real iTerm2 pending. The original
+Round 4 PostDetail scroll-away/back-doesn't-redraw repro (`5a`-`5d` in that round's notes) remains
+open and uninvestigated by this round — it may or may not share a root cause with the above;
+revisit separately once this round's fixes are confirmed live.
