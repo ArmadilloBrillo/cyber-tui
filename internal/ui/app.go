@@ -1121,6 +1121,9 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
+	case postConvertedToNoteMsg:
+		a, notifyCmd := a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
+		return a, tea.Batch(notifyCmd, a.loadFeedCmd()), true
 	case screens.SubmitPostEditMsg:
 		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW), true
 	case postEditedMsg:
@@ -3617,6 +3620,10 @@ type repliesLoadedMsg struct {
 type replyCreatedMsg struct{ postID, replyID string }
 type replyDeletedMsg struct{ replyID string }
 type postCreatedMsg struct{}
+
+// postConvertedToNoteMsg is returned instead of postCreatedMsg when the server
+// silently turned a too-soon post into a journal entry — see createPostCmd.
+type postConvertedToNoteMsg struct{}
 type postDeletedMsg struct {
 	postID   string
 	fromFeed bool // true = delete was triggered from the feed; false = from post detail
@@ -4215,9 +4222,21 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 
 func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW)
+		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW)
 		if err != nil {
 			return actionErrMsg{err}
+		}
+		// The server silently converts a post submitted too soon after a
+		// previous one into a journal entry instead of rejecting it — the
+		// response still looks like a normal success (postId/slug), but the
+		// post doesn't actually exist. No notification is ever generated for
+		// this server-side, so the only way to detect it client-side is to
+		// check whether the returned ID resolves.
+		if _, err := a.client.GetPost(post.ID); err != nil {
+			var apiErr *api.APIError
+			if errors.As(err, &apiErr) && apiErr.Status == 404 {
+				return postConvertedToNoteMsg{}
+			}
 		}
 		return postCreatedMsg{}
 	}

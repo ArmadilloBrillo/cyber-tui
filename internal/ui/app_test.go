@@ -1833,6 +1833,35 @@ func TestResendVerificationCmd_PropagatesError(t *testing.T) {
 	}
 }
 
+// tooSoonPostClient simulates the server silently converting a post
+// submitted too soon after a previous one into a journal entry: CreatePost
+// still "succeeds" with a postId/slug, but that ID doesn't resolve.
+type tooSoonPostClient struct {
+	*api.MockClient
+}
+
+func (c *tooSoonPostClient) GetPost(postID string) (model.Post, error) {
+	return model.Post{}, &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "post not found"}
+}
+
+func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testing.T) {
+	a := NewApp(&tooSoonPostClient{MockClient: api.NewMockClient()})
+
+	msg := a.createPostCmd("hello", "", "", nil, true, false)()
+	if _, ok := msg.(postConvertedToNoteMsg); !ok {
+		t.Fatalf("createPostCmd() = %T, want postConvertedToNoteMsg", msg)
+	}
+}
+
+func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
+	a := NewApp(api.NewMockClient())
+
+	msg := a.createPostCmd("hello", "", "", nil, true, false)()
+	if _, ok := msg.(postCreatedMsg); !ok {
+		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
+	}
+}
+
 // flagErrorMsg softens the documented self-report 403 into a friendly banner;
 // anything else falls through to the normal actionErrMsg handling.
 func TestFlagErrorMsg_403IsSoftened(t *testing.T) {
