@@ -640,12 +640,19 @@ func (m ChatroomsModel) ActiveRoomSlug() string {
 	return m.activeRoom.Slug
 }
 
-// GetFocusedURLs returns URLs found across all currently loaded messages in
-// the open room, for the 'o' / ctrl+o open-link shortcut. Reachable via
-// ctrl+o even while the compose input is focused, which it always is in
-// detail mode (there's no separate browsing vs. composing sub-mode here).
+// GetFocusedURLs returns URLs found in the currently selected message while
+// browsing, or across all currently loaded messages in the open room
+// otherwise, for the 'o' / ctrl+o open-link shortcut. Reachable via ctrl+o
+// even while the compose input is focused, which it always is in detail
+// mode outside of browsing.
 func (m ChatroomsModel) GetFocusedURLs() []string {
 	if m.mode != chatroomModeDetail {
+		return nil
+	}
+	if m.selectedMsgID != "" {
+		if msg, ok := findMessageByID(m.messages, m.selectedMsgID); ok {
+			return dedupeURLs(messageURLs(msg))
+		}
 		return nil
 	}
 	var urls []string
@@ -1528,44 +1535,52 @@ func findMessageByID(msgs []model.Message, id string) (model.Message, bool) {
 	return model.Message{}, false
 }
 
-// selOffsets/selHeights project m.msgOffsets/m.msgHeights through sel (the
-// selectable-only index list), for feeding into millerPageNav.
-func selOffsets(m ChatroomsModel, sel []int) []int {
+// selOffsets/selHeights project offsets/heights (1:1 with a message list)
+// through sel (the selectable-only index list), for feeding into
+// millerPageNav. Shared by ChatroomsModel and CMailModel browsing.
+func selOffsets(offsets []int, sel []int) []int {
 	out := make([]int, len(sel))
 	for i, idx := range sel {
-		out[i] = m.msgOffsets[idx]
+		out[i] = offsets[idx]
 	}
 	return out
 }
 
-func selHeights(m ChatroomsModel, sel []int) []int {
+func selHeights(heights []int, sel []int) []int {
 	out := make([]int, len(sel))
 	for i, idx := range sel {
-		out[i] = m.msgHeights[idx]
+		out[i] = heights[idx]
 	}
 	return out
+}
+
+// ensureMessageVisible scrolls vp the minimum amount so the message whose ID
+// matches selectedID is fully visible, mirroring PostDetailModel's
+// ensureSelectedVisible. Shared by ChatroomsModel and CMailModel browsing.
+func ensureMessageVisible(vp viewport.Model, msgs []model.Message, offsets, heights []int, selectedID string) viewport.Model {
+	for i, msg := range msgs {
+		if msg.ID != selectedID {
+			continue
+		}
+		itemStart := offsets[i]
+		itemEnd := itemStart + heights[i] - 1
+		if itemStart < vp.YOffset {
+			vp.SetYOffset(itemStart)
+		} else if itemEnd >= vp.YOffset+vp.Height {
+			vp.SetYOffset(itemEnd - vp.Height + 1)
+		}
+		return vp
+	}
+	return vp
 }
 
 // ensureSelectedMessageVisible scrolls the viewport the minimum amount so the
-// selected message is fully visible, mirroring PostDetailModel's
-// ensureSelectedVisible.
+// selected message is fully visible.
 func (m ChatroomsModel) ensureSelectedMessageVisible() ChatroomsModel {
 	if !m.ready {
 		return m
 	}
-	for i, msg := range m.messages {
-		if msg.ID != m.selectedMsgID {
-			continue
-		}
-		itemStart := m.msgOffsets[i]
-		itemEnd := itemStart + m.msgHeights[i] - 1
-		if itemStart < m.viewport.YOffset {
-			m.viewport.SetYOffset(itemStart)
-		} else if itemEnd >= m.viewport.YOffset+m.viewport.Height {
-			m.viewport.SetYOffset(itemEnd - m.viewport.Height + 1)
-		}
-		return m
-	}
+	m.viewport = ensureMessageVisible(m.viewport, m.messages, m.msgOffsets, m.msgHeights, m.selectedMsgID)
 	return m
 }
 
@@ -1629,7 +1644,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 			return m.maybeLoadOlderMessages()
 		}
 		newPos, newOffset := millerPageNav(-1, m.viewport.Height, 0,
-			selOffsets(m, sel), selHeights(m, sel), curPos, m.viewport.YOffset)
+			selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), curPos, m.viewport.YOffset)
 		if newPos < 0 {
 			newPos = 0
 		}
@@ -1649,7 +1664,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 			return m, nil
 		}
 		newPos, newOffset := millerPageNav(+1, m.viewport.Height, 0,
-			selOffsets(m, sel), selHeights(m, sel), curPos, m.viewport.YOffset)
+			selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), curPos, m.viewport.YOffset)
 		m.selectedMsgID = m.messages[sel[newPos]].ID
 		m.viewport.SetYOffset(newOffset)
 		return m.refreshMessages(), nil

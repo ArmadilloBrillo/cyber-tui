@@ -100,6 +100,8 @@ All REST endpoints and the RTDB SSE subscription are fully implemented. See `doc
 | `POST /v1/cmail/:conversationId/read` | POST | Mark conversation as read | **Done** — `MarkCMailRead`; called on conversation open |
 | RTDB `dm_messages/<conversationId>` | SSE | Real-time new messages | **Done** — `SubscribeDMs`; skips initial snapshot |
 | RTDB `user_conversations/<uid>` | SSE | Live conversation list / unread updates | **Done** — `SubscribeUserConversations`; replaces the old 60s REST poll (`docs/08-cmail.md`, `docs/09-rtdb-cmail.md`) |
+| `POST /v1/cmail/:conversationId/messages/:messageId/flag` (or similar) | POST | Report a CMail message for review | **Missing** — no such endpoint in the API. cIRC has `POST /v1/circ/:roomId/messages/:messageId/flag`, but nothing analogous exists for CMail. Per-message browsing/selection (`docs/08-cmail.md`) deliberately stops short of adding a flag action for this reason — wire it up if the API adds one. |
+| `DELETE /v1/cmail/:conversationId/messages/:messageId` (or similar) | DELETE | Soft-delete a CMail message | **Missing** — same as above; cIRC has room-message delete, CMail has no equivalent. |
 
 ### cIRC (new in v0.7)
 

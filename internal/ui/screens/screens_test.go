@@ -450,6 +450,26 @@ func TestChatrooms_GetFocusedURLs_AggregatesLoadedMessagesAndDedupes(t *testing.
 	}
 }
 
+// TestChatrooms_GetFocusedURLs_ScopedToSelectedMessage guards the 'o'
+// open-link shortcut narrowing to just the selected message's links while
+// browsing, instead of every loaded message in the room.
+func TestChatrooms_GetFocusedURLs_ScopedToSelectedMessage(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // opens "zion"
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "check https://example.com/one", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "bob"}, Body: "and https://example.com/two", CreatedAt: time.Now()},
+	})
+	m, _ = sendChatroomSpecialKey(m, tea.KeyUp) // select m2 (newest)
+
+	urls := m.GetFocusedURLs()
+	if len(urls) != 1 || urls[0] != "https://example.com/two" {
+		t.Errorf("expected only the selected message's URL [https://example.com/two], got %v", urls)
+	}
+}
+
 // --- /help reply as a local system message ---
 
 func TestChatrooms_AppendSystemMessage_RendersLocally(t *testing.T) {
@@ -1106,6 +1126,214 @@ func TestCMail_PrependMessages_EmptyMarksExhausted(t *testing.T) {
 	_, cmd := sendSpecialKey(m, tea.KeyUp)
 	if cmd != nil {
 		t.Error("expected no further history-load command once history is exhausted")
+	}
+}
+
+// --- CMail per-message browsing ---
+
+func sampleConvWithMessages() []model.Conversation {
+	return []model.Conversation{
+		{
+			ID:           "c1",
+			Participants: []model.User{{Username: "neuromancer"}, {Username: "molly"}},
+			Messages: []model.Message{
+				{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: time.Now()},
+				{ID: "m2", From: model.User{Username: "neuromancer"}, Body: "second", CreatedAt: time.Now()},
+			},
+		},
+	}
+}
+
+func TestCMail_Up_EntersBrowsing_SelectsNewest(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", "", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessages())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m, _ = sendSpecialKey(m, tea.KeyUp)
+	if m.SelectedMessageID() != "m2" {
+		t.Errorf("SelectedMessageID() = %q, want m2 (newest)", m.SelectedMessageID())
+	}
+}
+
+func TestCMail_Esc_WhileBrowsing_ClearsSelectionWithoutLeavingConv(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", "", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessages())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+	m, _ = sendSpecialKey(m, tea.KeyUp)
+	if m.SelectedMessageID() == "" {
+		t.Fatal("setup: expected a selection after up")
+	}
+
+	m, _ = sendSpecialKey(m, tea.KeyEsc)
+	if m.SelectedMessageID() != "" {
+		t.Error("expected esc to clear the selection")
+	}
+	if !m.IsShowingDetail() {
+		t.Error("expected esc while browsing to stay in the conversation, not leave it")
+	}
+}
+
+func TestCMail_Down_PastNewest_ExitsBrowsing(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", "", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessage()) // single message
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+	m, _ = sendSpecialKey(m, tea.KeyUp) // select the only (newest) message
+
+	m, _ = sendSpecialKey(m, tea.KeyDown)
+	if m.SelectedMessageID() != "" {
+		t.Error("expected down past the newest message to exit browsing")
+	}
+}
+
+func TestCMail_WhileBrowsing_OtherKeysAreSwallowed_NotTypedIntoCompose(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", "", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+	m, _ = sendSpecialKey(m, tea.KeyUp)
+
+	m, _ = sendKey(m, "q")
+	m, _ = sendKey(m, "1")
+	if m.SelectedMessageID() == "" {
+		t.Error("expected selection to remain active after unrelated keys")
+	}
+
+	m, _ = sendSpecialKey(m, tea.KeyEsc)
+	if !m.ComposeEmpty() {
+		t.Error("expected compose box to remain empty — browsing must not type into it")
+	}
+}
+
+func TestCMail_DraftPreserved_AcrossBrowsingRoundTrip(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", "", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations(sampleConvWithMessage())
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+	for _, r := range "hello" {
+		m, _ = sendKey(m, string(r))
+	}
+	if m.ComposeEmpty() {
+		t.Fatal("setup: expected a draft before browsing")
+	}
+
+	m, _ = sendSpecialKey(m, tea.KeyUp)  // enter browsing
+	m, _ = sendSpecialKey(m, tea.KeyEsc) // back to typing
+
+	if m.ComposeEmpty() {
+		t.Error("expected the draft to survive a trip into browsing and back")
+	}
+}
+
+// TestCMail_GetFocusedURLs_ScopedToSelectedMessage guards the 'o' open-link
+// shortcut narrowing to just the selected message's links while browsing,
+// instead of every loaded message in the conversation.
+func TestCMail_GetFocusedURLs_ScopedToSelectedMessage(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", "", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations([]model.Conversation{
+		{
+			ID:           "c1",
+			Participants: []model.User{{Username: "neuromancer"}, {Username: "molly"}},
+			Messages: []model.Message{
+				{ID: "m1", From: model.User{Username: "molly"}, Body: "check https://example.com/one", CreatedAt: time.Now()},
+				{ID: "m2", From: model.User{Username: "neuromancer"}, Body: "and https://example.com/two", CreatedAt: time.Now()},
+			},
+		},
+	})
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+	m, _ = sendSpecialKey(m, tea.KeyUp) // select m2 (newest)
+
+	urls := m.GetFocusedURLs()
+	if len(urls) != 1 || urls[0] != "https://example.com/two" {
+		t.Errorf("expected only the selected message's URL [https://example.com/two], got %v", urls)
+	}
+}
+
+func TestCMail_Up_WhileBrowsingAtOldest_StillTriggersHistoryLoad(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", "", nil)
+	// A short viewport so 3 multi-line bordered-bubble messages don't all fit
+	// at once — otherwise the viewport is trivially "at top" the instant any
+	// message renders, regardless of which one is selected.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = m.SetConversations([]model.Conversation{
+		{
+			ID:           "c1",
+			Participants: []model.User{{Username: "neuromancer"}, {Username: "molly"}},
+			Messages: []model.Message{
+				{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: time.Now()},
+				{ID: "m2", From: model.User{Username: "neuromancer"}, Body: "second", CreatedAt: time.Now()},
+				{ID: "m3", From: model.User{Username: "molly"}, Body: "third", CreatedAt: time.Now()},
+			},
+		},
+	})
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	m, _ = sendSpecialKey(m, tea.KeyUp) // enter browsing, select m3 (newest)
+	if m.SelectedMessageID() != "m3" {
+		t.Fatalf("setup: SelectedMessageID() = %q, want m3", m.SelectedMessageID())
+	}
+	m, cmd := sendSpecialKey(m, tea.KeyUp) // move to m2 (middle — not the oldest yet)
+	if cmd != nil {
+		t.Fatal("expected no history-load cmd yet — not at the oldest message")
+	}
+	if m.SelectedMessageID() != "m2" {
+		t.Fatalf("SelectedMessageID() = %q, want m2", m.SelectedMessageID())
+	}
+
+	_, cmd = sendSpecialKey(m, tea.KeyUp) // reaches m1 (oldest) — pagination fires
+	if cmd == nil {
+		t.Error("expected a history-load command when browsing reaches the oldest loaded message")
+	}
+}
+
+// TestCMail_DownThroughManyMessages_ReachesNewestAndExits mirrors
+// TestChatrooms_DownThroughManyMessages_ReachesNewestAndExits: guards the
+// same offset/height desync bug in renderChatMessagesWithSelection that was
+// fixed in renderCircMessagesWithSelection, exercised here with CMail's
+// multi-line bordered-bubble rendering instead of cIRC's single-line-per-
+// message rendering.
+func TestCMail_DownThroughManyMessages_ReachesNewestAndExits(t *testing.T) {
+	m := screens.NewCMailModel("neuromancer", "", nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 14}) // small: forces real scrolling
+	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neuromancer"}, {Username: "molly"}}}
+	var msgs []model.Message
+	for i := 1; i <= 10; i++ {
+		msgs = append(msgs, model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "molly"},
+			Body:      fmt.Sprintf("message number %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+	conv.Messages = msgs
+	m = m.SetConversations([]model.Conversation{conv})
+	m, _ = sendSpecialKey(m, tea.KeyEnter)
+
+	// Walk all the way up to the oldest message first (m1), then test that
+	// 'down' can walk all the way back down without getting stuck.
+	for i := 0; i < 10; i++ {
+		m, _ = sendSpecialKey(m, tea.KeyUp)
+	}
+	if m.SelectedMessageID() != "m1" {
+		t.Fatalf("setup: SelectedMessageID() = %q after walking up, want m1 (oldest)", m.SelectedMessageID())
+	}
+
+	for i := 0; i < 9; i++ {
+		m, _ = sendSpecialKey(m, tea.KeyDown)
+		if m.SelectedMessageID() == "" {
+			t.Fatalf("down got stuck or exited early after %d presses (expected still browsing)", i+1)
+		}
+	}
+	if m.SelectedMessageID() != "m10" {
+		t.Fatalf("SelectedMessageID() = %q after 9 downs from m1, want m10 (newest)", m.SelectedMessageID())
+	}
+
+	m, _ = sendSpecialKey(m, tea.KeyDown) // one more: past newest, exits browsing
+	if m.SelectedMessageID() != "" {
+		t.Errorf("expected browsing to exit after 'down' past the newest message, got selected=%q", m.SelectedMessageID())
 	}
 }
 
