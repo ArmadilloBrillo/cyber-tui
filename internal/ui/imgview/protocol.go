@@ -8,6 +8,7 @@ package imgview
 
 import (
 	"bytes"
+	"log"
 	"os"
 	"strconv"
 	"time"
@@ -55,11 +56,32 @@ func DetectProtocol() GraphicsProtocol {
 	return ProtocolNone
 }
 
+// ProtocolFromName maps a config override string ("kitty", "iterm2", "sixel",
+// "none") to a GraphicsProtocol, for when autodetection is unreliable (see
+// Config.GraphicsProtocol). ok is false for an empty or unrecognized name.
+func ProtocolFromName(name string) (proto GraphicsProtocol, ok bool) {
+	switch name {
+	case "kitty":
+		return ProtocolKitty, true
+	case "iterm2":
+		return ProtocolITerm2, true
+	case "sixel":
+		return ProtocolSixel, true
+	case "none":
+		return ProtocolNone, true
+	default:
+		return ProtocolNone, false
+	}
+}
+
 // da1ProbeTimeout bounds how long ProbeSixel waits for a terminal to answer a
 // DA1 query. A local pty round-trip normally takes low single-digit
-// milliseconds; this is a generous, hand-picked ceiling, not a measured
-// value — adjust if real terminals need more slack.
-const da1ProbeTimeout = 150 * time.Millisecond
+// milliseconds, but Windows terminals (mintty/Git Bash over ConPTY) have been
+// observed to occasionally exceed 150ms, causing intermittent false
+// negatives that flip Sixel detection off for the whole session; this is a
+// generous, hand-picked ceiling, not a measured value — adjust if real
+// terminals need more slack.
+const da1ProbeTimeout = 500 * time.Millisecond
 
 // ProbeSixel checks whether the terminal connected to stdin/stdout supports
 // Sixel graphics by sending a DA1 (Primary Device Attributes) query and
@@ -68,23 +90,31 @@ const da1ProbeTimeout = 150 * time.Millisecond
 // own input reader. Returns false on any error, timeout, or non-terminal
 // stdin — it never blocks longer than da1ProbeTimeout and never leaves the
 // terminal in raw mode.
+// TEMPORARY: log.Printf calls below are a diagnostic for a Windows/mintty
+// intermittent-detection report, mirroring the CYBER_TUI_DEBUG_LOG pattern
+// used (and later removed) for the WezTerm investigation in
+// docs/plan-inline-images-improvements.md §9. Remove once resolved.
 func ProbeSixel(stdin, stdout *os.File) bool {
 	fd := int(stdin.Fd())
 	if !term.IsTerminal(fd) {
+		log.Printf("imgview: ProbeSixel: IsTerminal(stdin)=false, skipping probe")
 		return false
 	}
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
+		log.Printf("imgview: ProbeSixel: MakeRaw failed: %v", err)
 		return false
 	}
 	defer term.Restore(fd, oldState)
 
 	if _, err := stdout.WriteString("\x1b[c"); err != nil {
+		log.Printf("imgview: ProbeSixel: DA1 query write failed: %v", err)
 		return false
 	}
 
 	cr, err := cancelreader.NewReader(stdin)
 	if err != nil {
+		log.Printf("imgview: ProbeSixel: cancelreader.NewReader failed: %v", err)
 		return false
 	}
 	defer cr.Close()
@@ -100,14 +130,20 @@ func ProbeSixel(stdin, stdout *os.File) bool {
 		done <- readResult{buf[:n], err}
 	}()
 
+	start := time.Now()
 	select {
 	case res := <-done:
+		elapsed := time.Since(start)
 		if res.err != nil {
+			log.Printf("imgview: ProbeSixel: read error after %v: %v", elapsed, res.err)
 			return false
 		}
-		return ParseDA1SixelSupport(res.buf)
+		supported := ParseDA1SixelSupport(res.buf)
+		log.Printf("imgview: ProbeSixel: DA1 response after %v: %q sixel=%v", elapsed, res.buf, supported)
+		return supported
 	case <-time.After(da1ProbeTimeout):
 		cr.Cancel()
+		log.Printf("imgview: ProbeSixel: timed out after %v with no response", da1ProbeTimeout)
 		return false
 	}
 }
