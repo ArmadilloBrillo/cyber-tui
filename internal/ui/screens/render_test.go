@@ -730,6 +730,34 @@ func TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned(t *testi
 	}
 }
 
+// TestRenderChatMessagesWithSelection_HighlightsSelectedAndMatchesUnselected
+// mirrors TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned
+// for CMail's renderChatMessagesWithSelection: offsets/heights stay 1:1 with
+// msgs, rendering with selectedID == "" is byte-identical to
+// renderChatMessagesStyled, and selecting a message changes its rendered
+// block (the SelectedRow highlight).
+func TestRenderChatMessagesWithSelection_HighlightsSelectedAndMatchesUnselected(t *testing.T) {
+	const width = 60
+	msgs := []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: circMsgTime},
+		{ID: "m2", From: model.User{Username: "case"}, Body: "second", CreatedAt: circMsgTime},
+	}
+
+	unselected := renderChatMessagesStyled(msgs, "case", time.UTC, "datetime", width, 0)
+	content, offsets, heights := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "")
+	if content != unselected {
+		t.Errorf("renderChatMessagesWithSelection with selectedID==\"\" should match renderChatMessagesStyled;\ngot:  %q\nwant: %q", content, unselected)
+	}
+	if len(offsets) != len(msgs) || len(heights) != len(msgs) {
+		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
+	}
+
+	selected, _, _ := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "m1")
+	if selected == unselected {
+		t.Error("expected selecting m1 to change the rendered content (highlight)")
+	}
+}
+
 // TestFeedRenderPost_CachesBodyAcrossSelectionChange guards the fix that
 // splits renderPostBody (cacheable) out from the selection border: moving
 // the cursor between posts must reuse the cached body and only change

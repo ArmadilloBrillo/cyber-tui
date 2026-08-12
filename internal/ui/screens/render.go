@@ -607,3 +607,29 @@ func renderChatMessagesStyled(msgs []model.Message, currentUser string, loc *tim
 	}
 	return sb.String()
 }
+
+// renderChatMessagesWithSelection renders msgs exactly like
+// renderChatMessagesStyled (byte-identical when selectedID == ""),
+// additionally returning each message's start-line offset and rendered
+// line-height (1:1 with msgs), and highlighting the message whose ID
+// matches selectedID with theme.SelectedRow — the same approach
+// renderCircMessagesWithSelection uses.
+func renderChatMessagesWithSelection(msgs []model.Message, currentUser string, loc *time.Location, timeDisplayFormat string, viewportWidth int, frame int, selectedID string) (content string, offsets []int, heights []int) {
+	offsets = make([]int, len(msgs))
+	heights = make([]int, len(msgs))
+	var sb strings.Builder
+	var lineCount int
+	for i, msg := range msgs {
+		rendered := renderChatMessagesStyled([]model.Message{msg}, currentUser, loc, timeDisplayFormat, viewportWidth, frame)
+		if selectedID != "" && msg.ID == selectedID {
+			plain := strings.TrimSuffix(ansi.Strip(rendered), "\n")
+			rendered = theme.SelectedRow.Width(viewportWidth).Render(plain) + "\n"
+		}
+		offsets[i] = lineCount
+		h := strings.Count(rendered, "\n")
+		heights[i] = h
+		lineCount += h
+		sb.WriteString(rendered)
+	}
+	return sb.String(), offsets, heights
+}

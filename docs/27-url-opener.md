@@ -45,6 +45,8 @@ Profile screens expose `WebsiteUrl` and `WebsiteImageUrl` directly (no markdown 
 | Topics | Selected post content (post-list view only; disabled in topic-list view) |
 | Journal | Selected note; selected revision in history view; disabled in edit mode |
 | Notifications | Not supported (post content not cached in model) |
+| CIRC (Chatrooms) | The browsing-selected message's content while browsing, or every loaded message in the room otherwise. Reachable only via `ctrl+o` — the compose input is always focused in detail mode, so plain `o` never reaches this screen; see `docs/33-circ.md`. |
+| C-Mail | The browsing-selected message's content while browsing, or every loaded message in the conversation otherwise. Reachable only via `ctrl+o`, same reason as CIRC; see `docs/08-cmail.md`. |
 
 ---
 

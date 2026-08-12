@@ -64,10 +64,10 @@ Long bodies word-wrap to fit the terminal width; continuation lines are indented
 | `j` / `↓` | Next room (list mode) |
 | `k` / `↑` | Previous room (list mode) |
 | `Enter` | Open selected room |
-| `↑` / `↓` | Scroll messages (detail mode) |
+| `↑` / `↓` | Scroll messages one line (detail mode); once the top is reached, `↑` instead enters per-message browsing (selects the newest message, highlighted) — `↑`/`↓` then move message-by-message, `Esc` or `↓` past the newest exits back to typing. Browsing also has `!` (flag) and `d` (delete own message); see `ChatroomsModel.updateBrowsingKey`. |
 | `Enter` | Send message (detail mode) |
 | `Esc` | Return to room list — or, if deep-linked from a `chat_mention` notification, leave Chatrooms and return to Notifications |
-| `ctrl+o` | Open URLs/images from the loaded room history (detail mode). Plain `o` — the shortcut used everywhere else in the TUI — can't reach this here: the compose input is focused for the entire detail view (not a transient sub-mode like Feed's reply box), so `o` always gets typed into the message instead. `ctrl+o` is exempted from the focused-input gate specifically for this. |
+| `ctrl+o` | Open URLs/images — from just the selected message while browsing, or from the whole loaded room history otherwise (detail mode). Plain `o` — the shortcut used everywhere else in the TUI — can't reach this here: the compose input is focused for the entire detail view regardless of browsing (not a transient sub-mode like Feed's reply box), so `o` always gets typed into the message, or swallowed while browsing, instead. `ctrl+o` is exempted from the focused-input gate specifically for this. |
 | `ctrl+q` | Quit (same as global `q`) |
 | `ctrl+t` | Open theme picker (same as global `t`) |
 | `ctrl+←` / `ctrl+→` | Cycle tabs (same as global `←`/`→`; Tabs layout only) |

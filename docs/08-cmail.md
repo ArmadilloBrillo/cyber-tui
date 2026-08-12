@@ -48,6 +48,8 @@ Full-width message history viewport + fixed compose input at bottom:
 - My messages: right-aligned (`timestamp  @me` header, then body)
 - **Compose input width**: `input.Width` is set to `terminalWidth - 4 - len(Prompt) - 1`, not just `terminalWidth - 4`, and the empty (placeholder) state is hand-built from `textinput`'s exported style fields rather than left to its own `placeholderView()` — see `docs/33-circ.md`'s matching bullet for the full explanation (a pair of `bubbles/textinput` quirks where its empty-placeholder render and typed-content render total different widths, which without this fix left the box either 3 columns too wide once typing started, or 3 columns too narrow while empty).
 
+**Per-message browsing**: pressing `↑` from the bottom of the history selects the newest message and enters browsing mode (mirrors CIRC — see `docs/33-circ.md`) — the compose input blurs, the selected message is highlighted, and `↑`/`↓` move message-by-message (not line-by-line) even across messages that wrap to several lines. `Esc` clears the selection and returns to typing without leaving the conversation; `↓` past the newest message does the same. Unlike CIRC, there's no `!` (flag) or `d` (delete) action while browsing — the API has no CMail message flag/delete endpoint (only `POST /v1/circ/:roomId/messages/:messageId/flag` for CIRC rooms, and the posts/replies flag endpoints), and no `Enter` reveal action, since CMail doesn't support spoiler/l33t styling. The one action browsing enables is scoping `ctrl+o` (open link) to just the selected message instead of every loaded message — see "Key Bindings" below.
+
 **Scroll-to-load history**: scrolling to the top of the loaded messages (`↑`) automatically fetches the next older page (`GetMessages(conversationID, 50, before)`, `before` = the oldest loaded message's timestamp) and prepends it, preserving scroll position. The header shows `(loading history…)` while a page is in flight. Stops once a fetch returns no messages. If a fetch fails, `loadingHistory` resets so a retry is possible on the next scroll-to-top, and the viewport shows "couldn't load messages" instead of a misleading "no messages" if nothing has loaded yet.
 
 **Live-stream reconnect**: the Firebase `idToken` backing the RTDB subscription expires hourly. The stream is treated as dead — triggering reconnect — on any of: the server sending a terminal `auth_revoked`/`cancel` SSE event, a 10-minute idle-read timeout (no line received, including keepalive comments), a 30-second connect-phase timeout, or an outright network error/close (see `internal/rtdb/client.go`). When the stream closes while a conversation is still open, the app calls `api.Client.RefreshSession()` and reopens the subscription, retrying with exponential backoff (`1s, 2s, 4s, 8s, 15s` — 6 attempts total) if an attempt fails. Success shows a brief "reconnected to live chat" notification. While retrying, the conversation header shows `(live updates lost, reconnecting… N/6)`; if all attempts fail, it shows a persistent `(live updates lost)` until the user leaves and re-enters the conversation — this indicator is independent of the message list, so it's visible even with history already loaded.
@@ -79,10 +81,10 @@ Like CIRC (`docs/33-circ.md`), any `/`-prefixed input not recognized is rejected
 | Key | Action |
 |---|---|
 | `Enter` | Send message (when input non-empty) |
-| `↑` | Scroll message history up |
-| `↓` | Scroll message history down |
-| `Esc` | Return to list mode; cancel RTDB subscription — or, if this conversation was opened via a deep link (`c` from another screen, or a `dm_message` notification), leave C-Mail entirely and return to that origin screen instead |
-| `ctrl+o` | Open URLs/images from the loaded conversation. Plain `o` can't reach this here — the compose input is focused for the entire detail view, so `o` always types into the message instead; `ctrl+o` is exempted from the focused-input gate specifically for this. |
+| `↑` | Not browsing: scroll message history up one line, or enter browsing (selecting the newest message) once the top of the loaded history is reached. Browsing: move the selection to the previous (older) message. |
+| `↓` | Not browsing: scroll message history down one line. Browsing: move the selection to the next (newer) message, or exit browsing (back to typing) once past the newest. |
+| `Esc` | Browsing: clear the selection and return to typing, staying in the conversation. Not browsing: return to list mode; cancel RTDB subscription — or, if this conversation was opened via a deep link (`c` from another screen, or a `dm_message` notification), leave C-Mail entirely and return to that origin screen instead. |
+| `ctrl+o` | Open URLs/images — from just the selected message while browsing, or from the whole loaded conversation otherwise. Plain `o` can't reach this here — the compose input is focused for the entire detail view (`InputFocused()` doesn't distinguish browsing from typing), so `o` always types into the message, or is swallowed while browsing, instead; `ctrl+o` is exempted from the focused-input gate specifically for this. |
 | `ctrl+q` | Quit (same as global `q`) |
 | `ctrl+t` | Open theme picker (same as global `t`) |
 | `ctrl+←` / `ctrl+→` | Cycle tabs (same as global `←`/`→`; Tabs layout only) |
@@ -112,7 +114,8 @@ Like CIRC (`docs/33-circ.md`), any `/`-prefixed input not recognized is rejected
 | `InputFocused() bool` | True in detail mode (compose input focused) |
 | `ComposeEmpty() bool` | Whether the compose input has no typed text — lets plain `←`/`→` fall through to tab-cycling |
 | `TotalUnread() int` | Sum of `UnreadCount` across all conversations, for the tab-bar badge |
-| `GetFocusedURLs() []string` | URLs across all loaded messages in the open conversation (`URLProvider`); nil outside detail mode |
+| `SelectedMessageID() string` | The browsing-selected message's ID, or `""` while composing/typing |
+| `GetFocusedURLs() []string` | URLs from just the selected message while browsing, or across all loaded messages in the open conversation otherwise (`URLProvider`); nil outside detail mode |
 
 ---
 
