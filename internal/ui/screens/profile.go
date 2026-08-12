@@ -933,7 +933,7 @@ func (m ProfileModel) renderPostItem(p model.Post, selected bool) string {
 	if innerWidth < 1 {
 		innerWidth = 40
 	}
-	ts := theme.Subtle.Render(displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, true))
+	ts := theme.Subtle.Render(displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, true) + editedSuffix(p.EditedAt))
 	previewText := markdown.FirstLine(p.Content)
 	if p.Title != "" {
 		previewText = p.Title
@@ -962,7 +962,7 @@ func (m ProfileModel) renderReplyItem(r model.Reply, selected bool) string {
 	if innerWidth < 1 {
 		innerWidth = 40
 	}
-	ts := theme.Subtle.Render(displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, true))
+	ts := theme.Subtle.Render(displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, true) + editedSuffix(r.EditedAt))
 	tag := theme.Subtle.Render("↩ ")
 	previewMaxW := innerWidth - lipgloss.Width(ts) - lipgloss.Width(tag) - 2
 	if previewMaxW < 10 {

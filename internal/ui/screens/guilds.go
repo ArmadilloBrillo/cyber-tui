@@ -1094,7 +1094,7 @@ func (m GuildsModel) renderDetailReply(node replyNode, selected bool, width int)
 	if node.ParentUsername != "" {
 		header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
 	}
-	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false))
+	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false) + editedSuffix(node.Reply.EditedAt))
 	body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
 	boxStyle := theme.Border
 	if selected {
