@@ -73,11 +73,22 @@ func CountImages(content string) int {
 	return n
 }
 
+// webBaseURL is cyberspace.online's web (non-API) origin.
+const webBaseURL = "https://cyberspace.online"
+
 // NormalizeURL prefixes relative paths with the cyberspace.online base URL.
 // Absolute URLs are returned unchanged.
 func NormalizeURL(u string) string {
 	if strings.HasPrefix(u, "/") {
-		return "https://cyberspace.online" + u
+		return webBaseURL + u
 	}
 	return u
+}
+
+// PostPermalink builds a post's web URL from its author's username and its
+// slug — the /{username}/{slug} deep-link shape described for notification
+// metadata (docs/00-latest-api-reference.md). A reply has no URL of its
+// own; callers pass its parent post's fields instead.
+func PostPermalink(authorUsername, slug string) string {
+	return webBaseURL + "/" + authorUsername + "/" + slug
 }

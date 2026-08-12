@@ -29,6 +29,11 @@ type ShowPostMsg struct{ Post model.Post }
 // App navigates to post detail and opens the compose box immediately.
 type ShowPostForReplyMsg struct{ Post model.Post }
 
+// CopyLinkMsg is emitted when the user presses 'l' on a selected post or
+// reply. Always carries the parent post — a reply has no URL of its own,
+// so callers pass its parent post's fields instead of the reply itself.
+type CopyLinkMsg struct{ Post model.Post }
+
 // LoadFeedDetailMsg is emitted when the selected post changes so the app can
 // fetch replies for the Miller reading pane.
 type LoadFeedDetailMsg struct{ PostID string }
@@ -613,6 +618,12 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
 				postID := visible[m.selectedIndex].ID
 				return m, func() tea.Msg { return BookmarkPostMsg{PostID: postID} }
+			}
+			return m, nil
+		case "l":
+			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
+				post := visible[m.selectedIndex]
+				return m, func() tea.Msg { return CopyLinkMsg{Post: post} }
 			}
 			return m, nil
 		case "w":
