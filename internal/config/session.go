@@ -87,6 +87,13 @@ type Config struct {
 
 	// Layout selects the UI layout. "" or "tabs" = tab bar (default); "miller" = sidebar columns.
 	Layout string `json:"layout,omitempty"`
+
+	// GraphicsProtocol overrides automatic terminal graphics-protocol
+	// detection. "" (default) autodetects via env vars and a DA1 probe; set
+	// to "kitty", "iterm2", "sixel", or "none" to force a choice when
+	// autodetection is unreliable — e.g. mintty/Git Bash on Windows, which
+	// supports Sixel but doesn't reliably answer the DA1 probe query.
+	GraphicsProtocol string `json:"graphicsProtocol,omitempty"`
 }
 
 // GetMaxThreadDepth returns MaxThreadDepth, substituting the default (3) when

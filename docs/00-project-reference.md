@@ -663,6 +663,7 @@ Fetches and displays images in the terminal using native graphics protocols (Kit
 | `DetectProtocol() GraphicsProtocol` | func | Env-var based (`KITTY_WINDOW_ID`, `TERM_PROGRAM`); returns `ProtocolNone` for an unrecognized terminal, including any Sixel-capable one — Sixel has no reliable env-var signal |
 | `ProbeSixel(stdin, stdout *os.File) bool` | func | Active DA1 (Primary Device Attributes) terminal query, only run when `DetectProtocol` returns none; must run before Bubble Tea takes over stdin. Returns `false` on any error, timeout, or non-terminal stdin |
 | `ParseDA1SixelSupport(resp []byte) bool` | func | Pure parser for a raw DA1 response, checking for attribute `4` — exported so `ProbeSixel`'s parsing is unit-testable independent of live terminal I/O |
+| `ProtocolFromName(name string) (GraphicsProtocol, bool)` | func | Maps `Config.GraphicsProtocol` ("kitty"/"iterm2"/"sixel"/"none") to a protocol, bypassing autodetection — see `docs/41-graphics-protocol-override.md` |
 
 **Encoders** (one file per protocol — `kitty.go`, `iterm2.go`, `sixel.go`): each takes `(img image.Image, maxCols, maxRows, cellPxW, cellPxH int, ...)` and returns the ready-to-write escape sequence plus the computed display size in terminal columns/rows, never upscaling beyond the image's natural pixel size. `cellPxW`/`cellPxH` (from `TerminalCellPixelSize`, `<= 0` falls back to an assumed 10×20px cell) matter most for iTerm2 — its `preserveAspectRatio=1` letterboxes against the terminal's real font metrics, so a wrong guess leaves visible blank space; Kitty instead stretches to exactly fill the given box, so a wrong guess there only mildly distorts. `EncodeKitty` additionally takes `placementID`: `0` for the fullscreen modal's anonymous mode (self-heals via a blunt `a=d,d=A` delete-all), non-zero for inline rendering's named placements (never blunt-deletes — see `DeleteKittyPlacement`, which targets exactly one placement). `EncodeSixel` has no terminal-side scale-to-fit, so it downscales in pixel space itself before encoding (256 colors, hardcoded — true for essentially every Sixel-capable terminal in practice).
 
@@ -698,6 +699,7 @@ Permissions: `0600` (owner read/write only)
 | `allowRemoteSsh` | bool | `false` | Permit `sshListenAddr` to bind a non-loopback address. SSH server mode is unauthenticated, so this is off by default |
 | `wanderLust` | bool | `false` | Wander mode toggle; `true` = on, `false` = off |
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
+| `graphicsProtocol` | string | `""` (autodetect) | `"kitty"`, `"iterm2"`, `"sixel"`, or `"none"` — bypasses autodetection when it's unreliable (e.g. mintty/Git Bash). See `docs/41-graphics-protocol-override.md` |
 
 ---
 

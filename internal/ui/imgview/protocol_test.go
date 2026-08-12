@@ -29,3 +29,26 @@ func TestParseDA1SixelSupport(t *testing.T) {
 		})
 	}
 }
+
+func TestProtocolFromName(t *testing.T) {
+	tests := []struct {
+		name     string
+		wantProt imgview.GraphicsProtocol
+		wantOK   bool
+	}{
+		{"kitty", imgview.ProtocolKitty, true},
+		{"iterm2", imgview.ProtocolITerm2, true},
+		{"sixel", imgview.ProtocolSixel, true},
+		{"none", imgview.ProtocolNone, true},
+		{"", imgview.ProtocolNone, false},
+		{"bogus", imgview.ProtocolNone, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotProt, gotOK := imgview.ProtocolFromName(tt.name)
+			if gotProt != tt.wantProt || gotOK != tt.wantOK {
+				t.Errorf("ProtocolFromName(%q) = (%v, %v), want (%v, %v)", tt.name, gotProt, gotOK, tt.wantProt, tt.wantOK)
+			}
+		})
+	}
+}
