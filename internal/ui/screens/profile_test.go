@@ -114,6 +114,37 @@ func TestProfileUpdate_FKey_EmitsUnfollowMsg_WhenFollowing(t *testing.T) {
 	}
 }
 
+// --- 'p' key — poke ---
+
+func TestProfileUpdate_PKey_EmitsPokeMsg_WhenReadOnly(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	_ = updated
+	if cmd == nil {
+		t.Fatal("expected a cmd, got nil")
+	}
+	msg := cmd()
+	pokeMsg, ok := msg.(screens.PokeUserMsg)
+	if !ok {
+		t.Fatalf("expected PokeUserMsg, got %T", msg)
+	}
+	if pokeMsg.Username != "ragnar" {
+		t.Errorf("Username = %q, want ragnar", pokeMsg.Username)
+	}
+}
+
+func TestProfileUpdate_PKey_NoOp_OnOwnProfile(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(false)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd != nil {
+		if _, ok := cmd().(screens.PokeUserMsg); ok {
+			t.Error("did not expect PokeUserMsg on own (non-read-only) profile")
+		}
+	}
+}
+
 // --- IncrementFollowersCount ---
 
 func TestProfileIncrementFollowersCount(t *testing.T) {

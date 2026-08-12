@@ -3362,6 +3362,42 @@ func TestHTTPWatchPost_CallsCorrectEndpoint(t *testing.T) {
 	}
 }
 
+func TestHTTPPoke_CallsCorrectEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		writeOK(t, w, map[string]any{"userId": "u1", "username": "alice", "poked": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.Poke("alice"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "POST" {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/v1/users/alice/poke" {
+		t.Errorf("path = %q, want /v1/users/alice/poke", gotPath)
+	}
+}
+
+func TestHTTPPoke_RateLimited(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many pokes")
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.Poke("alice")
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Status != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429", apiErr.Status)
+	}
+}
+
 func TestHTTPUnwatchPost_CallsCorrectEndpoint(t *testing.T) {
 	var gotMethod, gotPath string
 	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

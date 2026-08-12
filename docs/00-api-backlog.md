@@ -187,12 +187,6 @@ cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAt
 | `/v1/posts/:id` | PATCH | Edit own post — supporter-only, within 5 minutes of publishing. `slug`/`createdAt` immutable; no re-notification; response/entry gains `editedAt`. Rate limit 5/min, 30/day. | Not yet implemented |
 | `/v1/replies/:id` | PATCH | Edit own reply — same supporter/5-minute window; `content` only. Rate limit 5/min, 30/day. | Not yet implemented |
 
-### Poke (new in v0.8.4)
-
-| Endpoint | Method | Description | Priority |
-|---|---|---|---|
-| `/v1/users/:username/poke` | POST | Send a `poke` notification to a user (mirrors the web **[P] Poke** button). No body; blocked in either direction → 403; self-poke → 400. Rate limit 1/hour, 8/day across all users. | Not yet implemented |
-
 ### TypeScript definitions (new in v0.8.4)
 
 `/types.d.ts` now publishes TypeScript types for every documented response shape. Not applicable to this Go client — noted for reference only.
@@ -288,3 +282,4 @@ Notes:
 | `POST /v1/guilds/:slug/leave` | Leave guild — `l` key in guild thread feed with confirmation prompt; success banner "✓ Left #name"; navigates back to guild list. Feature 29. | 2026-06-01 |
 | Attachments (image/audio) | Attachment URLs surfaced via `GetFocusedURLs` and opened with `o`. Best-effort handling for a TUI — no further work needed. | 2026-05-30 |
 | `POST /v1/posts`/`/v1/threads`/`/v1/notes` `topics`, and `slug` | Client-side fix, not a server bug: `topics` is documented as "must be lowercase" and `slug` as `[a-z0-9-]`, but neither field restricted input client-side — an uppercase or punctuation-laced tag round-tripped to the server and came back a `400 VALIDATION_ERROR`. Compose's slug and topics inputs, and journal's topics input, now filter keystrokes live (`filterSlugCharsKeyMsg`/`filterTopicsKeyMsg`, `internal/ui/screens/shared.go`): uppercase auto-lowercases, any character outside `[a-z0-9-]` (plus `, ` as topic delimiters) is dropped as typed. Topics' existing 3-item cap (`ParseTopics`) is now also enforced live — a comma that would open a 4th topic is blocked — instead of only silently truncating at submit. Closes #94 ("Posts with uppercase tags cause API error"). | 2026-08-07 |
+| `POST /v1/users/:username/poke` (v0.8.4) | Send a poke — `p` key on a read-only profile; brief `poked.` feedback; suppressed on own profile. 429 (1/hour, 8/day cap) and 403 (blocked either direction) get friendly banners instead of raw API error text. Feature 42. | 2026-08-12 |

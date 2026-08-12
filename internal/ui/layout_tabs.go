@@ -344,7 +344,7 @@ func (l TabsLayout) screenHints(a App) []hint {
 			return []hint{{"Ctrl+s", "save"}, {"Esc", "cancel"}, {"tab", "cycle"}}
 		}
 		if a.profile.IsReadOnly() {
-			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"c", "message"}, {"tab", "cycle"}, more}
+			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"c", "message"}, {"p", "poke"}, {"tab", "cycle"}, more}
 		}
 		return []hint{{"↑↓", "navigate"}, {"e", "edit"}, {"tab", "cycle"}, more}
 	case screenNotifications:
@@ -504,6 +504,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 			localSection = section("profile",
 				row("enter", "open"),
 				row("c", "message"),
+				row("p", "poke"),
 			)
 		} else {
 			localSection = section("profile (own)",

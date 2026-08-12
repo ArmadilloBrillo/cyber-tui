@@ -120,6 +120,9 @@ type FollowUserMsg struct{ UserID string }
 // UnfollowUserMsg is emitted by ProfileModel when the user presses 'f' to unfollow.
 type UnfollowUserMsg struct{ FollowID string }
 
+// PokeUserMsg is emitted by ProfileModel when the user presses 'p' to poke another user.
+type PokeUserMsg struct{ Username string }
+
 // LoadMoreJournalMsg is emitted by JournalModel when the viewport reaches the bottom
 // and a next-page cursor is available. App intercepts this and fires the API call.
 type LoadMoreJournalMsg struct{ Cursor string }
