@@ -188,6 +188,7 @@ type wirePost struct {
 	IsNSFW         bool             `json:"isNSFW"`
 	Deleted        bool             `json:"deleted"`
 	CreatedAt      apiTimestamp     `json:"createdAt"`
+	EditedAt       apiTimestamp     `json:"editedAt"`
 	Attachments    []wireAttachment `json:"attachments"`
 }
 
@@ -245,6 +246,7 @@ type wireReply struct {
 	Content        string           `json:"content"`
 	ParentReplyID  string           `json:"parentReplyId"`
 	CreatedAt      apiTimestamp     `json:"createdAt"`
+	EditedAt       apiTimestamp     `json:"editedAt"`
 	Attachments    []wireAttachment `json:"attachments"`
 }
 
@@ -361,6 +363,20 @@ type createPostResponseData struct {
 	PostID string `json:"postId"`
 	Slug   string `json:"slug"`
 	Title  string `json:"title"`
+}
+
+// editPostRequest deliberately omits omitempty on Title: the API accepts ""
+// to clear an existing title, and omitempty would silently drop that intent.
+type editPostRequest struct {
+	Content  string   `json:"content"`
+	Title    string   `json:"title"`
+	Topics   []string `json:"topics"`
+	IsPublic bool     `json:"isPublic"`
+	IsNSFW   bool     `json:"isNSFW"`
+}
+
+type editReplyRequest struct {
+	Content string `json:"content"`
 }
 
 type createReplyRequest struct {
@@ -945,6 +961,7 @@ func wirePostToModel(w wirePost) model.Post {
 		IsNSFW:         w.IsNSFW,
 		Deleted:        w.Deleted,
 		CreatedAt:      t,
+		EditedAt:       parseTime(string(w.EditedAt)),
 		Attachments:    wireAttachmentsToModel(w.Attachments),
 	}
 }
@@ -960,6 +977,7 @@ func wireReplyToModel(w wireReply) model.Reply {
 		Content:        w.Content,
 		ParentReplyID:  w.ParentReplyID,
 		CreatedAt:      t,
+		EditedAt:       parseTime(string(w.EditedAt)),
 		Attachments:    wireAttachmentsToModel(w.Attachments),
 	}
 }
@@ -1293,8 +1311,24 @@ func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, is
 	}, nil
 }
 
+func (c *HTTPClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool) error {
+	_, err := c.doJSON("PATCH", "/v1/posts/"+url.PathEscape(postID), editPostRequest{
+		Content:  content,
+		Title:    title,
+		Topics:   topics,
+		IsPublic: isPublic,
+		IsNSFW:   isNSFW,
+	})
+	return err
+}
+
 func (c *HTTPClient) DeletePost(postID string) error {
 	_, err := c.doRequest("DELETE", "/v1/posts/"+url.PathEscape(postID), nil)
+	return err
+}
+
+func (c *HTTPClient) EditReply(replyID, content string) error {
+	_, err := c.doJSON("PATCH", "/v1/replies/"+url.PathEscape(replyID), editReplyRequest{Content: content})
 	return err
 }
 

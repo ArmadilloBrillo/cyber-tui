@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -200,6 +201,84 @@ func TestFeed_ComposeActive_TrueWhileConfirmingDelete(t *testing.T) {
 	m, _ = m.Update(keyRune("d"))
 	if !m.ComposeActive() {
 		t.Error("expected ComposeActive to report true while the delete-confirm overlay is open")
+	}
+}
+
+// --- CanEditSelected / 'e' key ---
+
+func TestFeed_CanEditSelected_TrueForOwnRecentSupporter(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine", CreatedAt: time.Now()},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+
+	if !m.CanEditSelected() {
+		t.Error("expected CanEditSelected true for own recent post as a supporter")
+	}
+}
+
+func TestFeed_CanEditSelected_FalseForOtherUsersPost(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "bob", Content: "not mine", CreatedAt: time.Now()},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+
+	if m.CanEditSelected() {
+		t.Error("expected CanEditSelected false for another user's post")
+	}
+}
+
+func TestFeed_CanEditSelected_FalseWithoutSupporterStatus(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine", CreatedAt: time.Now()},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(false)
+
+	if m.CanEditSelected() {
+		t.Error("expected CanEditSelected false without supporter status")
+	}
+}
+
+func TestFeed_CanEditSelected_FalseOutsideEditWindow(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine", CreatedAt: time.Now().Add(-10 * time.Minute)},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+
+	if m.CanEditSelected() {
+		t.Error("expected CanEditSelected false outside the 5-minute edit window")
+	}
+}
+
+func TestFeed_EKey_OpensEditPanel_WhenEligible(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine", Title: "old title", CreatedAt: time.Now()},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+
+	m, _ = m.Update(keyRune("e"))
+	if !m.ComposeActive() {
+		t.Fatal("expected ComposeActive true after pressing 'e' on an editable post")
+	}
+}
+
+func TestFeed_EKey_NoOp_WhenNotEligible(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "bob", Content: "not mine", CreatedAt: time.Now()},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+
+	m, _ = m.Update(keyRune("e"))
+	if m.ComposeActive() {
+		t.Error("expected ComposeActive to stay false pressing 'e' on another user's post")
 	}
 }
 

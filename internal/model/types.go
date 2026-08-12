@@ -83,6 +83,7 @@ type Post struct {
 	IsNSFW         bool
 	Deleted        bool
 	CreatedAt      time.Time
+	EditedAt       time.Time // zero value means never edited
 	Attachments    []Attachment
 }
 
@@ -95,6 +96,7 @@ type Reply struct {
 	Content        string
 	ParentReplyID  string
 	CreatedAt      time.Time
+	EditedAt       time.Time // zero value means never edited
 	Attachments    []Attachment
 }
 

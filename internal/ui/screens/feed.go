@@ -77,6 +77,18 @@ type SubmitNewPostMsg struct {
 	IsNSFW   bool
 }
 
+// SubmitPostEditMsg is emitted when the user submits an edit to an existing
+// post via the 'e' key (Feed or PostDetail). Unlike SubmitNewPostMsg, slug is
+// not included — it's immutable once published.
+type SubmitPostEditMsg struct {
+	PostID   string
+	Content  string
+	Title    string
+	Topics   []string
+	IsPublic bool
+	IsNSFW   bool
+}
+
 type FeedModel struct {
 	posts             []model.Post
 	postOffsets       []int // start line of each post within the viewport content
@@ -106,8 +118,10 @@ type FeedModel struct {
 	inlineImagesEnabled bool
 	postImages          [][]postImageSlot
 
-	currentUsername  string // set after login; used to guard the delete key
-	confirmingDelete bool   // true while the delete-post confirmation overlay is shown
+	currentUsername        string // set after login; used to guard the delete key
+	currentUserIsSupporter bool   // set after login/profile load; edit requires supporter status
+	confirmingDelete       bool   // true while the delete-post confirmation overlay is shown
+	editingPostID          string // non-empty while m.panel is editing this post rather than composing a new one
 
 	flagPrompt       FlagPrompt // active while reporting the selected post
 	flagTargetPostID string
@@ -306,6 +320,49 @@ func (m FeedModel) SetError(err error) FeedModel {
 // restrict the delete key to the user's own posts.
 func (m FeedModel) SetCurrentUsername(username string) FeedModel {
 	m.currentUsername = username
+	return m
+}
+
+func (m FeedModel) SetCurrentUserIsSupporter(isSupporter bool) FeedModel {
+	m.currentUserIsSupporter = isSupporter
+	return m
+}
+
+// postEditWindow is how long after publishing a post or reply remains
+// editable, per the API's documented edit window (also supporter-gated).
+const postEditWindow = 5 * time.Minute
+
+// CanEditSelected reports whether the currently selected post is the current
+// user's own, published within the edit window, and the account is a
+// supporter — the same gate applied to the 'e' keypress, reused by the status
+// bar to show/hide the hint live as the selection or clock changes.
+func (m FeedModel) CanEditSelected() bool {
+	visible := m.visiblePosts()
+	if m.selectedIndex >= len(visible) {
+		return false
+	}
+	p := visible[m.selectedIndex]
+	return p.AuthorUsername == m.currentUsername && m.currentUserIsSupporter && time.Since(p.CreatedAt) < postEditWindow
+}
+
+// ApplyPostEdit overwrites the edited fields of a local post by ID after a
+// successful PATCH, leaving AuthorID, CreatedAt, RepliesCount, etc. untouched.
+func (m FeedModel) ApplyPostEdit(postID, content, title string, topics []string, isPublic, isNSFW bool, editedAt time.Time) FeedModel {
+	for i, p := range m.posts {
+		if p.ID == postID {
+			p.Content = content
+			p.Title = title
+			p.Topics = topics
+			p.IsPublic = isPublic
+			p.IsNSFW = isNSFW
+			p.EditedAt = editedAt
+			m.posts[i] = p
+			break
+		}
+	}
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -514,10 +571,17 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	case ComposeSubmitMsg:
 		content := msg.Content
 		title := m.panel.TitleValue()
-		slug := m.panel.SlugValue()
 		topics := ParseTopics(m.panel.TopicsRaw())
 		isPublic := m.panel.IsPublic()
 		isNSFW := m.panel.IsNSFW()
+		if m.editingPostID != "" {
+			postID := m.editingPostID
+			m = m.closeCompose()
+			return m, func() tea.Msg {
+				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
+			}
+		}
+		slug := m.panel.SlugValue()
 		m = m.closeCompose()
 		return m, func() tea.Msg {
 			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
@@ -639,6 +703,17 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				m.viewport.Height = m.viewportHeight()
 			}
 			return m, nil
+		case "e":
+			if m.CanEditSelected() {
+				visible := m.visiblePosts()
+				post := visible[m.selectedIndex]
+				m.editingPostID = post.ID
+				var cmd tea.Cmd
+				m.panel, cmd = m.panel.OpenForEdit(post)
+				m.viewport.Height = m.viewportHeight()
+				return m, cmd
+			}
+			return m, nil
 		case "!":
 			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) &&
 				visible[m.selectedIndex].AuthorUsername != m.currentUsername {
@@ -708,6 +783,7 @@ func (m FeedModel) viewportHeight() int {
 
 func (m FeedModel) closeCompose() FeedModel {
 	m.panel = m.panel.Close()
+	m.editingPostID = ""
 	m.viewport.Height = m.viewportHeight()
 	return m
 }
@@ -772,9 +848,9 @@ func (m FeedModel) buildContent() (string, []int, [][]postImageSlot) {
 
 // feedBodyCacheEntry is a memoized renderPostBody result plus the inputs it
 // was computed from, so a stale hit (width resize, bookmark/watch toggle, an
-// edited post body, the inline-images setting changing, or a theme switch
-// recoloring the baked-in ANSI) can be detected and recomputed instead of
-// served.
+// edited post body/title/topics/visibility, the inline-images setting
+// changing, or a theme switch recoloring the baked-in ANSI) can be detected
+// and recomputed instead of served.
 type feedBodyCacheEntry struct {
 	body                string
 	imgSlots            []postImageSlot
@@ -782,6 +858,10 @@ type feedBodyCacheEntry struct {
 	bookmarked          bool
 	watched             bool
 	content             string
+	title               string
+	topics              string // strings.Join(p.Topics, ",") — cheap to compare
+	isPublic            bool
+	isNSFW              bool
 	inlineImagesEnabled bool
 	themeName           string
 }
@@ -789,14 +869,15 @@ type feedBodyCacheEntry struct {
 func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
+	topics := strings.Join(p.Topics, ",")
 
 	body, imgSlots, ok := "", []postImageSlot(nil), false
-	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.inlineImagesEnabled == m.inlineImagesEnabled && e.themeName == theme.CurrentName() {
+	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.inlineImagesEnabled == m.inlineImagesEnabled && e.themeName == theme.CurrentName() {
 		body, imgSlots, ok = e.body, e.imgSlots, true
 	}
 	if !ok {
 		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
-		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, inlineImagesEnabled: m.inlineImagesEnabled, themeName: theme.CurrentName()}
+		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, inlineImagesEnabled: m.inlineImagesEnabled, themeName: theme.CurrentName()}
 	}
 
 	boxStyle := theme.Border

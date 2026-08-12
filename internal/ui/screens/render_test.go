@@ -789,6 +789,35 @@ func TestFeedRenderPost_CachesBodyAcrossSelectionChange(t *testing.T) {
 	}
 }
 
+// TestFeedRenderPost_CacheInvalidatesOnTopicsOnlyChange guards against a
+// regression where feedBodyCacheEntry's staleness check only compared
+// Content, not Title/Topics/IsPublic/IsNSFW — fields that became editable
+// via the edit feature (docs/43-edit-post.md) but were previously immutable
+// after creation, so the cache never needed to account for them. Editing
+// only a post's topics (leaving content unchanged) served a stale cached
+// render that never showed the new tags in Feed, even though Post Detail
+// (which has no such cache) updated correctly.
+func TestFeedRenderPost_CacheInvalidatesOnTopicsOnlyChange(t *testing.T) {
+	withTrueColor(t)
+	m := NewFeedModel()
+	m.width = 80
+	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "same content", Topics: []string{"old"}}
+
+	before, _ := m.renderPost(post, false)
+	if !strings.Contains(ansi.Strip(before), "#old") {
+		t.Fatalf("expected #old topic in initial render, got: %q", before)
+	}
+
+	post.Topics = []string{"new"}
+	after, _ := m.renderPost(post, false)
+	if strings.Contains(ansi.Strip(after), "#old") {
+		t.Error("expected cache to invalidate after topics changed, got stale #old topic")
+	}
+	if !strings.Contains(ansi.Strip(after), "#new") {
+		t.Errorf("expected #new topic in output after a topics-only edit, got: %q", after)
+	}
+}
+
 // BenchmarkRenderCircMessagesWithSelection measures how render cost scales
 // with the number of loaded messages — chatrooms.go never caps m.messages,
 // and this render runs in full on every 150ms style-animation tick

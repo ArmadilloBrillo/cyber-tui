@@ -1,6 +1,7 @@
 package screens_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -517,6 +518,109 @@ func TestPostDetail_ComposeActive_TrueWhileConfirmingDelete(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
 	if !m.ComposeActive() {
 		t.Error("expected ComposeActive to report true while the delete-confirm overlay is open")
+	}
+}
+
+// --- CanEditSelected / 'e' key ---
+
+func TestPostDetail_CanEditSelected_TrueForOwnRecentPost_AsSupporter(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "mine", CreatedAt: time.Now()})
+
+	if !m.CanEditSelected() {
+		t.Error("expected CanEditSelected true for own recent post as a supporter")
+	}
+}
+
+func TestPostDetail_CanEditSelected_FalseWithoutSupporterStatus(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(false)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "mine", CreatedAt: time.Now()})
+
+	if m.CanEditSelected() {
+		t.Error("expected CanEditSelected false without supporter status")
+	}
+}
+
+func TestPostDetail_CanEditSelected_FalseOutsideEditWindow(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "mine", CreatedAt: time.Now().Add(-10 * time.Minute)})
+
+	if m.CanEditSelected() {
+		t.Error("expected CanEditSelected false outside the 5-minute edit window")
+	}
+}
+
+func TestPostDetail_CanEditSelected_ForOwnRecentReply(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(pdPost("p1")) // author "op" != "alice"
+	m = m.SetReplies([]model.Reply{pdReply("r1", "", "alice", time.Now())})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select r1 (own reply)
+
+	if !m.CanEditSelected() {
+		t.Error("expected CanEditSelected true for own recent reply, even though the post itself isn't ours")
+	}
+}
+
+func TestPostDetail_EKey_OpensPostEditPanel_WhenEligible(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "mine", CreatedAt: time.Now()})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if !m.ComposeActive() {
+		t.Fatal("expected ComposeActive true after pressing 'e' on an editable post")
+	}
+}
+
+// TestPostDetail_EKey_PostEditPanel_ActuallyRenders guards against a
+// regression where the post-edit panel became active (ComposeActive true,
+// status bar hints updated) but View() had no branch that ever drew it —
+// the screen just kept showing the plain viewport.
+func TestPostDetail_EKey_PostEditPanel_ActuallyRenders(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "distinctive body text", CreatedAt: time.Now()})
+
+	before := m.View()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	after := m.View()
+
+	if after == before {
+		t.Fatal("expected View() to change once the post-edit panel is open, got identical output")
+	}
+	if !strings.Contains(after, "distinctive body text") {
+		t.Errorf("expected View() to render the pre-filled body content, got:\n%s", after)
+	}
+}
+
+func TestPostDetail_EKey_NoOp_WhenNotEligible(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(pdPost("p1")) // author "op" != "alice"
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if m.ComposeActive() {
+		t.Error("expected ComposeActive to stay false pressing 'e' on another user's post")
+	}
+}
+
+func TestPostDetail_EKey_OpensReplyEdit_WhenEligible(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(pdPost("p1"))
+	m = m.SetReplies([]model.Reply{pdReply("r1", "", "alice", time.Now())})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select r1
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if cmd == nil {
+		t.Fatal("expected a focus cmd from opening the reply editor")
+	}
+	if !m.ComposeActive() {
+		t.Error("expected ComposeActive true after pressing 'e' on an editable own reply")
 	}
 }
 
