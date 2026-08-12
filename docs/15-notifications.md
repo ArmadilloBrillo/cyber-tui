@@ -177,6 +177,19 @@ Pressing `enter` on a navigable notification opens PostDetail. Pressing `esc` in
 
 A notification can point to a post that has since been deleted; the notification list carries no "deleted target" field, so this only surfaces when the post is opened and `GET /v1/posts/:id` returns `404 NOT_FOUND`. Rather than blocking the screen, the post-open fetch returns `notifPostLoadErrMsg`; `handleNotifications` shows a transient banner **"This post has been deleted"** and leaves the notifications list intact and usable. (A 401 here still redirects to login; other errors show their message in the banner.) See [31-global-notifications.md](31-global-notifications.md) for the banner mechanism and the broader "errors never block a screen" model.
 
+### System notification unreachable via REST (post-too-soon conversion)
+
+When a post is submitted too soon after a previous one, the server silently
+converts it into a journal entry (see `docs/28-extended-posts.md` /
+`docs/00-api-backlog.md`) and generates a "System" notification about it —
+visible on the website and reflected in `GET /v1/notifications/unread-count`.
+Confirmed live (2026-08-12) that this notification is **never returned by
+`GET /v1/notifications`**, under any filter (unfiltered, `read=false`, or a
+full 50-item page) — not a caching delay, a persistent gap between the two
+endpoints. No REST client can fetch or render it; this is not a client-side
+bug. The count/list badge can legitimately be off by however many of these
+exist unread.
+
 ---
 
 ## API Endpoints
