@@ -676,6 +676,13 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				return m, func() tea.Msg { return ToggleWatchPostMsg{PostID: postID} }
 			}
 			return m, nil
+		case "l":
+			// A reply has no URL of its own — always link to the parent post,
+			// regardless of whether the post or one of its replies is selected.
+			if m.post.ID != "" {
+				return m, func() tea.Msg { return CopyLinkMsg{Post: m.post} }
+			}
+			return m, nil
 		case "up", "k":
 			newReply, newOffset := millerPageNav(-1, m.viewport.Height, m.postHeight,
 				m.replyOffsets, m.replyHeights, m.selectedReply, m.viewport.YOffset)

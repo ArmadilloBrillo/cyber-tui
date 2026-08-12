@@ -18,6 +18,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muesli/termenv"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -1611,6 +1612,19 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.postDetail = a.postDetail.SetPost(msg.post)
 		a.pendingReplyID = msg.replyID
 		return a, a.loadRepliesCmd(msg.post.ID), true
+	case screens.CopyLinkMsg:
+		// termenv.Copy writes an OSC 52 escape sequence to the host process's
+		// os.Stdout — for an SSH/wish session that's the host machine's own
+		// terminal, not the connected client's, so it can't reach the SSH
+		// user's clipboard at all (same reason inline images are gated on
+		// a.ephemeral). Gate it here rather than silently claim success.
+		if a.ephemeral {
+			a, cmd := a.notify(notifyInfo, "Copying links is disabled in SSH sessions")
+			return a, cmd, true
+		}
+		termenv.Copy(urlutil.PostPermalink(msg.Post.AuthorUsername, msg.Post.Slug))
+		a, cmd := a.notify(notifyInfo, "Copied link to clipboard")
+		return a, cmd, true
 	case screens.BookmarkPostMsg:
 		if msg.ReplyID != "" {
 			replyID := msg.ReplyID
