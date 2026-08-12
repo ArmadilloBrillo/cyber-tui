@@ -578,6 +578,14 @@ func (m TopicsModel) IsViewingTopicPosts() bool { return m.view == viewTopicPost
 // ActiveTopicName returns the slug of the currently active topic.
 func (m TopicsModel) ActiveTopicName() string { return m.activeTopic }
 
+// OpenTopic marks slug as the active topic, mirroring what pressing enter on
+// a topic-list row does. Callers still need to dispatch the post-list load
+// themselves (e.g. via LoadTopicPostsMsg) — this only sets the selection.
+func (m TopicsModel) OpenTopic(slug string) TopicsModel {
+	m.activeTopic = slug
+	return m
+}
+
 func (m TopicsModel) IsCompactListActive() bool { return m.IsViewingTopicPosts() }
 func (m TopicsModel) ListTitle() string          { return "posts (# " + m.ActiveTopicName() + ")" }
 

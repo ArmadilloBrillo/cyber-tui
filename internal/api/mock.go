@@ -275,6 +275,16 @@ func (m *MockClient) GetPost(postID string) (model.Post, error) {
 	return model.Post{ID: postID, AuthorUsername: "unknown", Content: "[post not found]"}, nil
 }
 
+func (m *MockClient) GetPostBySlug(username, slug string) (model.Post, error) {
+	posts, _, _ := m.GetFeed("")
+	for _, p := range posts {
+		if p.AuthorUsername == username && p.Slug == slug {
+			return p, nil
+		}
+	}
+	return model.Post{AuthorUsername: username, Slug: slug, Content: "[post not found]"}, nil
+}
+
 func (m *MockClient) GetBookmarks(cursor string) ([]model.Bookmark, string, error) {
 	return m.bookmarks, "", nil
 }

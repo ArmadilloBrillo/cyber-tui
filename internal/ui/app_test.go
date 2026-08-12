@@ -1406,6 +1406,159 @@ func TestRouteURL_RelativeURL_ExternalOpen(t *testing.T) {
 	}
 }
 
+func TestRouteURL_ReservedWord_NotTreatedAsUsername(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	a2, _ := a.routeURL("https://cyberspace.online/jukebox")
+	if a2.profileReturn == screenFeed {
+		t.Error("reserved top-level path must not be routed as a profile")
+	}
+}
+
+func TestRouteURL_BareUsername_OpensProfile(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	a2, cmd := a.routeURL("https://cyberspace.online/castle")
+	if cmd == nil {
+		t.Error("expected a cmd for bare-username profile navigation")
+	}
+	if a2.profileReturn != screenFeed {
+		t.Errorf("profileReturn should be screenFeed, got %v", a2.profileReturn)
+	}
+}
+
+func TestRouteURL_PostPermalink_ShortForm(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	_, cmd := a.routeURL("https://cyberspace.online/castle/podcast-recommendations")
+	if cmd == nil {
+		t.Fatal("expected a cmd for post permalink")
+	}
+	msg := cmd()
+	loaded, ok := msg.(urlPostLoadedMsg)
+	if !ok {
+		t.Fatalf("expected urlPostLoadedMsg, got %T", msg)
+	}
+	if loaded.origin != screenFeed {
+		t.Errorf("origin = %v, want screenFeed", loaded.origin)
+	}
+}
+
+func TestRouteURL_PostPermalink_BlogForm(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenBookmarks
+	_, cmd := a.routeURL("https://cyberspace.online/castle/blog/podcast-recommendations")
+	if cmd == nil {
+		t.Fatal("expected a cmd for post permalink")
+	}
+	msg := cmd()
+	loaded, ok := msg.(urlPostLoadedMsg)
+	if !ok {
+		t.Fatalf("expected urlPostLoadedMsg, got %T", msg)
+	}
+	if loaded.origin != screenBookmarks {
+		t.Errorf("origin = %v, want screenBookmarks", loaded.origin)
+	}
+}
+
+func TestRouteURL_TopicPath_OpensTopic(t *testing.T) {
+	a := loggedInApp()
+	a2, cmd := a.routeURL("https://cyberspace.online/topics/diy")
+	if cmd == nil {
+		t.Fatal("expected a cmd for topic navigation")
+	}
+	if a2.active != screenTopics {
+		t.Errorf("active = %v, want screenTopics", a2.active)
+	}
+	if got := a2.topics.ActiveTopicName(); got != "diy" {
+		t.Errorf("ActiveTopicName() = %q, want %q", got, "diy")
+	}
+}
+
+func TestRouteURL_BareTopics_OpensTopicList(t *testing.T) {
+	a := loggedInApp()
+	a2, _ := a.routeURL("https://cyberspace.online/topics")
+	if a2.active != screenTopics {
+		t.Errorf("active = %v, want screenTopics", a2.active)
+	}
+}
+
+func TestRouteURL_GuildPath_OpensGuild(t *testing.T) {
+	a := loggedInApp()
+	a2, cmd := a.routeURL("https://cyberspace.online/guilds/night-owls")
+	if cmd == nil {
+		t.Fatal("expected a cmd for guild navigation")
+	}
+	if a2.active != screenGuilds {
+		t.Errorf("active = %v, want screenGuilds", a2.active)
+	}
+	if got := a2.guilds.ActiveGuild(); got != "night-owls" {
+		t.Errorf("ActiveGuild() = %q, want %q", got, "night-owls")
+	}
+}
+
+func TestRouteURL_BareGuilds_OpensGuildList(t *testing.T) {
+	a := loggedInApp()
+	a2, _ := a.routeURL("https://cyberspace.online/guilds")
+	if a2.active != screenGuilds {
+		t.Errorf("active = %v, want screenGuilds", a2.active)
+	}
+}
+
+func TestRouteURL_ChatPath_OpensRoom(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	_, cmd := a.routeURL("https://cyberspace.online/chat/general")
+	if cmd == nil {
+		t.Fatal("expected a cmd for chat room navigation")
+	}
+	msg := cmd()
+	open, ok := msg.(screens.OpenRoomMsg)
+	if !ok {
+		t.Fatalf("expected screens.OpenRoomMsg, got %T", msg)
+	}
+	if open.RoomSlug != "general" {
+		t.Errorf("RoomSlug = %q, want %q", open.RoomSlug, "general")
+	}
+	if open.NotifID != "" {
+		t.Errorf("NotifID = %q, want empty (not from a notification)", open.NotifID)
+	}
+}
+
+func TestRouteURL_BareChat_OpensRoomList(t *testing.T) {
+	a := loggedInApp()
+	a2, _ := a.routeURL("https://cyberspace.online/chat")
+	if a2.active != screenChatrooms {
+		t.Errorf("active = %v, want screenChatrooms", a2.active)
+	}
+}
+
+func TestRouteURL_ChatPath_NoNotifID_DoesNotDecrementUnread(t *testing.T) {
+	a := loggedInApp()
+	a.polledUnreadCount = 3
+	_, cmd := a.routeURL("https://cyberspace.online/chat/general")
+	msg := cmd()
+	m, _, handled := a.handleChatrooms(msg)
+	if !handled {
+		t.Fatal("expected handleChatrooms to handle screens.OpenRoomMsg")
+	}
+	if m.polledUnreadCount != 3 {
+		t.Errorf("polledUnreadCount = %d, want unchanged 3 (no notification behind this open)", m.polledUnreadCount)
+	}
+}
+
+func TestRouteURL_EphemeralAllowsPostPermalinkNav(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+	got, cmd := a.routeURL("https://cyberspace.online/castle/podcast-recommendations")
+	if got.notifyText != "" {
+		t.Errorf("notifyText = %q, want empty (internal nav must not be blocked)", got.notifyText)
+	}
+	if cmd == nil {
+		t.Error("cmd = nil, want post load command")
+	}
+}
+
 func TestGetFocusedURLs_LoginScreen(t *testing.T) {
 	a := newTestApp() // active == screenLogin, not in switch
 	if got := a.getFocusedURLs(); got != nil {

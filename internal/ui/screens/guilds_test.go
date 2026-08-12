@@ -40,6 +40,16 @@ func TestGuildsModel_InitialState(t *testing.T) {
 	}
 }
 
+// --- OpenGuild ---
+
+func TestGuildsModel_OpenGuild_SetsActiveGuild(t *testing.T) {
+	m := screens.NewGuildsModel()
+	m = m.OpenGuild("night-owls")
+	if got := m.ActiveGuild(); got != "night-owls" {
+		t.Errorf("ActiveGuild() = %q, want %q", got, "night-owls")
+	}
+}
+
 // --- SetGuilds ---
 
 func TestGuildsModel_SetGuilds_MarksLoaded(t *testing.T) {

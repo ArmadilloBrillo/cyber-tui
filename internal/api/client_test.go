@@ -2412,6 +2412,41 @@ func TestHTTPGetPost_ParsesPost(t *testing.T) {
 	}
 }
 
+func TestHTTPGetPostBySlug_ParsesPost(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/users/castle/posts/podcast-recommendations" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{
+			"postId":         "p99",
+			"authorId":       "u1",
+			"authorUsername": "castle",
+			"slug":           "podcast-recommendations",
+			"content":        "hello world",
+			"topics":         []string{"tui"},
+			"repliesCount":   3,
+			"isPublic":       true,
+			"isNSFW":         false,
+			"deleted":        false,
+			"createdAt":      "2026-01-01T10:00:00Z",
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	post, err := c.GetPostBySlug("castle", "podcast-recommendations")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if post.ID != "p99" {
+		t.Errorf("ID mismatch: %s", post.ID)
+	}
+	if post.AuthorUsername != "castle" {
+		t.Errorf("AuthorUsername mismatch: %s", post.AuthorUsername)
+	}
+	if post.Slug != "podcast-recommendations" {
+		t.Errorf("Slug mismatch: %s", post.Slug)
+	}
+}
+
 // --- Bookmarks ---
 
 func TestHTTPGetBookmarks_ParsesList(t *testing.T) {

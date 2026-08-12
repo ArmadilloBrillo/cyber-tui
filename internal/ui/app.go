@@ -1178,9 +1178,15 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.chatrooms, cmd = a.chatrooms.OpenPendingRoom()
 		return a, cmd, true
 	case screens.OpenRoomMsg:
-		// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
-		if a.polledUnreadCount > 0 {
-			a.polledUnreadCount--
+		// NotifID is empty when this came from a URL open (routeURL) rather
+		// than a chat_mention notification — nothing to mark read there.
+		var markReadCmd tea.Cmd
+		if msg.NotifID != "" {
+			// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
+			if a.polledUnreadCount > 0 {
+				a.polledUnreadCount--
+			}
+			markReadCmd = a.markNotifReadCmd(msg.NotifID)
 		}
 		a.chatroomsReturn = a.active
 		a.chatrooms = a.chatrooms.SetPendingRoomSlug(msg.RoomSlug)
@@ -1188,7 +1194,7 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		// Chatrooms, so it must be set true *after* that call, not before.
 		a, activateCmd := activateScreen(a, screenChatrooms)
 		a.chatrooms = a.chatrooms.SetCanGoBack(true)
-		return a, tea.Batch(a.markNotifReadCmd(msg.NotifID), activateCmd), true
+		return a, tea.Batch(markReadCmd, activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
 	case screens.FlagMessageMsg:
@@ -2534,6 +2540,19 @@ func (a App) handleOpenURL(urls []string) (App, tea.Cmd) {
 	return a, nil
 }
 
+// reservedTopLevelPaths are real, distinct top-level pages on
+// cyberspace.online (confirmed live) that must never be misread as a bare
+// `/{username}` profile path. None of them map to a TUI screen, so they fall
+// through to the OS browser like any other non-cyberspace URL.
+var reservedTopLevelPaths = map[string]bool{
+	"topics": true, "guilds": true, "chat": true,
+	"search": true, "notifications": true, "bookmarks": true, "settings": true,
+	"jukebox": true, "globe": true, "fortune": true, "wiki": true,
+	"webring": true, "faq": true, "netiquette": true, "contact": true,
+	"impressum": true, "support": true, "terms": true, "privacy-policy": true,
+	"changelog": true, "admin": true,
+}
+
 // routeURL navigates to an internal screen for known cyberspace.online paths,
 // opens images in the terminal viewer when supported, or falls through to the
 // OS default browser.
@@ -2547,9 +2566,40 @@ func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 	}
 	if parsed.Host == "cyberspace.online" || parsed.Host == "www.cyberspace.online" {
 		parts := strings.SplitN(strings.TrimPrefix(parsed.Path, "/"), "/", 3)
-		if len(parts) >= 2 && parts[0] == "u" && parts[1] != "" {
+		switch {
+		case parts[0] == "topics":
+			if len(parts) >= 2 && parts[1] != "" {
+				a.topics = a.topics.OpenTopic(parts[1])
+				a, cmd := activateScreen(a, screenTopics)
+				return a, tea.Batch(cmd, a.loadTopicPostsCmd(parts[1]))
+			}
+			return activateScreen(a, screenTopics)
+		case parts[0] == "guilds":
+			if len(parts) >= 2 && parts[1] != "" {
+				a.guilds = a.guilds.OpenGuild(parts[1])
+				a, cmd := activateScreen(a, screenGuilds)
+				return a, tea.Batch(cmd, a.loadGuildPostsCmd(parts[1]), a.loadGuildDetailCmd(parts[1]))
+			}
+			return activateScreen(a, screenGuilds)
+		case parts[0] == "chat":
+			if len(parts) >= 2 && parts[1] != "" {
+				slug := parts[1]
+				return a, func() tea.Msg { return screens.OpenRoomMsg{RoomSlug: slug} }
+			}
+			return activateScreen(a, screenChatrooms)
+		case len(parts) >= 2 && parts[0] == "u" && parts[1] != "":
 			a.profileReturn = a.active
 			return a, a.loadUserProfileCmd(parts[1])
+		case len(parts) == 3 && parts[1] == "blog" && parts[0] != "" && parts[2] != "":
+			// /{username}/blog/{slug} — the canonical-form post permalink.
+			return a, a.loadPostBySlugCmd(parts[0], parts[2], a.active)
+		case len(parts) == 2 && parts[0] != "" && parts[1] != "" && !reservedTopLevelPaths[parts[0]]:
+			// /{username}/{slug} — the short-form post permalink.
+			return a, a.loadPostBySlugCmd(parts[0], parts[1], a.active)
+		case len(parts) == 1 && parts[0] != "" && !reservedTopLevelPaths[parts[0]]:
+			// /{username} — profile.
+			a.profileReturn = a.active
+			return a, a.loadUserProfileCmd(parts[0])
 		}
 	}
 	// Ephemeral (SSH-hosted) sessions must never launch host processes or make
@@ -3571,6 +3621,11 @@ type errMsg struct{ err error }
 // through handleErr and blanking the list.
 type notifPostLoadErrMsg struct{ err error }
 
+// urlPostLoadErrMsg is the failure of opening a post permalink URL (see
+// routeURL). Handled the same way as notifPostLoadErrMsg — a friendly
+// transient banner rather than routing through handleErr.
+type urlPostLoadErrMsg struct{ err error }
+
 // imageFetchedMsg carries the result of fetching and encoding an image for
 // terminal display. err is non-nil when the download or decode failed; rawURL
 // is retained so a failed decode can fall back to opening the browser. frames
@@ -3812,6 +3867,14 @@ type notifsPageMsg struct {
 	cursor string
 }
 type notifPostLoadedMsg struct{ post model.Post }
+
+// urlPostLoadedMsg carries the result of opening a post permalink URL (see
+// routeURL). origin travels with the message rather than being read from
+// a.active on arrival, since a.active can change while the fetch is in flight.
+type urlPostLoadedMsg struct {
+	post   model.Post
+	origin screen
+}
 type profilePostLoadedMsg struct{ post model.Post }
 type pollUnreadTickMsg struct{ gen int }
 type unreadCountMsg struct{ count int }
@@ -4187,6 +4250,22 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		// The target post is gone (or otherwise unfetchable): announce it in the
 		// transient banner and leave the notifications list untouched.
+		var apiErr *api.APIError
+		if errors.As(msg.err, &apiErr) && apiErr.Status == 404 {
+			a, cmd := a.notify(notifyWarn, "This post has been deleted")
+			return a, cmd, true
+		}
+		a, cmd := a.notify(notifyError, msg.err.Error())
+		return a, cmd, true
+	case urlPostLoadedMsg:
+		a.postDetailReturn = msg.origin
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.post)
+		return a, a.loadRepliesCmd(msg.post.ID), true
+	case urlPostLoadErrMsg:
+		if errors.Is(msg.err, api.ErrUnauthorized) {
+			return a, nil, false
+		}
 		var apiErr *api.APIError
 		if errors.As(msg.err, &apiErr) && apiErr.Status == 404 {
 			a, cmd := a.notify(notifyWarn, "This post has been deleted")
@@ -4834,6 +4913,20 @@ func (a *App) loadPostAndShowCmd(postID string) tea.Cmd {
 			return notifPostLoadErrMsg{err}
 		}
 		return notifPostLoadedMsg{post: post}
+	}
+}
+
+// loadPostBySlugCmd fetches a post permalink (see routeURL) by its author's
+// username and per-author slug. origin is the screen to return to when
+// PostDetail closes; it travels through urlPostLoadedMsg rather than being
+// read from a.active when the response arrives.
+func (a *App) loadPostBySlugCmd(username, slug string, origin screen) tea.Cmd {
+	return func() tea.Msg {
+		post, err := a.client.GetPostBySlug(username, slug)
+		if err != nil {
+			return urlPostLoadErrMsg{err}
+		}
+		return urlPostLoadedMsg{post: post, origin: origin}
 	}
 }
 

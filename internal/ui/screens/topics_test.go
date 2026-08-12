@@ -23,6 +23,16 @@ func sampleTopicPosts() []model.Post {
 	}
 }
 
+// --- OpenTopic ---
+
+func TestTopics_OpenTopic_SetsActiveTopicName(t *testing.T) {
+	m := screens.NewTopicsModel()
+	m = m.OpenTopic("diy")
+	if got := m.ActiveTopicName(); got != "diy" {
+		t.Errorf("ActiveTopicName() = %q, want %q", got, "diy")
+	}
+}
+
 // --- IsBrowsingTopic / esc ---
 
 func TestTopics_Esc_ClearsIsBrowsingTopic(t *testing.T) {

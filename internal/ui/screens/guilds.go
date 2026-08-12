@@ -183,6 +183,14 @@ func (m GuildsModel) ComposeView(width int) string   { return m.panel.SetWidth(w
 // ActiveGuild returns the slug of the guild whose posts are currently displayed, or "" when in list view.
 func (m GuildsModel) ActiveGuild() string { return m.activeGuild }
 
+// OpenGuild marks slug as the active guild, mirroring what pressing enter on
+// a guild-list row does. Callers still need to dispatch the post-list load
+// themselves (e.g. via LoadGuildPostsMsg) — this only sets the selection.
+func (m GuildsModel) OpenGuild(slug string) GuildsModel {
+	m.activeGuild = slug
+	return m
+}
+
 // IsLoaded reports whether the guild list has been fetched at least once.
 func (m GuildsModel) IsLoaded() bool { return m.loaded }
 

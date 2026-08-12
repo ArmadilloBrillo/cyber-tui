@@ -30,6 +30,9 @@ type Client interface {
 	CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error)
 	// GetPost fetches a single post by ID (used when jumping from a notification).
 	GetPost(postID string) (model.Post, error)
+	// GetPostBySlug fetches a single post by its author's username and per-author
+	// slug (used when opening a post permalink URL from post/reply content).
+	GetPostBySlug(username, slug string) (model.Post, error)
 
 	// Replies — first page only (pagination deferred).
 	GetPostReplies(postID string) ([]model.Reply, error)

@@ -1367,6 +1367,18 @@ func (c *HTTPClient) GetPost(postID string) (model.Post, error) {
 	return wirePostToModel(wire), nil
 }
 
+func (c *HTTPClient) GetPostBySlug(username, slug string) (model.Post, error) {
+	env, err := c.doRequest("GET", "/v1/users/"+url.PathEscape(username)+"/posts/"+url.PathEscape(slug), nil)
+	if err != nil {
+		return model.Post{}, err
+	}
+	var wire wirePost
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return model.Post{}, err
+	}
+	return wirePostToModel(wire), nil
+}
+
 func (c *HTTPClient) GetOwnProfile() (model.User, error) {
 	env, err := c.doRequest("GET", "/v1/users/me", nil)
 	if err != nil {
