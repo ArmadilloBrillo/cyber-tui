@@ -1,10 +1,10 @@
-# ᑕ¥βєяรקค¢є API v0.8.3
+﻿# á‘•Â¥Î²Ñ”Ñà¸£×§à¸„Â¢Ñ” API v0.8.4
 
 ## Access
 
 The API is open to every Cyberspace account. All you need is a **verified email address**.
 
-If your email isn't verified yet, authenticated requests are rejected with `403 EMAIL_NOT_VERIFIED` — log in, call [Resend Verification Email](#resend-verification-email), click the link, and you're in.
+If your email isn't verified yet, authenticated requests are rejected with `403 EMAIL_NOT_VERIFIED` â€” log in, call [Resend Verification Email](#resend-verification-email), click the link, and you're in.
 
 Accounts are created on the [website](https://cyberspace.online); there is no signup endpoint.
 
@@ -12,11 +12,11 @@ Accounts are created on the [website](https://cyberspace.online); there is no si
 
 By using this API you agree that you will not:
 
-- **Scrape** the API — bulk-collect posts, replies, profiles, or any other content for redistribution, archival, or analysis outside the intended use of a personal client.
-- Run **bots** — automated accounts that post, reply, follow, react, or otherwise act without a human driving each action in real time.
-- Use the API to feed **AI systems** — no training, fine-tuning, embedding, or evaluation of language models on Cyberspace content; no LLM-driven agents that read or write through the API on your behalf.
+- **Scrape** the API â€” bulk-collect posts, replies, profiles, or any other content for redistribution, archival, or analysis outside the intended use of a personal client.
+- Run **bots** â€” automated accounts that post, reply, follow, react, or otherwise act without a human driving each action in real time.
+- Use the API to feed **AI systems** â€” no training, fine-tuning, embedding, or evaluation of language models on Cyberspace content; no LLM-driven agents that read or write through the API on your behalf.
 
-Cyberspace is a small, human social network. Accounts that violate these terms will be banned and their content removed. If you're building a personal client (TUI, mobile, desktop) that a real user drives, you're fine — that's exactly what the API is for.
+Cyberspace is a small, human social network. Accounts that violate these terms will be banned and their content removed. If you're building a personal client (TUI, mobile, desktop) that a real user drives, you're fine â€” that's exactly what the API is for.
 
 ## Authentication
 
@@ -185,7 +185,7 @@ POST /v1/posts
 
 - `content` -- required, max 32,768 characters
 - `title` -- optional, free-form, max 100 characters
-- `slug` -- optional, lowercase `[a-z0-9-]`, max 60 characters, unique per author. If omitted, one is generated server-side from the title, content, or attachments. If the slug is already taken by another of your posts, `-2`, `-3`, … is appended automatically. Reserved slugs (`blog`, `jukebox`, `public`, `replies`, `index`, `edit`, `new`, `admin`, anything starting with `_`) are rejected.
+- `slug` -- optional, lowercase `[a-z0-9-]`, max 60 characters, unique per author. If omitted, one is generated server-side from the title, content, or attachments. If the slug is already taken by another of your posts, `-2`, `-3`, â€¦ is appended automatically. Reserved slugs (`blog`, `jukebox`, `public`, `replies`, `index`, `edit`, `new`, `admin`, anything starting with `_`) are rejected.
 - `topics` -- optional, max 3, must be lowercase
 - `isPublic` -- optional, makes entry visible without login
 - `isNSFW` -- optional, content warning flag
@@ -193,6 +193,39 @@ POST /v1/posts
 Returns `{ "data": { "postId": "...", "slug": "...", "title": "..." } }` (201). The `slug` field reflects the final stored slug, which may differ from what you submitted (collision suffix) or be derived from your content if omitted. `title` is only returned when set.
 
 Rate limit: 2/min, 15/day.
+
+### Edit Entry
+
+```
+PATCH /v1/posts/:id
+```
+
+```json
+{
+  "content": "Corrected entry content (markdown)",
+  "title": "New Title",
+  "topics": ["tag1", "tag2"],
+  "isPublic": true,
+  "isNSFW": false
+}
+```
+
+Available to supporters, within **5 minutes** of publishing, on their own entries. Outside that window -- or on an account without it -- the request returns `403`.
+
+Every field is optional; only what you send changes. Send at least one, or you get a `400`.
+
+- `content` -- max 32,768 characters
+- `title` -- max 100 characters. Send `""` to remove a title.
+- `topics` -- max 3, must be lowercase. Replaces the existing list.
+- `isPublic` -- boolean
+- `isNSFW` -- boolean
+- `attachments` -- replaces the existing attachments. Send `[]` to remove them.
+
+The `slug` is fixed once an entry is published, so share links keep working; sending one returns `400`. `createdAt` never changes, and an edit sends no notifications -- the people who were notified when you published aren't notified again.
+
+Returns `{ "data": { "postId": "..." } }` (200). The entry then carries an `editedAt` timestamp.
+
+Rate limit: 5/min, 30/day.
 
 ### Delete Entry
 
@@ -214,7 +247,7 @@ POST /v1/posts/:id/flag
 
 Reports the entry for review. `reason` is optional, max 500 characters. Returns `{ "data": { "postId": "...", "flagId": "...", "flagged": true } }` (`201`).
 
-Reporting is idempotent: report the same entry again and you get `200` with `{ "data": { "postId": "...", "flagged": true, "alreadyFlagged": true } }` and no second report is filed — so it's safe to retry. Reports made from the website count too. You can't report your own entry (`403`), and there's no way to withdraw a report.
+Reporting is idempotent: report the same entry again and you get `200` with `{ "data": { "postId": "...", "flagged": true, "alreadyFlagged": true } }` and no second report is filed â€” so it's safe to retry. Reports made from the website count too. You can't report your own entry (`403`), and there's no way to withdraw a report.
 
 Rate limit: 5/min, 20/hour, 50/day, shared with the other flag endpoints.
 
@@ -259,6 +292,24 @@ Returns `{ "data": { "replyId": "..." } }` (201).
 Posting a reply auto-watches the thread (see Thread Watching) unless you've disabled `autoWatchOnReply` in Settings.
 
 Rate limit: 3/min, 15/day.
+
+### Edit Reply
+
+```
+PATCH /v1/replies/:id
+```
+
+```json
+{ "content": "Corrected reply content (markdown)" }
+```
+
+Same permission and window as [Edit Entry](#edit-entry): supporters, within 5 minutes, on their own replies. `content` is the only editable field and is required, max 32,768 characters.
+
+Editing doesn't bump the thread -- the entry's reply count and last-activity time are untouched.
+
+Returns `{ "data": { "replyId": "..." } }` (200). The reply then carries an `editedAt` timestamp.
+
+Rate limit: 5/min, 30/day.
 
 ### Delete Reply
 
@@ -409,6 +460,20 @@ PATCH /v1/users/me
 
 Rate limit: 2/min, 15/day.
 
+### Poke a User
+
+```
+POST /v1/users/:username/poke
+```
+
+No body. Sends the user a `poke` notification -- the same nudge as the **[P] Poke** button on a profile on the web. Returns `{ "data": { "userId": "...", "username": "...", "poked": true } }` (`201`).
+
+- Poking yourself returns `400`.
+- Blocked in either direction (you blocked them, or they blocked you) returns `403`.
+- Unknown user returns `404`.
+
+Rate limit: 1/hour, 8/day -- across all users, not per user. A rejected poke (`400`/`403`/`404`) doesn't count against it.
+
 ---
 
 ## Bookmarks
@@ -510,10 +575,10 @@ Each guild object:
   "slug": "night-owls",
   "founderId": "uid",
   "founderUsername": "someone",
-  "icon": "🦉",
-  "profilePictureUrl": "https://…",
+  "icon": "ðŸ¦‰",
+  "profilePictureUrl": "https://â€¦",
   "bio": "We never sleep",
-  "link": "https://…",
+  "link": "https://â€¦",
   "linkText": "our site",
   "memberCount": 42,
   "createdAt": "2026-03-27T10:12:01.516Z"
@@ -550,7 +615,7 @@ Returns memberships oldest-joined first, enriched with each member's `displayNam
       "role": "member",
       "joinedAt": "2026-03-27T10:12:01.516Z",
       "displayName": "Some One",
-      "profilePictureUrl": "https://…"
+      "profilePictureUrl": "https://â€¦"
     }
   ],
   "cursor": null
@@ -593,7 +658,7 @@ Guild forums are open: any authenticated user can start a thread (membership is 
 
 Returns `{ "data": { "postId": "...", "slug": "...", "title": "..." } }` (201).
 
-**Replying to a thread** uses the normal `POST /v1/replies` with the thread's `postId` — a guild thread is an ordinary entry. Replies posted to a guild thread inherit its `guildId`, and posting a reply bumps the thread's activity so it rises in the thread list.
+**Replying to a thread** uses the normal `POST /v1/replies` with the thread's `postId` â€” a guild thread is an ordinary entry. Replies posted to a guild thread inherit its `guildId`, and posting a reply bumps the thread's activity so it rises in the thread list.
 
 Rate limit: 2/min, 15/day.
 
@@ -605,7 +670,7 @@ POST /v1/guilds/:slug/join
 
 No body. Joins the guild as a `member`. Returns `{ "data": { "guildId": "...", "role": "member" } }` (201).
 
-A user can only be in one guild. If you're already in another guild, this returns `409` — leave your current guild first.
+A user can only be in one guild. If you're already in another guild, this returns `409` â€” leave your current guild first.
 
 Rate limit: 3/min, 15/day.
 
@@ -617,7 +682,7 @@ POST /v1/guilds/:slug/leave
 
 No body. Removes your membership and clears your guild fields. Returns `{ "data": { "guildId": "..." } }`.
 
-Founders cannot leave through the API (`403`) — manage the guild on the web. `404` if you aren't a member.
+Founders cannot leave through the API (`403`) â€” manage the guild on the web. `404` if you aren't a member.
 
 Rate limit: 3/min, 15/day.
 
@@ -659,25 +724,26 @@ Each notification has this shape:
 }
 ```
 
-- `actorId` / `actorUsername` — who triggered the notification (denormalized so no extra lookup is needed).
-- `targetType` — `post` or `reply`; `targetId` is the related entry's ID.
-- `read` — always `false` on creation.
-- `reason` — present only on some system notifications (e.g. `system_ban`).
-- `metadata` — type-dependent context. Common keys: `postSlug` and `authorUsername` (build the `/{username}/{slug}` deep link), `replyId` (the relevant reply), `postContent` / `replyContent` (the mention source text), and for guild threads `guildSlug`, `guildName`, `isGuildThread`, `threadId`. `metadata` is open-ended — clients should treat unknown keys as optional.
+- `actorId` / `actorUsername` â€” who triggered the notification (denormalized so no extra lookup is needed).
+- `targetType` â€” `post` or `reply`; `targetId` is the related entry's ID.
+- `read` â€” always `false` on creation.
+- `reason` â€” present only on some system notifications (e.g. `system_ban`).
+- `metadata` â€” type-dependent context. Common keys: `postSlug` and `authorUsername` (build the `/{username}/{slug}` deep link), `replyId` (the relevant reply), `postContent` / `replyContent` (the mention source text), and for guild threads `guildSlug`, `guildName`, `isGuildThread`, `threadId`. `metadata` is open-ended â€” clients should treat unknown keys as optional.
 
 `guildSlug` / `isGuildThread` here live inside notification `metadata`; the same names also appear as top-level fields on guild-thread **entries** (see Guilds).
 
 ### How notifications are generated
 
-The API emits these notifications server-side — clients don't create them:
+The API emits these notifications server-side â€” clients don't create them:
 
-- `new_follower` — someone follows you.
-- `bookmark` — someone bookmarks your entry or reply.
-- `reply` — someone replies to your entry.
-- `new_post_following` / `new_post_friend` — someone you follow posts a new entry. `new_post_friend` is sent when the follow is **mutual** (you follow each other); `new_post_following` when it's one-way.
-- `post_mention` / `reply_mention` — you're `@`-mentioned in an entry or reply. Mentions use the `@username` syntax (case-insensitive). Mentioning a user in an entry also subscribes them to that thread, so they receive `thread_reply` for future replies.
-- `thread_reply` — a new reply is posted to a thread you're watching.
-- `guild_new_thread` — a new thread is posted in a guild you belong to.
+- `new_follower` â€” someone follows you.
+- `bookmark` â€” someone bookmarks your entry or reply.
+- `reply` â€” someone replies to your entry.
+- `new_post_following` / `new_post_friend` â€” someone you follow posts a new entry. `new_post_friend` is sent when the follow is **mutual** (you follow each other); `new_post_following` when it's one-way.
+- `post_mention` / `reply_mention` â€” you're `@`-mentioned in an entry or reply. Mentions use the `@username` syntax (case-insensitive). Mentioning a user in an entry also subscribes them to that thread, so they receive `thread_reply` for future replies.
+- `thread_reply` â€” a new reply is posted to a thread you're watching.
+- `guild_new_thread` â€” a new thread is posted in a guild you belong to.
+- `poke` â€” someone pokes you (`POST /v1/users/:username/poke`).
 
 Notifications are never sent to yourself for your own actions, and a user who would otherwise receive several notifications for the same event gets only one (the most specific). Remaining types in the list above are produced by other parts of the platform (DMs, chat, moderation, role/permission changes).
 
@@ -715,7 +781,7 @@ Returns `{ "data": { "updated": 12 } }` with the count of notifications marked r
 
 Notes are private to you. No other user can see them.
 
-Notes support **revisions** — editing a note creates a new revision rather than overwriting the original. The API returns the latest revision by default.
+Notes support **revisions** â€” editing a note creates a new revision rather than overwriting the original. The API returns the latest revision by default.
 
 ### List Notes
 
@@ -845,9 +911,9 @@ Rate limit: 2/min, 15/day.
 
 ## C-Mail
 
-C-Mail is Cyberspace's private 1:1 messaging, stored in Firebase Realtime Database (RTDB). **Sending** goes through this REST API so content is sanitized, rate-limited, and the sender identity is set server-side. **Reading new messages as they arrive** is done by subscribing to the conversation in Realtime Database directly, using your `idToken` — see [Reading in real time](#reading-in-real-time). The `GET` endpoints here are for loading the conversation list and message history.
+C-Mail is Cyberspace's private 1:1 messaging, stored in Firebase Realtime Database (RTDB). **Sending** goes through this REST API so content is sanitized, rate-limited, and the sender identity is set server-side. **Reading new messages as they arrive** is done by subscribing to the conversation in Realtime Database directly, using your `idToken` â€” see [Reading in real time](#reading-in-real-time). The `GET` endpoints here are for loading the conversation list and message history.
 
-A conversation is addressed by a `conversationId`. The API derives it server-side from the two participants — you never compute it yourself. Get it from `POST /v1/cmail` (below) or from the conversation list.
+A conversation is addressed by a `conversationId`. The API derives it server-side from the two participants â€” you never compute it yourself. Get it from `POST /v1/cmail` (below) or from the conversation list.
 
 ### Start / Get a Conversation
 
@@ -859,7 +925,7 @@ POST /v1/cmail
 { "recipientUsername": "alice" }
 ```
 
-Provide either `recipientUsername` or `recipientId`. The API returns (and, if needed, creates) the conversation between you and that user. Idempotent — returns the existing conversation if one already exists (`200`), otherwise creates it (`201`).
+Provide either `recipientUsername` or `recipientId`. The API returns (and, if needed, creates) the conversation between you and that user. Idempotent â€” returns the existing conversation if one already exists (`200`), otherwise creates it (`201`).
 
 ```json
 { "data": { "conversationId": "...", "otherUser": { "userId": "...", "username": "alice" } } }
@@ -881,9 +947,9 @@ Returns the caller's conversations, unread first then newest activity first. Eac
 GET /v1/cmail/:conversationId?limit=50&before=<timestamp>
 ```
 
-Participant only. Use this to load history — the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-in-real-time), not from here. Returns up to `limit` (1–100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp).
+Participant only. Use this to load history â€” the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-in-real-time), not from here. Returns up to `limit` (1â€“100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp).
 
-Each message: `id`, `senderId`, `senderUsername`, `content`, `timestamp` (ms epoch), plus the optional attachment and formatting fields described under [Message fields](#message-fields). **`content` can be empty** — an attached image, GIF or song is the whole message. Don't assume every message has text.
+Each message: `id`, `senderId`, `senderUsername`, `content`, `timestamp` (ms epoch), plus the optional attachment and formatting fields described under [Message fields](#message-fields). **`content` can be empty** â€” an attached image, GIF or song is the whole message. Don't assume every message has text.
 
 ### Send a Message
 
@@ -895,9 +961,9 @@ POST /v1/cmail/:conversationId
 { "content": "hello there" }
 ```
 
-Sends into an existing conversation (start one first via `POST /v1/cmail`). `senderUsername` is always set from your authenticated account — any value in the body is ignored. Blocked in either direction (you blocked them, or they blocked you) returns `403`. Returns `{ "data": { "conversationId": "...", "messageId": "..." } }` (`201`).
+Sends into an existing conversation (start one first via `POST /v1/cmail`). `senderUsername` is always set from your authenticated account â€” any value in the body is ignored. Blocked in either direction (you blocked them, or they blocked you) returns `403`. Returns `{ "data": { "conversationId": "...", "messageId": "..." } }` (`201`).
 
-Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. `/art` and the `/mute` family are cIRC-only and return `400` here.
+Supports [commands](#commands) â€” a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. `/art` and the `/mute` family are cIRC-only and return `400` here.
 
 ### Mark as Read
 
@@ -913,13 +979,13 @@ Resets your unread count for the conversation to `0`.
 POST /v1/cmail/:conversationId/typing
 ```
 
-Tells the other participant you're composing a message — they see the same "…is typing" the website shows. No body; your username is set from your authenticated account.
+Tells the other participant you're composing a message â€” they see the same "â€¦is typing" the website shows. No body; your username is set from your authenticated account.
 
 ```json
 { "data": { "conversationId": "...", "ok": true, "heartbeatMs": 3000, "staleAfterMs": 9000 } }
 ```
 
-The flag is deliberately short-lived. Refresh it every `heartbeatMs` while the user is still typing; if you stop refreshing, it clears itself after `staleAfterMs`. That's what keeps a client that quits or crashes mid-sentence from leaving "…is typing" stuck on the other person's screen forever. Read both values off the response rather than hard-coding them.
+The flag is deliberately short-lived. Refresh it every `heartbeatMs` while the user is still typing; if you stop refreshing, it clears itself after `staleAfterMs`. That's what keeps a client that quits or crashes mid-sentence from leaving "â€¦is typing" stuck on the other person's screen forever. Read both values off the response rather than hard-coding them.
 
 Sending a message clears your flag automatically, so you don't need to clear it before `POST /v1/cmail/:conversationId`.
 
@@ -927,7 +993,7 @@ Sending a message clears your flag automatically, so you don't need to clear it 
 DELETE /v1/cmail/:conversationId/typing
 ```
 
-Clears the flag immediately — call it when the input goes idle (the website uses ~2.5 s) or the user closes the conversation, rather than waiting for it to age out. Returns `{ "data": { "conversationId": "...", "ok": true } }`.
+Clears the flag immediately â€” call it when the input goes idle (the website uses ~2.5 s) or the user closes the conversation, rather than waiting for it to age out. Returns `{ "data": { "conversationId": "...", "ok": true } }`.
 
 ```
 GET /v1/cmail/:conversationId/typing
@@ -939,13 +1005,13 @@ Whether the *other* participant is typing right now:
 { "data": { "conversationId": "...", "userId": "...", "typing": true, "username": "alice", "since": 1719700000000, "staleAfterMs": 9000 } }
 ```
 
-This is a polling convenience — for a live indicator, subscribe to the presence node directly (below) instead of hammering this endpoint.
+This is a polling convenience â€” for a live indicator, subscribe to the presence node directly (below) instead of hammering this endpoint.
 
 ### Reading in real time
 
 New messages are delivered by subscribing to the conversation in Realtime Database directly, using the `idToken` you already have.
 
-Your login `idToken` doubles as the Realtime Database credential — pass it as the `auth` query parameter (it's the same token you send as `Authorization: Bearer`). Reads are scoped to your own `auth.uid`, so you see the conversations you're a participant in.
+Your login `idToken` doubles as the Realtime Database credential â€” pass it as the `auth` query parameter (it's the same token you send as `Authorization: Bearer`). Reads are scoped to your own `auth.uid`, so you see the conversations you're a participant in.
 
 **The database URL.** Connect to:
 
@@ -955,7 +1021,7 @@ https://cyberspace-cyberspace-default-rtdb.europe-west1.firebasedatabase.app
 
 This is the `rtdbUrl` value also returned from `/v1/auth/login` and `/v1/auth/refresh` (read it from there rather than hard-coding it). It's a plain endpoint URL, not a secret.
 
-**Subscribe to the conversation** over Server-Sent Events. Open this request and keep it open — the connection stays alive and the database streams an event every time the conversation changes:
+**Subscribe to the conversation** over Server-Sent Events. Open this request and keep it open â€” the connection stays alive and the database streams an event every time the conversation changes:
 
 ```
 GET https://cyberspace-cyberspace-default-rtdb.europe-west1.firebasedatabase.app/dm_messages/<conversationId>.json?auth=<idToken>&orderBy="timestamp"&limitToLast=50
@@ -964,7 +1030,7 @@ Accept: text/event-stream
 
 (`conversationId` comes from `POST /v1/cmail` or the conversation list; `<idToken>` is your login token.) Subscribe to `user_conversations/<yourUid>` the same way to get live conversation-list and unread updates.
 
-When the `idToken` expires (~1 hour) the stream closes — get a fresh one from `POST /v1/auth/refresh` and reopen the connection.
+When the `idToken` expires (~1 hour) the stream closes â€” get a fresh one from `POST /v1/auth/refresh` and reopen the connection.
 
 The stream stays open and emits an event per change. The first event is a `put` with the whole window; each new message is another `put`/`patch`:
 
@@ -982,15 +1048,15 @@ A `data` of `null` means that path was deleted. Merge events into your local vie
 
 **Stay within bounds (or get denied):**
 
-For a live typing indicator, subscribe to `dm_presence/<conversationId>.json?auth=<idToken>` the same way. Entries look like `{ "<userId>": { "username": "...", "typing": true, "timestamp": 1719700000000 } }`. Apply the same rule the endpoint does — treat someone as typing only if `typing` is `true` **and** `timestamp` is newer than `staleAfterMs` — and re-check on a timer, since a flag going stale produces no event. Publishing your own still goes through `POST /v1/cmail/:conversationId/typing`.
+For a live typing indicator, subscribe to `dm_presence/<conversationId>.json?auth=<idToken>` the same way. Entries look like `{ "<userId>": { "username": "...", "typing": true, "timestamp": 1719700000000 } }`. Apply the same rule the endpoint does â€” treat someone as typing only if `typing` is `true` **and** `timestamp` is newer than `staleAfterMs` â€” and re-check on a timer, since a flag going stale produces no event. Publishing your own still goes through `POST /v1/cmail/:conversationId/typing`.
 
-- You can only read conversations you're a participant in, and your own `user_conversations/<yourUid>` — nothing above those. The database rejects anything broader, so don't try to read the whole tree.
+- You can only read conversations you're a participant in, and your own `user_conversations/<yourUid>` â€” nothing above those. The database rejects anything broader, so don't try to read the whole tree.
 - **Always** include `orderBy="timestamp"` and a `limitToLast` of **100 or fewer**. Page older history with `&endBefore=<timestamp>`. Unbounded reads pull the entire conversation and may be rejected.
 - Keep one stream open per conversation; don't reconnect in a loop.
 
 ## cIRC
 
-cIRC is Cyberspace's multi-user chat rooms, stored in Firebase Realtime Database (RTDB). It works the same way as [C-Mail](#c-mail): **sending** goes through this REST API so content is sanitized, rate-limited, and your identity is set server-side. **Reading new messages as they arrive** is done by subscribing to the room in Realtime Database directly, using your `idToken` — see [Reading a room in real time](#reading-a-room-in-real-time). The `GET` endpoints here are for loading the room list and message history.
+cIRC is Cyberspace's multi-user chat rooms, stored in Firebase Realtime Database (RTDB). It works the same way as [C-Mail](#c-mail): **sending** goes through this REST API so content is sanitized, rate-limited, and your identity is set server-side. **Reading new messages as they arrive** is done by subscribing to the room in Realtime Database directly, using your `idToken` â€” see [Reading a room in real time](#reading-a-room-in-real-time). The `GET` endpoints here are for loading the room list and message history.
 
 A room is addressed by its `roomId` (its slug, e.g. `general`). Messages are plain text and support [commands](#commands).
 
@@ -1000,7 +1066,7 @@ A room is addressed by its `roomId` (its slug, e.g. `general`). Messages are pla
 GET /v1/circ
 ```
 
-Returns the rooms available to you, sorted by `sortOrder` then most-recently-active first. Each entry: `id`, `slug`, `name`, `lastMessageAt` (ms epoch), `sortOrder`, `onlineCount` (how many people are in the room right now — see [Who's in a room](#whos-in-a-room)).
+Returns the rooms available to you, sorted by `sortOrder` then most-recently-active first. Each entry: `id`, `slug`, `name`, `lastMessageAt` (ms epoch), `sortOrder`, `onlineCount` (how many people are in the room right now â€” see [Who's in a room](#whos-in-a-room)).
 
 ### Read a Room
 
@@ -1008,9 +1074,9 @@ Returns the rooms available to you, sorted by `sortOrder` then most-recently-act
 GET /v1/circ/:roomId?limit=50&before=<timestamp>
 ```
 
-Use this to load history — the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-a-room-in-real-time), not from here. Returns up to `limit` (1–100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp). Returns `403` if the room isn't available to you.
+Use this to load history â€” the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-a-room-in-real-time), not from here. Returns up to `limit` (1â€“100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp). Returns `403` if the room isn't available to you.
 
-Each message: `id`, `userId`, `username`, `isChatAdmin`, `content`, `timestamp` (ms epoch), plus the optional attachment and formatting fields described under [Message fields](#message-fields). **`content` can be empty** — an attached image, GIF or song is the whole message. Don't assume every message has text.
+Each message: `id`, `userId`, `username`, `isChatAdmin`, `content`, `timestamp` (ms epoch), plus the optional attachment and formatting fields described under [Message fields](#message-fields). **`content` can be empty** â€” an attached image, GIF or song is the whole message. Don't assume every message has text.
 
 ### Send a Message
 
@@ -1022,9 +1088,9 @@ POST /v1/circ/:roomId
 { "content": "hello world" }
 ```
 
-`username` and `isChatAdmin` are always set from your authenticated account — any values in the body are ignored. Returns `{ "data": { "roomId": "...", "messageId": "..." } }` (`201`). Returns `403` if the room isn't available to you.
+`username` and `isChatAdmin` are always set from your authenticated account â€” any values in the body are ignored. Returns `{ "data": { "roomId": "...", "messageId": "..." } }` (`201`). Returns `403` if the room isn't available to you.
 
-Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side.
+Supports [commands](#commands) â€” a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side.
 
 ### Delete Your Message
 
@@ -1036,7 +1102,7 @@ Deletes a message you sent. It's a soft delete: the message stays in the room so
 
 Returns `{ "data": { "roomId": "...", "messageId": "...", "deleted": true } }`.
 
-**It can't be undone.** Deleting again returns `409 CONFLICT`; there is no un-delete. You can only delete your own messages — someone else's returns `403`, and an unknown `messageId` returns `404`.
+**It can't be undone.** Deleting again returns `409 CONFLICT`; there is no un-delete. You can only delete your own messages â€” someone else's returns `403`, and an unknown `messageId` returns `404`.
 
 Rate limit: 5/min, 30/day.
 
@@ -1052,7 +1118,7 @@ POST /v1/circ/:roomId/messages/:messageId/flag
 
 Reports someone's message for review. `reason` is optional, max 500 characters. The message's text (and any attachment) is recorded with the report, so it survives even if the message is deleted afterwards. Returns `{ "data": { "roomId": "...", "messageId": "...", "flagId": "...", "flagged": true } }` (`201`).
 
-Reporting is idempotent — the same message twice returns `200` with `alreadyFlagged: true` and files nothing new, and reports made from the website count too. You can't report your own message (`403`). A message that's already been deleted can still be reported. There's no way to withdraw a report.
+Reporting is idempotent â€” the same message twice returns `200` with `alreadyFlagged: true` and files nothing new, and reports made from the website count too. You can't report your own message (`403`). A message that's already been deleted can still be reported. There's no way to withdraw a report.
 
 Rate limit: 5/min, 20/hour, 50/day, shared with [Flag an Entry](#flag-an-entry) and [Flag a Reply](#flag-a-reply).
 
@@ -1074,7 +1140,7 @@ Returns the people currently in the room, sorted by username. Each entry: `userI
 
 Presence is heartbeat-based: someone counts as present while they keep announcing themselves. Stop hearing from a client and it drops off the list on its own, so a crashed or force-quit client clears itself without any cleanup call.
 
-`lastActivity` is when that person last did something. Treat anyone whose `lastActivity` is older than `idleAfterMs` as idle — the website shows them with a 💤 next to their name. `null` means their client doesn't report it; treat them as active. Re-evaluate on a timer, since someone going idle produces no update of its own.
+`lastActivity` is when that person last did something. Treat anyone whose `lastActivity` is older than `idleAfterMs` as idle â€” the website shows them with a ðŸ’¤ next to their name. `null` means their client doesn't report it; treat them as active. Re-evaluate on a timer, since someone going idle produces no update of its own.
 
 ### Announce Your Presence
 
@@ -1082,7 +1148,7 @@ Presence is heartbeat-based: someone counts as present while they keep announcin
 POST /v1/circ/:roomId/presence
 ```
 
-Call this when you enter a room, then repeat it every `heartbeatMs` for as long as you stay. This is what puts you in the room's user list — including for people on the website, who see you alongside everyone else. Skip it and you can still read and send, you're just invisible.
+Call this when you enter a room, then repeat it every `heartbeatMs` for as long as you stay. This is what puts you in the room's user list â€” including for people on the website, who see you alongside everyone else. Skip it and you can still read and send, you're just invisible.
 
 The body is optional. `username` and `isChatAdmin` are set from your authenticated account, so you can only ever publish your own presence.
 
@@ -1090,13 +1156,13 @@ The body is optional. `username` and `isChatAdmin` are set from your authenticat
 { "lastActivity": 1719700000000 }
 ```
 
-`lastActivity` is when your user last did something — a keystroke, a command, your window regaining focus — as a ms epoch on your own clock. Send it with every heartbeat, plus an extra one the moment they wake up or go quiet. Leave it out and you always read as active. Returns:
+`lastActivity` is when your user last did something â€” a keystroke, a command, your window regaining focus â€” as a ms epoch on your own clock. Send it with every heartbeat, plus an extra one the moment they wake up or go quiet. Leave it out and you always read as active. Returns:
 
 ```json
 { "data": { "roomId": "general", "ok": true, "heartbeatMs": 30000, "staleAfterMs": 180000, "idleAfterMs": 600000 } }
 ```
 
-Read the cadence off the response rather than hard-coding it: send a heartbeat every `heartbeatMs`, and you drop out of the room once `staleAfterMs` passes with no heartbeat. Once `idleAfterMs` passes with no `lastActivity` update you show as idle — a 💤 beside your name on the website. Keep heartbeating while your user is idle, or you drop out of the room instead. Returns `403` if the room isn't available to you.
+Read the cadence off the response rather than hard-coding it: send a heartbeat every `heartbeatMs`, and you drop out of the room once `staleAfterMs` passes with no heartbeat. Once `idleAfterMs` passes with no `lastActivity` update you show as idle â€” a ðŸ’¤ beside your name on the website. Keep heartbeating while your user is idle, or you drop out of the room instead. Returns `403` if the room isn't available to you.
 
 ### Leave a Room
 
@@ -1104,11 +1170,11 @@ Read the cadence off the response rather than hard-coding it: send a heartbeat e
 DELETE /v1/circ/:roomId/presence
 ```
 
-Removes you from the room's user list immediately. Optional but polite — call it when the user leaves the room or quits your client. Without it you stay listed until `staleAfterMs` elapses. Returns `{ "data": { "roomId": "...", "ok": true } }`.
+Removes you from the room's user list immediately. Optional but polite â€” call it when the user leaves the room or quits your client. Without it you stay listed until `staleAfterMs` elapses. Returns `{ "data": { "roomId": "...", "ok": true } }`.
 
 ### Reading a room in real time
 
-New messages are delivered by subscribing to the room in Realtime Database directly — the same mechanism [C-Mail uses](#reading-in-real-time), using the `idToken` you already have. Connect to the `rtdbUrl` returned from `/v1/auth/login` and `/v1/auth/refresh` and open a Server-Sent Events stream:
+New messages are delivered by subscribing to the room in Realtime Database directly â€” the same mechanism [C-Mail uses](#reading-in-real-time), using the `idToken` you already have. Connect to the `rtdbUrl` returned from `/v1/auth/login` and `/v1/auth/refresh` and open a Server-Sent Events stream:
 
 ```
 GET https://cyberspace-cyberspace-default-rtdb.europe-west1.firebasedatabase.app/chat_messages/<roomId>.json?auth=<idToken>&orderBy="timestamp"&limitToLast=50
@@ -1119,13 +1185,13 @@ The first event is a `put` with the whole window; each new message is another `p
 
 Don't only listen for new messages: [deleting a message](#delete-your-message) *changes* an existing one rather than adding one, so it arrives as a `patch` on that message's path (`{ "content": "[DELETED]", "deleted": true }`). Apply it to the message you already have, or the deletion stays invisible to you until you reload the room.
 
-To keep the room's user list live without polling `GET /v1/circ/:roomId/users`, open a second stream on `chat_presence/<roomId>.json?auth=<idToken>`. Entries look like `{ "<userId>": { "username": "...", "isChatAdmin": false, "online": true, "lastSeen": 1719700000000, "lastActivity": 1719699000000 } }`. Apply the same rules the endpoint does: show an entry only if `online` is `true` and `lastSeen` is newer than `staleAfterMs`, and show it as idle if its `lastActivity` is older than `idleAfterMs` (absent means active) — and re-evaluate on a timer, not just on events, since an entry going stale or idle produces no event. Publishing your own presence still goes through `POST /v1/circ/:roomId/presence`.
+To keep the room's user list live without polling `GET /v1/circ/:roomId/users`, open a second stream on `chat_presence/<roomId>.json?auth=<idToken>`. Entries look like `{ "<userId>": { "username": "...", "isChatAdmin": false, "online": true, "lastSeen": 1719700000000, "lastActivity": 1719699000000 } }`. Apply the same rules the endpoint does: show an entry only if `online` is `true` and `lastSeen` is newer than `staleAfterMs`, and show it as idle if its `lastActivity` is older than `idleAfterMs` (absent means active) â€” and re-evaluate on a timer, not just on events, since an entry going stale or idle produces no event. Publishing your own presence still goes through `POST /v1/circ/:roomId/presence`.
 
 **Stay within bounds (or get denied):**
 
 - **Always** include `orderBy="timestamp"` and a `limitToLast` of **100 or fewer**. Page older history with `&endBefore=<timestamp>`. Unbounded reads may be rejected.
 - Keep one stream open per room; don't reconnect in a loop.
-- When the `idToken` expires (~1 hour) the stream closes — get a fresh one from `POST /v1/auth/refresh` and reopen the connection.
+- When the `idToken` expires (~1 hour) the stream closes â€” get a fresh one from `POST /v1/auth/refresh` and reopen the connection.
 
 ---
 
@@ -1138,12 +1204,12 @@ GET /v1/search?q=<query>&type=all
 ```
 
 Query params:
-- `q` -- required search text (1–512 chars)
+- `q` -- required search text (1â€“512 chars)
 - `type` -- `all` (default), `posts`, `replies`, or `users`
-- `limit` -- 1–50, default 20 (ignored when `type=all`)
+- `limit` -- 1â€“50, default 20 (ignored when `type=all`)
 - `page` -- 0-based page number (only for a specific `type`)
 
-**`type=all`** returns a grouped preview — up to 8 hits per group, no pagination:
+**`type=all`** returns a grouped preview â€” up to 8 hits per group, no pagination:
 
 ```json
 {
@@ -1190,7 +1256,7 @@ Missing `q` returns `400 VALIDATION_ERROR`. Rate limit: 30/min.
 
 ## Commands
 
-Both cIRC and C-Mail sends understand IRC-style slash commands. When a message's `content` begins with `/` and matches one of these, the server expands it and stores the result — resolved server-side, so any client gets it for free.
+Both cIRC and C-Mail sends understand IRC-style slash commands. When a message's `content` begins with `/` and matches one of these, the server expands it and stores the result â€” resolved server-side, so any client gets it for free.
 
 | Command | Effect |
 |---------|--------|
@@ -1201,30 +1267,30 @@ Both cIRC and C-Mail sends understand IRC-style slash commands. When a message's
 | `/fortune` | A random fortune cookie |
 | `/gif <https url>` | Post an animated GIF by link |
 | `/song <youtube url> \| <artist> \| <title> [\| <genre>]` | Attach a track to play in the jukebox. Requires supporter status |
-| `/art <ascii art>` | Post ASCII art. cIRC only; max 80 columns × 25 lines |
+| `/art <ascii art>` | Post ASCII art. cIRC only; max 80 columns Ã— 25 lines |
 | `/blink` `/l33t` `/comic` `/cursive` `/times` `/rainbow` `/flip` `/quiet` `/slow` `/glitch` `/spoiler` `/wave` `<message>` | Post the message with a text style |
 | `/mute <username>` `/unmute <username>` `/muted` `/unmuteall` | Manage who you've muted in this room. cIRC only; posts nothing |
-| `/help` | Returns the command list as `{ "data": { "reply": "…" } }`; posts nothing |
+| `/help` | Returns the command list as `{ "data": { "reply": "â€¦" } }`; posts nothing |
 
 Plain text is posted as-is. A malformed command (e.g. bad `/dice` notation, a `/song` that isn't a YouTube link) returns `400 VALIDATION_ERROR`. `/song` without supporter status returns `403 FORBIDDEN`.
 
-`/gif` is checked before the message is posted: the link has to be reachable and actually be a GIF. If it isn't you get a `400` saying why (`That URL returned HTTP 404`, `That URL isn't a GIF`, …) and nothing is posted — the same gate the website applies, so a GIF that posts will render for everyone.
+`/gif` is checked before the message is posted: the link has to be reachable and actually be a GIF. If it isn't you get a `400` saying why (`That URL returned HTTP 404`, `That URL isn't a GIF`, â€¦) and nothing is posted â€” the same gate the website applies, so a GIF that posts will render for everyone.
 
-Styles chain with `+` — `/comic+rainbow hello` applies both. Every style combines except `/spoiler`. Only `/img` is website-only, since it needs a file upload; send it and it posts as plain text.
+Styles chain with `+` â€” `/comic+rainbow hello` applies both. Every style combines except `/spoiler`. Only `/img` is website-only, since it needs a file upload; send it and it posts as plain text.
 
-**Posting ASCII art.** Put the art on the lines after the command, and it's stored as-is — leading spaces are preserved, because they're the picture:
+**Posting ASCII art.** Put the art on the lines after the command, and it's stored as-is â€” leading spaces are preserved, because they're the picture:
 
 ```json
 { "content": "/art\n /\\_/\\\n( o.o )\n > ^ <" }
 ```
 
-The canvas is 80 columns × 25 lines; going over returns a `400` telling you which limit you hit. Art comes back with `style: "art"` and a base64-encoded `content` — see [Message fields](#message-fields).
+The canvas is 80 columns Ã— 25 lines; going over returns a `400` telling you which limit you hit. Art comes back with `style: "art"` and a base64-encoded `content` â€” see [Message fields](#message-fields).
 
-**Muting.** `/mute`, `/unmute`, `/muted` and `/unmuteall` change *your own* view of a room and post nothing; each returns `{ "data": { "reply": "…" } }`. They're the same mutes as on the website — mute someone from your client and the site honours it too. Nothing is filtered server-side: `GET /v1/circ/:roomId` still returns a muted user's messages, and your client is expected to hide them, which is also what lets an unmute reveal history you've already fetched. The list lives in `mutedUsersByRoom` on [Settings](#settings), so you can also read or edit it wholesale there.
+**Muting.** `/mute`, `/unmute`, `/muted` and `/unmuteall` change *your own* view of a room and post nothing; each returns `{ "data": { "reply": "â€¦" } }`. They're the same mutes as on the website â€” mute someone from your client and the site honours it too. Nothing is filtered server-side: `GET /v1/circ/:roomId` still returns a muted user's messages, and your client is expected to hide them, which is also what lets an unmute reveal history you've already fetched. The list lives in `mutedUsersByRoom` on [Settings](#settings), so you can also read or edit it wholesale there.
 
 ### Message fields
 
-Beyond `content`, a message may carry any of these. They're all optional — a plain text message has none of them.
+Beyond `content`, a message may carry any of these. They're all optional â€” a plain text message has none of them.
 
 | Field | Meaning |
 |-------|---------|
@@ -1232,16 +1298,16 @@ Beyond `content`, a message may carry any of these. They're all optional — a p
 | `gifUrl` | An attached animated GIF (`/gif`) |
 | `audioAttachment` | A jukebox track (`/song`): `{ src, origin: "youtube", artist, title, genre }` |
 | `style` | A text style name, or an array of them for chained styles |
-| `isAction` | The message is a third-person action (`/me` and the emotes) — conventionally rendered as `* username content` |
+| `isAction` | The message is a third-person action (`/me` and the emotes) â€” conventionally rendered as `* username content` |
 | `isDice` | The action was a dice roll |
 | `isEightball`, `eightballAnswer` | The action was an 8-ball; the answer on its own for clients that want to highlight it |
 | `isFortune`, `fortuneText` | The action was a fortune cookie; likewise |
-| `deleted` | cIRC only. The message was deleted by its author — `content` is `[DELETED]` and every field above is gone. Render it as a tombstone rather than as text |
+| `deleted` | cIRC only. The message was deleted by its author â€” `content` is `[DELETED]` and every field above is gone. Render it as a tombstone rather than as text |
 
 Two things worth handling:
 
-- **`content` may be empty.** An attachment can be the entire message. When a message posted from the website has an attachment and no caption, `content` is sometimes set to the same URL as `imageUrl`/`gifUrl` — skip the text in that case rather than printing the link twice.
-- **`style: "art"` means `content` is base64-encoded** ASCII art, not readable text. Decode it before display. It's the one style that changes how `content` should be read; the rest are purely presentational, and it's up to your client to decide what `rainbow` or `blink` looks like — or to ignore them entirely.
+- **`content` may be empty.** An attachment can be the entire message. When a message posted from the website has an attachment and no caption, `content` is sometimes set to the same URL as `imageUrl`/`gifUrl` â€” skip the text in that case rather than printing the link twice.
+- **`style: "art"` means `content` is base64-encoded** ASCII art, not readable text. Decode it before display. It's the one style that changes how `content` should be read; the rest are purely presentational, and it's up to your client to decide what `rainbow` or `blink` looks like â€” or to ignore them entirely.
 
 ---
 
@@ -1286,6 +1352,7 @@ All responses follow this structure:
 | Replies | 3 | 15 |
 | Follows | 3 | 15 |
 | Unfollows | 3 | 15 |
+| Pokes | â€” | 8 |
 | Notes | 3 | 30 |
 | Bookmarks | 5 | 75 |
 | Guild threads | 2 | 15 |
@@ -1296,15 +1363,15 @@ All responses follow this structure:
 | Watch thread | 10 | 100 |
 | C-Mail message | 15 | 300 |
 | Start C-Mail conversation | 5 | 50 |
-| Mark C-Mail read | 60 | — |
-| C-Mail typing on/off | 40 per conversation, 120 overall | — |
+| Mark C-Mail read | 60 | â€” |
+| C-Mail typing on/off | 40 per conversation, 120 overall | â€” |
 | cIRC message | 15 | 300 |
 | Delete a cIRC message | 5 | 30 |
-| Mark cIRC room read | 60 | — |
-| cIRC presence heartbeat / leave | 15 per room, 90 overall | — |
+| Mark cIRC room read | 60 | â€” |
+| cIRC presence heartbeat / leave | 15 per room, 90 overall | â€” |
 | Flag an entry, reply or message | 5 | 50 |
 
-C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour). Flagging is capped at 20/hour, and the three flag endpoints share one budget between them. Presence is counted per room, and C-Mail typing per conversation.
+Pokes are capped at 1/hour rather than per minute. C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour). Flagging is capped at 20/hour, and the three flag endpoints share one budget between them. Presence is counted per room, and C-Mail typing per conversation.
 
 `POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour. `POST /v1/auth/check-username` is limited to 10/min and 60/hour per IP.
 
@@ -1354,3 +1421,20 @@ Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for 
 | Location name | 64 chars |
 | Topics per entry | 3 |
 | Username | 3-20 chars |
+
+## TypeScript definitions
+
+Every response shape on this page is available as a TypeScript definition file at
+[`/types.d.ts`](/types.d.ts). Save it next to your code and import from it:
+
+```ts
+import type { ApiList, ApiSingle, Entry, OwnUser } from './cyberspace-api-types'
+
+const res = await fetch('https://api.cyberspace.online/v1/posts', {
+  headers: { Authorization: `Bearer ${idToken}` },
+})
+const feed: ApiList<Entry> = await res.json()
+```
+
+Timestamps are ISO 8601 strings everywhere except cIRC and C-Mail, where they're
+millisecond epoch numbers.

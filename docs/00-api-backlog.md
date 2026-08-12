@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.8.3) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.8.4) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -25,6 +25,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8.2 live. `docs/00-latest-api-reference.md` re-fetched and diffed — only change is a newly-documented rate limit (10/min, 60/hour per IP) on `POST /v1/auth/check-username`, which is already out of scope for this client (web-only registration flow). No code changes needed. | 2026-08-03 |
 | `/v1/auth/refresh` | POST | **Open** | Returns `500 FUNCTION_INVOCATION_FAILED` (a Vercel serverless crash, plain-text body: "A server error has occurred") for every refresh token tried, valid or garbage. Reproduced directly via `curl` against `https://api.cyberspace.online`, bypassing the TUI entirely, so it's not a client bug or a misconfigured `apiBaseURL`. Breaks auto-login/session-resume for all users until fixed upstream; a fresh email/password login through `/v1/auth/login` is unaffected. Client-side, `refresh()` (`internal/api/client.go`) previously tried to JSON-decode this plain-text body before checking the status code, surfacing a confusing `invalid character 'A' looking for beginning of value` error; it now checks `resp.StatusCode` first and reports the real status + body snippet instead. | 2026-08-04 |
 | `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8.3 live. `docs/00-latest-api-reference.md` re-fetched and diffed byte-for-byte (UTF-8) against the previous v0.8.2 snapshot — only the version header changed, no endpoint, field, rate-limit, or content-limit differences. No code changes needed. | 2026-08-05 |
+| `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8.4 live. `docs/00-latest-api-reference.md` re-fetched and diffed — new surface: `PATCH /v1/posts/:id` and `PATCH /v1/replies/:id` (supporter-only edit within 5 minutes of publishing), `POST /v1/users/:username/poke` (new `poke` notification type, 1/hour + 8/day rate limit), and a published `/types.d.ts` TypeScript definitions file. Added to Unimplemented API Features below. | 2026-08-12 |
 
 ---
 
@@ -178,6 +179,23 @@ cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAt
 | Area | Description | Priority |
 |---|---|---|
 | `lastActivity`/`idleAfterMs` idle tracking | Send `lastActivity` on every presence heartbeat (tracked from any keypress while a room is open), plus an extra out-of-cycle, cooldown-guarded heartbeat on every keypress that finds the panel currently showing our own entry as idle (`ChatroomsModel.selfShownIdle`) — corrects a stale server-recorded `lastActivity` immediately rather than waiting for the next scheduled beat. Going idle needs no push of its own; the server computes it passively from the aging last-reported timestamp. Decode `lastActivity` from `GET .../users` and the `chat_presence` RTDB stream (nil = always active). Render a 💤 badge for idle users in the online-users panel, computed at render time off `idleAfterMs` — idle users are never filtered out of the list, only flagged. See `docs/33-circ.md`. | **Done** — 2026-08-03; corrected 2026-08-03 (self-idle badge could get stuck showing idle while actively typing — see `docs/33-circ.md`'s "Waking from idle" bullet) |
+
+### Entry/Reply editing (new in v0.8.4)
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/posts/:id` | PATCH | Edit own post — supporter-only, within 5 minutes of publishing. `slug`/`createdAt` immutable; no re-notification; response/entry gains `editedAt`. Rate limit 5/min, 30/day. | Not yet implemented |
+| `/v1/replies/:id` | PATCH | Edit own reply — same supporter/5-minute window; `content` only. Rate limit 5/min, 30/day. | Not yet implemented |
+
+### Poke (new in v0.8.4)
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/users/:username/poke` | POST | Send a `poke` notification to a user (mirrors the web **[P] Poke** button). No body; blocked in either direction → 403; self-poke → 400. Rate limit 1/hour, 8/day across all users. | Not yet implemented |
+
+### TypeScript definitions (new in v0.8.4)
+
+`/types.d.ts` now publishes TypeScript types for every documented response shape. Not applicable to this Go client — noted for reference only.
 
 ### Auth (new in v0.8)
 
