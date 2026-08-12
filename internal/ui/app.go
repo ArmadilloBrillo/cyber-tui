@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"log"
 	"math"
 	"math/rand"
 	neturl "net/url"
@@ -467,17 +466,6 @@ type App struct {
 	// or written to the host operator's config file.
 	ephemeral bool
 
-	// debug mirrors config.Config.Debug (set via WithDebug from cmd/cyber-tui,
-	// "debug": true in ~/.cyber-tui.json) — gates the temporary inline-image
-	// diagnostic log.Printf calls added for
-	// docs/plan-inline-images-improvements.md Round 6. Needed because the
-	// standard log package's default writer is os.Stderr, which shares the
-	// tty with Bubble Tea's alt-screen — cmd/cyber-tui only redirects it to
-	// a file when Debug is true (main.go), so an unconditional log.Printf
-	// would visibly corrupt the display for every user, not just during
-	// this investigation.
-	debug bool
-
 	// bookmarkedPostIDs and bookmarkedReplyIDs track which posts/replies the current
 	// user has bookmarked, populated from the bookmarks list and kept in sync on
 	// create/delete. Used to show [★] indicators in feed, postdetail, and topics.
@@ -601,12 +589,6 @@ func (a App) WithGraphicsProtocol(proto imgview.GraphicsProtocol) App {
 // from the host operator's config file.
 func (a App) WithEphemeralSession() App {
 	a.ephemeral = true
-	return a
-}
-
-// WithDebug mirrors config.Config.Debug — see the debug field's doc comment.
-func (a App) WithDebug(debug bool) App {
-	a.debug = debug
 	return a
 }
 
@@ -1126,16 +1108,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 			// resolved. Applying it anyway would silently rewrite the
 			// current post's reply tree with another post's data — see
 			// repliesLoadedMsg's doc comment.
-			// ponytail: temporary diagnostic — see the stale-rows log in
-			// syncInlineImages (app.go).
-			if a.debug {
-				log.Printf("image: dropped stale repliesLoadedMsg for %q, current post is %q", msg.postID, a.postDetail.PostID())
-			}
 			return a, nil, true
-		}
-		// ponytail: temporary diagnostic — see above.
-		if a.debug {
-			log.Printf("image: applying repliesLoadedMsg for %q (%d replies)", msg.postID, len(msg.replies))
 		}
 		a.postDetail = a.postDetail.SetReplies(msg.replies)
 		if a.pendingReplyID != "" {
@@ -2938,25 +2911,12 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 			a.inlineImageStaleRows = accumulateStaleRows(a.inlineImageStaleRows, staleRows)
 			a.inlineImageStaleSince = time.Now()
 			a.imageRepaintGen++
-			// ponytail: temporary diagnostic logging for the delayed/
-			// no-interaction blackout under investigation — see
-			// docs/plan-inline-images-improvements.md Round 6. Gated behind
-			// the same log-package redirect cfg.Debug already sets up
-			// (cmd/cyber-tui/main.go), matching existing project convention
-			// for verbose debug output (e.g. internal/api/client.go). Gated
-			// on a.debug (see its doc comment) — this fires often enough in
-			// normal use that leaving it unconditional would risk visibly
-			// corrupting the display via log's default os.Stderr writer.
-			if a.debug {
-				log.Printf("image: stale rows active=%v fresh=%v accumulated=%v gen=%d", a.active, staleRows, a.inlineImageStaleRows, a.imageRepaintGen)
-			}
 		} else if time.Since(a.inlineImageStaleSince) > inlineImageStaleGrace {
 			a.inlineImageStaleRows = nil
 		}
 
 		selChanged := selKey != a.inlineImageLastSelKey
 		touchesVisible := selChanged && (selectionTouchesSlot(selKey, slots) || selectionTouchesSlot(a.inlineImageLastSelKey, slots))
-		prevSelKey := a.inlineImageLastSelKey
 		a.inlineImageLastSelKey = selKey
 		if touchesVisible {
 			a.inlineImagePaintGen++
@@ -2967,15 +2927,6 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 			// (layout.go) is collision-proof here too, not just for the
 			// stale-row case.
 			a.imageRepaintGen++
-			// ponytail: temporary diagnostic — a previously un-instrumented
-			// trigger distinct from the stale-rows log above: a selection
-			// change (e.g. the post's border recoloring active/inactive
-			// when a reply gets selected) that touches a visible image's
-			// row WITHOUT moving it. See docs/plan-inline-images-
-			// improvements.md Round 6/14.
-			if a.debug {
-				log.Printf("image: selection touched visible image active=%v prevSel=%q newSel=%q paintGen=%d gen=%d", a.active, prevSelKey, selKey, a.inlineImagePaintGen, a.imageRepaintGen)
-			}
 		}
 	}
 
@@ -2989,26 +2940,10 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 			continue
 		}
 		if a.inlineImageFetching[key] {
-			// ponytail: temporary diagnostic — see the stale-rows log above.
-			if a.debug {
-				log.Printf("image: cache miss for %q, already fetching (skipped duplicate)", key)
-			}
 			continue
 		}
 		if failedAt, failed := a.inlineImageFailedAt[key]; failed && time.Since(failedAt) < inlineImageFailureCooldown {
-			if a.debug {
-				log.Printf("image: cache miss for %q, in failure cooldown since %v (skipped)", key, failedAt)
-			}
 			continue
-		}
-		// ponytail: temporary diagnostic — a miss here for a slot that was
-		// already visible/cached moments ago is exactly what Round 5's
-		// touchInlineImageCache fix was meant to prevent; seeing whether
-		// this still fires (and for which key) confirms or rules out
-		// eviction as the live cause — see docs/plan-inline-images-
-		// improvements.md Round 6.
-		if a.debug {
-			log.Printf("image: cache miss for %q — fetching (active=%v)", key, a.active)
 		}
 		a.inlineImageFetching[key] = true
 		placementID := 0
@@ -3102,18 +3037,9 @@ func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.inlineImageFailedAt = make(map[string]time.Time)
 		}
 		a.inlineImageFailedAt[m.key] = time.Now()
-		// ponytail: temporary diagnostic — see the stale-rows log above.
-		if a.debug {
-			log.Printf("image: fetch failed for %q: %v", m.key, m.err)
-		}
 		return a, nil, true
 	}
 	delete(a.inlineImageFailedAt, m.key)
-	// ponytail: temporary diagnostic — correlates fetch-completion timing
-	// against the observed "several seconds, worst case 9" blackout delay.
-	if a.debug {
-		log.Printf("image: fetch succeeded for %q (%d bytes encoded)", m.key, len(m.encoded))
-	}
 	return a.cacheInlineImage(m.key, m.encoded), nil, true
 }
 
@@ -3178,12 +3104,6 @@ func (a App) cacheInlineImageBounded(key, encoded string, maxBytes int) App {
 	for a.inlineImageCacheBytes > maxBytes && a.inlineImageCacheOrder.Len() > 1 {
 		oldest := a.inlineImageCacheOrder.Front()
 		oldestKey := oldest.Value.(string)
-		// ponytail: temporary diagnostic — see the stale-rows log in
-		// syncInlineImages. Shows whether eviction is actually occurring in
-		// a short repro session (16MiB is a lot of headroom).
-		if a.debug {
-			log.Printf("image: evicting %q (cache now %d bytes, cap %d)", oldestKey, a.inlineImageCacheBytes, maxBytes)
-		}
 		a.inlineImageCacheBytes -= len(a.inlineImageCache[oldestKey])
 		delete(a.inlineImageCache, oldestKey)
 		delete(a.inlineImageCacheElems, oldestKey)
@@ -4289,17 +4209,8 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		if !a.feed.IsLoaded() || a.feed.IsRefreshing() {
 			return a, a.scheduleFeedPollCmd(), true
 		}
-		// ponytail: temporary diagnostic — correlates the feed's global 15s
-		// poll cycle against the observed feed-refresh blackout delay
-		// timing. See docs/plan-inline-images-improvements.md Round 6.
-		if a.debug {
-			log.Printf("image: feedPollTickMsg firing, active=%v", a.active)
-		}
 		return a, tea.Batch(a.fetchFeedPeekCmd(), a.scheduleFeedPollCmd()), true
 	case feedPeekMsg:
-		if a.debug {
-			log.Printf("image: feedPeekMsg landed, %d posts, active=%v", len(msg.posts), a.active)
-		}
 		a.feed = a.feed.SetPendingNew(msg.posts)
 		return a, nil, true
 	}

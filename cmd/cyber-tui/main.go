@@ -88,7 +88,7 @@ func main() {
 	if gfxProto == imgview.ProtocolNone && imgview.ProbeSixel(os.Stdin, os.Stdout) {
 		gfxProto = imgview.ProtocolSixel
 	}
-	app := ui.NewApp(newClient()).WithGraphicsProtocol(gfxProto).WithDebug(cfg.Debug)
+	app := ui.NewApp(newClient()).WithGraphicsProtocol(gfxProto)
 	// Prefer saved session (token-based) over autoEmail/autoPassword credentials.
 	if cfg.RefreshToken != "" {
 		app = app.WithSavedSession(cfg)

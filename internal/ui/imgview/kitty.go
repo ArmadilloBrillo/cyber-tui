@@ -15,19 +15,24 @@ import (
 // sequence and the computed display size in terminal columns and rows.
 //
 // placementID selects one of two modes:
-//   - 0: anonymous placement (used by the fullscreen modal, where only one
-//     image is ever shown at a time). Prefixed with a blunt a=d,d=A
-//     (delete-all) self-heal — a no-op if nothing is displayed, but clears a
-//     leftover placement from a previous image whose own close-cleanup
-//     frame never reached the terminal.
+//   - 0: anonymous placement. Prefixed with a blunt a=d,d=A (delete-all)
+//     self-heal — a no-op if nothing is displayed, but clears a leftover
+//     placement from a previous image whose own close-cleanup frame never
+//     reached the terminal. Not used by any caller in this codebase — the
+//     fullscreen modal uses its own fixed non-zero id
+//     (App.kittyModalPlacementID) instead, precisely so its cleanup never
+//     blunt-deletes inline rendering's placements too — but kept as a
+//     supported mode of the protocol itself, exercised directly by this
+//     package's own tests.
 //   - non-zero: a named placement (used for inline rendering, where several
-//     images are on screen at once). Uses that value as both the image id
-//     and placement id — deliberately never blunt-deletes, since that would
-//     erase every other inline image's placement too; see
-//     DeleteKittyPlacement for this mode's targeted counterpart. Sending
-//     a=T again with the same id/placement (e.g. after scrolling) replaces
-//     the existing placement in place per the protocol spec — this is how
-//     an inline image "moves" without a separate reposition command.
+//     images are on screen at once, and by the fullscreen modal's own fixed
+//     id). Uses that value as both the image id and placement id —
+//     deliberately never blunt-deletes, since that would erase every other
+//     placement too; see DeleteKittyPlacement for this mode's targeted
+//     counterpart. Sending a=T again with the same id/placement (e.g. after
+//     scrolling) replaces the existing placement in place per the protocol
+//     spec — this is how an inline image "moves" without a separate
+//     reposition command.
 //
 // cellPxW/cellPxH is the terminal's real cell pixel size (from
 // TerminalCellPixelSize); if <= 0 (real size unavailable), falls back to the
