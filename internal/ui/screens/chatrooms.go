@@ -37,6 +37,12 @@ const (
 // top border + 2 content rows + bottom border = 4.
 const roomCardHeight = 4
 
+// chatMessageBufferMaxBytes bounds the live message history kept for the
+// active room, evicting oldest-first once exceeded — mirrors the byte cap
+// used for inlineImageCache (app.go). Prevents unbounded growth from an
+// active room over a long-running session.
+const chatMessageBufferMaxBytes = 2 << 20 // 2 MiB
+
 // roomSubscription holds the live RTDB channel and its cancellation function.
 type roomSubscription struct {
 	RoomID string
@@ -751,10 +757,56 @@ func (m ChatroomsModel) enterRoomDetail(idx int, room model.Room) (ChatroomsMode
 // AppendMessage adds a live incoming message to the currently open room.
 func (m ChatroomsModel) AppendMessage(msg model.Message) ChatroomsModel {
 	m.messages = append(m.messages, msg)
+	m = m.trimMessageBuffer()
 	m.err = nil
 	if m.ready {
 		m = m.refreshMessages()
 		m.viewport.GotoBottom()
+	}
+	return m
+}
+
+// estimatedMessageSize approximates a model.Message's memory footprint for
+// chatMessageBufferMaxBytes accounting. Doesn't need to be exact, just
+// proportional to actual size — messages carrying ASCII art (already
+// base64-decoded into Body) or attachments can be far larger than a typical
+// chat line, which a fixed message-count cap wouldn't account for.
+func estimatedMessageSize(msg model.Message) int {
+	const overhead = 128
+	n := overhead + len(msg.ID) + len(msg.From.Username) + len(msg.Body) +
+		len(msg.ImageUrl) + len(msg.GifUrl)
+	for _, s := range msg.Style {
+		n += len(s)
+	}
+	if msg.AudioAttachment != nil {
+		n += 128
+	}
+	return n
+}
+
+// trimMessageBuffer evicts oldest messages from m.messages while the
+// estimated total size exceeds chatMessageBufferMaxBytes, always keeping at
+// least the most recent message. Clears m.selectedMsgID if the evicted range
+// contained the current selection, and resets m.historyExhausted so a later
+// scroll-to-top re-fetches the evicted range from the server instead of
+// treating it as permanently gone — the pagination cursor is m.messages[0]
+// (see maybeLoadOlderMessages), so this is always safe to re-trigger.
+func (m ChatroomsModel) trimMessageBuffer() ChatroomsModel {
+	total := 0
+	for _, msg := range m.messages {
+		total += estimatedMessageSize(msg)
+	}
+	i := 0
+	for total > chatMessageBufferMaxBytes && i < len(m.messages)-1 {
+		if m.messages[i].ID != "" && m.messages[i].ID == m.selectedMsgID {
+			m.selectedMsgID = ""
+		}
+		total -= estimatedMessageSize(m.messages[i])
+		i++
+	}
+	if i > 0 {
+		m.messages = m.messages[i:]
+		m.historyExhausted = false
 	}
 	return m
 }

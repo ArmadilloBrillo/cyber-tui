@@ -1409,3 +1409,91 @@ func TestBrowsing_Enter_TogglesL33tReveal(t *testing.T) {
 		t.Error("expected l33t-substituted text again after toggling off")
 	}
 }
+
+// --- message buffer byte cap (trimMessageBuffer) ---
+
+// bigMessage returns a message whose estimated size is roughly n bytes, via
+// its Body, so tests can push the buffer over chatMessageBufferMaxBytes
+// without needing thousands of individual AppendMessage calls.
+func bigMessage(id string, n int) model.Message {
+	return model.Message{
+		ID:        id,
+		From:      model.User{Username: "molly"},
+		Body:      strings.Repeat("x", n),
+		CreatedAt: time.Now(),
+	}
+}
+
+func TestAppendMessage_TrimsOldestWhenOverByteCap(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	big := chatMessageBufferMaxBytes / 3
+	m = m.SetMessages("zion", []model.Message{
+		bigMessage("old1", big),
+		bigMessage("old2", big),
+	})
+
+	m = m.AppendMessage(bigMessage("new1", big))
+	m = m.AppendMessage(bigMessage("new2", big))
+
+	if len(m.messages) == 0 {
+		t.Fatal("expected at least one message to remain")
+	}
+	if m.messages[len(m.messages)-1].ID != "new2" {
+		t.Errorf("expected newest message to survive, got last ID %q", m.messages[len(m.messages)-1].ID)
+	}
+	for _, msg := range m.messages {
+		if msg.ID == "old1" {
+			t.Error("expected oldest message to be evicted, found old1 still present")
+		}
+	}
+	total := 0
+	for _, msg := range m.messages {
+		total += estimatedMessageSize(msg)
+	}
+	if total > chatMessageBufferMaxBytes {
+		t.Errorf("total estimated size = %d, want <= %d", total, chatMessageBufferMaxBytes)
+	}
+}
+
+func TestAppendMessage_ClearsSelectionOnEviction(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	big := chatMessageBufferMaxBytes / 2
+	m = m.SetMessages("zion", []model.Message{bigMessage("old1", big)})
+	m.selectedMsgID = "old1"
+
+	m = m.AppendMessage(bigMessage("new1", big))
+	m = m.AppendMessage(bigMessage("new2", big))
+
+	if m.selectedMsgID != "" {
+		t.Errorf("expected selectedMsgID cleared after its message was evicted, got %q", m.selectedMsgID)
+	}
+}
+
+func TestPrependMessages_NotSubjectToByteCap(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	big := chatMessageBufferMaxBytes
+	m = m.SetMessages("zion", []model.Message{bigMessage("recent", 10)})
+
+	m = m.PrependMessages("zion", []model.Message{bigMessage("history", big)})
+
+	if len(m.messages) != 2 {
+		t.Fatalf("expected prepend to keep both messages regardless of byte cap, got %d messages", len(m.messages))
+	}
+	if m.messages[0].ID != "history" {
+		t.Errorf("expected prepended message first, got %q", m.messages[0].ID)
+	}
+}
+
+func TestAppendMessage_EvictionResetsHistoryExhausted(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	big := chatMessageBufferMaxBytes / 2
+	m = m.SetMessages("zion", []model.Message{bigMessage("old1", big)})
+	m.historyExhausted = true
+
+	m = m.AppendMessage(bigMessage("new1", big))
+	m = m.AppendMessage(bigMessage("new2", big))
+
+	if m.historyExhausted {
+		t.Error("expected historyExhausted reset to false after eviction, so scrolling up can re-fetch the evicted history")
+	}
+}
