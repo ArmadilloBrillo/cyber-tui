@@ -287,7 +287,7 @@ type App struct {
 	// how many unrelated Updates interleave.
 	inlineImageStaleSince time.Time
 	inlineImageLastSelKey string
-	inlineImagePaintGen     int
+	inlineImagePaintGen   int
 	// imageRepaintGen is a monotonically incrementing counter, bumped
 	// (never reset — same never-auto-expire posture as pendingKittyDeletes)
 	// each time an inline-image repaint is newly triggered for either
@@ -1121,8 +1121,25 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
+	case screens.SubmitPostEditMsg:
+		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW), true
+	case postEditedMsg:
+		// Both Feed and PostDetail may hold their own local copy of this post;
+		// PostDetail's ApplyPostEdit has no postID param, so guard it here —
+		// otherwise editing from Feed while PostDetail has an unrelated post
+		// open would overwrite that unrelated post's content.
+		a.feed = a.feed.ApplyPostEdit(msg.postID, msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt)
+		if a.postDetail.PostID() == msg.postID {
+			a.postDetail = a.postDetail.ApplyPostEdit(msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt)
+		}
+		return a, nil, true
 	case screens.SubmitReplyMsg:
 		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID), true
+	case screens.SubmitReplyEditMsg:
+		return a, a.editReplyCmd(msg.ReplyID, msg.Content), true
+	case replyEditedMsg:
+		a.postDetail = a.postDetail.ApplyReplyEdit(msg.replyID, msg.content, msg.editedAt)
+		return a, nil, true
 	case replyCreatedMsg:
 		if a.settings.AutoWatchOnReply {
 			if _, alreadyWatched := a.watchedPostIDs[msg.postID]; !alreadyWatched {
@@ -1288,8 +1305,8 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.currentUser = msg.user
 		a.profile = a.profile.ClearTabs().SetUser(msg.user).SetCanGoBack(false)
 		// Propagate the confirmed username to screens that guard own-content actions.
-		a.feed = a.feed.SetCurrentUsername(msg.user.Username)
-		a.postDetail = a.postDetail.SetCurrentUsername(msg.user.Username)
+		a.feed = a.feed.SetCurrentUsername(msg.user.Username).SetCurrentUserIsSupporter(msg.user.IsSupporter)
+		a.postDetail = a.postDetail.SetCurrentUsername(msg.user.Username).SetCurrentUserIsSupporter(msg.user.IsSupporter)
 		return a, nil, true
 	case userProfileLoadedMsg:
 		isOwn := msg.user.Username == a.currentUser.Username
@@ -3527,11 +3544,11 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 func (a *App) afterLoginCmd() tea.Cmd {
 	a.active = screenFeed
 	a.profile = a.profile.SetUser(a.currentUser)
-	a.feed = a.feed.SetCurrentUsername(a.currentUser.Username)
+	a.feed = a.feed.SetCurrentUsername(a.currentUser.Username).SetCurrentUserIsSupporter(a.currentUser.IsSupporter)
 	a.feed = a.feed.SetFetching()
 	a.bookmarks = a.bookmarks.SetFetching()
 	a.topics = a.topics.SetFetching()
-	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username)
+	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username).SetCurrentUserIsSupporter(a.currentUser.IsSupporter)
 	a.broadcastConfig()
 	// Conversation list has no REST seed — the live subscription's own first
 	// event (a full snapshot, like chat_presence's) populates it. Seeding via
@@ -3588,6 +3605,7 @@ type userProfileLoadedMsg struct {
 }
 type followResultMsg struct{ followID string }
 type unfollowResultMsg struct{}
+
 // repliesLoadedMsg carries postID so a request superseded by the user
 // navigating to a different post before it resolves can be detected and
 // dropped instead of silently overwriting the now-current post's reply tree
@@ -3602,6 +3620,22 @@ type postCreatedMsg struct{}
 type postDeletedMsg struct {
 	postID   string
 	fromFeed bool // true = delete was triggered from the feed; false = from post detail
+}
+
+// postEditedMsg carries the fields submitted in a successful post edit. The
+// PATCH response echoes back no fields worth using (same as CreatePost), so
+// editedAt is set optimistically to the time the request completed.
+type postEditedMsg struct {
+	postID           string
+	content, title   string
+	topics           []string
+	isPublic, isNSFW bool
+	editedAt         time.Time
+}
+
+type replyEditedMsg struct {
+	replyID, content string
+	editedAt         time.Time
 }
 type settingsLoadedMsg struct{ settings model.Settings }
 type settingsSavedMsg struct {
@@ -4772,6 +4806,18 @@ func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 	}
 }
 
+func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW); err != nil {
+			return editErrorMsg(err)
+		}
+		return postEditedMsg{
+			postID: postID, content: content, title: title, topics: topics,
+			isPublic: isPublic, isNSFW: isNSFW, editedAt: time.Now(),
+		}
+	}
+}
+
 func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.DeleteReply(replyID); err != nil {
@@ -4779,6 +4825,28 @@ func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 		}
 		return replyDeletedMsg{replyID: replyID}
 	}
+}
+
+func (a *App) editReplyCmd(replyID, content string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.EditReply(replyID, content); err != nil {
+			return editErrorMsg(err)
+		}
+		return replyEditedMsg{replyID: replyID, content: content, editedAt: time.Now()}
+	}
+}
+
+// editErrorMsg converts a post/reply-edit error into the message to emit. A
+// 403 here means outside the 5-minute window or not a supporter — the
+// CanEditSelected gate should prevent most of these, but a race is possible
+// (window expires or supporter status lapses between opening the editor and
+// submitting). Anything else falls through to actionErrMsg's normal handling.
+func editErrorMsg(err error) tea.Msg {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.Status == 403 {
+		return notifyMsg{level: notifyError, text: "can't edit — outside the 5-minute window or not a supporter"}
+	}
+	return actionErrMsg{err}
 }
 
 // flagResultText picks the banner text for a completed report, distinguishing

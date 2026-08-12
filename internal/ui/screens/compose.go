@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -288,6 +289,7 @@ type PostComposePanel struct {
 	isNSFW      bool
 	focus       postField
 	active      bool
+	editing     bool // true when editing an existing post rather than creating one
 	width       int
 	bodyLines   int
 }
@@ -340,9 +342,39 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	return m, m.titleInput.Focus()
 }
 
+// OpenForEdit pre-fills the panel with an existing post's fields and opens it
+// in edit mode: the slug field (immutable once published) is removed from the
+// tab cycle and hidden from view. Focus starts on the body, the most likely
+// thing to be corrected.
+func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cmd) {
+	m.active = true
+	m.editing = true
+	m.focus = postFieldBody
+	m.isPublic = post.IsPublic
+	m.isNSFW = post.IsNSFW
+	m.titleInput.SetValue(post.Title)
+	m.slugInput.SetValue("")
+	m.slugError = ""
+	m.topicsInput.SetValue(strings.Join(post.Topics, ", "))
+	m.textarea.SetValue(post.Content)
+	m.titleInput.Blur()
+	m.slugInput.Blur()
+	m.topicsInput.Blur()
+	// Force textarea height back to the baseline before growing it to fit the
+	// pre-filled content — recalcBodyHeight short-circuits when its computed
+	// line count already equals m.bodyLines, which would otherwise leave the
+	// textarea's actual rendered height wherever it was left (library default,
+	// or stale from a previous session), desynced from what PanelHeight reports.
+	m.bodyLines = composeMinLines
+	m.textarea.SetHeight(composeMinLines)
+	m = m.recalcBodyHeight()
+	return m, m.textarea.Focus()
+}
+
 // Close blurs all inputs and marks the panel inactive.
 func (m PostComposePanel) Close() PostComposePanel {
 	m.active = false
+	m.editing = false
 	m.focus = postFieldTitle
 	m.titleInput.SetValue("")
 	m.titleInput.Blur()
@@ -361,13 +393,19 @@ func (m PostComposePanel) TitleValue() string { return strings.TrimSpace(m.title
 func (m PostComposePanel) SlugValue() string {
 	return strings.ToLower(strings.TrimSpace(m.slugInput.Value()))
 }
-func (m PostComposePanel) TopicsRaw() string  { return m.topicsInput.Value() }
-func (m PostComposePanel) IsPublic() bool     { return m.isPublic }
-func (m PostComposePanel) IsNSFW() bool       { return m.isNSFW }
+func (m PostComposePanel) TopicsRaw() string { return m.topicsInput.Value() }
+func (m PostComposePanel) IsPublic() bool    { return m.isPublic }
+func (m PostComposePanel) IsNSFW() bool      { return m.isNSFW }
 
 // PanelHeight returns the total terminal rows the panel renders:
 // 2 (border) + 1 (title row) + 1 (slug row) + 1 (sep) + bodyLines + 1 (sep) + 1 (topics row).
-func (m PostComposePanel) PanelHeight() int { return m.bodyLines + 7 }
+// The slug row is omitted in edit mode (slug is immutable once published).
+func (m PostComposePanel) PanelHeight() int {
+	if m.editing {
+		return m.bodyLines + 6
+	}
+	return m.bodyLines + 7
+}
 
 // SetWidth resizes all inner inputs to fit the new panel width.
 func (m PostComposePanel) SetWidth(w int) PostComposePanel {
@@ -410,6 +448,10 @@ func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
 		m.topicsInput.Blur()
 	}
 	m.focus = postField((int(m.focus) + delta + int(postFieldCount)) % int(postFieldCount))
+	if m.editing && m.focus == postFieldSlug {
+		// Slug is immutable once published — skip it in the edit-mode tab cycle.
+		m.focus = postField((int(m.focus) + delta + int(postFieldCount)) % int(postFieldCount))
+	}
 	switch m.focus {
 	case postFieldTitle:
 		return m, m.titleInput.Focus()
@@ -455,14 +497,16 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
 		case "ctrl+s":
-			if err := ValidateSlug(m.SlugValue()); err != nil {
-				m.slugError = err.Error()
-				m.focus = postFieldSlug
-				m.titleInput.Blur()
-				m.textarea.Blur()
-				m.topicsInput.Blur()
-				cmd := m.slugInput.Focus()
-				return m, cmd
+			if !m.editing {
+				if err := ValidateSlug(m.SlugValue()); err != nil {
+					m.slugError = err.Error()
+					m.focus = postFieldSlug
+					m.titleInput.Blur()
+					m.textarea.Blur()
+					m.topicsInput.Blur()
+					cmd := m.slugInput.Focus()
+					return m, cmd
+				}
 			}
 			content := m.textarea.Value()
 			return m, func() tea.Msg { return ComposeSubmitMsg{Content: content} }
@@ -615,14 +659,12 @@ func (m PostComposePanel) View() string {
 		"  " + pubStyle.Render(pubCheck+" public") +
 		"  " + nsfwStyle.Render(nsfwCheck+" nsfw")
 
-	inner := lipgloss.JoinVertical(lipgloss.Left,
-		titleRow,
-		slugRow,
-		sep,
-		m.textarea.View(),
-		sep,
-		topicsRow,
-	)
+	rows := []string{titleRow}
+	if !m.editing {
+		rows = append(rows, slugRow)
+	}
+	rows = append(rows, sep, m.textarea.View(), sep, topicsRow)
+	inner := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	boxStyle := theme.ActiveBorder
 	if m.width > 2 {
 		boxStyle = boxStyle.Width(m.width - 2)

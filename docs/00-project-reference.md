@@ -158,9 +158,9 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Group | Methods |
 |---|---|
 | Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()`, `ResendVerification(idToken)` |
-| Feed | `GetFeed(cursor)`, `CreatePost(content, title, slug, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)` |
+| Feed | `GetFeed(cursor)`, `CreatePost(content, title, slug, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)`, `EditPost(postID, content, title, topics, isPublic, isNSFW)` |
 | Thread watching | `GetWatches(cursor)`, `WatchPost(postID)`, `UnwatchPost(postID)` |
-| Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)` |
+| Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)`, `EditReply(replyID, content)` |
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
 | User History | `GetUserPosts(username, cursor)`, `GetUserReplies(username, cursor)` |
 | Follows | `GetFollowing(cursor)`, `GetFollowers(cursor)`, `GetUserFollows(userID, followType, cursor)`, `Follow(followedID)`, `Unfollow(followID)` |
@@ -849,6 +849,7 @@ cycle), not a global shortcut.
 | `r` | Reply to selected post |
 | `n` | New post |
 | `d` | Delete selected post (own posts only — prompts y/n) |
+| `e` | Edit selected post (own posts, supporter account, within 5 min of publishing — see `docs/43-edit-post.md`) |
 | `p` | View author's profile |
 | `c` | Start C-Mail conversation with post author |
 | `w` | Watch / unwatch the selected thread |
@@ -861,6 +862,7 @@ cycle), not a global shortcut.
 | `k` / `↑` | Scroll up / previous reply |
 | `r` | Reply to selected post or reply |
 | `d` | Delete selected post or reply (own content only — prompts y/n) |
+| `e` | Edit selected post or reply (own content, supporter account, within 5 min of publishing — see `docs/43-edit-post.md`) |
 | `p` | View author's profile |
 | `c` | Start C-Mail conversation with focused author |
 | `w` | Watch / unwatch the thread (root post focused only; no-op on replies) |

@@ -1901,6 +1901,69 @@ func TestPokeErrorMsg_OtherErrorsFallThrough(t *testing.T) {
 	}
 }
 
+// editErrorMsg softens the documented 403 (outside the 5-minute window or not
+// a supporter) into a friendly banner; anything else falls through to the
+// normal actionErrMsg handling.
+func TestEditErrorMsg_403IsSoftened(t *testing.T) {
+	got := editErrorMsg(&api.APIError{Code: "FORBIDDEN", Status: 403, Message: "edit window closed"})
+	msg, ok := got.(notifyMsg)
+	if !ok {
+		t.Fatalf("editErrorMsg(403) = %T, want notifyMsg", got)
+	}
+	if msg.level != notifyError {
+		t.Errorf("level = %v, want notifyError", msg.level)
+	}
+	if msg.text != "can't edit — outside the 5-minute window or not a supporter" {
+		t.Errorf("text = %q, want friendly edit-window message", msg.text)
+	}
+}
+
+func TestEditErrorMsg_OtherErrorsFallThrough(t *testing.T) {
+	err := &api.APIError{Code: "RATE_LIMITED", Status: 429, Message: "too many requests"}
+	got := editErrorMsg(err)
+	ae, ok := got.(actionErrMsg)
+	if !ok {
+		t.Fatalf("editErrorMsg(429) = %T, want actionErrMsg", got)
+	}
+	if ae.err != err {
+		t.Errorf("actionErrMsg.err = %v, want the original error", ae.err)
+	}
+}
+
+// TestApp_PostEditPanel_VisibleInFullRender exercises the whole App-level
+// pipeline (outer layout chrome included) rather than PostDetailModel in
+// isolation, to catch any clipping/composition bug the layout wrapper might
+// introduce on top of an otherwise-correct screen-level View(). Reported
+// live: pressing 'e' on a post in Post Detail applies and saves the edit
+// (so Update() routing is confirmed working) but the panel is never visible.
+func TestApp_PostEditPanel_VisibleInFullRender(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "op", IsSupporter: true}
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.
+		SetCurrentUsername("op").
+		SetCurrentUserIsSupporter(true).
+		SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "distinctive body text", CreatedAt: time.Now()})
+
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a = m.(App)
+
+	before := a.View()
+	m, _ = a.Update(keyMsg("e"))
+	a = m.(App)
+	after := a.View()
+
+	if !a.postDetail.ComposeActive() {
+		t.Fatal("setup: expected ComposeActive true after pressing 'e'")
+	}
+	if after == before {
+		t.Fatal("expected the full App render to change once the post-edit panel is open, got identical output")
+	}
+	if !strings.Contains(after, "distinctive body text") {
+		t.Errorf("expected the full App render to contain the pre-filled body content, got:\n%s", after)
+	}
+}
+
 // --- routeURL: ephemeral (SSH) sessions must not drive host side effects ---
 
 func TestRouteURL_EphemeralBlocksExternalOpen(t *testing.T) {

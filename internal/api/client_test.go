@@ -3398,6 +3398,103 @@ func TestHTTPPoke_RateLimited(t *testing.T) {
 	}
 }
 
+func TestHTTPEditPost_CallsCorrectEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"postId": "p1"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.EditPost("p1", "corrected content", "New Title", []string{"go", "cli"}, true, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "PATCH" {
+		t.Errorf("method = %q, want PATCH", gotMethod)
+	}
+	if gotPath != "/v1/posts/p1" {
+		t.Errorf("path = %q, want /v1/posts/p1", gotPath)
+	}
+	if gotBody["content"] != "corrected content" {
+		t.Errorf("content = %v, want %q", gotBody["content"], "corrected content")
+	}
+	if gotBody["title"] != "New Title" {
+		t.Errorf("title = %v, want %q", gotBody["title"], "New Title")
+	}
+}
+
+// TestHTTPEditPost_SendsEmptyTitleToClear confirms the wire request has no
+// omitempty on Title — the API documents sending "" to clear an existing
+// title, and createPostRequest's omitempty (a different struct, reused
+// nowhere here) would silently drop that intent if it were reused for edits.
+func TestHTTPEditPost_SendsEmptyTitleToClear(t *testing.T) {
+	var gotBody map[string]any
+	sawTitleKey := false
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		sawTitleKey = strings.Contains(string(raw), `"title"`)
+		json.Unmarshal(raw, &gotBody)
+		writeOK(t, w, map[string]any{"postId": "p1"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.EditPost("p1", "content", "", nil, false, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sawTitleKey {
+		t.Fatal(`request body missing "title" key — omitempty would drop an intentionally-cleared title`)
+	}
+	if gotBody["title"] != "" {
+		t.Errorf("title = %v, want empty string", gotBody["title"])
+	}
+}
+
+func TestHTTPEditPost_Forbidden(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusForbidden, "FORBIDDEN", "outside edit window")
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.EditPost("p1", "content", "title", nil, false, false)
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Status != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", apiErr.Status)
+	}
+}
+
+func TestHTTPEditReply_CallsCorrectEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"replyId": "r1"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.EditReply("r1", "corrected reply")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "PATCH" {
+		t.Errorf("method = %q, want PATCH", gotMethod)
+	}
+	if gotPath != "/v1/replies/r1" {
+		t.Errorf("path = %q, want /v1/replies/r1", gotPath)
+	}
+	if gotBody["content"] != "corrected reply" {
+		t.Errorf("content = %v, want %q", gotBody["content"], "corrected reply")
+	}
+}
+
 func TestHTTPUnwatchPost_CallsCorrectEndpoint(t *testing.T) {
 	var gotMethod, gotPath string
 	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

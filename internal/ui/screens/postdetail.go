@@ -101,6 +101,14 @@ type SubmitReplyMsg struct {
 	Content       string
 }
 
+// SubmitReplyEditMsg is emitted when the user submits an edit to their own
+// reply via the 'e' key. content is the only editable field for replies.
+type SubmitReplyEditMsg struct {
+	ReplyID string
+	PostID  string
+	Content string
+}
+
 type PostDetailModel struct {
 	post         model.Post
 	replies      []model.Reply
@@ -125,15 +133,18 @@ type PostDetailModel struct {
 	err                 error
 
 	compose           ComposeModel
-	replyPostID       string         // postID set when compose opens
-	replyParentID     string         // parentReplyID set when compose opens (empty = top-level)
-	relaxed           bool           // true = blank lines between post, header, and replies
-	loc               *time.Location // timezone for timestamp display; nil = UTC
-	timeDisplayFormat string         // API setting: "datetime", "relative", "unix", "swatch"
+	replyPostID       string           // postID set when compose opens
+	replyParentID     string           // parentReplyID set when compose opens (empty = top-level)
+	editingReplyID    string           // non-empty while m.compose is editing this reply rather than composing a new one
+	editPanel         PostComposePanel // post-edit panel; PostDetail has no "new post" panel, only this edit-mode one
+	relaxed           bool             // true = blank lines between post, header, and replies
+	loc               *time.Location   // timezone for timestamp display; nil = UTC
+	timeDisplayFormat string           // API setting: "datetime", "relative", "unix", "swatch"
 
-	currentUsername string        // set after login; guards the delete key to own content
-	confirming      pdConfirmKind // pending delete confirmation
-	maxThreadDepth  int           // max visual nesting depth; 0 treated as 3
+	currentUsername        string        // set after login; guards the delete key to own content
+	currentUserIsSupporter bool          // set after login/profile load; edit requires supporter status
+	confirming             pdConfirmKind // pending delete confirmation
+	maxThreadDepth         int           // max visual nesting depth; 0 treated as 3
 
 	flagPrompt        FlagPrompt // active while reporting the selected post or reply
 	flagTargetPostID  string     // set when flagging the post itself
@@ -152,6 +163,7 @@ type PostDetailModel struct {
 func NewPostDetailModel() PostDetailModel {
 	return PostDetailModel{
 		compose:    NewComposeModel(0),
+		editPanel:  NewPostComposePanel(0),
 		flagPrompt: NewFlagPrompt(),
 	}
 }
@@ -297,7 +309,7 @@ func (m PostDetailModel) Ready() bool { return m.ready }
 // intercepts keys first in Update must be OR'd in here — app.go's global
 // shortcuts fire instead of reaching Update whenever this returns false.
 func (m PostDetailModel) ComposeActive() bool {
-	return m.compose.IsActive() || m.flagPrompt.Active() || m.confirming != pdConfirmNone
+	return m.compose.IsActive() || m.editPanel.IsActive() || m.flagPrompt.Active() || m.confirming != pdConfirmNone
 }
 
 func (m PostDetailModel) SetError(err error) PostDetailModel {
@@ -313,6 +325,61 @@ func (m PostDetailModel) SetError(err error) PostDetailModel {
 // restrict the delete key to the user's own posts and replies.
 func (m PostDetailModel) SetCurrentUsername(username string) PostDetailModel {
 	m.currentUsername = username
+	return m
+}
+
+func (m PostDetailModel) SetCurrentUserIsSupporter(isSupporter bool) PostDetailModel {
+	m.currentUserIsSupporter = isSupporter
+	return m
+}
+
+// CanEditSelected reports whether the currently selected post or reply is the
+// current user's own, published within the edit window, and the account is a
+// supporter — the same gate applied to the 'e' keypress, reused by the status
+// bar to show/hide the hint live as the selection or clock changes.
+func (m PostDetailModel) CanEditSelected() bool {
+	if !m.currentUserIsSupporter {
+		return false
+	}
+	if m.selectedReply == -1 {
+		return m.post.ID != "" && m.post.AuthorUsername == m.currentUsername && time.Since(m.post.CreatedAt) < postEditWindow
+	}
+	if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
+		r := m.flatTree[m.selectedReply].Reply
+		return r.AuthorUsername == m.currentUsername && time.Since(r.CreatedAt) < postEditWindow
+	}
+	return false
+}
+
+// ApplyPostEdit overwrites the edited fields of the displayed post after a
+// successful PATCH, leaving AuthorID, CreatedAt, RepliesCount, etc. untouched.
+func (m PostDetailModel) ApplyPostEdit(content, title string, topics []string, isPublic, isNSFW bool, editedAt time.Time) PostDetailModel {
+	m.post.Content = content
+	m.post.Title = title
+	m.post.Topics = topics
+	m.post.IsPublic = isPublic
+	m.post.IsNSFW = isNSFW
+	m.post.EditedAt = editedAt
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
+// ApplyReplyEdit overwrites a reply's content by ID after a successful PATCH.
+func (m PostDetailModel) ApplyReplyEdit(replyID, content string, editedAt time.Time) PostDetailModel {
+	for i, r := range m.replies {
+		if r.ID == replyID {
+			r.Content = content
+			r.EditedAt = editedAt
+			m.replies[i] = r
+			m.flatTree = buildReplyTree(m.replies, m.effectiveMaxDepth())
+			break
+		}
+	}
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
 }
 
@@ -391,6 +458,9 @@ func (m PostDetailModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight
 	if m.compose.IsActive() {
 		h -= m.compose.BoxHeight()
+	}
+	if m.editPanel.IsActive() {
+		h -= m.editPanel.PanelHeight()
 	}
 	if m.confirming != pdConfirmNone {
 		h -= confirmBoxHeight
@@ -488,6 +558,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.compose = m.compose.SetWidth(msg.Width)
+		m.editPanel = m.editPanel.SetWidth(msg.Width)
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, m.viewportHeight())
 			m = m.refreshContent()
@@ -500,8 +571,34 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		return m, nil
 
 	case ComposeSubmitMsg:
+		if m.editPanel.IsActive() {
+			content := msg.Content
+			postID := m.post.ID
+			title := m.editPanel.TitleValue()
+			topics := ParseTopics(m.editPanel.TopicsRaw())
+			isPublic := m.editPanel.IsPublic()
+			isNSFW := m.editPanel.IsNSFW()
+			m.editPanel = m.editPanel.Close()
+			if m.ready {
+				m.viewport.Height = m.viewportHeight()
+			}
+			return m, func() tea.Msg {
+				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
+			}
+		}
 		content := msg.Content
 		postID := m.replyPostID
+		if m.editingReplyID != "" {
+			replyID := m.editingReplyID
+			m.editingReplyID = ""
+			m.compose = m.compose.Close()
+			if m.ready {
+				m.viewport.Height = m.viewportHeight()
+			}
+			return m, func() tea.Msg {
+				return SubmitReplyEditMsg{ReplyID: replyID, PostID: postID, Content: content}
+			}
+		}
 		parentID := m.replyParentID
 		m.compose = m.compose.Close()
 		if m.ready {
@@ -517,6 +614,8 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 
 	case ComposeCancelMsg:
 		m.compose = m.compose.Close()
+		m.editPanel = m.editPanel.Close()
+		m.editingReplyID = ""
 		if m.ready {
 			m.viewport.Height = m.viewportHeight()
 		}
@@ -576,6 +675,17 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			return m, nil
 		}
 
+		// When the post-edit panel is open, all key events go to it.
+		if m.editPanel.IsActive() {
+			prevH := m.editPanel.PanelHeight()
+			var cmd tea.Cmd
+			m.editPanel, cmd = m.editPanel.Update(msg)
+			if m.editPanel.PanelHeight() != prevH && m.ready {
+				m.viewport.Height = m.viewportHeight()
+			}
+			return m, cmd
+		}
+
 		// When compose is open, all key events go to the compose box.
 		if m.compose.IsActive() {
 			prevH := m.compose.BoxHeight()
@@ -605,6 +715,23 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case "e":
+			if !m.CanEditSelected() {
+				return m, nil
+			}
+			if m.selectedReply == -1 {
+				var cmd tea.Cmd
+				m.editPanel, cmd = m.editPanel.OpenForEdit(m.post)
+				m.viewport.Height = m.viewportHeight()
+				return m, cmd
+			}
+			reply := m.flatTree[m.selectedReply].Reply
+			m.editingReplyID = reply.ID
+			m.replyPostID = m.post.ID
+			var cmd tea.Cmd
+			m.compose, cmd = m.compose.OpenWithContent("editing reply", "write your reply…", reply.Content)
+			m.viewport.Height = m.viewportHeight()
+			return m, cmd
 		case "!":
 			if m.selectedReply == -1 {
 				if m.post.ID != "" && m.post.AuthorUsername != m.currentUsername {
@@ -980,6 +1107,12 @@ func (m PostDetailModel) View() string {
 		return lipgloss.JoinVertical(lipgloss.Left,
 			m.viewport.View(),
 			m.compose.View(),
+		)
+	}
+	if m.editPanel.IsActive() {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.viewport.View(),
+			m.editPanel.View(),
 		)
 	}
 	return m.viewport.View()

@@ -253,8 +253,16 @@ func (m *MockClient) DeletePost(postID string) error {
 	return nil // no-op: in-memory feed is rebuilt on each GetFeed call
 }
 
+func (m *MockClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool) error {
+	return nil
+}
+
 func (m *MockClient) DeleteReply(replyID string) error {
 	return nil // no-op: in-memory replies are rebuilt on each GetPostReplies call
+}
+
+func (m *MockClient) EditReply(replyID, content string) error {
+	return nil
 }
 
 func (m *MockClient) FlagPost(postID, reason string) (string, bool, error) {

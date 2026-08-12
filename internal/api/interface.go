@@ -167,10 +167,18 @@ type Client interface {
 	// Posts — deletion.
 	// DeletePost soft-deletes a post owned by the authenticated user.
 	DeletePost(postID string) error
+	// EditPost edits a post owned by the authenticated user. Supporter accounts
+	// only, within 5 minutes of publishing; returns an *APIError with Status 403
+	// otherwise. The response carries no fields worth returning — the caller
+	// already has the full edited state and merges it locally.
+	EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool) error
 
 	// Replies — deletion.
 	// DeleteReply soft-deletes a reply owned by the authenticated user.
 	DeleteReply(replyID string) error
+	// EditReply edits a reply owned by the authenticated user. Same permission
+	// window as EditPost; content is the only editable field.
+	EditReply(replyID, content string) error
 
 	// FlagPost reports a post for review. reason is optional (max 500 chars).
 	// Idempotent: reporting the same post again returns alreadyFlagged=true
