@@ -59,6 +59,9 @@ type Client interface {
 	Follow(followedID string) (string, error)
 	// Unfollow removes a follow relationship by its document ID.
 	Unfollow(followID string) error
+	// Poke sends a poke notification to a user. Rate limited to 1/hour, 8/day
+	// across all users (not per-target).
+	Poke(username string) error
 
 	// Settings
 	GetSettings() (model.Settings, error)

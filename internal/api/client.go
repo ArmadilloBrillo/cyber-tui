@@ -1551,6 +1551,11 @@ func (c *HTTPClient) UnwatchPost(postID string) error {
 	return err
 }
 
+func (c *HTTPClient) Poke(username string) error {
+	_, err := c.doRequest("POST", "/v1/users/"+url.PathEscape(username)+"/poke", nil)
+	return err
+}
+
 // --- Topics ---
 
 func (c *HTTPClient) GetTopics(cursor string) ([]model.Topic, string, error) {

@@ -1861,6 +1861,46 @@ func TestFlagErrorMsg_OtherErrorsFallThrough(t *testing.T) {
 	}
 }
 
+// pokeErrorMsg softens the expected 429 (1/hour, 8/day cap) and the documented
+// 403 (blocked either direction) into friendly banners; anything else falls
+// through to the normal actionErrMsg handling.
+func TestPokeErrorMsg_429IsSoftened(t *testing.T) {
+	got := pokeErrorMsg(&api.APIError{Code: "RATE_LIMITED", Status: 429, Message: "too many requests"})
+	msg, ok := got.(notifyMsg)
+	if !ok {
+		t.Fatalf("pokeErrorMsg(429) = %T, want notifyMsg", got)
+	}
+	if msg.level != notifyError {
+		t.Errorf("level = %v, want notifyError", msg.level)
+	}
+	if msg.text != "poke limit reached — try again later" {
+		t.Errorf("text = %q, want friendly rate-limit message", msg.text)
+	}
+}
+
+func TestPokeErrorMsg_403IsSoftened(t *testing.T) {
+	got := pokeErrorMsg(&api.APIError{Code: "FORBIDDEN", Status: 403, Message: "blocked"})
+	msg, ok := got.(notifyMsg)
+	if !ok {
+		t.Fatalf("pokeErrorMsg(403) = %T, want notifyMsg", got)
+	}
+	if msg.text != "can't poke this user" {
+		t.Errorf("text = %q, want friendly blocked message", msg.text)
+	}
+}
+
+func TestPokeErrorMsg_OtherErrorsFallThrough(t *testing.T) {
+	err := &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "unknown user"}
+	got := pokeErrorMsg(err)
+	ae, ok := got.(actionErrMsg)
+	if !ok {
+		t.Fatalf("pokeErrorMsg(404) = %T, want actionErrMsg", got)
+	}
+	if ae.err != err {
+		t.Errorf("actionErrMsg.err = %v, want the original error", ae.err)
+	}
+}
+
 // --- routeURL: ephemeral (SSH) sessions must not drive host side effects ---
 
 func TestRouteURL_EphemeralBlocksExternalOpen(t *testing.T) {

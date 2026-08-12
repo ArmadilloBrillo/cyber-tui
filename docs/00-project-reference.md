@@ -164,6 +164,7 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
 | User History | `GetUserPosts(username, cursor)`, `GetUserReplies(username, cursor)` |
 | Follows | `GetFollowing(cursor)`, `GetFollowers(cursor)`, `GetUserFollows(userID, followType, cursor)`, `Follow(followedID)`, `Unfollow(followID)` |
+| Poke | `Poke(username)` |
 | Settings | `GetSettings()`, `UpdateSettings(update)` |
 | Rooms | `GetRooms()`, `GetRoomMessages(roomID, limit)`, `SendRoomMessage(roomID, body)` |
 | Notifications | `GetNotifications(cursor, unreadOnly, types)`, `GetUnreadNotificationCount()`, `MarkNotificationRead(id)`, `MarkAllNotificationsRead()` |
@@ -835,6 +836,7 @@ cycle), not a global shortcut.
 | `e` | Edit profile (own profile, Info tab) |
 | `f` | Follow / unfollow (read-only profiles) |
 | `c` | Start C-Mail conversation (read-only profiles only) |
+| `p` | Poke (read-only profiles only) |
 | `esc` | Back to previous screen |
 
 ### Feed

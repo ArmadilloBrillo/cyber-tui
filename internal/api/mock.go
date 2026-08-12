@@ -686,6 +686,10 @@ func (m *MockClient) Unfollow(followID string) error {
 	return nil
 }
 
+func (m *MockClient) Poke(username string) error {
+	return nil
+}
+
 func (m *MockClient) GetNotes(cursor string) ([]model.Note, string, error) {
 	return m.notes, "", nil
 }

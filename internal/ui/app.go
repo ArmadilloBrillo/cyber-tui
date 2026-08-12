@@ -1307,6 +1307,8 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.followUserCmd(msg.UserID), true
 	case screens.UnfollowUserMsg:
 		return a, a.unfollowUserCmd(msg.FollowID), true
+	case screens.PokeUserMsg:
+		return a, a.pokeUserCmd(msg.Username), true
 	case followResultMsg:
 		a.profile = a.profile.SetFollowState(true, msg.followID).IncrementFollowersCount(1).SetFollowFeedback("following.")
 		return a, nil, true
@@ -3996,6 +3998,33 @@ func (a *App) unfollowUserCmd(followID string) tea.Cmd {
 		}
 		return unfollowResultMsg{}
 	}
+}
+
+func (a *App) pokeUserCmd(username string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.Poke(username); err != nil {
+			return pokeErrorMsg(err)
+		}
+		return notifyMsg{level: notifyInfo, text: "poked @" + username}
+	}
+}
+
+// pokeErrorMsg converts a poke-action error into the message to emit. A 429
+// is expected here far more than on other actions (1/hour, 8/day cap across
+// all users) so it gets a friendly banner instead of the raw API error text;
+// a 403 (blocked either direction) also gets a friendlier message. Anything
+// else falls through to actionErrMsg's normal handling.
+func pokeErrorMsg(err error) tea.Msg {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.Status {
+		case 429:
+			return notifyMsg{level: notifyError, text: "poke limit reached — try again later"}
+		case 403:
+			return notifyMsg{level: notifyError, text: "can't poke this user"}
+		}
+	}
+	return actionErrMsg{err}
 }
 
 func (a *App) loadUserPostsCmd(username, cursor string) tea.Cmd {
