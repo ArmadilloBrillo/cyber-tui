@@ -195,13 +195,19 @@ func preprocessMarkdown(content string, width int) (src []byte, resolvedWidth in
 // block syntax — it stays literal chat text. Inline parsing still runs the
 // normal CommonMark set (parser.DefaultInlineParsers: code span, link,
 // autolink, raw HTML, emphasis/strong) plus bare-URL detection
-// (extension.NewLinkifyParser, the same one extension.GFM's Linkify wraps).
+// (extension.NewLinkifyParser, the same one extension.GFM's Linkify wraps)
+// and strikethrough (extension.NewStrikethroughParser, same priority as
+// extension.GFM uses for mdInstance — accepts both ~single~ and ~~double~~
+// tilde runs; see goldmark's strikethroughParser.Parse).
 // No @mention node here — CIRC has its own bespoke mention system layered on
 // top by the caller.
 var mdInlineParser = parser.NewParser(
 	parser.WithBlockParsers(util.Prioritized(parser.NewParagraphParser(), 1000)),
 	parser.WithInlineParsers(
-		append(parser.DefaultInlineParsers(), util.Prioritized(extension.NewLinkifyParser(), 999))...,
+		append(parser.DefaultInlineParsers(),
+			util.Prioritized(extension.NewLinkifyParser(), 999),
+			util.Prioritized(extension.NewStrikethroughParser(), 500),
+		)...,
 	),
 )
 
