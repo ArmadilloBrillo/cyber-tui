@@ -359,16 +359,12 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 		createdAt = b.CreatedAt
 	}
 
-	// Line 1 left: [type]  @author  [img][yt]
+	// Line 1 left: [type]  @author  🖼
 	var authorStyled string
 	if author != "" {
 		authorStyled = "  " + theme.Highlight.Render("@"+author)
 	}
-	attInd := attachmentIndicator(attachments, content)
-	left1 := typeTag + authorStyled
-	if attInd != "" {
-		left1 += "  " + attInd
-	}
+	left1 := typeTag + authorStyled + imageIcon(attachments, content)
 
 	// Line 1 right: "posted Xh ago · saved Yd ago"
 	postedStr := formatRelativeTime(createdAt, now, loc)
