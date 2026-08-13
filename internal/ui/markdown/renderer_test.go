@@ -370,6 +370,35 @@ func TestRender_Strikethrough(t *testing.T) {
 	}
 }
 
+// TestRender_SingleTildeStrikethrough confirms GFM's strikethrough extension
+// treats a single-tilde run (~text~) the same as double-tilde (~~text~~).
+func TestRender_SingleTildeStrikethrough(t *testing.T) {
+	raw := Render("~deleted text~", 80)
+	plain := strip(raw)
+	if !strings.Contains(plain, "deleted text") {
+		t.Errorf("strikethrough text not in output: %q", plain)
+	}
+	if strings.Contains(plain, "~deleted text~") {
+		t.Errorf("raw strikethrough markers remain: %q", plain)
+	}
+}
+
+// TestRenderInline_Strikethrough confirms chat/DM one-liners (RenderInline,
+// which uses a separate minimal parser from Render) also strike through both
+// ~single~ and ~~double~~ tilde runs.
+func TestRenderInline_Strikethrough(t *testing.T) {
+	for _, content := range []string{"~deleted~", "~~deleted~~"} {
+		raw := RenderInline(content, "")
+		plain := strip(raw)
+		if !strings.Contains(plain, "deleted") {
+			t.Errorf("%q: strikethrough text not in output: %q", content, plain)
+		}
+		if strings.Contains(plain, "~") {
+			t.Errorf("%q: raw strikethrough markers remain: %q", content, plain)
+		}
+	}
+}
+
 func TestRender_AmbiguousRunesStripped(t *testing.T) {
 	// U+00B0 DEGREE SIGN (°) is ambiguous-width per go-runewidth.
 	raw := Render("Hello \u00B0 world", 80)
