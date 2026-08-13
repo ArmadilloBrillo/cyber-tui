@@ -50,11 +50,8 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+p.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)+editedSuffix(p.EditedAt)),
-	) + audioIcon(p.Attachments) + bookmarkIcon(bookmarked) + watchIcon(watched)
+	) + imageIcon(p.Attachments, p.Content) + audioIcon(p.Attachments) + bookmarkIcon(bookmarked) + watchIcon(watched)
 	var rightParts []string
-	if ind := attachmentIndicator(p.Attachments, p.Content); ind != "" {
-		rightParts = append(rightParts, ind)
-	}
 	switch p.RepliesCount {
 	case 1:
 		rightParts = append(rightParts, theme.Subtle.Render("1 reply"))
@@ -164,29 +161,20 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 	return lipgloss.JoinVertical(lipgloss.Left, rows...), imgSlots
 }
 
-// attachmentIndicator returns a compact header badge for any images present
+// imageIcon returns a 🖼 icon (with leading spaces) when any image is present
 // — counting both structured image/gif Attachments and images embedded as
 // markdown syntax in content (most real posts use the latter; see
-// urlutil.CountImages) — e.g. "[img]" for one, "[img +2]" when there are
-// more beyond the first (the count beyond what inline rendering shows, and
-// what the carousel modal has left to page through). Returns "" when there
-// are no images at all — audio attachments get their own icon (audioIcon).
-func attachmentIndicator(attachments []model.Attachment, content string) string {
-	n := 0
+// urlutil.CountImages) — else "". Audio attachments get their own icon (audioIcon).
+func imageIcon(attachments []model.Attachment, content string) string {
 	for _, a := range attachments {
 		if a.Type == "image" || a.Type == "gif" {
-			n++
+			return "  " + theme.Highlight.Render("🖼")
 		}
 	}
-	n += urlutil.CountImages(content)
-	switch {
-	case n == 0:
-		return ""
-	case n == 1:
-		return theme.Subtle.Render("[img]")
-	default:
-		return theme.Subtle.Render(fmt.Sprintf("[img +%d]", n-1))
+	if urlutil.CountImages(content) > 0 {
+		return "  " + theme.Highlight.Render("🖼")
 	}
+	return ""
 }
 
 // audioIcon returns a ♫ icon (with leading spaces) when any attachment is audio, else "".

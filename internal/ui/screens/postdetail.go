@@ -928,23 +928,8 @@ func (m PostDetailModel) renderFullPost(selected bool) (string, []postImageSlot)
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+m.post.AuthorUsername),
 		theme.Subtle.Render("  "+displayTime(m.post.CreatedAt, m.location(), m.timeDisplayFormat, false)+editedSuffix(m.post.EditedAt)),
-	) + audioIcon(m.post.Attachments) + bookmarkIcon(postBookmarked) + watchIcon(postWatched)
-	var rightParts []string
-	if ind := attachmentIndicator(m.post.Attachments, m.post.Content); ind != "" {
-		rightParts = append(rightParts, ind)
-	}
-	right := strings.Join(rightParts, " ")
-	var header string
-	if right != "" && innerWidth > 0 {
-		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(right)
-		if gap > 0 {
-			header = left + strings.Repeat(" ", gap) + right
-		} else {
-			header = left
-		}
-	} else {
-		header = left
-	}
+	) + imageIcon(m.post.Attachments, m.post.Content) + audioIcon(m.post.Attachments) + bookmarkIcon(postBookmarked) + watchIcon(postWatched)
+	header := left
 
 	// Badges line: guild indicator, nsfw, public — omitted when none apply.
 	var badgeParts []string
@@ -1030,19 +1015,8 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) (string, []p
 		theme.Subtle.Render("  "+displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false)+editedSuffix(node.Reply.EditedAt)),
 	)
 	_, replyBookmarked := m.bookmarkedReplyIDs[node.Reply.ID]
-	left := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...) + audioIcon(node.Reply.Attachments) + bookmarkIcon(replyBookmarked)
-	var replyRightParts []string
-	if ind := attachmentIndicator(node.Reply.Attachments, node.Reply.Content); ind != "" {
-		replyRightParts = append(replyRightParts, ind)
-	}
-	replyRight := strings.Join(replyRightParts, " ")
+	left := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...) + imageIcon(node.Reply.Attachments, node.Reply.Content) + audioIcon(node.Reply.Attachments) + bookmarkIcon(replyBookmarked)
 	header := left
-	if replyRight != "" && innerWidth > 0 {
-		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(replyRight)
-		if gap > 0 {
-			header = left + strings.Repeat(" ", gap) + replyRight
-		}
-	}
 
 	// lineBase: 1 border-top row + 1 header row (header is always a single
 	// JoinHorizontal line here, unlike the full post's optional badges/title).
