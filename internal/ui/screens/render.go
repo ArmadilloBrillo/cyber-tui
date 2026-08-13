@@ -500,7 +500,21 @@ func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, t
 		if url != "" {
 			bandLine := strings.Count(rendered, "\n")
 			bandRows := chatImageBandRows(realRows, circMsgImageKey(msg.ID))
-			rendered += strings.Repeat("\n", bandRows)
+			if selectedID != "" && msg.ID == selectedID {
+				// Extend the highlight into the image's reserved gutter so the
+				// selection band visually wraps the image, not just the text
+				// above it. Safe against the same corruption class the modal/
+				// animation fix guarded against: this only changes these rows'
+				// bytes when the selection moves onto/off msg, and that exact
+				// case is already handled generically by selectionTouchesSlot/
+				// inlineImagePaintGen (app.go), which forces the image to be
+				// redrawn in place whenever a selection change recolors the row
+				// range under it.
+				blankRow := theme.SelectedRow.Width(viewportWidth).Render("") + "\n"
+				rendered += strings.Repeat(blankRow, bandRows)
+			} else {
+				rendered += strings.Repeat("\n", bandRows)
+			}
 			imgSlots[i] = []postImageSlot{{URL: url, Line: bandLine + 1}}
 		}
 		offsets[i] = lineCount

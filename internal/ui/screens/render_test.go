@@ -862,6 +862,43 @@ func TestRenderPost_ShowsEditedMarkerWhenEditedAtSet(t *testing.T) {
 	}
 }
 
+// TestRenderCircMessagesWithSelection_HighlightsImageBandWhenSelected guards
+// the fix extending the SelectedRow highlight into a selected message's
+// reserved inline-image gutter, not just its text. Band size/position must
+// stay identical whether selected or not — only the band rows' background
+// styling should differ.
+func TestRenderCircMessagesWithSelection_HighlightsImageBandWhenSelected(t *testing.T) {
+	withTrueColor(t)
+	const width = 60
+	msg := circMsg("bob", "hi from bob")
+	msg.ID = "m1"
+	msg.ImageUrl = "https://example.com/a.png"
+	msgs := []model.Message{msg}
+
+	unselected, _, unselHeights, unselSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, true, nil)
+	selected, _, selHeights, selSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "m1", nil, 0, nil, true, nil)
+
+	if unselHeights[0] != selHeights[0] {
+		t.Errorf("heights differ between selected/unselected: %d vs %d, want equal", unselHeights[0], selHeights[0])
+	}
+	if unselSlots[0][0].Line != selSlots[0][0].Line {
+		t.Errorf("image slot Line differs between selected/unselected: %d vs %d, want equal", unselSlots[0][0].Line, selSlots[0][0].Line)
+	}
+
+	unselLines := strings.Split(unselected, "\n")
+	selLines := strings.Split(selected, "\n")
+	bandStart := unselSlots[0][0].Line - 1 // Line is 1-indexed relative to the band's first row
+	bandRows := chatImageBandRows(nil, circMsgImageKey("m1"))
+	for i := 0; i < bandRows && bandStart+i < len(unselLines); i++ {
+		if ansi.Strip(unselLines[bandStart+i]) != "" {
+			t.Fatalf("setup: expected unselected band row %d to be blank, got %q", i, unselLines[bandStart+i])
+		}
+	}
+	if !strings.Contains(selLines[bandStart], "\x1b[") {
+		t.Errorf("expected the selected message's image band to carry the SelectedRow background escape, got plain %q", selLines[bandStart])
+	}
+}
+
 // --- chatImageBandRows ---
 
 // TestChatImageBandRows_UnknownFallsBackToMax confirms the pre-fetch
