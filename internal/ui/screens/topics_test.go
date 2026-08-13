@@ -100,3 +100,38 @@ func TestTopics_FilterNSFW_Off_ShowsAll(t *testing.T) {
 		t.Errorf("expected tp2 (nsfw), got %s", sp.Post.ID)
 	}
 }
+
+// --- VisibleInlineImages ---
+
+func TestTopics_VisibleInlineImages_DisabledByDefault(t *testing.T) {
+	m := screens.NewTopicsModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetTopics(sampleTopics(), "")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m.SetTopicPosts([]model.Post{
+		{ID: "tp1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+func TestTopics_VisibleInlineImages_ReportsSlotWhenEnabled(t *testing.T) {
+	m := screens.NewTopicsModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetTopics(sampleTopics(), "")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m.SetTopicPosts([]model.Post{
+		{ID: "tp1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected 1 slot, got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != "https://example.com/a.png" {
+		t.Errorf("URL = %q, want https://example.com/a.png", slots[0].URL)
+	}
+}

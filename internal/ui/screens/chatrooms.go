@@ -268,6 +268,13 @@ type ChatroomsModel struct {
 	selectedMsgID       string
 	msgOffsets          []int // start line of m.messages[i]'s rendered block; 1:1 with m.messages
 	msgHeights          []int // rendered line-height of m.messages[i]'s block; 1:1 with m.messages
+	msgImages           [][]postImageSlot // inline image slot(s) for m.messages[i], nil unless eligible; 1:1 with m.messages
+	inlineImagesEnabled bool
+	// imageRealRows caches each image slot's actual fetched/fitted row
+	// count (App.recordInlineImageRealRows, keyed by circMsgImageKey), so
+	// its reserved band can shrink from the fallback-max placeholder down
+	// to its real size once known — see SetImageRealRows.
+	imageRealRows map[string]int
 	flagPrompt          FlagPrompt
 	flagTargetMsgID     string // message ID being flagged, set right before flagPrompt.Open()
 	confirmingDeleteMsg bool   // true while the y/n delete-confirm overlay for the selected message is showing
@@ -286,6 +293,14 @@ type ChatroomsModel struct {
 	// message is loaded in the room, not only while one is visible on screen.
 	styleAnimFrame   int
 	styleAnimRunning bool
+
+	// animPaused suppresses the refreshMessages() re-render that styleAnimTickMsg
+	// would otherwise trigger, without stopping the ticker chain itself. Set by
+	// app.go while the image modal is open: an animated line's re-render changes
+	// that terminal row's bytes, forcing Bubble Tea to resend the whole row —
+	// including the parts of it covered by the modal's box — which erases the
+	// modal's graphics-protocol pixels there.
+	animPaused bool
 
 	// focused is true while the Chatrooms tab is the one on screen. The RTDB
 	// subscription for an open room stays alive regardless (see
@@ -695,6 +710,18 @@ func (m ChatroomsModel) SetCanGoBack(v bool) ChatroomsModel {
 	return m
 }
 
+// SetAnimPaused pauses (or resumes) the styleAnimTickMsg re-render — see the
+// animPaused field doc comment. Called from app.go when the image modal
+// opens/closes.
+func (m ChatroomsModel) SetAnimPaused(paused bool) ChatroomsModel {
+	m.animPaused = paused
+	return m
+}
+
+// AnimPaused reports whether the styleAnimTickMsg re-render is currently
+// paused (see the animPaused field doc comment).
+func (m ChatroomsModel) AnimPaused() bool { return m.animPaused }
+
 // ResetToList clears any deep-link flag and drops back to the room list, for
 // ordinary tab navigation into Chatrooms that may still have a deep-linked
 // room open (SetCanGoBack(false) alone left mode stuck on detail).
@@ -755,13 +782,19 @@ func (m ChatroomsModel) enterRoomDetail(idx int, room model.Room) (ChatroomsMode
 }
 
 // AppendMessage adds a live incoming message to the currently open room.
+// Only follows the view down to the new message if it was already at the
+// bottom beforehand — never yanks a scrolled-up reader down to the newest
+// message, regardless of who posted it or what it contains.
 func (m ChatroomsModel) AppendMessage(msg model.Message) ChatroomsModel {
 	m.messages = append(m.messages, msg)
 	m = m.trimMessageBuffer()
 	m.err = nil
 	if m.ready {
+		wasAtBottom := m.viewport.AtBottom()
 		m = m.refreshMessages()
-		m.viewport.GotoBottom()
+		if wasAtBottom {
+			m.viewport.GotoBottom()
+		}
 	}
 	return m
 }
@@ -864,13 +897,23 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 // SetRoomUsers replaces the presence panel's content, sorted admins-first
 // then alphabetical within each block. Recomputes the message viewport width
 // since the panel's presence affects it (panelWidths collapses to zero width
-// until the first snapshot arrives).
+// until the first snapshot arrives). The live presence stream fires this on
+// every change and on its own 5s re-evaluation timer, so — same as
+// SetImageRealRows — the reflow must never yank the view down, and must
+// re-home to the bottom if it was already there, or every presence tick
+// silently drifts the scroll position out from under the user.
 func (m ChatroomsModel) SetRoomUsers(users []model.RoomUser) ChatroomsModel {
 	m.roomUsers = sortRoomUsers(users)
 	if m.ready {
 		msgW, _ := m.panelWidths()
-		m.viewport.Width = msgW
-		m = m.refreshMessages()
+		if msgW != m.viewport.Width {
+			wasAtBottom := m.viewport.AtBottom()
+			m.viewport.Width = msgW
+			m = m.refreshMessages()
+			if wasAtBottom {
+				m.viewport.GotoBottom()
+			}
+		}
 	}
 	return m
 }
@@ -963,6 +1006,15 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			cmd = tea.Batch(cmd, m.sendHeartbeatCmd(m.activeRoomID, m.lastActivityAt))
 		}
 	}
+	// Clear the unread badge the moment the view catches up to the bottom
+	// while focused — whatever caused it (Esc from browsing, paging past
+	// the newest message, sticky-scroll re-homing itself, or a plain
+	// scroll), not just re-focusing the tab. A single choke point instead
+	// of hunting down every individual path that can land back at the
+	// bottom.
+	if m.focused && m.mode == chatroomModeDetail && m.unreadCount > 0 && m.viewport.AtBottom() {
+		m.unreadCount = 0
+	}
 	return m, cmd
 }
 
@@ -1024,7 +1076,9 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	case styleAnimTickMsg:
 		m.styleAnimFrame++
 		m.styleAnimRunning = false
-		m = m.refreshMessages()
+		if !m.animPaused {
+			m = m.refreshMessages()
+		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -1061,6 +1115,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.mutedUsersByRoom = msg.Settings.MutedUsersByRoom
+		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m = m.SetLocation(msg.Loc)
 		if m.mode == chatroomModeDetail && m.activeRoom != nil {
 			m = m.refreshMessages()
@@ -1096,7 +1151,11 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			m = m.ApplyMessageDeleted(msg.msg.ID)
 		} else {
 			m = m.AppendMessage(msg.msg)
-			if !m.focused {
+			// Also counts as unread while focused if the view isn't at the
+			// bottom (scrolled up reading history) — AppendMessage only
+			// followed the view down if it was already there, so this
+			// reliably reflects "have I actually seen the newest message."
+			if !m.focused || !m.viewport.AtBottom() {
 				m.unreadCount++
 			}
 		}
@@ -1540,12 +1599,90 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 		m.msgOffsets, m.msgHeights = nil, nil
 		return m
 	}
-	content, offsets, heights := renderCircMessagesWithSelection(
+	content, offsets, heights, imgSlots := renderCircMessagesWithSelection(
 		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID,
-		m.revealed, m.styleAnimFrame, m.mutedUsers())
+		m.revealed, m.styleAnimFrame, m.mutedUsers(), m.inlineImagesEnabled, m.imageRealRows)
 	m.viewport.SetContent(content)
 	m.msgOffsets, m.msgHeights = offsets, heights
+	m.msgImages = imgSlots
 	return m
+}
+
+// SetImageRealRows records key's actual fetched/fitted row count (from
+// App.recordInlineImageRealRows) and, if it changed, re-renders so the
+// message list's reserved band shrinks from the fallback-max placeholder
+// down to the image's real size — see renderCircMessagesWithSelection's
+// band-sizing. If the viewport was scrolled to the bottom before the
+// reflow, it's re-homed to the (now shorter) bottom afterward — otherwise
+// the room would settle without ever reaching the true bottom as each
+// image's band shrinks out from under a fixed YOffset, one fetch at a
+// time. Never yanks the view down if the user had scrolled up to read
+// history, mirroring SetMessages' own GotoBottom convention.
+func (m ChatroomsModel) SetImageRealRows(key string, rows int) ChatroomsModel {
+	if m.imageRealRows[key] == rows {
+		return m
+	}
+	if m.imageRealRows == nil {
+		m.imageRealRows = make(map[string]int)
+	}
+	m.imageRealRows[key] = rows
+	if m.mode == chatroomModeDetail && m.ready {
+		wasAtBottom := m.viewport.AtBottom()
+		m = m.refreshMessages()
+		if wasAtBottom {
+			m.viewport.GotoBottom()
+		}
+	}
+	return m
+}
+
+// VisibleInlineImages returns the inline image slots currently fully within
+// the viewport, top to bottom, across every visible message — see
+// PostDetailModel.VisibleInlineImages for the full contract.
+func (m ChatroomsModel) VisibleInlineImages() []InlineImageSlot {
+	if m.mode != chatroomModeDetail || !m.inlineImagesEnabled {
+		return nil
+	}
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+
+	var slots []InlineImageSlot
+	for i, msg := range m.messages {
+		if i >= len(m.msgImages) || i >= len(m.msgOffsets) {
+			continue
+		}
+		for _, img := range m.msgImages[i] {
+			abs := m.msgOffsets[i] + img.Line
+			key := circMsgImageKey(msg.ID)
+			// imgRows is the actual reserved image-row allowance for this
+			// message (chatImageBandRows minus its leading spacer, which
+			// sits before abs, not after) — not the old fixed
+			// inlineImageMaxRows, which over-required clearance once the
+			// band shrank below that constant and hid the last message's
+			// image in the room (nothing below it to push bottom out
+			// further).
+			imgRows := chatImageBandRows(m.imageRealRows, key) - 1
+			if abs < top || abs+imgRows > bottom {
+				continue
+			}
+			colIndent := circMessageTextIndent(msg)
+			slots = append(slots, InlineImageSlot{
+				URL: img.URL,
+				// abs-top is relative to the message viewport's own top edge
+				// (row 0 = the viewport's first visible line), but the
+				// viewport isn't screen row 0 within this screen's own
+				// content — View() stacks header+divider
+				// (chatroomDetailHeaderRows) above it. Without adding that
+				// back, an image near the top of the visible messages lands
+				// on the header/divider instead of the message it belongs to.
+				Row:       abs - top + chatroomDetailHeaderRows,
+				ColIndent: colIndent,
+				MaxCols:   max(m.viewport.Width-colIndent-2, 10),
+				MaxRows:   inlineImageEncodeMaxRows,
+				Key:       key,
+			})
+		}
+	}
+	return slots
 }
 
 // selectableMessageIndices returns the indices into msgs of messages that can

@@ -215,6 +215,13 @@ type CMailModel struct {
 	selectedMsgID string
 	msgOffsets    []int
 	msgHeights    []int
+	// msgImages is parallel to msgOffsets/msgHeights — see ChatroomsModel's
+	// field of the same name for the convention.
+	msgImages           [][]postImageSlot
+	inlineImagesEnabled bool
+	// imageRealRows caches each image slot's actual fetched/fitted row
+	// count — see ChatroomsModel's field of the same name.
+	imageRealRows map[string]int
 
 	// canGoBack is true when the active conversation was opened via a
 	// deep link (e.g. 'c' on a post, or a chat_mention/dm_message
@@ -273,6 +280,12 @@ type CMailModel struct {
 	// message styles — see maybeStartStyleAnim and chatrooms.go's identical fields.
 	styleAnimFrame   int
 	styleAnimRunning bool
+
+	// animPaused suppresses the refreshMessages() re-render that styleAnimTickMsg
+	// would otherwise trigger, without stopping the ticker chain itself. Set by
+	// app.go while the image modal is open — see ChatroomsModel.animPaused for
+	// the full rationale.
+	animPaused bool
 }
 
 // SendCMailMsg is emitted when the user sends a C-Mail message.
@@ -597,6 +610,18 @@ func (m CMailModel) SetCanGoBack(v bool) CMailModel {
 	return m
 }
 
+// SetAnimPaused pauses (or resumes) the styleAnimTickMsg re-render — see the
+// animPaused field doc comment. Called from app.go when the image modal
+// opens/closes.
+func (m CMailModel) SetAnimPaused(paused bool) CMailModel {
+	m.animPaused = paused
+	return m
+}
+
+// AnimPaused reports whether the styleAnimTickMsg re-render is currently
+// paused (see the animPaused field doc comment).
+func (m CMailModel) AnimPaused() bool { return m.animPaused }
+
 // ResetToList clears any deep-link flag and drops back to the conversation
 // list, for ordinary tab navigation into C-Mail that may still have a
 // deep-linked conversation open (SetCanGoBack(false) alone left mode stuck
@@ -764,6 +789,13 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 	if tickCmd != nil {
 		cmd = tea.Batch(cmd, tickCmd)
 	}
+	// Clear the unread badge the moment the view catches up to the bottom
+	// while focused — see ChatroomsModel.Update's equivalent for why this
+	// single choke point beats hunting down every path that can land back
+	// at the bottom.
+	if m.focused && m.mode == cmailModeDetail && m.viewport.AtBottom() {
+		m = m.zeroActiveConvUnread()
+	}
 	return m, cmd
 }
 
@@ -789,7 +821,7 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 	case styleAnimTickMsg:
 		m.styleAnimFrame++
 		m.styleAnimRunning = false
-		if m.mode == cmailModeDetail && m.activeConv != nil {
+		if !m.animPaused && m.mode == cmailModeDetail && m.activeConv != nil {
 			m = m.refreshMessages()
 		}
 		return m, nil
@@ -825,7 +857,12 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
+		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m = m.SetLocation(msg.Loc)
+		if imagesChanged && m.activeConv != nil {
+			m = m.refreshMessages()
+		}
 		return m, nil
 
 	// --- DM subscription lifecycle ---
@@ -849,7 +886,10 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 
 	case dmReceivedMsg:
 		m = m.AppendMessage(msg.msg)
-		if !m.focused {
+		// Also counts as unread while focused if the view isn't at the
+		// bottom (scrolled up reading history) — see ChatroomsModel's
+		// equivalent for why this is reliable here too.
+		if !m.focused || !m.viewport.AtBottom() {
 			m = m.bumpActiveConvUnread()
 		}
 		if m.dmSub != nil {
@@ -1360,11 +1400,76 @@ func (m CMailModel) refreshMessages() CMailModel {
 		m.msgOffsets, m.msgHeights = nil, nil
 		return m
 	}
-	content, offsets, heights := renderChatMessagesWithSelection(
-		m.activeConv.Messages, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width, m.styleAnimFrame, m.selectedMsgID)
+	content, offsets, heights, imgSlots := renderChatMessagesWithSelection(
+		m.activeConv.Messages, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width, m.styleAnimFrame, m.selectedMsgID, m.inlineImagesEnabled, m.imageRealRows)
 	m.viewport.SetContent(content)
 	m.msgOffsets, m.msgHeights = offsets, heights
+	m.msgImages = imgSlots
 	return m
+}
+
+// SetImageRealRows records key's actual fetched/fitted row count and, if it
+// changed, re-renders so the reserved band shrinks to the image's real
+// size, re-homing the viewport to the bottom if it was already there
+// before the reflow — see ChatroomsModel.SetImageRealRows.
+func (m CMailModel) SetImageRealRows(key string, rows int) CMailModel {
+	if m.imageRealRows[key] == rows {
+		return m
+	}
+	if m.imageRealRows == nil {
+		m.imageRealRows = make(map[string]int)
+	}
+	m.imageRealRows[key] = rows
+	if m.activeConv != nil && m.ready {
+		wasAtBottom := m.viewport.AtBottom()
+		m = m.refreshMessages()
+		if wasAtBottom {
+			m.viewport.GotoBottom()
+		}
+	}
+	return m
+}
+
+// VisibleInlineImages returns the inline image slots currently fully within
+// the viewport, top to bottom, across every visible message — see
+// PostDetailModel.VisibleInlineImages for the full contract.
+func (m CMailModel) VisibleInlineImages() []InlineImageSlot {
+	if m.activeConv == nil || !m.inlineImagesEnabled {
+		return nil
+	}
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+
+	var slots []InlineImageSlot
+	for i, msg := range m.activeConv.Messages {
+		if i >= len(m.msgImages) || i >= len(m.msgOffsets) {
+			continue
+		}
+		for _, img := range m.msgImages[i] {
+			abs := m.msgOffsets[i] + img.Line
+			key := cmailMsgImageKey(msg.ID)
+			// See ChatroomsModel.VisibleInlineImages' equivalent comment:
+			// this must be the actual reserved image-row allowance for
+			// this message, not the old fixed inlineImageMaxRows, which
+			// over-required clearance and hid the last message's image.
+			imgRows := chatImageBandRows(m.imageRealRows, key) - 1
+			if abs < top || abs+imgRows > bottom {
+				continue
+			}
+			slots = append(slots, InlineImageSlot{
+				URL: img.URL,
+				// See ChatroomsModel.VisibleInlineImages' equivalent comment:
+				// abs-top is relative to the viewport's own top edge, but
+				// View() stacks header+divider (cmailDetailHeaderRows) above
+				// the viewport within this screen's own content.
+				Row:       abs - top + cmailDetailHeaderRows,
+				ColIndent: 2,
+				MaxCols:   m.viewport.Width - 4,
+				MaxRows:   inlineImageEncodeMaxRows,
+				Key:       key,
+			})
+		}
+	}
+	return slots
 }
 
 // ensureSelectedMessageVisible scrolls the viewport the minimum amount so the
@@ -1429,7 +1534,10 @@ func (m CMailModel) SetConversationMessages(convID string, msgs []model.Message)
 }
 
 // AppendMessage adds a live incoming message to the currently open conversation.
-// No-op when no conversation is open.
+// No-op when no conversation is open. Only follows the view down to the new
+// message if it was already at the bottom beforehand — never yanks a
+// scrolled-up reader down to the newest message, regardless of who sent it
+// or what it contains — mirroring ChatroomsModel.AppendMessage.
 func (m CMailModel) AppendMessage(msg model.Message) CMailModel {
 	if m.activeConv == nil {
 		return m
@@ -1439,8 +1547,11 @@ func (m CMailModel) AppendMessage(msg model.Message) CMailModel {
 	m.activeConv = &conv
 	m.err = nil
 	if m.ready {
+		wasAtBottom := m.viewport.AtBottom()
 		m = m.refreshMessages()
-		m.viewport.GotoBottom()
+		if wasAtBottom {
+			m.viewport.GotoBottom()
+		}
 	}
 	return m
 }
