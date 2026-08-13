@@ -1833,6 +1833,65 @@ func TestResendVerificationCmd_PropagatesError(t *testing.T) {
 	}
 }
 
+// --- Notifications v0.8.5: unread-count exact, mark-all-read hasMore ---
+
+func TestUnreadCountMsg_PropagatesExactFlag(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.Update(unreadCountMsg{count: 100, exact: false})
+	got := m.(App)
+	if got.polledUnreadCount != 100 {
+		t.Errorf("polledUnreadCount = %d, want 100", got.polledUnreadCount)
+	}
+	if got.polledUnreadCountExact {
+		t.Error("polledUnreadCountExact = true, want false")
+	}
+}
+
+func TestMarkAllNotifsReadMsg_SetsExactTrue(t *testing.T) {
+	a := loggedInApp()
+	a.polledUnreadCount = 150
+	a.polledUnreadCountExact = false
+	m, _ := a.Update(screens.MarkAllNotifsReadMsg{})
+	got := m.(App)
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0", got.polledUnreadCount)
+	}
+	if !got.polledUnreadCountExact {
+		t.Error("polledUnreadCountExact = false, want true (zero unread is always exact)")
+	}
+}
+
+// markAllReadSpyClient counts MarkAllNotificationsRead calls and reports
+// hasMore true for the first hasMoreCalls invocations, then false.
+type markAllReadSpyClient struct {
+	*api.MockClient
+	hasMoreCalls int
+	calls        int
+}
+
+func (c *markAllReadSpyClient) MarkAllNotificationsRead() (bool, error) {
+	c.calls++
+	return c.calls <= c.hasMoreCalls, nil
+}
+
+func TestMarkAllNotifsReadCmd_LoopsWhileHasMore(t *testing.T) {
+	spy := &markAllReadSpyClient{MockClient: api.NewMockClient(), hasMoreCalls: 3}
+	a := NewApp(spy)
+	a.markAllNotifsReadCmd()()
+	if spy.calls != 4 {
+		t.Errorf("MarkAllNotificationsRead called %d times, want 4 (3 hasMore=true + 1 final hasMore=false)", spy.calls)
+	}
+}
+
+func TestMarkAllNotifsReadCmd_StopsAtMaxCalls(t *testing.T) {
+	spy := &markAllReadSpyClient{MockClient: api.NewMockClient(), hasMoreCalls: 1000}
+	a := NewApp(spy)
+	a.markAllNotifsReadCmd()()
+	if spy.calls != markAllNotifsReadMaxCalls {
+		t.Errorf("MarkAllNotificationsRead called %d times, want the bounded max %d", spy.calls, markAllNotifsReadMaxCalls)
+	}
+}
+
 // tooSoonPostClient simulates the server silently converting a post
 // submitted too soon after a previous one into a journal entry: CreatePost
 // still "succeeds" with a postId/slug, but that ID doesn't resolve.

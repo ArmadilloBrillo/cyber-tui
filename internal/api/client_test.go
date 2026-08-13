@@ -2321,15 +2321,37 @@ func TestHTTPGetUnreadNotificationCount_ReturnsCount(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		io.WriteString(w, `{"data":{"count":7}}`)
+		io.WriteString(w, `{"data":{"count":7,"exact":true}}`)
 	})))
 	c.LoginWithRefreshToken("tok")
-	count, err := c.GetUnreadNotificationCount()
+	count, exact, err := c.GetUnreadNotificationCount()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if count != 7 {
 		t.Errorf("expected count 7, got %d", count)
+	}
+	if !exact {
+		t.Error("expected exact true")
+	}
+}
+
+func TestHTTPGetUnreadNotificationCount_InexactAboveCap(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"data":{"count":100,"exact":false}}`)
+	})))
+	c.LoginWithRefreshToken("tok")
+	count, exact, err := c.GetUnreadNotificationCount()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 100 {
+		t.Errorf("expected count 100, got %d", count)
+	}
+	if exact {
+		t.Error("expected exact false above the 100 cap")
 	}
 }
 
@@ -2361,17 +2383,37 @@ func TestHTTPMarkAllNotificationsRead_Method(t *testing.T) {
 		capturedPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		io.WriteString(w, `{"data":null}`)
+		io.WriteString(w, `{"data":{"updated":12,"hasMore":false}}`)
 	})))
 	c.LoginWithRefreshToken("tok")
-	if err := c.MarkAllNotificationsRead(); err != nil {
+	hasMore, err := c.MarkAllNotificationsRead()
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if hasMore {
+		t.Error("expected hasMore false")
 	}
 	if capturedMethod != "POST" {
 		t.Errorf("expected POST, got %s", capturedMethod)
 	}
 	if capturedPath != "/v1/notifications/read-all" {
 		t.Errorf("expected /v1/notifications/read-all, got %s", capturedPath)
+	}
+}
+
+func TestHTTPMarkAllNotificationsRead_HasMoreTrue(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"data":{"updated":5000,"hasMore":true}}`)
+	})))
+	c.LoginWithRefreshToken("tok")
+	hasMore, err := c.MarkAllNotificationsRead()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !hasMore {
+		t.Error("expected hasMore true when the 5,000/call cap was hit")
 	}
 }
 

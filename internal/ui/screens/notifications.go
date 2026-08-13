@@ -341,13 +341,13 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 				return ShowNotificationPostMsg{PostID: postID, NotifID: notifID, ReplyID: replyID, PostSlug: slug, AuthorUsername: author}
 			}
 		case "p":
-			if len(visible) > 0 && m.selectedIndex < len(visible) {
+			if len(visible) > 0 && m.selectedIndex < len(visible) && hasActor(visible[m.selectedIndex]) {
 				username := visible[m.selectedIndex].Actor.Username
 				return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 			}
 			return m, nil
 		case "c":
-			if len(visible) > 0 && m.selectedIndex < len(visible) {
+			if len(visible) > 0 && m.selectedIndex < len(visible) && hasActor(visible[m.selectedIndex]) {
 				username := visible[m.selectedIndex].Actor.Username
 				return m, func() tea.Msg { return StartConversationMsg{Username: username} }
 			}
@@ -451,6 +451,13 @@ func notifSummary(n model.Notification) string {
 	return base
 }
 
+// hasActor reports whether a notification has a real, navigable actor.
+// Several v0.8.5 system-only types arrive with no sender: the actor fields
+// are either omitted (empty string) or carry the literal "system".
+func hasActor(n model.Notification) bool {
+	return n.Actor.Username != "" && n.Actor.Username != "system"
+}
+
 // guildLabel returns the guild handle to display, preferring the slug — the stable
 // lowercase handle the server sends for guild replies/posts (metadata.guildSlug) —
 // over the rarer display name. Empty when the notification has no guild context.
@@ -529,6 +536,22 @@ func baseNotifSummary(n model.Notification) string {
 		return "removed your attachment permissions."
 	case "system_ban":
 		return "your account has been banned."
+	case "graffiti_mention":
+		return "mentioned you in a graffiti wall post."
+	case "moderator_granted":
+		return "granted you Moderator status."
+	case "moderator_removed":
+		return "removed your Moderator status."
+	case "api_access_granted":
+		return "granted you API access."
+	case "api_access_removed":
+		return "revoked your API access."
+	case "system_ban_lifted":
+		return "your ban has been lifted."
+	case "post_cooldown":
+		return "a post was rate-limited and saved as a note instead."
+	case "rate_limit_warning":
+		return "you're approaching a posting limit."
 	default:
 		return n.Type
 	}
@@ -568,6 +591,18 @@ func notifIcon(n model.Notification) string {
 		sym = "%"
 	case "system_ban":
 		sym = "☠"
+	case "graffiti_mention":
+		sym = "@"
+	case "moderator_granted", "moderator_removed":
+		sym = "!"
+	case "api_access_granted", "api_access_removed":
+		sym = "/"
+	case "system_ban_lifted":
+		sym = "✓"
+	case "post_cooldown":
+		sym = "⏱"
+	case "rate_limit_warning":
+		sym = "⚠"
 	default:
 		sym = "·"
 	}
@@ -581,11 +616,19 @@ func (m NotificationsModel) renderNotif(n model.Notification, selected bool) str
 	innerWidth := m.width - 4
 
 	dot := notifIcon(n)
-	actor := theme.Highlight.Render("@" + n.Actor.Username)
-	summary := theme.Base.Render(" " + notifSummary(n))
 	ts := theme.Subtle.Render(formatRelativeTime(n.CreatedAt, time.Now(), m.location()))
 
-	left := lipgloss.JoinHorizontal(lipgloss.Top, dot, actor, summary)
+	var left string
+	if hasActor(n) {
+		actor := theme.Highlight.Render("@" + n.Actor.Username)
+		summary := theme.Base.Render(" " + notifSummary(n))
+		left = lipgloss.JoinHorizontal(lipgloss.Top, dot, actor, summary)
+	} else {
+		// System-only notifications (v0.8.5+) carry no actor — render the
+		// summary alone rather than an empty or literal "@system" handle.
+		summary := theme.Base.Render(notifSummary(n))
+		left = lipgloss.JoinHorizontal(lipgloss.Top, dot, summary)
+	}
 	var line string
 	if innerWidth > 0 {
 		gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ts)
@@ -601,13 +644,17 @@ func (m NotificationsModel) renderNotif(n model.Notification, selected bool) str
 	// For mention types, show an inline content preview so the user can read
 	// what mentioned them without navigating away. PostContent is set for
 	// post_mention; ReplyContent for reply_mention; MessageContent for
-	// chat_mention (v0.7+ metadata).
+	// chat_mention (v0.7+ metadata). Reason is the fallback for actorless
+	// system notifications (v0.8.5+) that explain themselves via that field.
 	mentionContent := n.PostContent
 	if mentionContent == "" {
 		mentionContent = n.ReplyContent
 	}
 	if mentionContent == "" {
 		mentionContent = n.MessageContent
+	}
+	if mentionContent == "" {
+		mentionContent = n.Reason
 	}
 	if mentionContent != "" && innerWidth > 4 {
 		flat := strings.ReplaceAll(mentionContent, "\n", " ")

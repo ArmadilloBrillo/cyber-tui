@@ -426,6 +426,9 @@ type App struct {
 	// It is synced from: 60-second server poll, m/M key, and enter on a notification.
 	// Never overwrite with the local list count — the server count is always authoritative.
 	polledUnreadCount int
+	// polledUnreadCountExact is false once polledUnreadCount was capped at 100 by the
+	// server (v0.8.5+); the badge renders "99+" instead of the number in that case.
+	polledUnreadCountExact bool
 
 	// settings holds the user's preferences fetched from GET /v1/settings on login.
 	settings model.Settings
@@ -3979,7 +3982,10 @@ type urlPostLoadedMsg struct {
 }
 type profilePostLoadedMsg struct{ post model.Post }
 type pollUnreadTickMsg struct{ gen int }
-type unreadCountMsg struct{ count int }
+type unreadCountMsg struct {
+	count int
+	exact bool
+}
 type feedPollTickMsg struct{ gen int }
 type feedPeekMsg struct{ posts []model.Post }
 type logoAnimTickMsg struct{ gen int } // 30s idle trigger — begins the scramble animation
@@ -4370,6 +4376,7 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.MarkAllNotifsReadMsg:
 		// Optimistic update already applied in NotificationsModel.Update; fire API call.
 		a.polledUnreadCount = 0
+		a.polledUnreadCountExact = true
 		return a, a.markAllNotifsReadCmd(), true
 	case screens.ShowNotificationPostMsg:
 		// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
@@ -4432,6 +4439,7 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	case unreadCountMsg:
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count
+		a.polledUnreadCountExact = msg.exact
 		if msg.count > prev && !a.notifications.HasPaginated() {
 			return a, a.loadNotifsCmd(), true
 		}
@@ -4501,9 +4509,21 @@ func (a *App) markNotifReadCmd(id string) tea.Cmd {
 	}
 }
 
+// markAllNotifsReadMaxCalls bounds the read-all loop below in case a server
+// bug ever reports hasMore indefinitely; 20 calls covers 100,000 notifications
+// (5,000/call), far beyond any real account's unread backlog.
+const markAllNotifsReadMaxCalls = 20
+
 func (a *App) markAllNotifsReadCmd() tea.Cmd {
 	return func() tea.Msg {
-		_ = a.client.MarkAllNotificationsRead() // fire-and-forget; UI already updated
+		// Fire-and-forget; UI already updated. read-all caps at 5,000/call — loop
+		// while the server says more remain.
+		for i := 0; i < markAllNotifsReadMaxCalls; i++ {
+			hasMore, err := a.client.MarkAllNotificationsRead()
+			if err != nil || !hasMore {
+				break
+			}
+		}
 		return nil
 	}
 }
@@ -5073,12 +5093,21 @@ func (a *App) checkAndWanderCmd() tea.Cmd {
 
 func (a *App) fetchUnreadCountCmd() tea.Cmd {
 	return func() tea.Msg {
-		count, err := a.client.GetUnreadNotificationCount()
+		count, exact, err := a.client.GetUnreadNotificationCount()
 		if err != nil {
 			return nil
 		}
-		return unreadCountMsg{count}
+		return unreadCountMsg{count: count, exact: exact}
 	}
+}
+
+// notifBadgeText formats the tab-bar unread count, rendering "99+" once the
+// server-reported count is inexact (v0.8.5+: true count exceeds 100).
+func notifBadgeText(count int, exact bool) string {
+	if !exact {
+		return "99+"
+	}
+	return strconv.Itoa(count)
 }
 
 func (a *App) loadPostAndShowCmd(postID string) tea.Cmd {

@@ -301,7 +301,7 @@ type NotificationActor struct {
 // handle the UI shows as #slug. GuildName is the rarer display-name variant.
 type Notification struct {
 	ID                   string
-	Type                 string // "reply", "reply_mention", "post_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "unfollowed", "bookmark", "poke", "guild_new_thread", "chat_mention", "dm_message", "supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed", "image_permission_granted", "image_permission_removed", "attachment_permission_granted", "attachment_permission_removed", "system_ban"
+	Type                 string // "reply", "reply_mention", "post_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "unfollowed", "bookmark", "poke", "guild_new_thread", "chat_mention", "dm_message", "supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed", "image_permission_granted", "image_permission_removed", "attachment_permission_granted", "attachment_permission_removed", "system_ban", "graffiti_mention", "moderator_granted", "moderator_removed", "api_access_granted", "api_access_removed", "system_ban_lifted", "post_cooldown", "rate_limit_warning"
 	Read                 bool
 	CreatedAt            time.Time
 	Actor                NotificationActor
@@ -318,4 +318,5 @@ type Notification struct {
 	RoomSlug             string // chat_mention: metadata.roomSlug; the cIRC room to jump to
 	RoomName             string // chat_mention: metadata.roomName; display name of the room
 	MessageContent       string // non-empty for chat_mention; the chat message that mentioned you
+	Reason               string // explains system-only notifications (bans, cooldowns, rate-limit warnings, role changes, v0.8.5+); empty for actor-driven types
 }

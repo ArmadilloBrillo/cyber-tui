@@ -388,19 +388,19 @@ func (m *MockClient) GetNotifications(cursor string, unreadOnly bool, types []st
 	return out, "", nil
 }
 
-func (m *MockClient) GetUnreadNotificationCount() (int, error) {
+func (m *MockClient) GetUnreadNotificationCount() (int, bool, error) {
 	count := 0
 	for _, n := range mockNotifications {
 		if !n.Read {
 			count++
 		}
 	}
-	return count, nil
+	return count, true, nil
 }
 
 func (m *MockClient) MarkNotificationRead(id string) error { return nil }
 
-func (m *MockClient) MarkAllNotificationsRead() error { return nil }
+func (m *MockClient) MarkAllNotificationsRead() (bool, error) { return false, nil }
 
 func (m *MockClient) GetOwnProfile() (model.User, error) {
 	return mockUsers[0], nil
