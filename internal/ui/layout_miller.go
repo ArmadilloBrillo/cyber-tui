@@ -135,15 +135,21 @@ func (l MillerLayout) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, i
 	contentW := a.width - millerSidebarWidth
 
 	if r := l.activeCompactRenderer(a); r != nil {
-		if a.active != screenFeed {
-			return nil, 0, 0, ""
-		}
 		listW, detailW := l.paneWidths(contentW)
 		if cc, ok := r.(CompactComposer); ok && cc.ComposeActive() {
 			contentH = max(0, contentH-cc.ComposeHeight())
 		}
 		colOrigin := millerSidebarWidth + 1 + listW + 1
-		return a.feed.VisibleDetailInlineImages(detailW, contentH), rowOrigin, colOrigin, a.feed.DetailSelectionKey()
+		switch a.active {
+		case screenFeed:
+			return a.feed.VisibleDetailInlineImages(detailW, contentH), rowOrigin, colOrigin, a.feed.DetailSelectionKey()
+		case screenGuilds:
+			return a.guilds.VisibleDetailInlineImages(detailW, contentH), rowOrigin, colOrigin, a.guilds.SelectedPostID()
+		case screenTopics:
+			return a.topics.VisibleDetailInlineImages(detailW, contentH), rowOrigin, colOrigin, a.topics.SelectedPostID()
+		default:
+			return nil, 0, 0, ""
+		}
 	}
 	if a.active == screenPostDetail {
 		// selKey falls back to the post's own ID when SelectedReplyID()
@@ -158,6 +164,18 @@ func (l MillerLayout) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, i
 			selKey = a.postDetail.PostID()
 		}
 		return a.postDetail.VisibleInlineImages(), rowOrigin, millerSidebarWidth + 1, selKey
+	}
+	if a.active == screenSearch {
+		return a.search.VisibleInlineImages(), rowOrigin, millerSidebarWidth + 1, a.search.SelectedPostID()
+	}
+	if a.active == screenCMail {
+		return a.cmail.VisibleInlineImages(), rowOrigin, millerSidebarWidth + 1, a.cmail.SelectedMessageID()
+	}
+	if a.active == screenChatrooms {
+		return a.chatrooms.VisibleInlineImages(), rowOrigin, millerSidebarWidth + 1, a.chatrooms.SelectedMessageID()
+	}
+	if a.active == screenProfile {
+		return a.profile.VisibleInlineImages(), rowOrigin, millerSidebarWidth + 1, ""
 	}
 	return nil, 0, 0, ""
 }

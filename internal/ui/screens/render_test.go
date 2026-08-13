@@ -713,8 +713,8 @@ func TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned(t *testi
 	visible.ID = "m2"
 	msgs := []model.Message{muted, visible}
 
-	content, offsets, heights := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "", "", nil, 0,
-		map[string]bool{"alice": true})
+	content, offsets, heights, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "", "", nil, 0,
+		map[string]bool{"alice": true}, false, nil)
 
 	if len(offsets) != len(msgs) || len(heights) != len(msgs) {
 		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
@@ -744,7 +744,7 @@ func TestRenderChatMessagesWithSelection_HighlightsSelectedAndMatchesUnselected(
 	}
 
 	unselected := renderChatMessagesStyled(msgs, "case", time.UTC, "datetime", width, 0)
-	content, offsets, heights := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "")
+	content, offsets, heights, _ := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "", false, nil)
 	if content != unselected {
 		t.Errorf("renderChatMessagesWithSelection with selectedID==\"\" should match renderChatMessagesStyled;\ngot:  %q\nwant: %q", content, unselected)
 	}
@@ -752,7 +752,7 @@ func TestRenderChatMessagesWithSelection_HighlightsSelectedAndMatchesUnselected(
 		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
 	}
 
-	selected, _, _ := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "m1")
+	selected, _, _, _ := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "m1", false, nil)
 	if selected == unselected {
 		t.Error("expected selecting m1 to change the rendered content (highlight)")
 	}
@@ -849,16 +849,53 @@ func TestFeedRenderPost_CacheInvalidatesOnEditedAtOnlyChange(t *testing.T) {
 func TestRenderPost_ShowsEditedMarkerWhenEditedAtSet(t *testing.T) {
 	base := model.Post{ID: "p1", AuthorUsername: "alice", Content: "hello"}
 
-	unedited := RenderPost(base, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines)
+	unedited, _ := RenderPost(base, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false)
 	if strings.Contains(unedited, "(edited)") {
 		t.Errorf("expected no (edited) marker for a never-edited post, got: %q", unedited)
 	}
 
 	edited := base
 	edited.EditedAt = time.Now()
-	got := RenderPost(edited, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines)
+	got, _ := RenderPost(edited, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false)
 	if !strings.Contains(ansi.Strip(got), "(edited)") {
 		t.Errorf("expected (edited) marker for an edited post, got: %q", got)
+	}
+}
+
+// --- chatImageBandRows ---
+
+// TestChatImageBandRows_UnknownFallsBackToMax confirms the pre-fetch
+// fallback (no real row count known yet) reserves the same fixed-max box
+// as before — the safe upper bound the encoder can never exceed, since
+// it's what gets passed as the encoder's own maxRows.
+func TestChatImageBandRows_UnknownFallsBackToMax(t *testing.T) {
+	got := chatImageBandRows(nil, "circmsg:m1:0")
+	want := 1 + inlineImageEncodeMaxRows
+	if got != want {
+		t.Errorf("chatImageBandRows(nil, ...) = %d, want %d (1 leading spacer + fallback max, no trailing spacer)", got, want)
+	}
+}
+
+// TestChatImageBandRows_KnownShrinksToRealSize confirms a known real row
+// count (smaller than the fallback max) shrinks the reserved band to
+// exactly that size, still with no trailing spacer.
+func TestChatImageBandRows_KnownShrinksToRealSize(t *testing.T) {
+	realRows := map[string]int{"circmsg:m1:0": 3}
+	got := chatImageBandRows(realRows, "circmsg:m1:0")
+	if want := 1 + 3; got != want {
+		t.Errorf("chatImageBandRows = %d, want %d (1 leading spacer + the known 3 rows)", got, want)
+	}
+}
+
+// TestChatImageBandRows_KnownAtOrAboveMaxStaysCapped guards against a
+// corrupted/stale cache entry (e.g. a real row count somehow >= the
+// fallback max) ever reserving MORE than the safe upper bound.
+func TestChatImageBandRows_KnownAtOrAboveMaxStaysCapped(t *testing.T) {
+	realRows := map[string]int{"circmsg:m1:0": inlineImageEncodeMaxRows + 5}
+	got := chatImageBandRows(realRows, "circmsg:m1:0")
+	want := 1 + inlineImageEncodeMaxRows
+	if got != want {
+		t.Errorf("chatImageBandRows = %d, want %d (capped at the fallback max)", got, want)
 	}
 }
 
@@ -876,7 +913,7 @@ func BenchmarkRenderCircMessagesWithSelection(b *testing.B) {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil)
+				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, false, nil)
 			}
 		})
 	}

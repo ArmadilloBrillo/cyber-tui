@@ -230,6 +230,50 @@ func messageDisplayBody(msg model.Message) string {
 	return msg.Body
 }
 
+// chatInlineImageURL returns the URL a chat message's inline image (if any)
+// should be fetched from: the explicit ImageUrl/GifUrl attachment field
+// first, else the first image-looking URL typed into the message body.
+// Returns "" when none apply — the message's existing attachment badge or
+// body text is never altered by this; it's purely a lookup for the
+// additive inline-image band C-Mail/cIRC splice in alongside it.
+func chatInlineImageURL(msg model.Message) string {
+	if msg.ImageUrl != "" {
+		return msg.ImageUrl
+	}
+	if msg.GifUrl != "" {
+		return msg.GifUrl
+	}
+	for _, u := range extractURLs(msg.Body) {
+		if urlutil.IsImageURL(u) {
+			return u
+		}
+	}
+	return ""
+}
+
+// sanitizeChatMessageForInlineImage returns a copy of msg with the text that
+// would otherwise duplicate its inline image (url, from chatInlineImageURL)
+// stripped, so a caller rendering that copy instead of msg doesn't show the
+// image's own URL/attachment badge sitting redundantly next to the actual
+// image. Only clears what's unambiguously that image:
+//   - ImageUrl/GifUrl, whichever matches url, so messageAttachments produces
+//     no [image]/[gif] badge for it (an unrelated AudioAttachment is untouched)
+//   - Body, but only when it's nothing but the URL itself (trimmed) — a URL
+//     embedded alongside other text is left alone, since surgically removing
+//     a substring from already word-wrapped/styled text isn't attempted here
+func sanitizeChatMessageForInlineImage(msg model.Message, url string) model.Message {
+	if msg.ImageUrl == url {
+		msg.ImageUrl = ""
+	}
+	if msg.GifUrl == url {
+		msg.GifUrl = ""
+	}
+	if strings.TrimSpace(msg.Body) == url {
+		msg.Body = ""
+	}
+	return msg
+}
+
 // dedupeURLs removes repeated URLs while preserving first-seen order. Used by
 // URLProvider implementations that aggregate across many items (e.g. an
 // entire loaded chat history) rather than a single focused one, where the

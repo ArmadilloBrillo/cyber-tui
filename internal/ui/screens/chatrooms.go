@@ -268,6 +268,13 @@ type ChatroomsModel struct {
 	selectedMsgID       string
 	msgOffsets          []int // start line of m.messages[i]'s rendered block; 1:1 with m.messages
 	msgHeights          []int // rendered line-height of m.messages[i]'s block; 1:1 with m.messages
+	msgImages           [][]postImageSlot // inline image slot(s) for m.messages[i], nil unless eligible; 1:1 with m.messages
+	inlineImagesEnabled bool
+	// imageRealRows caches each image slot's actual fetched/fitted row
+	// count (App.recordInlineImageRealRows, keyed by circMsgImageKey), so
+	// its reserved band can shrink from the fallback-max placeholder down
+	// to its real size once known — see SetImageRealRows.
+	imageRealRows map[string]int
 	flagPrompt          FlagPrompt
 	flagTargetMsgID     string // message ID being flagged, set right before flagPrompt.Open()
 	confirmingDeleteMsg bool   // true while the y/n delete-confirm overlay for the selected message is showing
@@ -755,13 +762,19 @@ func (m ChatroomsModel) enterRoomDetail(idx int, room model.Room) (ChatroomsMode
 }
 
 // AppendMessage adds a live incoming message to the currently open room.
+// Only follows the view down to the new message if it was already at the
+// bottom beforehand — never yanks a scrolled-up reader down to the newest
+// message, regardless of who posted it or what it contains.
 func (m ChatroomsModel) AppendMessage(msg model.Message) ChatroomsModel {
 	m.messages = append(m.messages, msg)
 	m = m.trimMessageBuffer()
 	m.err = nil
 	if m.ready {
+		wasAtBottom := m.viewport.AtBottom()
 		m = m.refreshMessages()
-		m.viewport.GotoBottom()
+		if wasAtBottom {
+			m.viewport.GotoBottom()
+		}
 	}
 	return m
 }
@@ -963,6 +976,15 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			cmd = tea.Batch(cmd, m.sendHeartbeatCmd(m.activeRoomID, m.lastActivityAt))
 		}
 	}
+	// Clear the unread badge the moment the view catches up to the bottom
+	// while focused — whatever caused it (Esc from browsing, paging past
+	// the newest message, sticky-scroll re-homing itself, or a plain
+	// scroll), not just re-focusing the tab. A single choke point instead
+	// of hunting down every individual path that can land back at the
+	// bottom.
+	if m.focused && m.mode == chatroomModeDetail && m.unreadCount > 0 && m.viewport.AtBottom() {
+		m.unreadCount = 0
+	}
 	return m, cmd
 }
 
@@ -1061,6 +1083,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.mutedUsersByRoom = msg.Settings.MutedUsersByRoom
+		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m = m.SetLocation(msg.Loc)
 		if m.mode == chatroomModeDetail && m.activeRoom != nil {
 			m = m.refreshMessages()
@@ -1096,7 +1119,11 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			m = m.ApplyMessageDeleted(msg.msg.ID)
 		} else {
 			m = m.AppendMessage(msg.msg)
-			if !m.focused {
+			// Also counts as unread while focused if the view isn't at the
+			// bottom (scrolled up reading history) — AppendMessage only
+			// followed the view down if it was already there, so this
+			// reliably reflects "have I actually seen the newest message."
+			if !m.focused || !m.viewport.AtBottom() {
 				m.unreadCount++
 			}
 		}
@@ -1540,12 +1567,74 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 		m.msgOffsets, m.msgHeights = nil, nil
 		return m
 	}
-	content, offsets, heights := renderCircMessagesWithSelection(
+	content, offsets, heights, imgSlots := renderCircMessagesWithSelection(
 		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID,
-		m.revealed, m.styleAnimFrame, m.mutedUsers())
+		m.revealed, m.styleAnimFrame, m.mutedUsers(), m.inlineImagesEnabled, m.imageRealRows)
 	m.viewport.SetContent(content)
 	m.msgOffsets, m.msgHeights = offsets, heights
+	m.msgImages = imgSlots
 	return m
+}
+
+// SetImageRealRows records key's actual fetched/fitted row count (from
+// App.recordInlineImageRealRows) and, if it changed, re-renders so the
+// message list's reserved band shrinks from the fallback-max placeholder
+// down to the image's real size — see renderCircMessagesWithSelection's
+// band-sizing. If the viewport was scrolled to the bottom before the
+// reflow, it's re-homed to the (now shorter) bottom afterward — otherwise
+// the room would settle without ever reaching the true bottom as each
+// image's band shrinks out from under a fixed YOffset, one fetch at a
+// time. Never yanks the view down if the user had scrolled up to read
+// history, mirroring SetMessages' own GotoBottom convention.
+func (m ChatroomsModel) SetImageRealRows(key string, rows int) ChatroomsModel {
+	if m.imageRealRows[key] == rows {
+		return m
+	}
+	if m.imageRealRows == nil {
+		m.imageRealRows = make(map[string]int)
+	}
+	m.imageRealRows[key] = rows
+	if m.mode == chatroomModeDetail && m.ready {
+		wasAtBottom := m.viewport.AtBottom()
+		m = m.refreshMessages()
+		if wasAtBottom {
+			m.viewport.GotoBottom()
+		}
+	}
+	return m
+}
+
+// VisibleInlineImages returns the inline image slots currently fully within
+// the viewport, top to bottom, across every visible message — see
+// PostDetailModel.VisibleInlineImages for the full contract.
+func (m ChatroomsModel) VisibleInlineImages() []InlineImageSlot {
+	if m.mode != chatroomModeDetail || !m.inlineImagesEnabled {
+		return nil
+	}
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+
+	var slots []InlineImageSlot
+	for i, msg := range m.messages {
+		if i >= len(m.msgImages) || i >= len(m.msgOffsets) {
+			continue
+		}
+		for _, img := range m.msgImages[i] {
+			abs := m.msgOffsets[i] + img.Line
+			if abs < top || abs+inlineImageMaxRows > bottom {
+				continue
+			}
+			colIndent := circMessageTextIndent(msg)
+			slots = append(slots, InlineImageSlot{
+				URL:       img.URL,
+				Row:       abs - top,
+				ColIndent: colIndent,
+				MaxCols:   max(m.viewport.Width-colIndent-2, 10),
+				MaxRows:   inlineImageEncodeMaxRows,
+				Key:       circMsgImageKey(msg.ID),
+			})
+		}
+	}
+	return slots
 }
 
 // selectableMessageIndices returns the indices into msgs of messages that can

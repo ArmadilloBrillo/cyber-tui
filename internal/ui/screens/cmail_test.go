@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -637,5 +638,268 @@ func TestSetFocusedCMail_ResumesStyleAnimAfterBackgroundedTickIsDropped(t *testi
 	}
 	if cmd == nil {
 		t.Error("expected a non-nil tea.Cmd restarting the ticker after refocusing")
+	}
+}
+
+// --- VisibleInlineImages ---
+
+// TestCMail_VisibleInlineImages_DisabledByDefault mirrors Feed's equivalent:
+// a message with an eligible image URL in its body reports no slots until
+// InlineImagesEnabled arrives via SharedConfigMsg.
+func TestCMail_VisibleInlineImages_DisabledByDefault(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversationMessages("c1", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, Body: "check this out https://example.com/pic.png", CreatedAt: time.Now()},
+	})
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+// TestCMail_VisibleInlineImages_AttachmentAndBodyURL confirms both image
+// sources chatInlineImageURL recognizes (the ImageUrl attachment field, and a
+// plain image URL typed in the body) produce a slot once enabled, without
+// disturbing the other's existing text/badge.
+func TestCMail_VisibleInlineImages_AttachmentAndBodyURL(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 80}) // tall enough that both messages' image bands stay fully in view
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetConversationMessages("c1", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/attach.png", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "trinity"}, Body: "look at https://example.com/pic.png", CreatedAt: time.Now().Add(time.Minute)},
+	})
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 slots (attachment + body URL), got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != "https://example.com/attach.png" {
+		t.Errorf("slots[0].URL = %q, want the attachment URL", slots[0].URL)
+	}
+	if slots[1].URL != "https://example.com/pic.png" {
+		t.Errorf("slots[1].URL = %q, want the body URL", slots[1].URL)
+	}
+}
+
+// TestCMail_InlineImages_SuppressesRedundantTextOnceEnabled mirrors
+// Chatrooms' equivalent: the attachment badge and a body that's nothing but
+// the image URL disappear once inline images are enabled, reappear when
+// disabled, and a URL embedded alongside other text is left alone either way.
+func TestCMail_InlineImages_SuppressesRedundantTextOnceEnabled(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 80})
+	msgs := []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/attach.png", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "trinity"}, Body: "https://example.com/pic.png", CreatedAt: time.Now().Add(time.Minute)},
+		{ID: "m3", From: model.User{Username: "trinity"}, Body: "check this out: https://example.com/mixed.png", CreatedAt: time.Now().Add(2 * time.Minute)},
+	}
+
+	disabled, _, _, _ := renderChatMessagesWithSelection(msgs, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width, m.styleAnimFrame, "", false, nil)
+	if !strings.Contains(disabled, "https://example.com/attach.png") || !strings.Contains(disabled, "https://example.com/pic.png") {
+		t.Fatalf("setup: expected both URLs visible while disabled, got: %q", disabled)
+	}
+
+	enabled, _, _, _ := renderChatMessagesWithSelection(msgs, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width, m.styleAnimFrame, "", true, nil)
+	if strings.Contains(enabled, "https://example.com/attach.png") {
+		t.Errorf("expected the attachment URL suppressed once enabled, got: %q", enabled)
+	}
+	if strings.Contains(enabled, "[image]") {
+		t.Errorf("expected the [image] badge suppressed once enabled, got: %q", enabled)
+	}
+	if strings.Contains(enabled, "https://example.com/pic.png") {
+		t.Errorf("expected the body-only URL suppressed once enabled, got: %q", enabled)
+	}
+	if !strings.Contains(enabled, "https://example.com/mixed.png") {
+		t.Errorf("expected a URL embedded alongside other text to stay visible (known scope limit), got: %q", enabled)
+	}
+}
+
+// TestCMail_SetImageRealRows_ShrinksBandAndMovesLaterMessages mirrors
+// Chatrooms' equivalent: once the real fetched row count is known, a later
+// message must move up to sit right after the now much shorter band.
+func TestCMail_SetImageRealRows_ShrinksBandAndMovesLaterMessages(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 200})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetConversationMessages("c1", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "trinity"}, Body: "after the image", CreatedAt: time.Now().Add(time.Minute)},
+	})
+	if len(m.msgOffsets) != 2 {
+		t.Fatalf("setup: expected 2 message offsets, got %d", len(m.msgOffsets))
+	}
+	beforeOffset := m.msgOffsets[1]
+
+	m = m.SetImageRealRows(cmailMsgImageKey("m1"), 2)
+	afterOffset := m.msgOffsets[1]
+
+	if afterOffset >= beforeOffset {
+		t.Errorf("expected m2's offset to move up once m1's image band shrank: before=%d, after=%d", beforeOffset, afterOffset)
+	}
+}
+
+// TestCMail_SetImageRealRows_StaysAtBottomWhenAlreadyThere mirrors
+// Chatrooms' equivalent regression test for the conversation-open scroll gap.
+func TestCMail_SetImageRealRows_StaysAtBottomWhenAlreadyThere(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetConversationMessages("c1", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "trinity"}, Body: "one", CreatedAt: time.Now().Add(time.Minute)},
+		{ID: "m3", From: model.User{Username: "trinity"}, Body: "two", CreatedAt: time.Now().Add(2 * time.Minute)},
+		{ID: "m4", From: model.User{Username: "trinity"}, Body: "three", CreatedAt: time.Now().Add(3 * time.Minute)},
+	})
+	if !m.viewport.AtBottom() {
+		t.Fatal("setup: expected SetConversationMessages to land at the bottom")
+	}
+
+	m = m.SetImageRealRows(cmailMsgImageKey("m1"), 2)
+
+	if !m.viewport.AtBottom() {
+		t.Error("expected the viewport to still be at the bottom after the band shrank, not settle above it")
+	}
+}
+
+// TestCMail_SetImageRealRows_DoesNotYankScrolledUpView mirrors Chatrooms'
+// equivalent: a user reading history shouldn't be pulled back to the bottom.
+func TestCMail_SetImageRealRows_DoesNotYankScrolledUpView(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetConversationMessages("c1", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "trinity"}, Body: "one", CreatedAt: time.Now().Add(time.Minute)},
+		{ID: "m3", From: model.User{Username: "trinity"}, Body: "two", CreatedAt: time.Now().Add(2 * time.Minute)},
+		{ID: "m4", From: model.User{Username: "trinity"}, Body: "three", CreatedAt: time.Now().Add(3 * time.Minute)},
+	})
+	m.viewport.SetYOffset(0)
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected scrolling to top to leave the bottom")
+	}
+
+	m = m.SetImageRealRows(cmailMsgImageKey("m1"), 2)
+
+	if m.viewport.AtBottom() {
+		t.Error("expected the scrolled-up view to stay put, not get yanked back to the bottom")
+	}
+}
+
+// --- Always-sticky scroll + unread-while-scrolled-up ---
+
+// manyPlainCMailMessages returns n one-line messages, enough to overflow a
+// small test viewport so AtBottom()/scrolling are actually meaningful.
+func manyPlainCMailMessages(n int) []model.Message {
+	msgs := make([]model.Message, n)
+	for i := range msgs {
+		msgs[i] = model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "trinity"},
+			Body:      fmt.Sprintf("message %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		}
+	}
+	return msgs
+}
+
+// TestCMail_AppendMessage_DoesNotScrollWhenScrolledUp mirrors Chatrooms'
+// equivalent: any live message must never auto-scroll a scrolled-up view.
+func TestCMail_AppendMessage_DoesNotScrollWhenScrolledUp(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12})
+	m = m.SetConversationMessages("c1", manyPlainCMailMessages(10))
+	m.viewport.SetYOffset(0)
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected scrolling to top to leave the bottom")
+	}
+	yOffsetBefore := m.viewport.YOffset
+
+	m = m.AppendMessage(model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "just arrived", CreatedAt: time.Now()})
+
+	if m.viewport.YOffset != yOffsetBefore {
+		t.Errorf("expected YOffset to stay at %d, got %d — a new message scrolled a scrolled-up view", yOffsetBefore, m.viewport.YOffset)
+	}
+	if m.viewport.AtBottom() {
+		t.Error("expected the scrolled-up view to stay scrolled up after a new message arrives")
+	}
+}
+
+// TestCMail_AppendMessage_FollowsWhenAlreadyAtBottom confirms the existing
+// "caught up" behavior still auto-follows new messages.
+func TestCMail_AppendMessage_FollowsWhenAlreadyAtBottom(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12})
+	m = m.SetConversationMessages("c1", manyPlainCMailMessages(10))
+	if !m.viewport.AtBottom() {
+		t.Fatal("setup: expected SetConversationMessages to land at the bottom")
+	}
+
+	m = m.AppendMessage(model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "just arrived", CreatedAt: time.Now()})
+
+	if !m.viewport.AtBottom() {
+		t.Error("expected the view to keep following once caught up")
+	}
+}
+
+// TestCMail_TotalUnread_IncrementsWhileFocusedButScrolledUp confirms the tab
+// badge grows even while C-Mail is the active screen, as long as the view
+// isn't at the bottom.
+func TestCMail_TotalUnread_IncrementsWhileFocusedButScrolledUp(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.conversations = []model.Conversation{{ID: "c1"}} // bumpActiveConvUnread/TotalUnread read from here, not activeConv
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12})
+	m = m.SetFocused(true)
+	m = m.SetConversationMessages("c1", manyPlainCMailMessages(10))
+	m.viewport.SetYOffset(0)
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected scrolling to top to leave the bottom")
+	}
+
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()}})
+
+	if m.TotalUnread() != 1 {
+		t.Errorf("TotalUnread() = %d, want 1", m.TotalUnread())
+	}
+}
+
+// TestCMail_TotalUnread_NoIncrementWhileFocusedAndAtBottom confirms a
+// message you're actively watching arrive never marks itself unread.
+func TestCMail_TotalUnread_NoIncrementWhileFocusedAndAtBottom(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.conversations = []model.Conversation{{ID: "c1"}}
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12})
+	m = m.SetFocused(true)
+	m = m.SetConversationMessages("c1", manyPlainCMailMessages(10))
+	if !m.viewport.AtBottom() {
+		t.Fatal("setup: expected SetConversationMessages to land at the bottom")
+	}
+
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()}})
+
+	if m.TotalUnread() != 0 {
+		t.Errorf("TotalUnread() = %d, want 0 (caught up, no reason to mark unread)", m.TotalUnread())
+	}
+}
+
+// TestCMail_TotalUnread_ClearsWhenScrolledBackToBottom confirms the badge
+// clears once the user scrolls back down themselves.
+func TestCMail_TotalUnread_ClearsWhenScrolledBackToBottom(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.conversations = []model.Conversation{{ID: "c1"}}
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12})
+	m = m.SetFocused(true)
+	m = m.SetConversationMessages("c1", manyPlainCMailMessages(10))
+	m.viewport.SetYOffset(0)
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()}})
+	if m.TotalUnread() == 0 {
+		t.Fatal("setup: expected TotalUnread > 0 while scrolled up")
+	}
+
+	m.viewport.GotoBottom()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12}) // drive a Update turn so the outer post-check runs
+
+	if m.TotalUnread() != 0 {
+		t.Errorf("TotalUnread() = %d, want 0 after scrolling back to the bottom", m.TotalUnread())
 	}
 }

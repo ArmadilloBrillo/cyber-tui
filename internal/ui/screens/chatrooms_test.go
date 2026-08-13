@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1329,8 +1330,8 @@ func TestBrowsing_Enter_TogglesSpoilerReveal(t *testing.T) {
 		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
 	}
 	renderedWithReveal := func(m ChatroomsModel) string {
-		content, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
-			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil)
+		content, _, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil)
 		return content
 	}
 	if strings.Contains(renderedWithReveal(m), "the ending is a twist") {
@@ -1382,8 +1383,8 @@ func TestBrowsing_Enter_TogglesL33tReveal(t *testing.T) {
 	}
 
 	renderedWithReveal := func(m ChatroomsModel) string {
-		content, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
-			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil)
+		content, _, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil)
 		return content
 	}
 	if !strings.Contains(renderedWithReveal(m), "3l173") {
@@ -1495,5 +1496,320 @@ func TestAppendMessage_EvictionResetsHistoryExhausted(t *testing.T) {
 
 	if m.historyExhausted {
 		t.Error("expected historyExhausted reset to false after eviction, so scrolling up can re-fetch the evicted history")
+	}
+}
+
+// --- VisibleInlineImages ---
+
+func TestChatrooms_VisibleInlineImages_DisabledByDefault(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, Body: "check this https://example.com/pic.png", CreatedAt: time.Now()},
+	})
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+func TestChatrooms_VisibleInlineImages_AttachmentAndBodyURL(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 80})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/attach.png", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "trinity"}, Body: "look at https://example.com/pic.png", CreatedAt: time.Now().Add(time.Minute)},
+	})
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 slots (attachment + body URL), got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != "https://example.com/attach.png" {
+		t.Errorf("slots[0].URL = %q, want the attachment URL", slots[0].URL)
+	}
+	if slots[1].URL != "https://example.com/pic.png" {
+		t.Errorf("slots[1].URL = %q, want the body URL", slots[1].URL)
+	}
+}
+
+// TestChatrooms_InlineImages_SuppressesRedundantTextOnceEnabled confirms the
+// attachment badge and a body that's nothing but the image URL both
+// disappear once inline images are enabled (nothing left "behind" the
+// image), but reappear when disabled — and that a URL embedded alongside
+// other text is left alone either way (known scope limit).
+func TestChatrooms_InlineImages_SuppressesRedundantTextOnceEnabled(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 80})
+	msgs := []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/attach.png", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "trinity"}, Body: "https://example.com/pic.png", CreatedAt: time.Now().Add(time.Minute)},
+		{ID: "m3", From: model.User{Username: "trinity"}, Body: "check this out: https://example.com/mixed.png", CreatedAt: time.Now().Add(2 * time.Minute)},
+	}
+
+	disabled, _, _, _ := renderCircMessagesWithSelection(msgs, m.location(), m.timeDisplayFormat,
+		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, false, nil)
+	if !strings.Contains(disabled, "https://example.com/attach.png") || !strings.Contains(disabled, "https://example.com/pic.png") {
+		t.Fatalf("setup: expected both URLs visible while disabled, got: %q", disabled)
+	}
+
+	enabled, _, _, _ := renderCircMessagesWithSelection(msgs, m.location(), m.timeDisplayFormat,
+		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, true, nil)
+	if strings.Contains(enabled, "https://example.com/attach.png") {
+		t.Errorf("expected the attachment URL suppressed once enabled, got: %q", enabled)
+	}
+	if strings.Contains(enabled, "[image]") {
+		t.Errorf("expected the [image] badge suppressed once enabled, got: %q", enabled)
+	}
+	if strings.Contains(enabled, "https://example.com/pic.png") {
+		t.Errorf("expected the body-only URL suppressed once enabled, got: %q", enabled)
+	}
+	if !strings.Contains(enabled, "https://example.com/mixed.png") {
+		t.Errorf("expected a URL embedded alongside other text to stay visible (known scope limit), got: %q", enabled)
+	}
+}
+
+// TestChatrooms_VisibleInlineImages_ColIndentMatchesUsernameWidth guards the
+// alignment fix: the image's left edge must line up with where that
+// message's own wrapped body text starts (username length + 4), not a
+// generic fixed indent.
+func TestChatrooms_VisibleInlineImages_ColIndentMatchesUsernameWidth(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 80})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()},
+	})
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected 1 slot, got %d: %+v", len(slots), slots)
+	}
+	want := len("trinity") + 4
+	if slots[0].ColIndent != want {
+		t.Errorf("ColIndent = %d, want %d (len(username)+4, matching renderCircMessagesStyled's rawPrefixWidth)", slots[0].ColIndent, want)
+	}
+}
+
+// TestChatrooms_SetImageRealRows_ShrinksBandAndMovesLaterMessages guards the
+// dynamic-resize fix end to end: before the real row count is known, a
+// second message sits below the full fallback-max band; once
+// SetImageRealRows reports a much smaller real size, refreshMessages must
+// re-render so that second message moves up to sit right after the now
+// much shorter band — not still separated by the old padding.
+func TestChatrooms_SetImageRealRows_ShrinksBandAndMovesLaterMessages(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 200})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "trinity"}, Body: "after the image", CreatedAt: time.Now().Add(time.Minute)},
+	})
+	if len(m.msgOffsets) != 2 {
+		t.Fatalf("setup: expected 2 message offsets, got %d", len(m.msgOffsets))
+	}
+	beforeOffset := m.msgOffsets[1]
+
+	m = m.SetImageRealRows(circMsgImageKey("m1"), 2) // much smaller than the fallback max
+	if len(m.msgOffsets) != 2 {
+		t.Fatalf("expected 2 message offsets after resize, got %d", len(m.msgOffsets))
+	}
+	afterOffset := m.msgOffsets[1]
+
+	if afterOffset >= beforeOffset {
+		t.Errorf("expected m2's offset to move up once m1's image band shrank: before=%d, after=%d", beforeOffset, afterOffset)
+	}
+	wantOffset := beforeOffset - (inlineImageEncodeMaxRows - 2) // the fallback-vs-real row difference
+	if afterOffset != wantOffset {
+		t.Errorf("m2's offset = %d, want exactly %d (band shrank from fallback-max to the real 2 rows, no leftover padding)", afterOffset, wantOffset)
+	}
+}
+
+// TestChatrooms_SetImageRealRows_NoOpWhenUnchanged confirms setting the same
+// row count twice doesn't trigger a redundant re-render (refreshMessages
+// only runs when the value actually changes).
+func TestChatrooms_SetImageRealRows_NoOpWhenUnchanged(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 80})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()},
+	})
+
+	m = m.SetImageRealRows(circMsgImageKey("m1"), 3)
+	offsetsAfterFirst := append([]int(nil), m.msgOffsets...)
+	m = m.SetImageRealRows(circMsgImageKey("m1"), 3) // same value again
+	if !slices.Equal(m.msgOffsets, offsetsAfterFirst) {
+		t.Errorf("expected offsets unchanged when SetImageRealRows is called with the same value, got %v want %v", m.msgOffsets, offsetsAfterFirst)
+	}
+}
+
+// TestChatrooms_SetImageRealRows_StaysAtBottomWhenAlreadyThere is a
+// regression test for the room-open scroll gap: SetMessages renders every
+// band at the fallback-max size and calls GotoBottom, but as each image's
+// real (smaller) size arrives, the content shrinks under a fixed YOffset —
+// without re-homing, the view settles somewhere above the true bottom
+// instead of following it down.
+func TestChatrooms_SetImageRealRows_StaysAtBottomWhenAlreadyThere(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 5}) // short enough that the room doesn't fully fit
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "trinity"}, Body: "one"},
+		{ID: "m3", From: model.User{Username: "trinity"}, Body: "two"},
+		{ID: "m4", From: model.User{Username: "trinity"}, Body: "three"},
+	})
+	if !m.viewport.AtBottom() {
+		t.Fatal("setup: expected SetMessages to land at the bottom")
+	}
+
+	m = m.SetImageRealRows(circMsgImageKey("m1"), 2) // much smaller than the fallback max, shrinks total content
+
+	if !m.viewport.AtBottom() {
+		t.Error("expected the viewport to still be at the bottom after the band shrank, not settle above it")
+	}
+}
+
+// TestChatrooms_SetImageRealRows_DoesNotYankScrolledUpView confirms a user
+// who scrolled up to read history isn't forcibly pulled back to the bottom
+// when an image band elsewhere shrinks.
+func TestChatrooms_SetImageRealRows_DoesNotYankScrolledUpView(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 5})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()},
+		{ID: "m2", From: model.User{Username: "trinity"}, Body: "one"},
+		{ID: "m3", From: model.User{Username: "trinity"}, Body: "two"},
+		{ID: "m4", From: model.User{Username: "trinity"}, Body: "three"},
+	})
+	m.viewport.SetYOffset(0) // scroll up to read history, away from the bottom
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected scrolling to top to leave the bottom")
+	}
+
+	m = m.SetImageRealRows(circMsgImageKey("m1"), 2)
+
+	if m.viewport.AtBottom() {
+		t.Error("expected the scrolled-up view to stay put, not get yanked back to the bottom")
+	}
+}
+
+// --- Always-sticky scroll + unread-while-scrolled-up ---
+
+// manyPlainMessages returns n one-line messages, enough to overflow a small
+// test viewport so AtBottom()/scrolling are actually meaningful.
+func manyPlainMessages(n int) []model.Message {
+	msgs := make([]model.Message, n)
+	for i := range msgs {
+		msgs[i] = model.Message{
+			ID:        fmt.Sprintf("m%d", i),
+			From:      model.User{Username: "trinity"},
+			Body:      fmt.Sprintf("message %d", i),
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		}
+	}
+	return msgs
+}
+
+// TestChatrooms_AppendMessage_DoesNotScrollWhenScrolledUp is a regression
+// test for the general case: any live message — not just one carrying an
+// image — must never auto-scroll a view that's currently scrolled up.
+func TestChatrooms_AppendMessage_DoesNotScrollWhenScrolledUp(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 5})
+	m = m.SetMessages("zion", manyPlainMessages(10))
+	m.viewport.SetYOffset(0)
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected scrolling to top to leave the bottom")
+	}
+	yOffsetBefore := m.viewport.YOffset
+
+	m = m.AppendMessage(model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "just arrived", CreatedAt: time.Now()})
+
+	if m.viewport.YOffset != yOffsetBefore {
+		t.Errorf("expected YOffset to stay at %d, got %d — a new message scrolled a scrolled-up view", yOffsetBefore, m.viewport.YOffset)
+	}
+	if m.viewport.AtBottom() {
+		t.Error("expected the scrolled-up view to stay scrolled up after a new message arrives")
+	}
+}
+
+// TestChatrooms_AppendMessage_FollowsWhenAlreadyAtBottom confirms the
+// existing "caught up" behavior still auto-follows new messages.
+func TestChatrooms_AppendMessage_FollowsWhenAlreadyAtBottom(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 5})
+	m = m.SetMessages("zion", manyPlainMessages(10))
+	if !m.viewport.AtBottom() {
+		t.Fatal("setup: expected SetMessages to land at the bottom")
+	}
+
+	m = m.AppendMessage(model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "just arrived", CreatedAt: time.Now()})
+
+	if !m.viewport.AtBottom() {
+		t.Error("expected the view to keep following once caught up")
+	}
+}
+
+// TestChatrooms_UnreadCount_IncrementsWhileFocusedButScrolledUp confirms the
+// tab badge grows even while the room is the active screen, as long as the
+// view isn't at the bottom.
+func TestChatrooms_UnreadCount_IncrementsWhileFocusedButScrolledUp(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 5})
+	m = m.SetFocused(true)
+	m = m.SetMessages("zion", manyPlainMessages(10))
+	m.viewport.SetYOffset(0)
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected scrolling to top to leave the bottom")
+	}
+
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()}})
+
+	if m.UnreadCount() != 1 {
+		t.Errorf("UnreadCount() = %d, want 1", m.UnreadCount())
+	}
+}
+
+// TestChatrooms_UnreadCount_NoIncrementWhileFocusedAndAtBottom confirms the
+// existing behavior — a message you're actively watching arrive never
+// marks itself unread.
+func TestChatrooms_UnreadCount_NoIncrementWhileFocusedAndAtBottom(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 5})
+	m = m.SetFocused(true)
+	m = m.SetMessages("zion", manyPlainMessages(10))
+	if !m.viewport.AtBottom() {
+		t.Fatal("setup: expected SetMessages to land at the bottom")
+	}
+
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()}})
+
+	if m.UnreadCount() != 0 {
+		t.Errorf("UnreadCount() = %d, want 0 (caught up, no reason to mark unread)", m.UnreadCount())
+	}
+}
+
+// TestChatrooms_UnreadCount_ClearsWhenScrolledBackToBottom confirms the
+// badge clears once the user scrolls back down themselves, without needing
+// to leave and re-enter the tab.
+func TestChatrooms_UnreadCount_ClearsWhenScrolledBackToBottom(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 5})
+	m = m.SetFocused(true)
+	m = m.SetMessages("zion", manyPlainMessages(10))
+	m.viewport.SetYOffset(0)
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()}})
+	if m.UnreadCount() == 0 {
+		t.Fatal("setup: expected UnreadCount > 0 while scrolled up")
+	}
+
+	m.viewport.GotoBottom()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 5}) // drive a Update turn so the outer post-check runs
+
+	if m.UnreadCount() != 0 {
+		t.Errorf("UnreadCount() = %d, want 0 after scrolling back to the bottom", m.UnreadCount())
 	}
 }

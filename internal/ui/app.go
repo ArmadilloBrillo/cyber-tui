@@ -2661,10 +2661,10 @@ func (a App) canInlineImages() bool {
 }
 
 // activeInlineImageSlots returns the active screen's currently visible
-// inline image slots, or nil for screens that don't support inline images
-// (Search/Guilds/Topics). Used by TabsLayout.InlineImageSlots; MillerLayout
-// has its own equivalent since its screen geometry (and, for Feed, which
-// screen method even has the current content — see FeedModel.VisibleDetailInlineImages)
+// inline image slots, or nil for screens that don't support inline images.
+// Used by TabsLayout.InlineImageSlots; MillerLayout has its own equivalent
+// since its screen geometry (and, for Feed/Guilds/Topics, which screen
+// method even has the current content — see FeedModel.VisibleDetailInlineImages)
 // differs from Tabs'.
 func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
 	switch a.active {
@@ -2672,6 +2672,18 @@ func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
 		return a.postDetail.VisibleInlineImages()
 	case screenFeed:
 		return a.feed.VisibleInlineImages()
+	case screenSearch:
+		return a.search.VisibleInlineImages()
+	case screenTopics:
+		return a.topics.VisibleInlineImages()
+	case screenGuilds:
+		return a.guilds.VisibleInlineImages()
+	case screenCMail:
+		return a.cmail.VisibleInlineImages()
+	case screenChatrooms:
+		return a.chatrooms.VisibleInlineImages()
+	case screenProfile:
+		return a.profile.VisibleInlineImages()
 	default:
 		return nil
 	}
@@ -2708,6 +2720,16 @@ func (a App) activeSelectionKey() string {
 		return a.postDetail.PostID()
 	case screenFeed:
 		return a.feed.SelectedPostID()
+	case screenSearch:
+		return a.search.SelectedPostID()
+	case screenTopics:
+		return a.topics.SelectedPostID()
+	case screenGuilds:
+		return a.guilds.SelectedPostID()
+	case screenCMail:
+		return a.cmail.SelectedMessageID()
+	case screenChatrooms:
+		return a.chatrooms.SelectedMessageID()
 	default:
 		return ""
 	}
@@ -3045,8 +3067,16 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 }
 
 // inlineImageFetchedMsg reports the result of one fetchInlineImageCmd.
+// slotKey/rows are only meaningful on success: slotKey is the originating
+// slot's stable Key (screens.InlineImageSlot.Key, e.g. "circmsg:m1:0"),
+// used to route the real row count back to the screen that owns it (see
+// handleInlineImageFetched); rows is the actual terminal rows the image was
+// fit into — from the encoder's own aspect-ratio-preserving fit-box
+// calculation, always <= the maxRows requested.
 type inlineImageFetchedMsg struct {
 	key     string
+	slotKey string
+	rows    int
 	encoded string
 	err     error
 }
@@ -3061,6 +3091,7 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, place
 	proto := a.graphicsProtocol
 	maxCols, maxRows := slot.MaxCols, slot.MaxRows
 	url := slot.URL
+	slotKey := slot.Key
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -3069,21 +3100,22 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, place
 			return inlineImageFetchedMsg{key: key, err: err}
 		}
 		var encoded string
+		var rows int
 		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 		switch proto {
 		case imgview.ProtocolITerm2:
-			encoded, _, _, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH)
+			encoded, _, rows, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH)
 		case imgview.ProtocolSixel:
-			encoded, _, _, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH)
+			encoded, _, rows, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH)
 		case imgview.ProtocolKitty:
-			encoded, _, _, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID)
+			encoded, _, rows, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID)
 		default:
 			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
 		}
 		if err != nil {
 			return inlineImageFetchedMsg{key: key, err: err}
 		}
-		return inlineImageFetchedMsg{key: key, encoded: encoded}
+		return inlineImageFetchedMsg{key: key, slotKey: slotKey, rows: rows, encoded: encoded}
 	}
 }
 
@@ -3126,7 +3158,29 @@ func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	}
 	delete(a.inlineImageFailedAt, m.key)
-	return a.cacheInlineImage(m.key, m.encoded), nil, true
+	a = a.cacheInlineImage(m.key, m.encoded)
+	a = a.recordInlineImageRealRows(m.slotKey, m.rows)
+	return a, nil, true
+}
+
+// recordInlineImageRealRows tells whichever screen owns slotKey how many
+// rows its image actually rendered into, so that screen can shrink its
+// reserved band down from the fallback-max placeholder to the image's real
+// size — see CMailModel/ChatroomsModel.SetImageRealRows. Only chat screens
+// support this today (Feed/PostDetail/Search/Topics/Guilds/Profile still use
+// a fixed fallback band); a slotKey belonging to one of those, or rows <= 0
+// (encode error/degenerate case), is a no-op.
+func (a App) recordInlineImageRealRows(slotKey string, rows int) App {
+	if rows <= 0 {
+		return a
+	}
+	switch {
+	case strings.HasPrefix(slotKey, "cmailmsg:"):
+		a.cmail = a.cmail.SetImageRealRows(slotKey, rows)
+	case strings.HasPrefix(slotKey, "circmsg:"):
+		a.chatrooms = a.chatrooms.SetImageRealRows(slotKey, rows)
+	}
+	return a
 }
 
 // inlineImageCacheMaxBytes bounds inlineImageCache's total payload size —

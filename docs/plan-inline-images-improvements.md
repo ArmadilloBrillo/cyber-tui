@@ -15,6 +15,10 @@ Items are ordered by real-bug-first, smallest-diff-that-fixes-it — deferred it
 deferred because both reviews independently judged them low-urgency, not because they
 were missed.
 
+**Update:** Feed/PostDetail scope is complete. The feature has since been extended to
+Search, Topics, Guilds (post lists), C-Mail, cIRC, and Profile — see
+`docs/44-inline-images-everywhere.md`.
+
 ---
 
 ## 1. ~~Decide MillerLayout's fate~~ — Resolved: finished, not deleted
