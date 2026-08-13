@@ -673,6 +673,8 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 			}
 		}
 		a.imageModalOpen = false
+		a.chatrooms = a.chatrooms.SetAnimPaused(false)
+		a.cmail = a.cmail.SetAnimPaused(false)
 		a.imageNeedsCleanup = (a.graphicsProtocol == imgview.ProtocolKitty)
 		a.imageCarouselItems = nil
 		a.imageCarouselIndex = 0
@@ -3377,6 +3379,8 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageModalCols = m.cols
 		a.imageModalRows = m.rows
 		a.imageModalOpen = true
+		a.chatrooms = a.chatrooms.SetAnimPaused(true)
+		a.cmail = a.cmail.SetAnimPaused(true)
 		a.imageNeedsCleanup = false
 		if a.imageCache == nil {
 			a.imageCache = make(map[string]cachedImage)

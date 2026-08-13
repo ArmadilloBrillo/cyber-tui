@@ -280,6 +280,12 @@ type CMailModel struct {
 	// message styles — see maybeStartStyleAnim and chatrooms.go's identical fields.
 	styleAnimFrame   int
 	styleAnimRunning bool
+
+	// animPaused suppresses the refreshMessages() re-render that styleAnimTickMsg
+	// would otherwise trigger, without stopping the ticker chain itself. Set by
+	// app.go while the image modal is open — see ChatroomsModel.animPaused for
+	// the full rationale.
+	animPaused bool
 }
 
 // SendCMailMsg is emitted when the user sends a C-Mail message.
@@ -604,6 +610,18 @@ func (m CMailModel) SetCanGoBack(v bool) CMailModel {
 	return m
 }
 
+// SetAnimPaused pauses (or resumes) the styleAnimTickMsg re-render — see the
+// animPaused field doc comment. Called from app.go when the image modal
+// opens/closes.
+func (m CMailModel) SetAnimPaused(paused bool) CMailModel {
+	m.animPaused = paused
+	return m
+}
+
+// AnimPaused reports whether the styleAnimTickMsg re-render is currently
+// paused (see the animPaused field doc comment).
+func (m CMailModel) AnimPaused() bool { return m.animPaused }
+
 // ResetToList clears any deep-link flag and drops back to the conversation
 // list, for ordinary tab navigation into C-Mail that may still have a
 // deep-linked conversation open (SetCanGoBack(false) alone left mode stuck
@@ -803,7 +821,7 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 	case styleAnimTickMsg:
 		m.styleAnimFrame++
 		m.styleAnimRunning = false
-		if m.mode == cmailModeDetail && m.activeConv != nil {
+		if !m.animPaused && m.mode == cmailModeDetail && m.activeConv != nil {
 			m = m.refreshMessages()
 		}
 		return m, nil

@@ -2532,6 +2532,46 @@ func TestUpdate_ImageNeedsCleanup_NotAutoCleared(t *testing.T) {
 	}
 }
 
+// TestHandleImageViewer_OpenPausesChatStyleAnim and its close counterpart
+// guard the fix for animated (wave/blink/glitch) chat lines corrupting the
+// image modal: a re-render triggered by styleAnimTickMsg changes a terminal
+// row's bytes, forcing Bubble Tea to resend the whole row — including the
+// part of it covered by the modal's box — which erases the modal's
+// graphics-protocol pixels there. Pausing chatrooms/cmail's animation
+// re-render while the modal is open avoids that.
+func TestHandleImageViewer_OpenPausesChatStyleAnim(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+
+	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://example.com/x.jpg", encoded: "seq", cols: 10, rows: 5})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if !a2.chatrooms.AnimPaused() {
+		t.Error("expected chatrooms.animPaused to be set once the modal opens")
+	}
+	if !a2.cmail.AnimPaused() {
+		t.Error("expected cmail.animPaused to be set once the modal opens")
+	}
+}
+
+func TestUpdate_ImageModalClose_ResumesChatStyleAnim(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.chatrooms = a.chatrooms.SetAnimPaused(true)
+	a.cmail = a.cmail.SetAnimPaused(true)
+
+	m, _ := a.Update(keyMsg("x"))
+	a2 := m.(App)
+	if a2.chatrooms.AnimPaused() {
+		t.Error("expected chatrooms.animPaused to be cleared once the modal closes")
+	}
+	if a2.cmail.AnimPaused() {
+		t.Error("expected cmail.animPaused to be cleared once the modal closes")
+	}
+}
+
 func TestHandleImageViewer_NewImage_ClearsCleanupFlag(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolKitty

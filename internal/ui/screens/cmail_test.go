@@ -619,6 +619,29 @@ func TestCMailUpdate_StyleAnimTick_AdvancesFrameAndRearms(t *testing.T) {
 	}
 }
 
+// TestCMailUpdate_StyleAnimTick_PausedSkipsRerenderButKeepsTicking guards the
+// image-modal fix: while animPaused is set, a styleAnimTickMsg must not
+// change the rendered viewport content, but the ticker chain must keep
+// rearming so the animation resumes immediately once animPaused is cleared.
+func TestCMailUpdate_StyleAnimTick_PausedSkipsRerenderButKeepsTicking(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})
+	if !m.styleAnimRunning {
+		t.Fatal("setup: expected styleAnimRunning = true")
+	}
+	m = m.SetAnimPaused(true)
+	before := m.viewport.View()
+
+	m, cmd := m.Update(styleAnimTickMsg{})
+
+	if m.viewport.View() != before {
+		t.Error("expected the viewport to be unchanged by a styleAnimTickMsg while animPaused")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd to rearm the ticker even while paused")
+	}
+}
+
 func TestSetFocusedCMail_ResumesStyleAnimAfterBackgroundedTickIsDropped(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
 	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})

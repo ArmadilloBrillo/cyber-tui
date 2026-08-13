@@ -1266,6 +1266,33 @@ func TestUpdate_StyleAnimTick_AdvancesFrameAndRearms(t *testing.T) {
 	}
 }
 
+// TestUpdate_StyleAnimTick_PausedSkipsRerenderButKeepsTicking guards the
+// image-modal fix: while animPaused is set, a styleAnimTickMsg must not
+// change the rendered viewport content (which would corrupt an open image
+// modal's rows), but the ticker chain must keep rearming so the animation
+// resumes immediately once animPaused is cleared.
+func TestUpdate_StyleAnimTick_PausedSkipsRerenderButKeepsTicking(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})
+	if !m.styleAnimRunning {
+		t.Fatal("setup: expected styleAnimRunning = true")
+	}
+	m = m.SetAnimPaused(true)
+	before := m.viewport.View()
+
+	m, cmd := m.Update(styleAnimTickMsg{})
+
+	if m.viewport.View() != before {
+		t.Error("expected the viewport to be unchanged by a styleAnimTickMsg while animPaused")
+	}
+	if !m.styleAnimRunning {
+		t.Error("expected styleAnimRunning to stay true (rearmed) while paused")
+	}
+	if cmd == nil {
+		t.Error("expected a non-nil tea.Cmd to rearm the ticker even while paused")
+	}
+}
+
 func TestSetFocused_ResumesStyleAnimAfterBackgroundedTickIsDropped(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	m, _ = m.Update(roomReceivedMsg{msg: model.Message{ID: "m1", Body: "hi", Style: []string{"wave"}}})

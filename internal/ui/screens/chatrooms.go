@@ -294,6 +294,14 @@ type ChatroomsModel struct {
 	styleAnimFrame   int
 	styleAnimRunning bool
 
+	// animPaused suppresses the refreshMessages() re-render that styleAnimTickMsg
+	// would otherwise trigger, without stopping the ticker chain itself. Set by
+	// app.go while the image modal is open: an animated line's re-render changes
+	// that terminal row's bytes, forcing Bubble Tea to resend the whole row —
+	// including the parts of it covered by the modal's box — which erases the
+	// modal's graphics-protocol pixels there.
+	animPaused bool
+
 	// focused is true while the Chatrooms tab is the one on screen. The RTDB
 	// subscription for an open room stays alive regardless (see
 	// IsRoomStreamMsg), so this only gates whether incoming messages bump
@@ -702,6 +710,18 @@ func (m ChatroomsModel) SetCanGoBack(v bool) ChatroomsModel {
 	return m
 }
 
+// SetAnimPaused pauses (or resumes) the styleAnimTickMsg re-render — see the
+// animPaused field doc comment. Called from app.go when the image modal
+// opens/closes.
+func (m ChatroomsModel) SetAnimPaused(paused bool) ChatroomsModel {
+	m.animPaused = paused
+	return m
+}
+
+// AnimPaused reports whether the styleAnimTickMsg re-render is currently
+// paused (see the animPaused field doc comment).
+func (m ChatroomsModel) AnimPaused() bool { return m.animPaused }
+
 // ResetToList clears any deep-link flag and drops back to the room list, for
 // ordinary tab navigation into Chatrooms that may still have a deep-linked
 // room open (SetCanGoBack(false) alone left mode stuck on detail).
@@ -1056,7 +1076,9 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	case styleAnimTickMsg:
 		m.styleAnimFrame++
 		m.styleAnimRunning = false
-		m = m.refreshMessages()
+		if !m.animPaused {
+			m = m.refreshMessages()
+		}
 		return m, nil
 
 	case tea.WindowSizeMsg:
