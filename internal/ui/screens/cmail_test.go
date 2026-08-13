@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
 )
@@ -682,6 +683,38 @@ func TestCMail_VisibleInlineImages_AttachmentAndBodyURL(t *testing.T) {
 	}
 }
 
+// TestCMail_VisibleInlineImages_RowAccountsForHeader mirrors Chatrooms'
+// equivalent regression test: View() stacks a 1-line header and a 1-line
+// divider above the message viewport (cmailDetailHeaderRows), so a slot's
+// screen-relative Row must include that offset or an image near the top of
+// the viewport lands on the header/divider instead of its message.
+func TestCMail_VisibleInlineImages_RowAccountsForHeader(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 80})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetConversationMessages("c1", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()},
+	})
+	m.viewport.SetYOffset(0)
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected 1 slot, got %d: %+v", len(slots), slots)
+	}
+	wantRow := m.msgOffsets[0] + m.msgImages[0][0].Line + cmailDetailHeaderRows
+	if slots[0].Row != wantRow {
+		t.Errorf("Row = %d, want %d (viewport-relative position + cmailDetailHeaderRows) — a message near the top of the viewport must not land on the header/divider lines above it", slots[0].Row, wantRow)
+	}
+
+	lines := strings.Split(m.View(), "\n")
+	if slots[0].Row >= len(lines) {
+		t.Fatalf("Row %d is out of range of View()'s %d lines", slots[0].Row, len(lines))
+	}
+	if strings.Contains(lines[slots[0].Row], "@trinity") || strings.Contains(ansi.Strip(lines[slots[0].Row]), "─") {
+		t.Errorf("Row %d lands on the header/divider line: %q", slots[0].Row, lines[slots[0].Row])
+	}
+}
+
 // TestCMail_InlineImages_SuppressesRedundantTextOnceEnabled mirrors
 // Chatrooms' equivalent: the attachment badge and a body that's nothing but
 // the image URL disappear once inline images are enabled, reappear when
@@ -901,5 +934,49 @@ func TestCMail_TotalUnread_ClearsWhenScrolledBackToBottom(t *testing.T) {
 
 	if m.TotalUnread() != 0 {
 		t.Errorf("TotalUnread() = %d, want 0 after scrolling back to the bottom", m.TotalUnread())
+	}
+}
+
+// --- Last-message image visibility regression ---
+
+// TestCMail_VisibleInlineImages_LastMessageImage_FallbackStage mirrors
+// Chatrooms' equivalent regression test: with nothing posted below it, an
+// image on the very last message must still be reported visible at the
+// fallback-max band stage — the visibility check must use the actual
+// reserved clearance for that message, not the old fixed
+// inlineImageMaxRows, which over-required room that isn't there when
+// there's no later message to push the viewport's bottom edge out further.
+func TestCMail_VisibleInlineImages_LastMessageImage_FallbackStage(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	// Height must be tall enough to fit the image's own band but shorter
+	// than the total content, so GotoBottom actually clamps "bottom" to
+	// the true content end — see Chatrooms' equivalent test for why.
+	// actual viewport.Height = 18 - theme.ChromeHeight(3) - cmailDetailChrome(5) = 10
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 18})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	msgs := manyPlainCMailMessages(5)
+	msgs = append(msgs, model.Message{ID: "last", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()})
+	m = m.SetConversationMessages("c1", msgs)
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected the last message's image to be visible at the fallback stage, got %d slots: %+v", len(slots), slots)
+	}
+}
+
+// TestCMail_VisibleInlineImages_LastMessageImage_AfterRealRowsKnown confirms
+// the same holds once SetImageRealRows shrinks the band to a real size.
+func TestCMail_VisibleInlineImages_LastMessageImage_AfterRealRowsKnown(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 18})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	msgs := manyPlainCMailMessages(5)
+	msgs = append(msgs, model.Message{ID: "last", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()})
+	m = m.SetConversationMessages("c1", msgs)
+	m = m.SetImageRealRows(cmailMsgImageKey("last"), 2)
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected the last message's image to stay visible after its band shrank, got %d slots: %+v", len(slots), slots)
 	}
 }

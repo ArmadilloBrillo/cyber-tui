@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
@@ -1591,6 +1592,41 @@ func TestChatrooms_VisibleInlineImages_ColIndentMatchesUsernameWidth(t *testing.
 	}
 }
 
+// TestChatrooms_VisibleInlineImages_RowAccountsForHeader is a regression test
+// for images landing on the room header/divider instead of their message:
+// View() stacks a 1-line header and a 1-line divider above the message
+// viewport (chatroomDetailHeaderRows), so a slot's screen-relative Row must
+// include that offset — Row is not simply the image's position within the
+// viewport's own content.
+func TestChatrooms_VisibleInlineImages_RowAccountsForHeader(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 80})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()},
+	})
+	m.viewport.SetYOffset(0) // the image's message is the very first line in the viewport
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected 1 slot, got %d: %+v", len(slots), slots)
+	}
+	wantRow := m.msgOffsets[0] + m.msgImages[0][0].Line + chatroomDetailHeaderRows
+	if slots[0].Row != wantRow {
+		t.Errorf("Row = %d, want %d (viewport-relative position + chatroomDetailHeaderRows) — a message near the top of the viewport must not land on the header/divider lines above it", slots[0].Row, wantRow)
+	}
+
+	// Cross-check against View()'s actual line layout: line 0 is the header,
+	// line 1 is the divider — the image's row must be neither.
+	lines := strings.Split(m.View(), "\n")
+	if slots[0].Row >= len(lines) {
+		t.Fatalf("Row %d is out of range of View()'s %d lines", slots[0].Row, len(lines))
+	}
+	if strings.Contains(lines[slots[0].Row], "zion") || strings.Contains(ansi.Strip(lines[slots[0].Row]), "─") {
+		t.Errorf("Row %d lands on the header/divider line: %q", slots[0].Row, lines[slots[0].Row])
+	}
+}
+
 // TestChatrooms_SetImageRealRows_ShrinksBandAndMovesLaterMessages guards the
 // dynamic-resize fix end to end: before the real row count is known, a
 // second message sits below the full fallback-max band; once
@@ -1696,6 +1732,68 @@ func TestChatrooms_SetImageRealRows_DoesNotYankScrolledUpView(t *testing.T) {
 	}
 }
 
+// TestChatrooms_SetRoomUsers_StaysAtBottomWhenAlreadyThere is a regression
+// test for the live presence stream (fires on every change and on its own 5s
+// re-evaluation timer) silently drifting the scroll position: SetRoomUsers
+// recomputes the message viewport's width from the users panel and reflows,
+// which must re-home to the bottom if the view was already there — same
+// sticky-bottom contract as SetImageRealRows.
+func TestChatrooms_SetRoomUsers_StaysAtBottomWhenAlreadyThere(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 13}) // short enough that the room doesn't fully fit
+	m = m.SetMessages("zion", messagesWithWrapSensitiveLast(20))
+	if !m.viewport.AtBottom() {
+		t.Fatal("setup: expected SetMessages to land at the bottom")
+	}
+
+	// First presence snapshot: users panel appears, narrowing the message
+	// viewport and reflowing every message's wrapping.
+	m = m.SetRoomUsers([]model.RoomUser{{UserID: "u1", Username: "trinity"}})
+
+	if !m.viewport.AtBottom() {
+		t.Error("expected the viewport to still be at the bottom after the presence panel appeared, not settle above it")
+	}
+}
+
+// TestChatrooms_SetRoomUsers_DoesNotYankScrolledUpView confirms a user who
+// scrolled up to read history isn't forcibly pulled back to the bottom by a
+// routine presence update.
+func TestChatrooms_SetRoomUsers_DoesNotYankScrolledUpView(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 13})
+	m = m.SetMessages("zion", messagesWithWrapSensitiveLast(20))
+	m.viewport.SetYOffset(0) // scroll up to read history, away from the bottom
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected scrolling to top to leave the bottom")
+	}
+
+	m = m.SetRoomUsers([]model.RoomUser{{UserID: "u1", Username: "trinity"}})
+
+	if m.viewport.AtBottom() {
+		t.Error("expected the scrolled-up view to stay put, not get yanked back to the bottom")
+	}
+}
+
+// TestChatrooms_SetRoomUsers_NoOpWhenWidthUnchanged confirms a repeat
+// presence snapshot that doesn't change the panel width (the common case —
+// the stream re-fires every few seconds even when nobody's status changed)
+// doesn't trigger a redundant reflow.
+func TestChatrooms_SetRoomUsers_NoOpWhenWidthUnchanged(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 13})
+	m = m.SetMessages("zion", manyPlainMessages(20))
+	m = m.SetRoomUsers([]model.RoomUser{{UserID: "u1", Username: "trinity"}})
+	offsetsAfterFirst := append([]int(nil), m.msgOffsets...)
+
+	// Same-shaped snapshot again (a different user, but the panel's width
+	// contribution is unchanged since it's non-empty either way).
+	m = m.SetRoomUsers([]model.RoomUser{{UserID: "u2", Username: "neo"}})
+
+	if !slices.Equal(m.msgOffsets, offsetsAfterFirst) {
+		t.Errorf("expected offsets unchanged when the panel width doesn't change, got %v want %v", m.msgOffsets, offsetsAfterFirst)
+	}
+}
+
 // --- Always-sticky scroll + unread-while-scrolled-up ---
 
 // manyPlainMessages returns n one-line messages, enough to overflow a small
@@ -1710,6 +1808,18 @@ func manyPlainMessages(n int) []model.Message {
 			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
 		}
 	}
+	return msgs
+}
+
+// messagesWithWrapSensitiveLast is like manyPlainMessages but its final
+// message is long enough to wrap into a different number of lines depending
+// on whether the message viewport is full-width or narrowed by the room
+// users panel — needed to make a presence-triggered reflow actually change
+// total content height in a test (manyPlainMessages' short bodies wrap
+// identically at either width, so they can't exercise this).
+func messagesWithWrapSensitiveLast(n int) []model.Message {
+	msgs := manyPlainMessages(n)
+	msgs[len(msgs)-1].Body = strings.Repeat("word ", 52)
 	return msgs
 }
 
@@ -1811,5 +1921,52 @@ func TestChatrooms_UnreadCount_ClearsWhenScrolledBackToBottom(t *testing.T) {
 
 	if m.UnreadCount() != 0 {
 		t.Errorf("UnreadCount() = %d, want 0 after scrolling back to the bottom", m.UnreadCount())
+	}
+}
+
+// --- Last-message image visibility regression ---
+
+// TestChatrooms_VisibleInlineImages_LastMessageImage_FallbackStage is a
+// regression test: with nothing posted below it, an image on the very last
+// message must still be reported visible at the fallback-max band stage
+// (before any fetch confirms a real size) — the visibility check must use
+// the same clearance the band actually reserves, not the old fixed
+// inlineImageMaxRows, which over-required room that isn't there when
+// there's no later message to push the viewport's bottom edge out further.
+func TestChatrooms_VisibleInlineImages_LastMessageImage_FallbackStage(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	// Height must be tall enough to fit the image's own band (so it's not
+	// excluded simply for being taller than the whole screen) but shorter
+	// than the total content (several filler messages plus the image
+	// message), so GotoBottom actually clamps "bottom" to the true content
+	// end instead of overshooting past it — either extreme would mask the
+	// regression this test exists to catch.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 18}) // actual viewport.Height = 18 - theme.ChromeHeight(3) - chatroomDetailChrome(5) = 10
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	msgs := manyPlainMessages(5)
+	msgs = append(msgs, model.Message{ID: "last", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()})
+	m = m.SetMessages("zion", msgs)
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected the last message's image to be visible at the fallback stage, got %d slots: %+v", len(slots), slots)
+	}
+}
+
+// TestChatrooms_VisibleInlineImages_LastMessageImage_AfterRealRowsKnown
+// confirms the same holds once SetImageRealRows shrinks the band to a real
+// (smaller) size — the tightest case, since less clearance is reserved.
+func TestChatrooms_VisibleInlineImages_LastMessageImage_AfterRealRowsKnown(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 18}) // actual viewport.Height = 18 - theme.ChromeHeight(3) - chatroomDetailChrome(5) = 10 // see FallbackStage's comment on sizing
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	msgs := manyPlainMessages(5)
+	msgs = append(msgs, model.Message{ID: "last", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()})
+	m = m.SetMessages("zion", msgs)
+	m = m.SetImageRealRows(circMsgImageKey("last"), 2)
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected the last message's image to stay visible after its band shrank, got %d slots: %+v", len(slots), slots)
 	}
 }

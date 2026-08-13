@@ -1428,16 +1428,26 @@ func (m CMailModel) VisibleInlineImages() []InlineImageSlot {
 		}
 		for _, img := range m.msgImages[i] {
 			abs := m.msgOffsets[i] + img.Line
-			if abs < top || abs+inlineImageMaxRows > bottom {
+			key := cmailMsgImageKey(msg.ID)
+			// See ChatroomsModel.VisibleInlineImages' equivalent comment:
+			// this must be the actual reserved image-row allowance for
+			// this message, not the old fixed inlineImageMaxRows, which
+			// over-required clearance and hid the last message's image.
+			imgRows := chatImageBandRows(m.imageRealRows, key) - 1
+			if abs < top || abs+imgRows > bottom {
 				continue
 			}
 			slots = append(slots, InlineImageSlot{
-				URL:       img.URL,
-				Row:       abs - top,
+				URL: img.URL,
+				// See ChatroomsModel.VisibleInlineImages' equivalent comment:
+				// abs-top is relative to the viewport's own top edge, but
+				// View() stacks header+divider (cmailDetailHeaderRows) above
+				// the viewport within this screen's own content.
+				Row:       abs - top + cmailDetailHeaderRows,
 				ColIndent: 2,
 				MaxCols:   m.viewport.Width - 4,
 				MaxRows:   inlineImageEncodeMaxRows,
-				Key:       cmailMsgImageKey(msg.ID),
+				Key:       key,
 			})
 		}
 	}

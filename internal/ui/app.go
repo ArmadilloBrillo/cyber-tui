@@ -2791,7 +2791,8 @@ func syncInlineImageErasures(slots []screens.InlineImageSlot, rowOrigin, colOrig
 	}
 	seen := make(map[int]bool)
 	for key, oldRect := range prevRects {
-		if newRect, stillThere := current[key]; !stillThere || newRect != oldRect {
+		newRect, stillThere := current[key]
+		if !stillThere || newRect != oldRect {
 			for r := oldRect.Row; r < oldRect.Row+oldRect.Rows; r++ {
 				if !seen[r] {
 					seen[r] = true

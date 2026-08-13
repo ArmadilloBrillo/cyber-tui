@@ -877,13 +877,23 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 // SetRoomUsers replaces the presence panel's content, sorted admins-first
 // then alphabetical within each block. Recomputes the message viewport width
 // since the panel's presence affects it (panelWidths collapses to zero width
-// until the first snapshot arrives).
+// until the first snapshot arrives). The live presence stream fires this on
+// every change and on its own 5s re-evaluation timer, so — same as
+// SetImageRealRows — the reflow must never yank the view down, and must
+// re-home to the bottom if it was already there, or every presence tick
+// silently drifts the scroll position out from under the user.
 func (m ChatroomsModel) SetRoomUsers(users []model.RoomUser) ChatroomsModel {
 	m.roomUsers = sortRoomUsers(users)
 	if m.ready {
 		msgW, _ := m.panelWidths()
-		m.viewport.Width = msgW
-		m = m.refreshMessages()
+		if msgW != m.viewport.Width {
+			wasAtBottom := m.viewport.AtBottom()
+			m.viewport.Width = msgW
+			m = m.refreshMessages()
+			if wasAtBottom {
+				m.viewport.GotoBottom()
+			}
+		}
 	}
 	return m
 }
@@ -1620,17 +1630,33 @@ func (m ChatroomsModel) VisibleInlineImages() []InlineImageSlot {
 		}
 		for _, img := range m.msgImages[i] {
 			abs := m.msgOffsets[i] + img.Line
-			if abs < top || abs+inlineImageMaxRows > bottom {
+			key := circMsgImageKey(msg.ID)
+			// imgRows is the actual reserved image-row allowance for this
+			// message (chatImageBandRows minus its leading spacer, which
+			// sits before abs, not after) — not the old fixed
+			// inlineImageMaxRows, which over-required clearance once the
+			// band shrank below that constant and hid the last message's
+			// image in the room (nothing below it to push bottom out
+			// further).
+			imgRows := chatImageBandRows(m.imageRealRows, key) - 1
+			if abs < top || abs+imgRows > bottom {
 				continue
 			}
 			colIndent := circMessageTextIndent(msg)
 			slots = append(slots, InlineImageSlot{
-				URL:       img.URL,
-				Row:       abs - top,
+				URL: img.URL,
+				// abs-top is relative to the message viewport's own top edge
+				// (row 0 = the viewport's first visible line), but the
+				// viewport isn't screen row 0 within this screen's own
+				// content — View() stacks header+divider
+				// (chatroomDetailHeaderRows) above it. Without adding that
+				// back, an image near the top of the visible messages lands
+				// on the header/divider instead of the message it belongs to.
+				Row:       abs - top + chatroomDetailHeaderRows,
 				ColIndent: colIndent,
 				MaxCols:   max(m.viewport.Width-colIndent-2, 10),
 				MaxRows:   inlineImageEncodeMaxRows,
-				Key:       circMsgImageKey(msg.ID),
+				Key:       key,
 			})
 		}
 	}
