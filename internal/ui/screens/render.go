@@ -49,7 +49,7 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+p.AuthorUsername),
-		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)),
+		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)+editedSuffix(p.EditedAt)),
 	) + audioIcon(p.Attachments) + bookmarkIcon(bookmarked) + watchIcon(watched)
 	var rightParts []string
 	if ind := attachmentIndicator(p.Attachments, p.Content); ind != "" {
@@ -213,6 +213,16 @@ func watchIcon(watched bool) string {
 		return "  " + theme.Highlight.Render("◉")
 	}
 	return ""
+}
+
+// editedSuffix returns " (edited)" when editedAt is set, for appending
+// inside an existing theme.Subtle.Render call alongside the timestamp —
+// else "".
+func editedSuffix(editedAt time.Time) string {
+	if editedAt.IsZero() {
+		return ""
+	}
+	return " (edited)"
 }
 
 // renderAttachments returns a formatted block for each attachment,

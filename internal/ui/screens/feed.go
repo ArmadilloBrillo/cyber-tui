@@ -862,6 +862,7 @@ type feedBodyCacheEntry struct {
 	topics              string // strings.Join(p.Topics, ",") — cheap to compare
 	isPublic            bool
 	isNSFW              bool
+	editedAt            time.Time
 	inlineImagesEnabled bool
 	themeName           string
 }
@@ -872,12 +873,12 @@ func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageS
 	topics := strings.Join(p.Topics, ",")
 
 	body, imgSlots, ok := "", []postImageSlot(nil), false
-	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.inlineImagesEnabled == m.inlineImagesEnabled && e.themeName == theme.CurrentName() {
+	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == m.inlineImagesEnabled && e.themeName == theme.CurrentName() {
 		body, imgSlots, ok = e.body, e.imgSlots, true
 	}
 	if !ok {
 		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
-		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, inlineImagesEnabled: m.inlineImagesEnabled, themeName: theme.CurrentName()}
+		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, editedAt: p.EditedAt, inlineImagesEnabled: m.inlineImagesEnabled, themeName: theme.CurrentName()}
 	}
 
 	boxStyle := theme.Border
@@ -972,7 +973,7 @@ func (m FeedModel) renderDetailReply(node replyNode, selected bool, width int) (
 	if node.ParentUsername != "" {
 		header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
 	}
-	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false))
+	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false) + editedSuffix(node.Reply.EditedAt))
 
 	var body string
 	var imgSlots []postImageSlot

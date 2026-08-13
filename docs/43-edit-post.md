@@ -13,7 +13,7 @@ Implements editing your own posts and replies within the API's 5-minute, support
 | Gated to: own content, published <5 minutes ago, supporter account | Done |
 | `e` hint dynamically shown/hidden in the status bar based on the *currently selected* post/reply | Done |
 | `e` documented statically in the `?` help modal ("edit own, <5min") | Done |
-| `(edited)` — not yet rendered in the post/reply view; `EditedAt` is captured in the model but no UI badge draws it yet | Deferred — see Files Changed |
+| `(edited)` — muted marker next to the timestamp on every screen that renders a post/reply header (Feed, Post Detail, Topics, Guilds, Search, Profile, Bookmarks) | Done — 2026-08-12, after `editedAt` was confirmed live (see `docs/00-api-backlog.md`) |
 | Attachment editing | Out of scope — no attachment-editing UI exists; the field is omitted from the request entirely, which per the API leaves existing attachments untouched |
 
 ---
@@ -27,7 +27,7 @@ Implements editing your own posts and replies within the API's 5-minute, support
 
 Both require a supporter account and a publish time within 5 minutes; outside either condition the API returns `403`. The response carries no fields worth returning (`{ "data": { "postId": "..." } }` / `{ "replyId": "..." } }`), so the client applies the submitted fields to its local copy directly rather than round-tripping through the response — the same approach `CreatePost` already uses for fields its own response omits.
 
-Per the docs, "the entry then carries an `editedAt` timestamp" — read as a persisted field on the entry, so it should come back on future `GET`s to any viewer, not just the editor. `wirePost`/`wireReply` now parse an optional `editedAt` field (tolerant of absence, via the existing `apiTimestamp` type) into `model.Post.EditedAt` / `model.Reply.EditedAt`. **This hasn't been confirmed live** — the API doc's example `GET` response JSON blocks weren't regenerated to literally list it. Worth an `apifetch` sanity check on an edited post; see `docs/00-api-backlog.md`.
+Per the docs, "the entry then carries an `editedAt` timestamp" — read as a persisted field on the entry, so it should come back on future `GET`s to any viewer, not just the editor. `wirePost`/`wireReply` now parse an optional `editedAt` field (tolerant of absence, via the existing `apiTimestamp` type) into `model.Post.EditedAt` / `model.Reply.EditedAt`. **Confirmed live 2026-08-12** via `apifetch` (create → `PATCH` → `GET`, `editedAt` came back correctly) — see `docs/00-api-backlog.md`.
 
 ---
 
@@ -83,3 +83,10 @@ A `403` is expected to be rare (the client-side gate should prevent most attempt
 | `internal/ui/screens/feed_test.go` | `CanEditSelected` gate tests (own/supporter/window), `e` key tests |
 | `internal/ui/screens/postdetail_test.go` | Same, plus reply-edit coverage |
 | `internal/ui/app_test.go` | `editErrorMsg` 403-softening + fallthrough |
+| `internal/ui/screens/render.go` | `editedSuffix` helper; `renderPostBody`'s header appends it |
+| `internal/ui/screens/postdetail.go` | `renderFullPost`/`renderReply` headers append `editedSuffix` |
+| `internal/ui/screens/feed.go` | `renderDetailReply` header appends `editedSuffix`; `feedBodyCacheEntry` gains an `editedAt` field so an edit that changes only `EditedAt` still invalidates the cached render |
+| `internal/ui/screens/topics.go`, `internal/ui/screens/guilds.go`, `internal/ui/screens/search.go` | Reply header render functions append `editedSuffix` |
+| `internal/ui/screens/profile.go` | `renderPostItem`/`renderReplyItem` fold `editedSuffix` into the timestamp before width-budget math |
+| `internal/ui/screens/bookmarks.go` | `renderItem` derives `editedAt` from the embedded post/reply and appends `editedSuffix` to the "posted/saved" line |
+| `internal/ui/screens/render_test.go` | `TestRenderPost_ShowsEditedMarkerWhenEditedAtSet`, `TestFeedRenderPost_CacheInvalidatesOnEditedAtOnlyChange` |

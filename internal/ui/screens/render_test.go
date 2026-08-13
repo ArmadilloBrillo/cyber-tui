@@ -818,6 +818,50 @@ func TestFeedRenderPost_CacheInvalidatesOnTopicsOnlyChange(t *testing.T) {
 	}
 }
 
+// TestFeedRenderPost_CacheInvalidatesOnEditedAtOnlyChange is the same class
+// of regression as TestFeedRenderPost_CacheInvalidatesOnTopicsOnlyChange,
+// for the "(edited)" marker: a resubmit that changes no tracked field except
+// EditedAt (e.g. the edit panel opened and saved with no actual content/
+// title/topics change) must still invalidate feedBodyCacheEntry, or the
+// marker never appears until something else evicts the cache.
+func TestFeedRenderPost_CacheInvalidatesOnEditedAtOnlyChange(t *testing.T) {
+	withTrueColor(t)
+	m := NewFeedModel()
+	m.width = 80
+	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "same content"}
+
+	before, _ := m.renderPost(post, false)
+	if strings.Contains(ansi.Strip(before), "(edited)") {
+		t.Fatalf("expected no (edited) marker before EditedAt is set, got: %q", before)
+	}
+
+	post.EditedAt = time.Now()
+	after, _ := m.renderPost(post, false)
+	if !strings.Contains(ansi.Strip(after), "(edited)") {
+		t.Errorf("expected cache to invalidate after EditedAt-only change, got stale body: %q", after)
+	}
+}
+
+// TestRenderPost_ShowsEditedMarkerWhenEditedAtSet guards the "(edited)"
+// indicator added once editedAt was confirmed to persist and come back on
+// GET (docs/00-api-backlog.md, 2026-08-12) — previously deferred in feature
+// 43 (docs/43-edit-post.md).
+func TestRenderPost_ShowsEditedMarkerWhenEditedAtSet(t *testing.T) {
+	base := model.Post{ID: "p1", AuthorUsername: "alice", Content: "hello"}
+
+	unedited := RenderPost(base, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines)
+	if strings.Contains(unedited, "(edited)") {
+		t.Errorf("expected no (edited) marker for a never-edited post, got: %q", unedited)
+	}
+
+	edited := base
+	edited.EditedAt = time.Now()
+	got := RenderPost(edited, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines)
+	if !strings.Contains(ansi.Strip(got), "(edited)") {
+		t.Errorf("expected (edited) marker for an edited post, got: %q", got)
+	}
+}
+
 // BenchmarkRenderCircMessagesWithSelection measures how render cost scales
 // with the number of loaded messages — chatrooms.go never caps m.messages,
 // and this render runs in full on every 150ms style-animation tick

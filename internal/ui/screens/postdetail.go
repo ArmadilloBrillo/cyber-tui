@@ -927,7 +927,7 @@ func (m PostDetailModel) renderFullPost(selected bool) (string, []postImageSlot)
 	_, postWatched := m.watchedPostIDs[m.post.ID]
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+m.post.AuthorUsername),
-		theme.Subtle.Render("  "+displayTime(m.post.CreatedAt, m.location(), m.timeDisplayFormat, false)),
+		theme.Subtle.Render("  "+displayTime(m.post.CreatedAt, m.location(), m.timeDisplayFormat, false)+editedSuffix(m.post.EditedAt)),
 	) + audioIcon(m.post.Attachments) + bookmarkIcon(postBookmarked) + watchIcon(postWatched)
 	var rightParts []string
 	if ind := attachmentIndicator(m.post.Attachments, m.post.Content); ind != "" {
@@ -1027,7 +1027,7 @@ func (m PostDetailModel) renderReply(node replyNode, selected bool) (string, []p
 		headerParts = append(headerParts, theme.Subtle.Render("  ↩ @"+node.ParentUsername))
 	}
 	headerParts = append(headerParts,
-		theme.Subtle.Render("  "+displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false)),
+		theme.Subtle.Render("  "+displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false)+editedSuffix(node.Reply.EditedAt)),
 	)
 	_, replyBookmarked := m.bookmarkedReplyIDs[node.Reply.ID]
 	left := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...) + audioIcon(node.Reply.Attachments) + bookmarkIcon(replyBookmarked)

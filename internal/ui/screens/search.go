@@ -656,7 +656,7 @@ func (m SearchModel) renderPostHit(p model.Post, selected bool) string {
 func (m SearchModel) renderReplyHit(r model.Reply, selected bool) string {
 	innerWidth := m.width - 4
 	header := theme.Highlight.Render("@" + r.AuthorUsername)
-	header += theme.Subtle.Render("  " + displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, false))
+	header += theme.Subtle.Render("  " + displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, false) + editedSuffix(r.EditedAt))
 	body := r.Content
 	if innerWidth > 0 {
 		body = ansiTruncate(body, innerWidth)
