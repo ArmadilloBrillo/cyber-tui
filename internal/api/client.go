@@ -411,6 +411,7 @@ type wireNotification struct {
 	ActorUsername string                   `json:"actorUsername"`
 	TargetID      string                   `json:"targetId"`
 	TargetType    string                   `json:"targetType"`
+	Reason        string                   `json:"reason"`
 	Metadata      wireNotificationMetadata `json:"metadata"`
 }
 
@@ -1107,6 +1108,7 @@ func wireNotificationToModel(w wireNotification) model.Notification {
 		RoomSlug:             w.Metadata.RoomSlug,
 		RoomName:             w.Metadata.RoomName,
 		MessageContent:       w.Metadata.MessageContent,
+		Reason:               w.Reason,
 	}
 }
 
@@ -1503,23 +1505,34 @@ func (c *HTTPClient) MarkNotificationRead(id string) error {
 	return err
 }
 
-func (c *HTTPClient) MarkAllNotificationsRead() error {
-	_, err := c.doRequest("POST", "/v1/notifications/read-all", nil)
-	return err
-}
-
-func (c *HTTPClient) GetUnreadNotificationCount() (int, error) {
-	env, err := c.doRequest("GET", "/v1/notifications/unread-count", nil)
+func (c *HTTPClient) MarkAllNotificationsRead() (bool, error) {
+	env, err := c.doRequest("POST", "/v1/notifications/read-all", nil)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 	var data struct {
-		Count int `json:"count"`
+		Updated  int  `json:"updated"`
+		HasMore  bool `json:"hasMore"`
 	}
 	if err := json.Unmarshal(env.Data, &data); err != nil {
-		return 0, err
+		return false, err
 	}
-	return data.Count, nil
+	return data.HasMore, nil
+}
+
+func (c *HTTPClient) GetUnreadNotificationCount() (int, bool, error) {
+	env, err := c.doRequest("GET", "/v1/notifications/unread-count", nil)
+	if err != nil {
+		return 0, false, err
+	}
+	var data struct {
+		Count int  `json:"count"`
+		Exact bool `json:"exact"`
+	}
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return 0, false, err
+	}
+	return data.Count, data.Exact, nil
 }
 
 // --- Bookmarks ---

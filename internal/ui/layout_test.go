@@ -37,6 +37,41 @@ func TestRenderTabBar_DoesNotShowSearch(t *testing.T) {
 	}
 }
 
+// --- unread badge: exact vs capped count (v0.8.5) ---
+
+func TestRenderTabBar_UnreadBadge_ShowsExactCount(t *testing.T) {
+	a := loggedInApp()
+	a.width = 100
+	a.polledUnreadCount = 3
+	a.polledUnreadCountExact = true
+	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	if !strings.Contains(out, "(3)") {
+		t.Errorf("expected exact unread badge (3), got: %q", out)
+	}
+}
+
+func TestRenderTabBar_UnreadBadge_ShowsCappedIndicator(t *testing.T) {
+	a := loggedInApp()
+	a.width = 100
+	a.polledUnreadCount = 100
+	a.polledUnreadCountExact = false
+	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	if !strings.Contains(out, "(99+)") {
+		t.Errorf("expected capped unread badge (99+), got: %q", out)
+	}
+}
+
+func TestRenderNav_UnreadBadge_ShowsCappedIndicator(t *testing.T) {
+	a := loggedInApp()
+	a.width = 100
+	a.polledUnreadCount = 100
+	a.polledUnreadCountExact = false
+	out := ansi.Strip(MillerLayout{}.renderNav(a))
+	if !strings.Contains(out, "●99+") {
+		t.Errorf("expected capped unread badge ●99+, got: %q", out)
+	}
+}
+
 // --- renderFeedPendingBar: background-poll indicator lives in the separator
 // row, not pushed into the feed viewport (see FeedModel.buildContent) ---
 

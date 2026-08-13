@@ -135,7 +135,7 @@ func (l TabsLayout) renderTabBar(a App) string {
 	for _, t := range visibleTabs() {
 		badge := ""
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
-			badge = fmt.Sprintf(" (%d)", a.polledUnreadCount)
+			badge = " (" + notifBadgeText(a.polledUnreadCount, a.polledUnreadCountExact) + ")"
 		}
 		if t.s == screenFeed {
 			if n := a.feed.PendingNewCount(); n > 0 {

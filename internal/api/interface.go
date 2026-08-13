@@ -113,10 +113,13 @@ type Client interface {
 	// pass nil for all types.
 	GetNotifications(cursor string, unreadOnly bool, types []string) ([]model.Notification, string, error)
 	// GetUnreadNotificationCount returns the server-side count of unread notifications.
-	// The value is cached for ~5 s on the server side.
-	GetUnreadNotificationCount() (int, error)
+	// The value is cached for ~5 s on the server side. exact is false once the true
+	// count exceeds 100 — count is capped at 100 in that case; render "99+".
+	GetUnreadNotificationCount() (count int, exact bool, err error)
 	MarkNotificationRead(id string) error
-	MarkAllNotificationsRead() error
+	// MarkAllNotificationsRead marks up to 5,000 notifications read per call.
+	// hasMore is true if the caller should call it again to mark the rest.
+	MarkAllNotificationsRead() (hasMore bool, err error)
 
 	// Bookmarks — cursor-paginated list; create/delete are fire-and-forget.
 	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.
