@@ -135,6 +135,31 @@ at exactly this margin, that's a signal the true trigger is closer to "any
 non-trivial image size" than "close to full screen," and would need the
 compositing mechanism itself addressed rather than a bigger margin.
 
+## `-` doing nothing right after `+` hits the screen margin
+
+Follow-up report: at max size, `+` correctly does nothing (already at the
+`modalScreenMarginFrac`/`ModalMaxWidth` ceiling) — but the very next `-`
+also did nothing, even though it should always shrink. Reproduced only at
+the max end, never at the min end.
+
+Cause: `adjustImageScale` computed its "current" position by recomputing
+`nativeCols * a.imageScale` — a value with no awareness of the screen-margin
+ceiling. Once the rendered box hit that ceiling, further `+` presses kept
+inflating `a.imageScale` with no visible effect (correctly clamped by
+`openImageInTerminal`), but the *stored* scale value kept climbing past
+what was actually achievable. The next `-` then only walked that invisible
+excess back down by one step — not enough to drop below the ceiling yet, so
+it also produced no visible change. This didn't happen at the min end
+because nothing pushes the box *smaller* than `config.MinImageScale`
+already produces — there's no equivalent invisible slack to build up on
+that side.
+
+Fix: `adjustImageScale` now anchors its step to `a.imageModalCols` — the
+box that's actually rendered right now — instead of recomputing an ideal,
+unclamped value from `a.imageScale`. Since that's always the true on-screen
+size, a.imageScale can never drift past what's achievable, and `-` always
+shrinks immediately on the very next press.
+
 ## Non-fix
 
 This does not change the underlying protocol behavior (iTerm2 still
