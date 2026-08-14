@@ -1788,11 +1788,11 @@ func (m ChatroomsModel) maybeLoadOlderMessages() (ChatroomsModel, tea.Cmd) {
 
 // updateBrowsingKey handles keys while a message is selected
 // (m.selectedMsgID != ""): up/down move the selection, esc returns to
-// typing, '!' reports the selected message, enter toggles a spoiler- or
-// l33t-styled message's reveal state. Everything else is swallowed
-// rather than typed, since the input is blurred for the duration of
-// browsing — see the 'up' case in the typing-mode switch, the only place
-// browsing is entered.
+// typing, '!' reports the selected message, 'p' views the sender's
+// profile, enter toggles a spoiler- or l33t-styled message's reveal
+// state. Everything else is swallowed rather than typed, since the
+// input is blurred for the duration of browsing — see the 'up' case in
+// the typing-mode switch, the only place browsing is entered.
 func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.Cmd) {
 	if m.confirmingDeleteMsg {
 		switch msg.String() {
@@ -1885,6 +1885,13 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		m.confirmingDeleteMsg = true
 		m.viewport.Height = m.viewportHeight()
 		return m, nil
+	case "p":
+		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
+		if !ok {
+			return m, nil
+		}
+		username := targetMsg.From.Username
+		return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 	}
 	return m, nil
 }

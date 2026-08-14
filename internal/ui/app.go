@@ -1242,6 +1242,12 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 	case roomCommandReplyMsg:
 		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, sanitize.Strip(msg.reply))
 		return a, a.loadSettingsCmd(), true
+	case screens.ShowUserProfileMsg:
+		if a.active != screenChatrooms {
+			return a, nil, false
+		}
+		a.profileReturn = screenChatrooms
+		return a, a.loadUserProfileCmd(msg.Username), true
 	case screens.LeaveChatroomsMsg:
 		a.active = a.chatroomsReturn
 		return a, nil, true
@@ -1293,6 +1299,12 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case cmailCommandReplyMsg:
 		a.cmail = a.cmail.AppendSystemMessage(msg.convID, sanitize.Strip(msg.reply))
 		return a, nil, true
+	case screens.ShowUserProfileMsg:
+		if a.active != screenCMail {
+			return a, nil, false
+		}
+		a.profileReturn = screenCMail
+		return a, a.loadUserProfileCmd(msg.Username), true
 	case screens.LeaveCMailMsg:
 		a.active = a.cmailReturn
 		return a, nil, true
