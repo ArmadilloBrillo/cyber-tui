@@ -10,7 +10,6 @@ import (
 	"math/rand"
 	neturl "net/url"
 	"os"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1021,26 +1020,6 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.chatrooms, _ = a.chatrooms.Update(contentMsg)
 		}
 		loginCmd := a.afterLoginCmd()
-		// Windows-only notice: every graphics protocol this app supports has
-		// turned up a confirmed or documented Windows-specific rendering bug
-		// during the WezTerm/ConPTY investigation (see
-		// docs/plan-inline-images-improvements.md §9) — not fixable from
-		// here, so surface it rather than silently leaving images broken.
-		// Deliberately does NOT require a.graphicsProtocol != ProtocolNone:
-		// that's our own detection heuristic succeeding (env-var based, see
-		// imgview.DetectProtocol), not the user's intent — mintty/Git Bash on
-		// Windows, for one, sets no TERM_PROGRAM at all and detects as
-		// ProtocolNone, but still goes through the same ConPTY layer as any
-		// other Windows terminal, so the user should still be warned if
-		// they've asked for terminal image viewing. Fired here (not Init())
-		// since the notify banner only renders in the post-login layouts and
-		// has a short TTL that would tick away unseen during login if set
-		// any earlier.
-		if !a.ephemeral && a.imageViewer != "browser" && runtime.GOOS == "windows" {
-			var notifyCmd tea.Cmd
-			a, notifyCmd = a.notify(notifyWarn, "images may not render correctly on Windows (known ConPTY issue) — try Settings → Image Viewer: browser")
-			return a, tea.Batch(loginCmd, notifyCmd), true
-		}
 		return a, loginCmd, true
 	case screens.LoginErrMsg:
 		var cmd tea.Cmd
@@ -1341,12 +1320,19 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		// Propagate the confirmed username to screens that guard own-content actions.
 		a.feed = a.feed.SetCurrentUsername(msg.user.Username).SetCurrentUserIsSupporter(msg.user.IsSupporter)
 		a.postDetail = a.postDetail.SetCurrentUsername(msg.user.Username).SetCurrentUserIsSupporter(msg.user.IsSupporter)
-		return a, nil, true
+		return a, a.loadUserGuildsCmd(msg.user.Username), true
 	case userProfileLoadedMsg:
 		isOwn := msg.user.Username == a.currentUser.Username
 		// Clear stale sub-tab data whenever a different profile is loaded.
 		a.profile = a.profile.ClearTabs().SetUser(msg.user).SetReadOnly(!isOwn).SetCanGoBack(true).SetFollowState(msg.isFollowing, msg.followID)
 		a.active = screenProfile
+		return a, a.loadUserGuildsCmd(msg.user.Username), true
+
+	case userGuildsLoadedMsg:
+		if msg.username != a.profile.Username() {
+			return a, nil, true // stale response from a since-abandoned profile switch
+		}
+		a.profile = a.profile.SetApprenticeships(msg.guilds)
 		return a, nil, true
 	case screens.BackFromProfileMsg:
 		a.active = a.profileReturn
@@ -2043,23 +2029,51 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.LeaveGuildMsg:
 		return a, a.leaveGuildCmd(msg.Slug, a.guilds.GuildDetail().Name), true
 
+	case screens.PromoteGuildMsg:
+		return a, a.promoteGuildCmd(msg.Slug, a.guilds.GuildDetail().Name), true
+
 	case guildJoinedMsg:
 		detail := a.guilds.GuildDetail()
 		detail.IsMember = true
-		detail.Role = "member"
+		detail.Role = msg.role
 		a.guilds = a.guilds.SetGuildDetail(detail)
-		a.currentUser.GuildSlug = msg.slug
-		a.guilds = a.guilds.SetOwnGuildSlug(msg.slug)
+		verb := "Apprenticed to"
+		if msg.role == "member" {
+			verb = "Joined"
+			a.currentUser.GuildSlug = msg.slug
+			a.currentUser.GuildID = detail.ID
+			a.currentUser.GuildName = detail.Name
+			a.currentUser.GuildIcon = detail.Icon
+			a.guilds = a.guilds.SetOwnGuildSlug(msg.slug)
+		}
 		var notifyCmd tea.Cmd
-		a, notifyCmd = a.notify(notifyInfo, "✓ Joined #"+msg.name)
+		a, notifyCmd = a.notify(notifyInfo, "✓ "+verb+" #"+msg.name)
 		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
 
 	case guildLeftMsg:
 		a.guilds = a.guilds.BackToGuildList()
-		a.currentUser.GuildSlug = ""
-		a.guilds = a.guilds.SetOwnGuildSlug("")
+		if msg.slug == a.currentUser.GuildSlug {
+			a.currentUser.GuildSlug = ""
+			a.currentUser.GuildID = ""
+			a.currentUser.GuildName = ""
+			a.currentUser.GuildIcon = ""
+			a.guilds = a.guilds.SetOwnGuildSlug("")
+		}
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "✓ Left #"+msg.name)
+		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
+
+	case guildPromotedMsg:
+		detail := a.guilds.GuildDetail()
+		detail.Role = msg.role
+		a.guilds = a.guilds.SetGuildDetail(detail)
+		a.currentUser.GuildSlug = msg.slug
+		a.currentUser.GuildID = detail.ID
+		a.currentUser.GuildName = detail.Name
+		a.currentUser.GuildIcon = detail.Icon
+		a.guilds = a.guilds.SetOwnGuildSlug(msg.slug)
+		var notifyCmd tea.Cmd
+		a, notifyCmd = a.notify(notifyInfo, "✓ #"+msg.name+" is now your guild badge")
 		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
 	}
 	return a, nil, false
@@ -4131,8 +4145,9 @@ type guildMembersPageMsg struct {
 	cursor  string
 }
 type guildDetailLoadedMsg struct{ guild model.Guild }
-type guildJoinedMsg struct{ slug, name string }
+type guildJoinedMsg struct{ slug, name, role string }
 type guildLeftMsg struct{ slug, name string }
+type guildPromotedMsg struct{ slug, name, role string }
 
 type notifsLoadedMsg struct {
 	notifs []model.Notification
@@ -4255,6 +4270,23 @@ func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 			}
 		}
 		return userProfileLoadedMsg{user: user, isFollowing: isFollowing, followID: followID}
+	}
+}
+
+// userGuildsLoadedMsg delivers a profile's apprenticeship list. Fetch errors
+// are non-fatal — the profile still renders without the apprenticeships row.
+type userGuildsLoadedMsg struct {
+	username string
+	guilds   []model.GuildMembership
+}
+
+func (a *App) loadUserGuildsCmd(username string) tea.Cmd {
+	return func() tea.Msg {
+		guilds, err := a.client.GetUserGuilds(username)
+		if err != nil {
+			return userGuildsLoadedMsg{username: username}
+		}
+		return userGuildsLoadedMsg{username: username, guilds: guilds}
 	}
 }
 
@@ -4986,10 +5018,11 @@ func (a *App) loadGuildDetailCmd(slug string) tea.Cmd {
 
 func (a *App) joinGuildCmd(slug, name string) tea.Cmd {
 	return func() tea.Msg {
-		if err := a.client.JoinGuild(slug); err != nil {
+		role, err := a.client.JoinGuild(slug)
+		if err != nil {
 			return actionErrMsg{err}
 		}
-		return guildJoinedMsg{slug: slug, name: name}
+		return guildJoinedMsg{slug: slug, name: name, role: role}
 	}
 }
 
@@ -4999,6 +5032,16 @@ func (a *App) leaveGuildCmd(slug, name string) tea.Cmd {
 			return actionErrMsg{err}
 		}
 		return guildLeftMsg{slug: slug, name: name}
+	}
+}
+
+func (a *App) promoteGuildCmd(slug, name string) tea.Cmd {
+	return func() tea.Msg {
+		role, err := a.client.PromoteGuild(slug)
+		if err != nil {
+			return actionErrMsg{err}
+		}
+		return guildPromotedMsg{slug: slug, name: name, role: role}
 	}
 }
 

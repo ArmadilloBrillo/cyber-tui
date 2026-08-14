@@ -53,6 +53,10 @@ type JoinGuildMsg struct{ Slug string }
 // LeaveGuildMsg is emitted when the user confirms leaving the active guild.
 type LeaveGuildMsg struct{ Slug string }
 
+// PromoteGuildMsg is emitted when the user confirms promoting an
+// apprenticeship to their guild badge.
+type PromoteGuildMsg struct{ Slug string }
+
 // LoadGuildThreadMsg is emitted when the selected guild post changes so the app can
 // fetch replies for the Miller reading pane.
 type LoadGuildThreadMsg struct{ PostID string }
@@ -85,6 +89,7 @@ const (
 	confirmNoneG guildsConfirm = iota
 	confirmJoinG
 	confirmLeaveG
+	confirmPromoteG
 )
 
 // Internal view state for the Guilds screen.
@@ -338,6 +343,9 @@ func (m GuildsModel) IsConfirmingJoin() bool { return m.confirming == confirmJoi
 // IsConfirmingLeave reports whether the leave confirmation prompt is active.
 func (m GuildsModel) IsConfirmingLeave() bool { return m.confirming == confirmLeaveG }
 
+// IsConfirmingPromote reports whether the promote confirmation prompt is active.
+func (m GuildsModel) IsConfirmingPromote() bool { return m.confirming == confirmPromoteG }
+
 // SetError stores an error and clears the loading state.
 func (m GuildsModel) SetError(err error) GuildsModel {
 	m.err = err
@@ -569,15 +577,22 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			return m, nil
 
 		case "J":
-			if m.view == viewGuildPosts && m.guildDetailLoaded && !m.activeGuildDetail.IsMember && m.ownGuildSlug == "" {
+			if m.view == viewGuildPosts && m.guildDetailLoaded && m.activeGuildDetail.Role == "" {
 				m.confirming = confirmJoinG
 				m = m.refreshContent()
 			}
 			return m, nil
 
 		case "L":
-			if m.view == viewGuildPosts && m.guildDetailLoaded && m.activeGuildDetail.IsMember && m.activeGuildDetail.Role != "founder" {
+			if m.view == viewGuildPosts && m.guildDetailLoaded && m.activeGuildDetail.Role != "" && m.activeGuildDetail.Role != "founder" {
 				m.confirming = confirmLeaveG
+				m = m.refreshContent()
+			}
+			return m, nil
+
+		case "P":
+			if m.view == viewGuildPosts && m.guildDetailLoaded && m.activeGuildDetail.Role == "apprentice" {
+				m.confirming = confirmPromoteG
 				m = m.refreshContent()
 			}
 			return m, nil
@@ -681,11 +696,16 @@ func (m GuildsModel) BackToGuildList() GuildsModel {
 
 func (m GuildsModel) renderConfirmBar() string {
 	var content string
-	if m.confirming == confirmJoinG {
+	switch m.confirming {
+	case confirmJoinG:
 		content = theme.Highlight.Render("Join "+m.activeGuildDetail.Name+"?") + "  " +
 			theme.Base.Render("[y]es") + "  " +
 			theme.Subtle.Render("[n]o / esc")
-	} else {
+	case confirmPromoteG:
+		content = theme.Highlight.Render("Make "+m.activeGuildDetail.Name+" your guild badge?") + "  " +
+			theme.Base.Render("[y]es") + "  " +
+			theme.Subtle.Render("[n]o / esc")
+	default:
 		content = theme.Error.Render("Leave "+m.activeGuildDetail.Name+"?") + "  " +
 			theme.Base.Render("[y]es") + "  " +
 			theme.Subtle.Render("[n]o / esc")
@@ -704,10 +724,14 @@ func (m GuildsModel) handleConfirmKey(msg tea.KeyMsg) (GuildsModel, tea.Cmd) {
 		m.confirming = confirmNoneG
 		m = m.refreshContent()
 		slug := m.activeGuild
-		if kind == confirmJoinG {
+		switch kind {
+		case confirmJoinG:
 			return m, func() tea.Msg { return JoinGuildMsg{Slug: slug} }
+		case confirmPromoteG:
+			return m, func() tea.Msg { return PromoteGuildMsg{Slug: slug} }
+		default:
+			return m, func() tea.Msg { return LeaveGuildMsg{Slug: slug} }
 		}
-		return m, func() tea.Msg { return LeaveGuildMsg{Slug: slug} }
 	case "n", "esc":
 		m.confirming = confirmNoneG
 		m = m.refreshContent()
@@ -799,13 +823,22 @@ func (m GuildsModel) buildContent() (string, []int, [][]postImageSlot) {
 	return prefix + strings.TrimRight(out, "\n"), offsets, postImages
 }
 
+// isEmojiIcon reports whether s contains a non-ASCII character, i.e. is an
+// emoji rather than a plain icon name like "code-filled".
+func isEmojiIcon(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
+}
+
 // guildIcon returns the icon string if it contains non-ASCII characters (i.e. an
 // emoji), or "◆" when the API has returned a plain icon name like "code-filled".
 func guildIcon(s string) string {
-	for _, r := range s {
-		if r > 127 {
-			return s
-		}
+	if isEmojiIcon(s) {
+		return s
 	}
 	return "◆"
 }
@@ -871,8 +904,11 @@ func (m GuildsModel) renderMemberItem(mem model.GuildMember, selected bool) stri
 	innerWidth := m.width - 4
 
 	iconStr := "•"
-	if mem.Role == "founder" {
+	switch mem.Role {
+	case "founder":
 		iconStr = "◆"
+	case "apprentice":
+		iconStr = "◇"
 	}
 	icon := theme.Subtle.Render(iconStr) + " "
 

@@ -519,6 +519,68 @@ func TestGuildsModel_LKey_WhenFounder_DoesNothing(t *testing.T) {
 	}
 }
 
+func TestGuildsModel_JKey_WhenApprentice_DoesNothing(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: true, Role: "apprentice"})
+	m, _ = m.Update(keyMsg_g("J"))
+	if m.IsConfirmingJoin() {
+		t.Error("J key when already an apprentice should not set confirming")
+	}
+}
+
+func TestGuildsModel_LKey_WhenApprentice_SetsConfirmLeave(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: true, Role: "apprentice"})
+	m, _ = m.Update(keyMsg_g("L"))
+	if !m.IsConfirmingLeave() {
+		t.Error("L key when an apprentice should set confirming to leave")
+	}
+}
+
+func TestGuildsModel_PKey_WhenApprentice_SetsConfirmPromote(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: true, Role: "apprentice"})
+	m, _ = m.Update(keyMsg_g("P"))
+	if !m.IsConfirmingPromote() {
+		t.Error("P key when an apprentice should set confirming to promote")
+	}
+}
+
+func TestGuildsModel_PKey_WhenMember_DoesNothing(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: true, Role: "member"})
+	m, _ = m.Update(keyMsg_g("P"))
+	if m.IsConfirmingPromote() {
+		t.Error("P key when a member (not apprentice) should not set confirming")
+	}
+}
+
+func TestGuildsModel_ConfirmY_Promote_EmitsPromoteGuildMsg(t *testing.T) {
+	t.Helper()
+	m := inPostsView(t)
+	m = m.SetGuildDetail(model.Guild{Slug: "alpha", Name: "Alpha", IsMember: true, Role: "apprentice"})
+	m, _ = m.Update(keyMsg_g("P"))
+	m2, cmd := m.Update(keyMsg_g("y"))
+	if cmd == nil {
+		t.Fatal("expected a cmd after y confirmation")
+	}
+	msg := cmd()
+	pm, ok := msg.(screens.PromoteGuildMsg)
+	if !ok {
+		t.Fatalf("expected PromoteGuildMsg, got %T", msg)
+	}
+	if pm.Slug != "alpha" {
+		t.Errorf("expected slug 'alpha', got %q", pm.Slug)
+	}
+	if m2.IsConfirmingPromote() {
+		t.Error("confirming should be cleared after y")
+	}
+}
+
 func TestGuildsModel_ConfirmY_Join_EmitsJoinGuildMsg(t *testing.T) {
 	t.Helper()
 	m := inPostsView(t)

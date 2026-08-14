@@ -3790,3 +3790,176 @@ func TestHTTPSearchUsers_ParsesResults(t *testing.T) {
 		t.Errorf("unexpected users: %+v", users)
 	}
 }
+
+func TestHTTPGetGuild_ApprenticeCountDefaultsToZeroWhenAbsent(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{
+			"id": "g1", "name": "Night Owls", "slug": "night-owls", "memberCount": 10,
+		})
+	}))
+
+	g, err := c.GetGuild("night-owls")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if g.ApprenticeCount != 0 {
+		t.Errorf("ApprenticeCount = %d, want 0 when absent from response", g.ApprenticeCount)
+	}
+}
+
+func TestHTTPGetGuild_ParsesApprenticeCountAndRole(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{
+			"id": "g1", "name": "Night Owls", "slug": "night-owls", "memberCount": 10,
+			"apprenticeCount": 7, "isMember": true, "role": "apprentice",
+		})
+	}))
+
+	g, err := c.GetGuild("night-owls")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if g.ApprenticeCount != 7 {
+		t.Errorf("ApprenticeCount = %d, want 7", g.ApprenticeCount)
+	}
+	if g.Role != "apprentice" {
+		t.Errorf("Role = %q, want apprentice", g.Role)
+	}
+}
+
+func TestHTTPGetUserGuilds_ParsesMembershipsIncludingApprentice(t *testing.T) {
+	var gotPath string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		writeOKWithCursor(t, w, []map[string]any{
+			{"guildId": "g1", "slug": "night-owls", "name": "Night Owls", "icon": "🦉", "role": "member", "joinedAt": "2026-03-27T10:12:01.516Z"},
+			{"guildId": "g2", "slug": "deep-divers", "name": "Deep Divers", "icon": "🐳", "role": "apprentice", "joinedAt": "2026-05-02T18:44:12.004Z"},
+		}, "")
+	}))
+
+	memberships, err := c.GetUserGuilds("neuromancer")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/v1/users/neuromancer/guilds" {
+		t.Errorf("unexpected path: %s", gotPath)
+	}
+	if len(memberships) != 2 {
+		t.Fatalf("len(memberships) = %d, want 2", len(memberships))
+	}
+	if memberships[0].Role != "member" || memberships[1].Role != "apprentice" {
+		t.Errorf("unexpected roles: %+v", memberships)
+	}
+}
+
+func TestHTTPGetUserGuilds_NotFound(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "no such user")
+	}))
+
+	_, err := c.GetUserGuilds("nobody")
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Status != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", apiErr.Status)
+	}
+}
+
+func TestHTTPJoinGuild_ReturnsMemberRole(t *testing.T) {
+	var gotPath, gotMethod string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		writeOK(t, w, map[string]any{"guildId": "g1", "role": "member"})
+	}))
+
+	role, err := c.JoinGuild("night-owls")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/v1/guilds/night-owls/join" {
+		t.Errorf("unexpected request: %s %s", gotMethod, gotPath)
+	}
+	if role != "member" {
+		t.Errorf("role = %q, want member", role)
+	}
+}
+
+func TestHTTPJoinGuild_ReturnsApprenticeRole(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{"guildId": "g1", "role": "apprentice"})
+	}))
+
+	role, err := c.JoinGuild("night-owls")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if role != "apprentice" {
+		t.Errorf("role = %q, want apprentice", role)
+	}
+}
+
+func TestHTTPJoinGuild_Conflict(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusConflict, "ALREADY_APPRENTICE", "already holding 5 apprenticeships")
+	}))
+
+	_, err := c.JoinGuild("night-owls")
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Status != http.StatusConflict {
+		t.Errorf("status = %d, want 409", apiErr.Status)
+	}
+}
+
+func TestHTTPPromoteGuild_ReturnsRole(t *testing.T) {
+	var gotPath, gotMethod string
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		writeOK(t, w, map[string]any{"guildId": "g1", "role": "member"})
+	}))
+
+	role, err := c.PromoteGuild("deep-divers")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/v1/guilds/deep-divers/promote" {
+		t.Errorf("unexpected request: %s %s", gotMethod, gotPath)
+	}
+	if role != "member" {
+		t.Errorf("role = %q, want member", role)
+	}
+}
+
+func TestHTTPPromoteGuild_ForbiddenWhenFounderOfCurrentBadge(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusForbidden, "FORBIDDEN", "founder must leave or hand over on the web first")
+	}))
+
+	_, err := c.PromoteGuild("deep-divers")
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Status != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", apiErr.Status)
+	}
+}
+
+func TestHTTPPromoteGuild_NotFoundWhenNotInGuild(t *testing.T) {
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "not in this guild")
+	}))
+
+	_, err := c.PromoteGuild("deep-divers")
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Status != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", apiErr.Status)
+	}
+}
