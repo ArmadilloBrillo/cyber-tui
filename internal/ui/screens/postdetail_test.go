@@ -1,6 +1,7 @@
 package screens_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -210,6 +211,151 @@ func TestPostDetail_PaginationRebuildsTree(t *testing.T) {
 	}
 }
 
+// TestPostDetail_VisibleInlineImages_DisabledByDefault confirms that with no
+// SharedConfigMsg.InlineImagesEnabled ever sent (the default), no slots are
+// reported even for a post whose content has an eligible image — the whole
+// feature must be a strict no-op until explicitly turned on.
+func TestPostDetail_VisibleInlineImages_DisabledByDefault(t *testing.T) {
+	m := initPostDetail()
+	post := pdPost("p1")
+	post.Content = "hi\n\n![a](https://example.com/a.png)\n\nbye"
+	m = m.SetPost(post)
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+// TestPostDetail_VisibleInlineImages_PostAndReply confirms that once enabled,
+// both the post's and a top-level reply's eligible image are reported, in
+// order, with the URL/Key/indent expected for each.
+func TestPostDetail_VisibleInlineImages_PostAndReply(t *testing.T) {
+	m := initPostDetail()
+	// Taller than the default 40 rows: the post's own reserved image band
+	// plus its header/border already takes a good chunk of the viewport, so
+	// a short viewport would legitimately cut the reply's image band off —
+	// this test wants both fully visible, not to exercise that cutoff.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 60})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+
+	post := pdPost("p1")
+	post.Content = "hi\n\n![a](https://example.com/a.png)\n\nbye"
+	m = m.SetPost(post)
+
+	reply := pdReply("r1", "", "someone", time.Now())
+	reply.Content = "check this\n\n![b](https://example.com/b.png)"
+	m = m.SetReplies([]model.Reply{reply})
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 visible slots (post + reply), got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != "https://example.com/a.png" || slots[0].Key != "post:p1:0" || slots[0].ColIndent != 2 {
+		t.Errorf("unexpected post slot: %+v", slots[0])
+	}
+	if slots[1].URL != "https://example.com/b.png" || slots[1].Key != "reply:r1:0" || slots[1].ColIndent != 2 {
+		t.Errorf("unexpected reply slot: %+v", slots[1])
+	}
+	if slots[1].Row <= slots[0].Row {
+		t.Errorf("expected reply slot to be below the post slot: post Row=%d, reply Row=%d", slots[0].Row, slots[1].Row)
+	}
+}
+
+// TestPostDetail_VisibleInlineImages_MultipleImagesInOnePost confirms every
+// eligible image in a single post is reported (not just the first), each
+// with its own index-suffixed Key, and that the second image's Row accounts
+// for the first image's full spacer-inclusive band plus the text paragraph
+// between them — the one thing renderBodyWithInlineImage's shift-tracking
+// loop exists to get right.
+func TestPostDetail_VisibleInlineImages_MultipleImagesInOnePost(t *testing.T) {
+	m := initPostDetail()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 80})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+
+	post := pdPost("p1")
+	post.Content = "one\n\n![a](https://example.com/a.png)\n\ntwo\n\n![b](https://example.com/b.png)\n\nthree"
+	m = m.SetPost(post)
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 slots for 2 images in one post, got %d: %+v", len(slots), slots)
+	}
+	if slots[0].Key != "post:p1:0" || slots[1].Key != "post:p1:1" {
+		t.Errorf("expected distinct per-image keys, got %q and %q", slots[0].Key, slots[1].Key)
+	}
+	// inlineImageMaxRows(8) + 2 spacer rows is the minimum gap between two
+	// images with nothing but a one-line paragraph between them.
+	const minGap = 10
+	if got := slots[1].Row - slots[0].Row; got < minGap {
+		t.Errorf("expected at least %d rows between images, got %d (rows %d, %d)", minGap, got, slots[0].Row, slots[1].Row)
+	}
+}
+
+// TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack is the
+// regression test for a 100%-reproducible live bug: with a post containing
+// an inline image taller than the viewport, pressing down to select the
+// first reply (scrolling the image out of view) and then pressing up just
+// enough to reselect the post (scrolling back onto it) left the image
+// failing to reappear on real iTerm2 — confirmed live to reproduce via
+// pure in-screen scrolling alone, no tab switch involved, and confirmed
+// here as a genuine viewport-positioning bug, not a redraw/timing issue:
+// millerPageNav's revealAbove (miller_pager.go) bottom-aligned the
+// viewport when scrolling back onto an item taller than the pane, leaving
+// its top — where an image band usually sits — still scrolled out of view.
+// Fixed by top-aligning revealAbove unconditionally, matching revealBelow.
+// See docs/plan-inline-images-improvements.md Round 4/13.
+func TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack(t *testing.T) {
+	m := initPostDetail()
+	// Small pane so the post (image band + text) is taller than it —
+	// otherwise millerPageNav's reveal-above/below logic for tall items
+	// never engages.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 15})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+
+	post := pdPost("p1")
+	post.Content = "hi\n\n![a](https://example.com/a.png)\n\nsome more text to pad out the post body a bit"
+	m = m.SetPost(post)
+	m = m.SetReplies([]model.Reply{
+		pdReply("r1", "", "alice", time.Now()),
+		pdReply("r2", "", "bob", time.Now().Add(time.Minute)),
+	})
+
+	initialSlots := m.VisibleInlineImages()
+	if len(initialSlots) != 1 {
+		t.Fatalf("setup: expected the image visible initially, got %d slots: %+v", len(initialSlots), initialSlots)
+	}
+
+	// Press down enough times to move selection off the post and onto a
+	// reply (scrolling the image out of view). The post is taller than the
+	// pane by design (see above), so millerPageNav scrolls one line at a
+	// time before it crosses into the reply — needs many presses, not few.
+	for i := 0; i < 60 && m.SelectedReplyID() == ""; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	}
+	if m.SelectedReplyID() == "" {
+		t.Fatal("setup: expected a reply selected after pressing down repeatedly")
+	}
+	if slots := m.VisibleInlineImages(); len(slots) != 0 {
+		t.Fatalf("setup: expected the image scrolled out of view once a reply is selected, got %+v", slots)
+	}
+
+	// Press up just enough to cross back onto the post (selection clears)
+	// — deliberately not settling any further, since a real user presses
+	// up only until the post is reselected, not dozens more times past
+	// that.
+	for i := 0; i < 60 && m.SelectedReplyID() != ""; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	}
+	if id := m.SelectedReplyID(); id != "" {
+		t.Fatalf("setup: expected back on the post after pressing up repeatedly, got reply %q selected", id)
+	}
+
+	finalSlots := m.VisibleInlineImages()
+	if len(finalSlots) != 1 {
+		t.Errorf("expected the image visible again immediately on scrolling back onto the post, got %d slots: %+v", len(finalSlots), finalSlots)
+	}
+}
+
 // TestPostDetail_DepthCap verifies that a chain deeper than 3 levels does not
 // panic and that all replies remain reachable via navigation.
 func TestPostDetail_DepthCap(t *testing.T) {
@@ -372,6 +518,109 @@ func TestPostDetail_ComposeActive_TrueWhileConfirmingDelete(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
 	if !m.ComposeActive() {
 		t.Error("expected ComposeActive to report true while the delete-confirm overlay is open")
+	}
+}
+
+// --- CanEditSelected / 'e' key ---
+
+func TestPostDetail_CanEditSelected_TrueForOwnRecentPost_AsSupporter(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "mine", CreatedAt: time.Now()})
+
+	if !m.CanEditSelected() {
+		t.Error("expected CanEditSelected true for own recent post as a supporter")
+	}
+}
+
+func TestPostDetail_CanEditSelected_FalseWithoutSupporterStatus(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(false)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "mine", CreatedAt: time.Now()})
+
+	if m.CanEditSelected() {
+		t.Error("expected CanEditSelected false without supporter status")
+	}
+}
+
+func TestPostDetail_CanEditSelected_FalseOutsideEditWindow(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "mine", CreatedAt: time.Now().Add(-10 * time.Minute)})
+
+	if m.CanEditSelected() {
+		t.Error("expected CanEditSelected false outside the 5-minute edit window")
+	}
+}
+
+func TestPostDetail_CanEditSelected_ForOwnRecentReply(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(pdPost("p1")) // author "op" != "alice"
+	m = m.SetReplies([]model.Reply{pdReply("r1", "", "alice", time.Now())})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select r1 (own reply)
+
+	if !m.CanEditSelected() {
+		t.Error("expected CanEditSelected true for own recent reply, even though the post itself isn't ours")
+	}
+}
+
+func TestPostDetail_EKey_OpensPostEditPanel_WhenEligible(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "mine", CreatedAt: time.Now()})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if !m.ComposeActive() {
+		t.Fatal("expected ComposeActive true after pressing 'e' on an editable post")
+	}
+}
+
+// TestPostDetail_EKey_PostEditPanel_ActuallyRenders guards against a
+// regression where the post-edit panel became active (ComposeActive true,
+// status bar hints updated) but View() had no branch that ever drew it —
+// the screen just kept showing the plain viewport.
+func TestPostDetail_EKey_PostEditPanel_ActuallyRenders(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "distinctive body text", CreatedAt: time.Now()})
+
+	before := m.View()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	after := m.View()
+
+	if after == before {
+		t.Fatal("expected View() to change once the post-edit panel is open, got identical output")
+	}
+	if !strings.Contains(after, "distinctive body text") {
+		t.Errorf("expected View() to render the pre-filled body content, got:\n%s", after)
+	}
+}
+
+func TestPostDetail_EKey_NoOp_WhenNotEligible(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(pdPost("p1")) // author "op" != "alice"
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if m.ComposeActive() {
+		t.Error("expected ComposeActive to stay false pressing 'e' on another user's post")
+	}
+}
+
+func TestPostDetail_EKey_OpensReplyEdit_WhenEligible(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(pdPost("p1"))
+	m = m.SetReplies([]model.Reply{pdReply("r1", "", "alice", time.Now())})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select r1
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	if cmd == nil {
+		t.Fatal("expected a focus cmd from opening the reply editor")
+	}
+	if !m.ComposeActive() {
+		t.Error("expected ComposeActive true after pressing 'e' on an editable own reply")
 	}
 }
 

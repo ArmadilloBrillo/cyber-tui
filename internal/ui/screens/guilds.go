@@ -152,6 +152,11 @@ type GuildsModel struct {
 	relaxed           bool
 	timeDisplayFormat string
 	filterNSFW        bool
+
+	// postImages is parallel to itemOffsets when view == viewGuildPosts —
+	// see TopicsModel's field of the same name for the convention.
+	postImages          [][]postImageSlot
+	inlineImagesEnabled bool
 }
 
 // NewGuildsModel returns a zero-value GuildsModel ready for first use.
@@ -182,6 +187,14 @@ func (m GuildsModel) ComposeView(width int) string   { return m.panel.SetWidth(w
 
 // ActiveGuild returns the slug of the guild whose posts are currently displayed, or "" when in list view.
 func (m GuildsModel) ActiveGuild() string { return m.activeGuild }
+
+// OpenGuild marks slug as the active guild, mirroring what pressing enter on
+// a guild-list row does. Callers still need to dispatch the post-list load
+// themselves (e.g. via LoadGuildPostsMsg) — this only sets the selection.
+func (m GuildsModel) OpenGuild(slug string) GuildsModel {
+	m.activeGuild = slug
+	return m
+}
 
 // IsLoaded reports whether the guild list has been fetched at least once.
 func (m GuildsModel) IsLoaded() bool { return m.loaded }
@@ -354,6 +367,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			m.postIndex = 0
 		}
 		m.ownGuildSlug = msg.OwnGuildSlug
+		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -701,9 +715,12 @@ func (m GuildsModel) handleConfirmKey(msg tea.KeyMsg) (GuildsModel, tea.Cmd) {
 	return m, nil
 }
 
-func (m GuildsModel) buildContent() (string, []int) {
+// buildContent returns the rendered viewport content, the per-item line
+// offsets, and — only when view == viewGuildPosts — each post's inline
+// image slots parallel to offsets (nil in the guild/member list views).
+func (m GuildsModel) buildContent() (string, []int, [][]postImageSlot) {
 	if m.fetching {
-		return theme.Subtle.Render("  loading guilds…"), nil
+		return theme.Subtle.Render("  loading guilds…"), nil, nil
 	}
 	sep := "\n"
 	lineInc := 1
@@ -722,9 +739,9 @@ func (m GuildsModel) buildContent() (string, []int) {
 	if m.view == viewGuildList {
 		if len(m.guilds) == 0 {
 			if m.err != nil {
-				return prefix + theme.Subtle.Render("  couldn't load guilds"), nil
+				return prefix + theme.Subtle.Render("  couldn't load guilds"), nil, nil
 			}
-			return prefix + theme.Subtle.Render("  no guilds yet"), nil
+			return prefix + theme.Subtle.Render("  no guilds yet"), nil, nil
 		}
 		offsets := make([]int, len(m.guilds))
 		currentLine := startLine
@@ -736,15 +753,15 @@ func (m GuildsModel) buildContent() (string, []int) {
 			currentLine += lipgloss.Height(rendered) + lineInc - 1
 		}
 		out += listFooter(m.loading, m.guildsExhausted && len(m.guilds) > 0)
-		return prefix + strings.TrimRight(out, "\n"), offsets
+		return prefix + strings.TrimRight(out, "\n"), offsets, nil
 	}
 
 	if m.view == viewGuildMembers {
 		if len(m.members) == 0 {
 			if m.err != nil {
-				return prefix + theme.Subtle.Render("  couldn't load members"), nil
+				return prefix + theme.Subtle.Render("  couldn't load members"), nil, nil
 			}
-			return prefix + theme.Subtle.Render("  no members"), nil
+			return prefix + theme.Subtle.Render("  no members"), nil, nil
 		}
 		offsets := make([]int, len(m.members))
 		currentLine := startLine
@@ -756,28 +773,30 @@ func (m GuildsModel) buildContent() (string, []int) {
 			currentLine += lipgloss.Height(rendered) + lineInc - 1
 		}
 		out += listFooter(m.loading, m.membersExhausted && len(m.members) > 0)
-		return prefix + strings.TrimRight(out, "\n"), offsets
+		return prefix + strings.TrimRight(out, "\n"), offsets, nil
 	}
 
 	// viewGuildPosts
 	if len(m.posts) == 0 {
 		if m.err != nil {
-			return prefix + theme.Subtle.Render("  couldn't load threads"), nil
+			return prefix + theme.Subtle.Render("  couldn't load threads"), nil, nil
 		}
-		return prefix + theme.Subtle.Render("  no threads"), nil
+		return prefix + theme.Subtle.Render("  no threads"), nil, nil
 	}
 	visible := m.visiblePosts()
 	offsets := make([]int, len(visible))
+	postImages := make([][]postImageSlot, len(visible))
 	currentLine := startLine
 	var out string
 	for i, p := range visible {
 		offsets[i] = currentLine
-		rendered := m.renderPostItem(p, i == m.postIndex)
+		rendered, imgSlots := m.renderPostItem(p, i == m.postIndex)
+		postImages[i] = imgSlots
 		out += rendered + sep
 		currentLine += lipgloss.Height(rendered) + lineInc - 1
 	}
 	out += listFooter(m.loading, m.exhausted)
-	return prefix + strings.TrimRight(out, "\n"), offsets
+	return prefix + strings.TrimRight(out, "\n"), offsets, postImages
 }
 
 // guildIcon returns the icon string if it contains non-ASCII characters (i.e. an
@@ -889,18 +908,104 @@ func (m GuildsModel) renderMemberItem(mem model.GuildMember, selected bool) stri
 	return boxStyle.Render(line)
 }
 
-func (m GuildsModel) renderPostItem(p model.Post, selected bool) string {
+func (m GuildsModel) renderPostItem(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
 }
 
 func (m GuildsModel) refreshContent() GuildsModel {
 	m.viewport.Height = m.viewportHeight()
-	content, offsets := m.buildContent()
+	content, offsets, postImages := m.buildContent()
 	m.itemOffsets = offsets
+	m.postImages = postImages
 	m.viewport.SetContent(content)
 	return m.ensureSelectedVisible()
+}
+
+// SelectedPostID returns the ID of the currently selected guild post, or ""
+// when not browsing guild posts or nothing is selected — used by App to
+// detect a selection-only move (see FeedModel.SelectedPostID's doc comment).
+func (m GuildsModel) SelectedPostID() string {
+	if m.view != viewGuildPosts {
+		return ""
+	}
+	visible := m.visiblePosts()
+	if m.postIndex < 0 || m.postIndex >= len(visible) {
+		return ""
+	}
+	return visible[m.postIndex].ID
+}
+
+// VisibleInlineImages returns the inline image slots currently fully within
+// the viewport, top to bottom, across every visible guild post — see
+// PostDetailModel.VisibleInlineImages for the full contract.
+func (m GuildsModel) VisibleInlineImages() []InlineImageSlot {
+	if !m.ready || !m.inlineImagesEnabled || m.view != viewGuildPosts {
+		return nil
+	}
+	visible := m.visiblePosts()
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+
+	var slots []InlineImageSlot
+	for i, p := range visible {
+		if i >= len(m.postImages) || i >= len(m.itemOffsets) {
+			continue
+		}
+		for j, img := range m.postImages[i] {
+			abs := m.itemOffsets[i] + img.Line
+			if abs < top || abs+inlineImageMaxRows > bottom {
+				continue
+			}
+			slots = append(slots, InlineImageSlot{
+				URL:       img.URL,
+				Row:       abs - top,
+				ColIndent: 2,
+				MaxCols:   m.width - 4,
+				MaxRows:   inlineImageEncodeMaxRows,
+				Key:       fmt.Sprintf("guildpost:%s:%d", p.ID, j),
+			})
+		}
+	}
+	return slots
+}
+
+// VisibleDetailInlineImages returns the inline image slots for the selected
+// post card in Miller's reading pane — see TopicsModel.VisibleDetailInlineImages
+// for the full contract (guild post replies aren't inline-image-aware either).
+func (m GuildsModel) VisibleDetailInlineImages(width, height int) []InlineImageSlot {
+	if !m.ready || !m.inlineImagesEnabled {
+		return nil
+	}
+	visible := m.visiblePosts()
+	if m.postIndex >= len(visible) {
+		return nil
+	}
+	p := visible[m.postIndex]
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	_, watched := m.watchedPostIDs[p.ID]
+	postSelected := m.threadReplyIndex < 0
+	_, imgSlots := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, true)
+	if len(imgSlots) == 0 {
+		return nil
+	}
+	top := m.threadScrollOffset
+	bottom := top + height
+	var slots []InlineImageSlot
+	for j, img := range imgSlots {
+		if img.Line < top || img.Line+inlineImageMaxRows > bottom {
+			continue
+		}
+		slots = append(slots, InlineImageSlot{
+			URL:       img.URL,
+			Row:       img.Line - top,
+			ColIndent: 2,
+			MaxCols:   width - 4,
+			MaxRows:   inlineImageEncodeMaxRows,
+			Key:       fmt.Sprintf("guildpost:%s:%d", p.ID, j),
+		})
+	}
+	return slots
 }
 
 func (m GuildsModel) ensureSelectedVisible() GuildsModel {
@@ -928,7 +1033,8 @@ func (m GuildsModel) ensureSelectedVisible() GuildsModel {
 		if selectedIndex >= len(visible) {
 			return m
 		}
-		itemHeight = lipgloss.Height(m.renderPostItem(visible[selectedIndex], false))
+		rendered, _ := m.renderPostItem(visible[selectedIndex], false)
+		itemHeight = lipgloss.Height(rendered)
 	}
 
 	if selectedIndex >= len(m.itemOffsets) {
@@ -1086,7 +1192,7 @@ func (m GuildsModel) renderDetailReply(node replyNode, selected bool, width int)
 	if node.ParentUsername != "" {
 		header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
 	}
-	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false))
+	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false) + editedSuffix(node.Reply.EditedAt))
 	body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
 	boxStyle := theme.Border
 	if selected {
@@ -1181,7 +1287,7 @@ func (m GuildsModel) pageThreadNav(delta, paneH, paneW int) GuildsModel {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
 
-	postCard := RenderPost(p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0)
+	postCard, _ := RenderPost(p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
 	postH := lipgloss.Height(postCard)
 
 	replyStarts := make([]int, len(m.threadFlatTree))
@@ -1217,7 +1323,7 @@ func (m GuildsModel) DetailView(width, height int) string {
 	_, watched := m.watchedPostIDs[p.ID]
 
 	postSelected := m.threadReplyIndex < 0
-	card := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0)
+	card, _ := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
 
 	var parts []string
 	startLines := []int{0}

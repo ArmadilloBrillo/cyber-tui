@@ -221,3 +221,25 @@ func TestFilePermissions(t *testing.T) {
 		t.Errorf("file mode = %04o, want 0600", mode)
 	}
 }
+
+func TestGetImageScale(t *testing.T) {
+	cases := []struct {
+		name string
+		in   float64
+		want float64
+	}{
+		{"zero defaults to 1.0", 0, 1.0},
+		{"negative defaults to 1.0", -1, 1.0},
+		{"within bounds unchanged", 1.5, 1.5},
+		{"below min clamps up", 0.05, config.MinImageScale},
+		{"above max clamps down", 10, config.MaxImageScale},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := config.Config{ImageScale: c.in}.GetImageScale()
+			if got != c.want {
+				t.Errorf("GetImageScale(%v) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}

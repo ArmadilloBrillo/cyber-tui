@@ -6,12 +6,14 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/api"
+	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
@@ -863,6 +865,7 @@ func TestCreateReplyCmd_ReturnsReplyID(t *testing.T) {
 func TestReplyCreatedMsg_SetsPendingReplyID(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1"})
 
 	m, cmd := a.Update(replyCreatedMsg{postID: "p1", replyID: "reply-new-1"})
 	a2 := m.(App)
@@ -887,6 +890,43 @@ func TestReplyCreatedMsg_SetsPendingReplyID(t *testing.T) {
 	}
 	if a2.pendingReplyID != "" {
 		t.Errorf("expected pendingReplyID cleared after replies loaded, got %q", a2.pendingReplyID)
+	}
+}
+
+// TestRepliesLoadedMsg_DropsStaleReplyForDifferentPost is the regression
+// test for a delayed-blackout bug: loadRepliesCmd fires a real network
+// request with no cancellation on navigation-away, and its result
+// (repliesLoadedMsg) used to be applied unconditionally — so a request
+// still in flight when the user opens a *different* post before it resolves
+// could land seconds later and silently overwrite that different post's
+// reply tree (which rebuilds replyOffsets/replyImages and, via
+// viewport.SetContent's internal GotoBottom() when content shrinks, can
+// even reposition the scroll away from an inline image with zero user
+// input). repliesLoadedMsg now carries postID so a stale delivery for a
+// post the user has since navigated away from is dropped instead.
+func TestRepliesLoadedMsg_DropsStaleReplyForDifferentPost(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1"})
+
+	// Navigate to a different post before the stale request "resolves".
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p2"})
+
+	m, _, ok := a.handlePostDetail(repliesLoadedMsg{
+		postID:  "p1",
+		replies: []model.Reply{{ID: "r1", PostID: "p1"}},
+	})
+	if !ok {
+		t.Fatal("expected repliesLoadedMsg to be handled")
+	}
+	a2 := m
+	if a2.postDetail.PostID() != "p2" {
+		t.Fatalf("setup broken: expected post p2 still open, got %q", a2.postDetail.PostID())
+	}
+	// SetPost leaves Loading() true until SetReplies clears it; a dropped
+	// stale reply load must leave p2's own (still in-flight) load untouched.
+	if !a2.postDetail.Loading() {
+		t.Error("expected p2 to still be Loading() — a stale reply load for a different post must not clear it")
 	}
 }
 
@@ -1367,6 +1407,159 @@ func TestRouteURL_RelativeURL_ExternalOpen(t *testing.T) {
 	}
 }
 
+func TestRouteURL_ReservedWord_NotTreatedAsUsername(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	a2, _ := a.routeURL("https://cyberspace.online/jukebox")
+	if a2.profileReturn == screenFeed {
+		t.Error("reserved top-level path must not be routed as a profile")
+	}
+}
+
+func TestRouteURL_BareUsername_OpensProfile(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	a2, cmd := a.routeURL("https://cyberspace.online/castle")
+	if cmd == nil {
+		t.Error("expected a cmd for bare-username profile navigation")
+	}
+	if a2.profileReturn != screenFeed {
+		t.Errorf("profileReturn should be screenFeed, got %v", a2.profileReturn)
+	}
+}
+
+func TestRouteURL_PostPermalink_ShortForm(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	_, cmd := a.routeURL("https://cyberspace.online/castle/podcast-recommendations")
+	if cmd == nil {
+		t.Fatal("expected a cmd for post permalink")
+	}
+	msg := cmd()
+	loaded, ok := msg.(urlPostLoadedMsg)
+	if !ok {
+		t.Fatalf("expected urlPostLoadedMsg, got %T", msg)
+	}
+	if loaded.origin != screenFeed {
+		t.Errorf("origin = %v, want screenFeed", loaded.origin)
+	}
+}
+
+func TestRouteURL_PostPermalink_BlogForm(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenBookmarks
+	_, cmd := a.routeURL("https://cyberspace.online/castle/blog/podcast-recommendations")
+	if cmd == nil {
+		t.Fatal("expected a cmd for post permalink")
+	}
+	msg := cmd()
+	loaded, ok := msg.(urlPostLoadedMsg)
+	if !ok {
+		t.Fatalf("expected urlPostLoadedMsg, got %T", msg)
+	}
+	if loaded.origin != screenBookmarks {
+		t.Errorf("origin = %v, want screenBookmarks", loaded.origin)
+	}
+}
+
+func TestRouteURL_TopicPath_OpensTopic(t *testing.T) {
+	a := loggedInApp()
+	a2, cmd := a.routeURL("https://cyberspace.online/topics/diy")
+	if cmd == nil {
+		t.Fatal("expected a cmd for topic navigation")
+	}
+	if a2.active != screenTopics {
+		t.Errorf("active = %v, want screenTopics", a2.active)
+	}
+	if got := a2.topics.ActiveTopicName(); got != "diy" {
+		t.Errorf("ActiveTopicName() = %q, want %q", got, "diy")
+	}
+}
+
+func TestRouteURL_BareTopics_OpensTopicList(t *testing.T) {
+	a := loggedInApp()
+	a2, _ := a.routeURL("https://cyberspace.online/topics")
+	if a2.active != screenTopics {
+		t.Errorf("active = %v, want screenTopics", a2.active)
+	}
+}
+
+func TestRouteURL_GuildPath_OpensGuild(t *testing.T) {
+	a := loggedInApp()
+	a2, cmd := a.routeURL("https://cyberspace.online/guilds/night-owls")
+	if cmd == nil {
+		t.Fatal("expected a cmd for guild navigation")
+	}
+	if a2.active != screenGuilds {
+		t.Errorf("active = %v, want screenGuilds", a2.active)
+	}
+	if got := a2.guilds.ActiveGuild(); got != "night-owls" {
+		t.Errorf("ActiveGuild() = %q, want %q", got, "night-owls")
+	}
+}
+
+func TestRouteURL_BareGuilds_OpensGuildList(t *testing.T) {
+	a := loggedInApp()
+	a2, _ := a.routeURL("https://cyberspace.online/guilds")
+	if a2.active != screenGuilds {
+		t.Errorf("active = %v, want screenGuilds", a2.active)
+	}
+}
+
+func TestRouteURL_ChatPath_OpensRoom(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	_, cmd := a.routeURL("https://cyberspace.online/chat/general")
+	if cmd == nil {
+		t.Fatal("expected a cmd for chat room navigation")
+	}
+	msg := cmd()
+	open, ok := msg.(screens.OpenRoomMsg)
+	if !ok {
+		t.Fatalf("expected screens.OpenRoomMsg, got %T", msg)
+	}
+	if open.RoomSlug != "general" {
+		t.Errorf("RoomSlug = %q, want %q", open.RoomSlug, "general")
+	}
+	if open.NotifID != "" {
+		t.Errorf("NotifID = %q, want empty (not from a notification)", open.NotifID)
+	}
+}
+
+func TestRouteURL_BareChat_OpensRoomList(t *testing.T) {
+	a := loggedInApp()
+	a2, _ := a.routeURL("https://cyberspace.online/chat")
+	if a2.active != screenChatrooms {
+		t.Errorf("active = %v, want screenChatrooms", a2.active)
+	}
+}
+
+func TestRouteURL_ChatPath_NoNotifID_DoesNotDecrementUnread(t *testing.T) {
+	a := loggedInApp()
+	a.polledUnreadCount = 3
+	_, cmd := a.routeURL("https://cyberspace.online/chat/general")
+	msg := cmd()
+	m, _, handled := a.handleChatrooms(msg)
+	if !handled {
+		t.Fatal("expected handleChatrooms to handle screens.OpenRoomMsg")
+	}
+	if m.polledUnreadCount != 3 {
+		t.Errorf("polledUnreadCount = %d, want unchanged 3 (no notification behind this open)", m.polledUnreadCount)
+	}
+}
+
+func TestRouteURL_EphemeralAllowsPostPermalinkNav(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+	got, cmd := a.routeURL("https://cyberspace.online/castle/podcast-recommendations")
+	if got.notifyText != "" {
+		t.Errorf("notifyText = %q, want empty (internal nav must not be blocked)", got.notifyText)
+	}
+	if cmd == nil {
+		t.Error("cmd = nil, want post load command")
+	}
+}
+
 func TestGetFocusedURLs_LoginScreen(t *testing.T) {
 	a := newTestApp() // active == screenLogin, not in switch
 	if got := a.getFocusedURLs(); got != nil {
@@ -1641,6 +1834,94 @@ func TestResendVerificationCmd_PropagatesError(t *testing.T) {
 	}
 }
 
+// --- Notifications v0.8.5: unread-count exact, mark-all-read hasMore ---
+
+func TestUnreadCountMsg_PropagatesExactFlag(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.Update(unreadCountMsg{count: 100, exact: false})
+	got := m.(App)
+	if got.polledUnreadCount != 100 {
+		t.Errorf("polledUnreadCount = %d, want 100", got.polledUnreadCount)
+	}
+	if got.polledUnreadCountExact {
+		t.Error("polledUnreadCountExact = true, want false")
+	}
+}
+
+func TestMarkAllNotifsReadMsg_SetsExactTrue(t *testing.T) {
+	a := loggedInApp()
+	a.polledUnreadCount = 150
+	a.polledUnreadCountExact = false
+	m, _ := a.Update(screens.MarkAllNotifsReadMsg{})
+	got := m.(App)
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0", got.polledUnreadCount)
+	}
+	if !got.polledUnreadCountExact {
+		t.Error("polledUnreadCountExact = false, want true (zero unread is always exact)")
+	}
+}
+
+// markAllReadSpyClient counts MarkAllNotificationsRead calls and reports
+// hasMore true for the first hasMoreCalls invocations, then false.
+type markAllReadSpyClient struct {
+	*api.MockClient
+	hasMoreCalls int
+	calls        int
+}
+
+func (c *markAllReadSpyClient) MarkAllNotificationsRead() (bool, error) {
+	c.calls++
+	return c.calls <= c.hasMoreCalls, nil
+}
+
+func TestMarkAllNotifsReadCmd_LoopsWhileHasMore(t *testing.T) {
+	spy := &markAllReadSpyClient{MockClient: api.NewMockClient(), hasMoreCalls: 3}
+	a := NewApp(spy)
+	a.markAllNotifsReadCmd()()
+	if spy.calls != 4 {
+		t.Errorf("MarkAllNotificationsRead called %d times, want 4 (3 hasMore=true + 1 final hasMore=false)", spy.calls)
+	}
+}
+
+func TestMarkAllNotifsReadCmd_StopsAtMaxCalls(t *testing.T) {
+	spy := &markAllReadSpyClient{MockClient: api.NewMockClient(), hasMoreCalls: 1000}
+	a := NewApp(spy)
+	a.markAllNotifsReadCmd()()
+	if spy.calls != markAllNotifsReadMaxCalls {
+		t.Errorf("MarkAllNotificationsRead called %d times, want the bounded max %d", spy.calls, markAllNotifsReadMaxCalls)
+	}
+}
+
+// tooSoonPostClient simulates the server silently converting a post
+// submitted too soon after a previous one into a journal entry: CreatePost
+// still "succeeds" with a postId/slug, but that ID doesn't resolve.
+type tooSoonPostClient struct {
+	*api.MockClient
+}
+
+func (c *tooSoonPostClient) GetPost(postID string) (model.Post, error) {
+	return model.Post{}, &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "post not found"}
+}
+
+func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testing.T) {
+	a := NewApp(&tooSoonPostClient{MockClient: api.NewMockClient()})
+
+	msg := a.createPostCmd("hello", "", "", nil, true, false)()
+	if _, ok := msg.(postConvertedToNoteMsg); !ok {
+		t.Fatalf("createPostCmd() = %T, want postConvertedToNoteMsg", msg)
+	}
+}
+
+func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
+	a := NewApp(api.NewMockClient())
+
+	msg := a.createPostCmd("hello", "", "", nil, true, false)()
+	if _, ok := msg.(postCreatedMsg); !ok {
+		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
+	}
+}
+
 // flagErrorMsg softens the documented self-report 403 into a friendly banner;
 // anything else falls through to the normal actionErrMsg handling.
 func TestFlagErrorMsg_403IsSoftened(t *testing.T) {
@@ -1666,6 +1947,109 @@ func TestFlagErrorMsg_OtherErrorsFallThrough(t *testing.T) {
 	}
 	if ae.err != err {
 		t.Errorf("actionErrMsg.err = %v, want the original error", ae.err)
+	}
+}
+
+// pokeErrorMsg softens the expected 429 (1/hour, 8/day cap) and the documented
+// 403 (blocked either direction) into friendly banners; anything else falls
+// through to the normal actionErrMsg handling.
+func TestPokeErrorMsg_429IsSoftened(t *testing.T) {
+	got := pokeErrorMsg(&api.APIError{Code: "RATE_LIMITED", Status: 429, Message: "too many requests"})
+	msg, ok := got.(notifyMsg)
+	if !ok {
+		t.Fatalf("pokeErrorMsg(429) = %T, want notifyMsg", got)
+	}
+	if msg.level != notifyError {
+		t.Errorf("level = %v, want notifyError", msg.level)
+	}
+	if msg.text != "poke limit reached — try again later" {
+		t.Errorf("text = %q, want friendly rate-limit message", msg.text)
+	}
+}
+
+func TestPokeErrorMsg_403IsSoftened(t *testing.T) {
+	got := pokeErrorMsg(&api.APIError{Code: "FORBIDDEN", Status: 403, Message: "blocked"})
+	msg, ok := got.(notifyMsg)
+	if !ok {
+		t.Fatalf("pokeErrorMsg(403) = %T, want notifyMsg", got)
+	}
+	if msg.text != "can't poke this user" {
+		t.Errorf("text = %q, want friendly blocked message", msg.text)
+	}
+}
+
+func TestPokeErrorMsg_OtherErrorsFallThrough(t *testing.T) {
+	err := &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "unknown user"}
+	got := pokeErrorMsg(err)
+	ae, ok := got.(actionErrMsg)
+	if !ok {
+		t.Fatalf("pokeErrorMsg(404) = %T, want actionErrMsg", got)
+	}
+	if ae.err != err {
+		t.Errorf("actionErrMsg.err = %v, want the original error", ae.err)
+	}
+}
+
+// editErrorMsg softens the documented 403 (outside the 5-minute window or not
+// a supporter) into a friendly banner; anything else falls through to the
+// normal actionErrMsg handling.
+func TestEditErrorMsg_403IsSoftened(t *testing.T) {
+	got := editErrorMsg(&api.APIError{Code: "FORBIDDEN", Status: 403, Message: "edit window closed"})
+	msg, ok := got.(notifyMsg)
+	if !ok {
+		t.Fatalf("editErrorMsg(403) = %T, want notifyMsg", got)
+	}
+	if msg.level != notifyError {
+		t.Errorf("level = %v, want notifyError", msg.level)
+	}
+	if msg.text != "can't edit — outside the 5-minute window or not a supporter" {
+		t.Errorf("text = %q, want friendly edit-window message", msg.text)
+	}
+}
+
+func TestEditErrorMsg_OtherErrorsFallThrough(t *testing.T) {
+	err := &api.APIError{Code: "RATE_LIMITED", Status: 429, Message: "too many requests"}
+	got := editErrorMsg(err)
+	ae, ok := got.(actionErrMsg)
+	if !ok {
+		t.Fatalf("editErrorMsg(429) = %T, want actionErrMsg", got)
+	}
+	if ae.err != err {
+		t.Errorf("actionErrMsg.err = %v, want the original error", ae.err)
+	}
+}
+
+// TestApp_PostEditPanel_VisibleInFullRender exercises the whole App-level
+// pipeline (outer layout chrome included) rather than PostDetailModel in
+// isolation, to catch any clipping/composition bug the layout wrapper might
+// introduce on top of an otherwise-correct screen-level View(). Reported
+// live: pressing 'e' on a post in Post Detail applies and saves the edit
+// (so Update() routing is confirmed working) but the panel is never visible.
+func TestApp_PostEditPanel_VisibleInFullRender(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "op", IsSupporter: true}
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.
+		SetCurrentUsername("op").
+		SetCurrentUserIsSupporter(true).
+		SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "distinctive body text", CreatedAt: time.Now()})
+
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a = m.(App)
+
+	before := a.View()
+	m, _ = a.Update(keyMsg("e"))
+	a = m.(App)
+	after := a.View()
+
+	if !a.postDetail.ComposeActive() {
+		t.Fatal("setup: expected ComposeActive true after pressing 'e'")
+	}
+	if after == before {
+		t.Fatal("expected the full App render to change once the post-edit panel is open, got identical output")
+	}
+	if !strings.Contains(after, "distinctive body text") {
+		t.Errorf("expected the full App render to contain the pre-filled body content, got:\n%s", after)
 	}
 }
 
@@ -2208,6 +2592,46 @@ func TestUpdate_ImageNeedsCleanup_NotAutoCleared(t *testing.T) {
 	}
 }
 
+// TestHandleImageViewer_OpenPausesChatStyleAnim and its close counterpart
+// guard the fix for animated (wave/blink/glitch) chat lines corrupting the
+// image modal: a re-render triggered by styleAnimTickMsg changes a terminal
+// row's bytes, forcing Bubble Tea to resend the whole row — including the
+// part of it covered by the modal's box — which erases the modal's
+// graphics-protocol pixels there. Pausing chatrooms/cmail's animation
+// re-render while the modal is open avoids that.
+func TestHandleImageViewer_OpenPausesChatStyleAnim(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+
+	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://example.com/x.jpg", encoded: "seq", cols: 10, rows: 5})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if !a2.chatrooms.AnimPaused() {
+		t.Error("expected chatrooms.animPaused to be set once the modal opens")
+	}
+	if !a2.cmail.AnimPaused() {
+		t.Error("expected cmail.animPaused to be set once the modal opens")
+	}
+}
+
+func TestUpdate_ImageModalClose_ResumesChatStyleAnim(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.chatrooms = a.chatrooms.SetAnimPaused(true)
+	a.cmail = a.cmail.SetAnimPaused(true)
+
+	m, _ := a.Update(keyMsg("x"))
+	a2 := m.(App)
+	if a2.chatrooms.AnimPaused() {
+		t.Error("expected chatrooms.animPaused to be cleared once the modal closes")
+	}
+	if a2.cmail.AnimPaused() {
+		t.Error("expected cmail.animPaused to be cleared once the modal closes")
+	}
+}
+
 func TestHandleImageViewer_NewImage_ClearsCleanupFlag(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolKitty
@@ -2283,6 +2707,14 @@ func TestHandleURLPickerKey_Enter_SingleImage_NoCarousel(t *testing.T) {
 	}
 }
 
+// TestUpdate_ImageModal_LeftRight_CyclesWithoutClosing confirms a left/right
+// press updates the carousel index and schedules a debounce tick
+// (carouselCycleGen bumped, a non-nil cmd) but does NOT start the real
+// fetch immediately — see cycleImageCarousel's doc comment for why: holding
+// the key down should feel responsive (index moves right away) without
+// firing one expensive fetch per repeat. The fetch only actually starts
+// once the debounce tick lands (simulated here via carouselCycleSettledMsg)
+// and its gen still matches, i.e. nothing superseded it.
 func TestUpdate_ImageModal_LeftRight_CyclesWithoutClosing(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolKitty
@@ -2303,16 +2735,57 @@ func TestUpdate_ImageModal_LeftRight_CyclesWithoutClosing(t *testing.T) {
 		t.Error("expected carousel items to survive cycling")
 	}
 	if cmd == nil {
-		t.Fatal("expected a fetch cmd for the newly cycled-to image")
+		t.Fatal("expected a debounce-tick cmd scheduled for the newly cycled-to image")
 	}
-	if a2.imageFetchGen == genBefore {
-		t.Error("expected imageFetchGen to advance on cycle")
+	if a2.imageFetchGen != genBefore {
+		t.Error("expected imageFetchGen NOT to advance yet — the fetch is debounced")
+	}
+	if a2.carouselCycleGen == a.carouselCycleGen {
+		t.Error("expected carouselCycleGen bumped on cycle")
+	}
+
+	m3, cmd3, ok := a2.handleImageViewer(carouselCycleSettledMsg{gen: a2.carouselCycleGen})
+	if !ok {
+		t.Fatal("expected carouselCycleSettledMsg to be handled")
+	}
+	if cmd3 == nil {
+		t.Fatal("expected the real fetch cmd once the debounce tick lands")
+	}
+	if m3.imageFetchGen == genBefore {
+		t.Error("expected imageFetchGen to advance once the debounce tick fires")
 	}
 
 	m2, _ := a2.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	a3 := m2.(App)
 	if a3.imageCarouselIndex != 0 {
 		t.Errorf("expected carousel index to wrap/return to 0 after left, got %d", a3.imageCarouselIndex)
+	}
+}
+
+// TestCycleImageCarousel_SupersededTickDoesNothing confirms a debounce tick
+// whose gen no longer matches a.carouselCycleGen (a later left/right press
+// happened before it fired) is a no-op — the whole point of debouncing is
+// that holding the key only ever fetches the image the user lands on, not
+// every intermediate one.
+func TestCycleImageCarousel_SupersededTickDoesNothing(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	genBefore := a.imageFetchGen
+
+	a2, _ := a.cycleImageCarousel(+1)  // gen N
+	a3, _ := a2.cycleImageCarousel(+1) // gen N+1, supersedes the first tick
+
+	m, cmd, ok := a3.handleImageViewer(carouselCycleSettledMsg{gen: a2.carouselCycleGen})
+	if !ok {
+		t.Fatal("expected carouselCycleSettledMsg to be handled even when superseded")
+	}
+	if cmd != nil {
+		t.Error("expected no fetch cmd for a superseded debounce tick")
+	}
+	if m.imageFetchGen != genBefore {
+		t.Error("expected imageFetchGen untouched by a superseded debounce tick")
 	}
 }
 
@@ -2338,6 +2811,268 @@ func TestUpdate_ImageModal_OtherKey_ClosesAndClearsCarousel(t *testing.T) {
 	}
 	if a2.imageCache != nil {
 		t.Error("expected imageCache to be cleared on close")
+	}
+}
+
+// --- Image modal scale: live +/- adjustment (config.Config.ImageScale) ---
+
+// modalTestImage is a 100x200px image, chosen so its native cell size at the
+// fallback cell pixel default (10x20, since TerminalCellPixelSize returns
+// ok=false in tests) is a clean 10x10 cols/rows — makes expected imageScale
+// values after a guaranteed-1-cell step easy to state exactly.
+func modalTestImage() image.Image {
+	return image.NewRGBA(image.Rect(0, 0, 100, 200))
+}
+
+func TestUpdate_ImageModal_Plus_IncreasesScaleAndRerenders(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{modalTestImage()}}}
+
+	m, cmd := a.Update(keyMsg("+"))
+	a2 := m.(App)
+	if !a2.imageModalOpen {
+		t.Error("expected the modal to stay open on a scale-adjust keypress")
+	}
+	// nativeCols=10, step=max(1, round(10*0.1))=1, currentCols=10 -> targetCols=11 -> scale=1.1.
+	if want := 1.1; a2.imageScale != want {
+		t.Errorf("imageScale = %v, want %v", a2.imageScale, want)
+	}
+	if cmd == nil {
+		t.Fatal("expected a re-render cmd for the current modal image")
+	}
+}
+
+func TestUpdate_ImageModal_Minus_DecreasesScale(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{modalTestImage()}}}
+
+	m, _ := a.Update(keyMsg("-"))
+	a2 := m.(App)
+	if want := 0.9; a2.imageScale != want {
+		t.Errorf("imageScale = %v, want %v", a2.imageScale, want)
+	}
+}
+
+func TestAdjustImageScale_ClampsAtBounds(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{modalTestImage()}}}
+	a.imageScale = config.MaxImageScale
+
+	a2, cmd := a.adjustImageScale(imageScaleStep)
+	if a2.imageScale != config.MaxImageScale {
+		t.Errorf("expected clamp at MaxImageScale (%v), got %v", config.MaxImageScale, a2.imageScale)
+	}
+	if cmd == nil {
+		t.Error("expected a re-render cmd even when already at the max (still a legitimate re-render request)")
+	}
+
+	a.imageScale = config.MinImageScale
+	a3, _ := a.adjustImageScale(-imageScaleStep)
+	if a3.imageScale != config.MinImageScale {
+		t.Errorf("expected clamp at MinImageScale (%v), got %v", config.MinImageScale, a3.imageScale)
+	}
+}
+
+// TestAdjustImageScale_NoCacheIsNoop confirms a scale-adjust keypress before
+// the modal's image has actually landed in the cache (shouldn't normally
+// happen — the cache is populated the instant the modal opens) doesn't
+// panic on the map lookup.
+func TestAdjustImageScale_NoCacheIsNoop(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalURL = "https://x.com/never-cached.jpg"
+	a.imageScale = 1.0
+
+	a2, cmd := a.adjustImageScale(imageScaleStep)
+	if a2.imageScale != 1.0 {
+		t.Errorf("expected imageScale unchanged, got %v", a2.imageScale)
+	}
+	if cmd != nil {
+		t.Error("expected no cmd when there's nothing cached to re-render")
+	}
+}
+
+// TestAdjustImageScale_TinyImage_AlwaysMovesAtLeastOneCell confirms the
+// guaranteed-visible-step design: even for an image whose native size is a
+// single cell (so a flat 10% step would round to nothing), a press still
+// moves the box by at least 1 cell — this is the property that was missing
+// before the fix (see docs/46-image-modal-scale.md): +/- appeared to do
+// nothing for typical images because fitBox's never-upscale cap silently
+// absorbed the old percent-of-terminal-box scale steps.
+func TestAdjustImageScale_TinyImage_AlwaysMovesAtLeastOneCell(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalURL = "https://x.com/tiny.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/tiny.jpg": {frames: []image.Image{image.NewRGBA(image.Rect(0, 0, 2, 2))}}}
+	a.imageScale = 1.0 // nativeCols=1 at the fallback cell size, so scale=1.0 -> currentCols=1
+
+	a2, _ := a.adjustImageScale(imageScaleStep)
+	// step=max(1, round(1*0.1))=1 -> targetCols=2 -> scale=2.0 (also happens
+	// to be config.MaxImageScale here, since nativeCols=1 leaves no room
+	// between "native" and "2x native" other than a single whole cell).
+	if a2.imageScale != config.MaxImageScale {
+		t.Errorf("imageScale = %v, want %v (a 1-cell step from a 1-cell native size)", a2.imageScale, config.MaxImageScale)
+	}
+}
+
+// TestAdjustImageScale_MinusImmediatelyShrinksAfterHittingScreenMargin is a
+// regression test: openImageInTerminal's screen-margin clamp
+// (modalScreenMarginFrac/Layout.ModalMaxWidth) can cap the rendered box well
+// below what config.MaxImageScale alone would allow for a large native
+// image on a small terminal. adjustImageScale used to step from a value
+// recomputed off a.imageScale, which kept climbing on repeated "+" presses
+// even after the box stopped growing (correctly clamped) — so the first "-"
+// press afterward only walked that invisible excess back down one step,
+// visibly doing nothing either. Reported live as "+ does nothing at max
+// size, then - does nothing the first time too." Fixed by anchoring the
+// step to a.imageModalCols (the box actually on screen), so "-" always
+// shrinks immediately.
+func TestAdjustImageScale_MinusImmediatelyShrinksAfterHittingScreenMargin(t *testing.T) {
+	// 500x500, not something more extreme: large enough that scale=2.0
+	// still hits the screen-margin ceiling (reproducing the bug), but small
+	// enough that scale=0.2 does NOT also collapse onto the same ceiling —
+	// an image so much bigger than the terminal that every scale in
+	// [0.2, 2.0] renders identically would trivially "pass" without
+	// exercising the fix at all.
+	bigImg := image.NewRGBA(image.Rect(0, 0, 500, 500))
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.width, a.height = 100, 40
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{bigImg}}}
+	a.imageScale = config.MaxImageScale // simulate having already pressed + repeatedly
+
+	// Render once to populate a.imageModalCols with the true,
+	// screen-margin-clamped box — mirrors what handleImageViewer does for a
+	// real imageFetchedMsg.
+	_, cmd := a.openImageInTerminal(a.imageModalURL)
+	msg := cmd().(imageFetchedMsg)
+	a.imageModalCols = msg.cols
+	a.imageModalRows = msg.rows
+
+	// Setup check: a further "+" is a no-op visually — already at the
+	// screen-margin ceiling, not the (much larger) native-size-relative max.
+	a2, cmd2 := a.adjustImageScale(imageScaleStep)
+	msg2 := cmd2().(imageFetchedMsg)
+	if msg2.cols != msg.cols {
+		t.Fatalf("setup: expected + to have no visible effect at the screen-margin ceiling, got cols %d -> %d", msg.cols, msg2.cols)
+	}
+	a2.imageModalCols = msg2.cols
+
+	// The regression: the very next "-" must immediately shrink the box.
+	_, cmd3 := a2.adjustImageScale(-imageScaleStep)
+	msg3 := cmd3().(imageFetchedMsg)
+	if msg3.cols >= msg2.cols {
+		t.Errorf("expected the first - press after hitting the ceiling to immediately shrink the box, got cols %d -> %d", msg2.cols, msg3.cols)
+	}
+}
+
+// TestOpenImageInTerminal_Scale_ChangesComputedBox confirms imageScale
+// actually reaches the encoder: a larger scale should never produce a
+// smaller cols/rows box than a smaller scale, for a source image large
+// enough that the display box (not the image's native size) is the
+// limiting factor — see openImageInTerminal's displayCols/displayRows.
+func TestOpenImageInTerminal_Scale_ChangesComputedBox(t *testing.T) {
+	bigImg := image.NewRGBA(image.Rect(0, 0, 1000, 1000))
+
+	render := func(scale float64) (cols, rows int) {
+		a := loggedInApp()
+		a.graphicsProtocol = imgview.ProtocolKitty
+		a.width, a.height = 100, 50
+		a.imageScale = scale
+		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{bigImg}}}
+		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+		msg := cmd().(imageFetchedMsg)
+		if msg.err != nil {
+			t.Fatalf("unexpected error: %v", msg.err)
+		}
+		return msg.cols, msg.rows
+	}
+
+	smallCols, smallRows := render(0.5)
+	bigCols, bigRows := render(1.5)
+	if bigCols < smallCols || bigRows < smallRows {
+		t.Errorf("expected scale 1.5 to produce a box at least as large as scale 0.5, got %dx%d vs %dx%d", bigCols, bigRows, smallCols, smallRows)
+	}
+	if bigCols == smallCols && bigRows == smallRows {
+		t.Error("expected scale to actually change the computed box for a large source image")
+	}
+}
+
+// TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap confirms a
+// high-scale image modal never grows wide enough, in Miller layout, for its
+// centered position (compositeOverlays centers against the full terminal
+// width, not the content pane — see Layout.ModalMaxWidth's doc comment) to
+// splice into the nav sidebar. TabsLayout, with no side chrome, is
+// unaffected and still clamps to the full terminal width.
+func TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap(t *testing.T) {
+	bigImg := image.NewRGBA(image.Rect(0, 0, 2000, 2000))
+
+	render := func(layout Layout) int {
+		a := loggedInApp()
+		a.graphicsProtocol = imgview.ProtocolKitty
+		a.layout = layout
+		a.width, a.height = 120, 50
+		a.imageScale = config.MaxImageScale
+		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{bigImg}}}
+		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+		msg := cmd().(imageFetchedMsg)
+		if msg.err != nil {
+			t.Fatalf("unexpected error: %v", msg.err)
+		}
+		return msg.cols
+	}
+
+	tabsCols := render(TabsLayout{})
+	millerCols := render(MillerLayout{})
+
+	if tabsCols > 120 {
+		t.Errorf("TabsLayout: cols=%d, want <= terminal width 120", tabsCols)
+	}
+	if want := (MillerLayout{}).ModalMaxWidth(120); millerCols > want {
+		t.Errorf("MillerLayout: cols=%d, want <= ModalMaxWidth(120)=%d (would splice into the sidebar when centered)", millerCols, want)
+	}
+	if millerCols >= tabsCols {
+		t.Errorf("expected MillerLayout to clamp narrower than TabsLayout for the same terminal width, got miller=%d tabs=%d", millerCols, tabsCols)
+	}
+}
+
+// TestOpenImageInTerminal_NeverExceedsScreenMargin confirms the modal never
+// occupies more than modalScreenMarginFrac (80%) of the terminal in either
+// dimension, on any layout, even at max scale with a huge source image —
+// see modalScreenMarginFrac's doc comment for why this headroom matters
+// beyond just avoiding Miller's sidebar (a documented class of terminal
+// rendering desync around large raw image payloads, reported live as
+// surrounding UI chrome getting visibly corrupted at close to full-screen
+// modal size).
+func TestOpenImageInTerminal_NeverExceedsScreenMargin(t *testing.T) {
+	hugeImg := image.NewRGBA(image.Rect(0, 0, 6000, 6000))
+
+	for _, layout := range []Layout{TabsLayout{}, MillerLayout{}} {
+		a := loggedInApp()
+		a.graphicsProtocol = imgview.ProtocolKitty
+		a.layout = layout
+		a.width, a.height = 300, 100
+		a.imageScale = config.MaxImageScale
+		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{hugeImg}}}
+		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+		msg := cmd().(imageFetchedMsg)
+		if msg.err != nil {
+			t.Fatalf("unexpected error: %v", msg.err)
+		}
+		maxCols := int(float64(a.width) * modalScreenMarginFrac)
+		maxRows := int(float64(a.height) * modalScreenMarginFrac)
+		if msg.cols > maxCols {
+			t.Errorf("%T: cols=%d, want <= %d (80%% of width %d)", layout, msg.cols, maxCols, a.width)
+		}
+		if msg.rows > maxRows {
+			t.Errorf("%T: rows=%d, want <= %d (80%% of height %d)", layout, msg.rows, maxRows, a.height)
+		}
 	}
 }
 
@@ -2497,20 +3232,104 @@ func TestHandleImageViewer_ErrorNoModalOpen_FallsBackToBrowser(t *testing.T) {
 	}
 }
 
-func TestHandleImageViewer_ITerm2CycleSuccess_ForcesClearScreen(t *testing.T) {
+// TestHandleImageViewer_ITerm2CycleSuccess_SnapshotsPrevDimsNoClearScreen
+// covers a real carousel cycle (modal already open, per the a.imageModalOpen
+// gate at app.go's key handling — cycling is unreachable otherwise): no
+// tea.ClearScreen is emitted anymore, and the outgoing box's dimensions are
+// snapshotted into imageModalPrevRows/Cols for compositeOverlays to use.
+func TestHandleImageViewer_ITerm2CycleSuccess_SnapshotsPrevDimsNoClearScreen(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolITerm2
 	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	a.imageModalOpen = true
+	a.imageModalCols = 20
+	a.imageModalRows = 10
 
-	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 10, rows: 5})
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 8, rows: 4})
 	if !ok {
 		t.Fatal("expected imageFetchedMsg to be handled")
 	}
 	if !a2.imageModalOpen {
 		t.Fatal("expected the image to open")
 	}
-	if cmd == nil {
-		t.Error("expected tea.ClearScreen to force a full repaint on an iTerm2 carousel cycle")
+	if cmd != nil {
+		t.Error("expected no tea.ClearScreen on an iTerm2 carousel cycle")
+	}
+	if a2.imageModalPrevRows != 10 || a2.imageModalPrevCols != 20 {
+		t.Errorf("expected prev dims snapshotted from the outgoing box (20x10), got %dx%d", a2.imageModalPrevCols, a2.imageModalPrevRows)
+	}
+	if a2.imageModalRows != 4 || a2.imageModalCols != 8 {
+		t.Errorf("expected current dims updated to the new image (8x4), got %dx%d", a2.imageModalCols, a2.imageModalRows)
+	}
+}
+
+// TestHandleImageViewer_SixelCycleSuccess_NoClearScreen covers a real
+// carousel cycle on Sixel to a different-sized image (mirrors the iTerm2
+// case above): still no Cmd queued — the repaint decision is made in
+// View() from a.imageRepaintGen, not a one-shot Update()-side command (see
+// its doc comment, App struct, for why) — but the generation bump that
+// triggers sixelFullRepaint in compositeOverlays must have happened.
+func TestHandleImageViewer_SixelCycleSuccess_NoClearScreen(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolSixel
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	a.imageModalOpen = true
+	a.imageModalCols = 20
+	a.imageModalRows = 10
+	startGen := a.imageRepaintGen
+
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 8, rows: 4})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd on a Sixel carousel cycle")
+	}
+	if a2.imageModalRows != 4 || a2.imageModalCols != 8 {
+		t.Errorf("expected current dims updated to the new image (8x4), got %dx%d", a2.imageModalCols, a2.imageModalRows)
+	}
+	if a2.imageRepaintGen == startGen {
+		t.Error("expected imageRepaintGen bumped on a size-changed Sixel cycle")
+	}
+}
+
+// TestHandleImageViewer_SixelCycleSameSize_StillBumpsRepaintGen confirms a
+// cycle to a same-sized image still bumps imageRepaintGen: the prev-box
+// cleanup itself has nothing to do for a same-size cycle, but
+// compositeOverlays' own modal image-draw line also reads this counter (see
+// imageDirtyMarker's doc comment) and needs a fresh value on every displayed
+// image change, not just a size-changed one.
+func TestHandleImageViewer_SixelCycleSameSize_StillBumpsRepaintGen(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolSixel
+	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	a.imageModalOpen = true
+	a.imageModalCols = 8
+	a.imageModalRows = 4
+	startGen := a.imageRepaintGen
+
+	a2, _, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 8, rows: 4})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if a2.imageRepaintGen == startGen {
+		t.Error("expected imageRepaintGen bumped even for a same-size Sixel cycle")
+	}
+}
+
+// TestHandleImageViewer_SixelFreshOpen_NoClearScreen covers a fresh o-open
+// on Sixel (modal not already open): no ClearScreen, same as every other
+// Sixel case — see TestHandleImageViewer_SixelCycleSuccess_NoClearScreen.
+func TestHandleImageViewer_SixelFreshOpen_NoClearScreen(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolSixel
+
+	_, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", encoded: "seq", cols: 10, rows: 5})
+	if !ok {
+		t.Fatal("expected imageFetchedMsg to be handled")
+	}
+	if cmd != nil {
+		t.Error("expected no ClearScreen on a fresh Sixel open — nothing previous to clean up")
 	}
 }
 
@@ -2518,6 +3337,7 @@ func TestHandleImageViewer_KittyCycleSuccess_NoClearScreen(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolKitty
 	a.imageCarouselItems = []string{"https://x.com/a.jpg", "https://x.com/b.jpg"}
+	a.imageModalOpen = true
 
 	_, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/b.jpg", encoded: "seq", cols: 10, rows: 5})
 	if !ok {
@@ -2528,16 +3348,22 @@ func TestHandleImageViewer_KittyCycleSuccess_NoClearScreen(t *testing.T) {
 	}
 }
 
+// TestHandleImageViewer_SingleImageSuccess_NoClearScreen covers a fresh
+// o-open (modal not already open): no tea.ClearScreen, and no previous box
+// to track since nothing was on screen before.
 func TestHandleImageViewer_SingleImageSuccess_NoClearScreen(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolITerm2 // even on iTerm2
 
-	_, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", encoded: "seq", cols: 10, rows: 5})
+	a2, cmd, ok := a.handleImageViewer(imageFetchedMsg{rawURL: "https://x.com/a.jpg", encoded: "seq", cols: 10, rows: 5})
 	if !ok {
 		t.Fatal("expected imageFetchedMsg to be handled")
 	}
 	if cmd != nil {
 		t.Error("expected no ClearScreen outside a carousel")
+	}
+	if a2.imageModalPrevRows != 0 || a2.imageModalPrevCols != 0 {
+		t.Errorf("expected no previous box tracked on a fresh open, got %dx%d", a2.imageModalPrevCols, a2.imageModalPrevRows)
 	}
 }
 
@@ -2901,5 +3727,603 @@ func TestHandlePathPrompt_Import_Failure_NotifiesAndLeavesCustomPaletteUntouched
 	}
 	if a2.customPalette != &saved {
 		t.Error("expected the saved custom palette to be untouched by a failed import")
+	}
+}
+
+// TestSelectionTouchesSlot confirms the substring match syncInlineImages
+// relies on to decide whether a selection change actually recolored a card
+// hosting a visible image, rather than blindly clearing on every selection
+// move (a shipped regression — every arrow-key step blinked the whole
+// screen whenever any image was visible anywhere on screen).
+func TestSelectionTouchesSlot(t *testing.T) {
+	slots := []screens.InlineImageSlot{
+		{Key: "post:p1:0", Row: 3},
+		{Key: "reply:r1:0", Row: 20},
+	}
+	if selectionTouchesSlot("", slots) {
+		t.Error("expected an empty id to never match")
+	}
+	if !selectionTouchesSlot("p1", slots) {
+		t.Error("expected a post id matching a post:<id>:n slot to match")
+	}
+	if !selectionTouchesSlot("r1", slots) {
+		t.Error("expected a reply id matching a reply:<id>:n slot to match")
+	}
+	if selectionTouchesSlot("p2", slots) {
+		t.Error("expected an id with no matching slot to not match")
+	}
+	// "p1" is a substring of a hypothetical slot key like "post:p1x:0"; the
+	// ":id:" delimiting must reject that, not just a raw strings.Contains.
+	substringSlots := []screens.InlineImageSlot{{Key: "post:p1x:0", Row: 3}}
+	if selectionTouchesSlot("p1", substringSlots) {
+		t.Error("expected id delimiting to reject a partial id match")
+	}
+}
+
+// TestActiveSelectionKey_PostDetailFallsBackToPostID is the regression test
+// for a real bug found via live debug logging (docs/plan-inline-images-
+// improvements.md Round 14): PostDetailModel.SelectedReplyID() returns ""
+// when the post itself is selected (not a reply), but selectionTouchesSlot
+// treats "" as "nothing selected" and always returns false for it (see
+// TestSelectionTouchesSlot above). Without this fallback to the post's own
+// ID, toggling selection between the post and a reply — which recolors the
+// post's border, including the rows its own inline image sits in — never
+// registers as touching that image, so imageRepaintGen never bumps and a
+// legitimate border-recolor resend can silently wipe the image with
+// nothing forcing it back. Confirmed live: this fired once on entering
+// PostDetail (Feed's own non-empty selection key carrying over) but never
+// again for any subsequent post/reply toggle within PostDetail itself.
+func TestActiveSelectionKey_PostDetailFallsBackToPostID(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1"})
+
+	// Post itself selected (SelectedReplyID() == "") — must fall back to
+	// the post's own ID, not "".
+	if got := a.activeSelectionKey(); got != "p1" {
+		t.Errorf("expected activeSelectionKey to fall back to the post ID %q when the post itself is selected, got %q", "p1", got)
+	}
+
+	slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 3}}
+	if !selectionTouchesSlot(a.activeSelectionKey(), slots) {
+		t.Error("expected the post's own selection key to touch its own visible image slot")
+	}
+}
+
+// TestSyncInlineImageErasures covers the stale-row detection that replaced
+// both tea.ClearScreen and the later accumulate-until-exact-rect-reclaimed
+// erasure design for scroll-triggered repaints: a moved or removed image's
+// old row range must come back in staleRows (so forceRowsDirty forces
+// Bubble Tea to resend that row's real content), computed fresh from a
+// single prevRects/current diff with no carry-forward or "claim" concept.
+func TestSyncInlineImageErasures(t *testing.T) {
+	rectA := inlineImageRect{Row: 5, Col: 3, Cols: 20, Rows: 3}
+	rectB := inlineImageRect{Row: 9, Col: 3, Cols: 20, Rows: 3}
+
+	t.Run("unchanged slot produces no stale rows", func(t *testing.T) {
+		slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 3, ColIndent: 3, MaxCols: 20, MaxRows: 3}}
+		prev := map[string]inlineImageRect{"post:p1:0": rectA}
+		current, staleRows := syncInlineImageErasures(slots, 2, 0, prev)
+		if len(staleRows) != 0 {
+			t.Errorf("expected no stale rows, got %v", staleRows)
+		}
+		if current["post:p1:0"] != rectA {
+			t.Errorf("expected current rect to match, got %v", current["post:p1:0"])
+		}
+	})
+
+	t.Run("moved slot returns its old rect's row range", func(t *testing.T) {
+		// Same key, but Row moved from 3 to 7 (rectB instead of rectA).
+		slots := []screens.InlineImageSlot{{Key: "post:p1:0", Row: 7, ColIndent: 3, MaxCols: 20, MaxRows: 3}}
+		prev := map[string]inlineImageRect{"post:p1:0": rectA}
+		current, staleRows := syncInlineImageErasures(slots, 2, 0, prev)
+		want := []int{5, 6, 7}
+		if !slices.Equal(staleRows, want) {
+			t.Errorf("expected old rect's row range %v pending, got %v", want, staleRows)
+		}
+		if current["post:p1:0"] != rectB {
+			t.Errorf("expected current rect updated to new position, got %v", current["post:p1:0"])
+		}
+	})
+
+	t.Run("removed slot returns its old rect's row range", func(t *testing.T) {
+		prev := map[string]inlineImageRect{"post:p1:0": rectA}
+		current, staleRows := syncInlineImageErasures(nil, 2, 0, prev)
+		want := []int{5, 6, 7}
+		if !slices.Equal(staleRows, want) {
+			t.Errorf("expected old rect's row range %v pending, got %v", want, staleRows)
+		}
+		if len(current) != 0 {
+			t.Errorf("expected no current rects, got %v", current)
+		}
+	})
+
+	t.Run("two removed keys whose old rects share a row dedup that row", func(t *testing.T) {
+		rectC := inlineImageRect{Row: 7, Col: 30, Cols: 20, Rows: 3} // rows 7-9, overlaps rectA's rows 5-7 at row 7
+		prev := map[string]inlineImageRect{"post:p1:0": rectA, "post:p2:0": rectC}
+		_, staleRows := syncInlineImageErasures(nil, 2, 0, prev)
+		want := []int{5, 6, 7, 8, 9}
+		if !slices.Equal(staleRows, want) {
+			t.Errorf("expected deduped, sorted row range %v, got %v", want, staleRows)
+		}
+	})
+}
+
+// TestInlineImageCacheKey_VariesByColsAndProtocol confirms the cache key
+// changes when the column budget (resize) or protocol changes, and stays
+// stable otherwise — a resize or protocol switch must invalidate stale
+// encodes rather than reuse a wrongly-sized/wrongly-encoded one.
+func TestInlineImageCacheKey_VariesByColsAndProtocol(t *testing.T) {
+	slot := screens.InlineImageSlot{URL: "https://example.com/a.png", MaxCols: 76}
+	key1 := inlineImageCacheKey(slot, imgview.ProtocolSixel)
+	key2 := inlineImageCacheKey(slot, imgview.ProtocolSixel)
+	if key1 != key2 {
+		t.Error("expected the same slot+protocol to produce the same key")
+	}
+
+	wider := slot
+	wider.MaxCols = 100
+	if inlineImageCacheKey(wider, imgview.ProtocolSixel) == key1 {
+		t.Error("expected a different MaxCols to produce a different key")
+	}
+
+	if inlineImageCacheKey(slot, imgview.ProtocolITerm2) == key1 {
+		t.Error("expected a different protocol to produce a different key")
+	}
+}
+
+// TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops confirms the
+// placement-id lifecycle Kitty inline rendering depends on: a slot's id
+// stays the same across syncs as long as it's still visible, a slot that
+// drops out of the visible set is reported for deletion exactly once, and a
+// newly-visible slot gets a fresh distinct id.
+func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
+	var a App
+	slots1 := []screens.InlineImageSlot{{Key: "post:p1:0"}, {Key: "post:p2:0"}}
+	// The very first sync reports every slot as "revived" too (nothing was
+	// visible before), which is harmless: the caller's revive step just
+	// deletes from an empty pendingKittyDeletes map, a no-op.
+	a, ids1, toDelete1, _ := a.syncKittyPlacements(slots1)
+	if len(toDelete1) != 0 {
+		t.Errorf("expected no deletes on first sync, got %v", toDelete1)
+	}
+	id1, id2 := ids1["post:p1:0"], ids1["post:p2:0"]
+	if id1 == 0 || id2 == 0 || id1 == id2 {
+		t.Fatalf("expected distinct non-zero ids, got %d and %d", id1, id2)
+	}
+
+	// Same slots again: ids must stay stable, no deletes/revives.
+	a, ids2, toDelete2, revived2 := a.syncKittyPlacements(slots1)
+	if ids2["post:p1:0"] != id1 || ids2["post:p2:0"] != id2 {
+		t.Errorf("expected ids to stay stable across syncs, got %v", ids2)
+	}
+	if len(toDelete2) != 0 || len(revived2) != 0 {
+		t.Errorf("expected no deletes/revives when the visible set didn't change, got toDelete=%v revived=%v", toDelete2, revived2)
+	}
+
+	// p1 scrolls out of view, p3 comes into view.
+	slots2 := []screens.InlineImageSlot{{Key: "post:p2:0"}, {Key: "post:p3:0"}}
+	a, ids3, toDelete3, revived3 := a.syncKittyPlacements(slots2)
+	if len(toDelete3) != 1 || toDelete3[0] != id1 {
+		t.Errorf("expected exactly p1's id (%d) to be reported for deletion, got %v", id1, toDelete3)
+	}
+	if len(revived3) != 1 || revived3[0] != ids3["post:p3:0"] {
+		t.Errorf("expected p3 (newly visible) reported as revived, got %v", revived3)
+	}
+	if ids3["post:p2:0"] != id2 {
+		t.Errorf("expected p2's id to remain stable, got %d want %d", ids3["post:p2:0"], id2)
+	}
+	id3 := ids3["post:p3:0"]
+	if id3 == 0 || id3 == id1 || id3 == id2 {
+		t.Errorf("expected p3 to get a fresh distinct id, got %d", id3)
+	}
+
+	// p1 scrolls back into view: it must reuse its ORIGINAL id (not a fresh
+	// one) — this is what keeps its id-less cache entry (see
+	// inlineImageCacheKey) valid, and is reported as revived so the caller
+	// cancels its still-pending delete.
+	slots3 := []screens.InlineImageSlot{{Key: "post:p1:0"}, {Key: "post:p2:0"}, {Key: "post:p3:0"}}
+	_, ids4, toDelete4, revived4 := a.syncKittyPlacements(slots3)
+	if ids4["post:p1:0"] != id1 {
+		t.Errorf("expected p1 to be revived with its original id %d, got %d", id1, ids4["post:p1:0"])
+	}
+	if len(toDelete4) != 0 {
+		t.Errorf("expected no new deletes when p1 returns, got %v", toDelete4)
+	}
+	if len(revived4) != 1 || revived4[0] != id1 {
+		t.Errorf("expected p1's id (%d) reported as revived, got %v", id1, revived4)
+	}
+}
+
+// TestSyncInlineImages_DisablingClearsStaleKittyPlacements is a regression
+// test: syncInlineImages used to early-return the moment canInlineImages()
+// went false (e.g. the user toggled inline images off), skipping the
+// --- inline-image fetch-failure cooldown ---
+
+// feedAppWithOneImage builds an App on Feed/Tabs with one post whose image
+// is currently visible, for tests exercising syncInlineImages/
+// handleInlineImageFetched against a real slot rather than hand-built state.
+func feedAppWithOneImage(t *testing.T) (a App, key string) {
+	t.Helper()
+	a = loggedInApp()
+	a.width, a.height = 80, 40
+	a.inlineImages = true
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.feed, _ = a.feed.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	a.feed, _ = a.feed.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+	slots := a.feed.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("setup: expected 1 visible slot, got %d", len(slots))
+	}
+	return a, inlineImageCacheKey(slots[0], a.graphicsProtocol)
+}
+
+// TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses is a
+// regression test: before this fix, a failed fetch left no record at all, so
+// syncInlineImages (called on every Update) refired the same doomed request
+// every keystroke/tick the slot stayed visible.
+func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T) {
+	a, key := feedAppWithOneImage(t)
+
+	a, cmd := a.syncInlineImages()
+	if cmd == nil || !a.inlineImageFetching[key] {
+		t.Fatal("setup: expected the first sync to schedule a fetch")
+	}
+
+	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
+	if _, failed := a.inlineImageFailedAt[key]; !failed {
+		t.Fatal("expected the failure to be recorded")
+	}
+	if a.inlineImageFetching[key] {
+		t.Error("expected the in-flight marker to be cleared after the failure")
+	}
+
+	a, _ = a.syncInlineImages()
+	if a.inlineImageFetching[key] {
+		t.Error("expected syncInlineImages to skip refetching within the cooldown window")
+	}
+
+	// Backdate the failure past the cooldown and confirm it retries.
+	a.inlineImageFailedAt[key] = time.Now().Add(-inlineImageFailureCooldown - time.Second)
+	a, _ = a.syncInlineImages()
+	if !a.inlineImageFetching[key] {
+		t.Error("expected syncInlineImages to retry once the cooldown has lapsed")
+	}
+}
+
+// TestInlineImageFailureCooldown_ClearedBySubsequentSuccess confirms a
+// success wipes any earlier failure record, so a transient blip doesn't
+// leave a stale cooldown blocking future retries after the URL recovers.
+func TestInlineImageFailureCooldown_ClearedBySubsequentSuccess(t *testing.T) {
+	a, key := feedAppWithOneImage(t)
+	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
+	if _, failed := a.inlineImageFailedAt[key]; !failed {
+		t.Fatal("setup: expected the failure to be recorded")
+	}
+
+	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
+	if _, failed := a.inlineImageFailedAt[key]; failed {
+		t.Error("expected the failure record to be cleared after a subsequent success")
+	}
+	if got := a.inlineImageCache[key]; got != "\x1b_Gfake\x1b\\" {
+		t.Errorf("expected the successful encode to be cached, got %q", got)
+	}
+}
+
+// diff/delete logic entirely and leaving previously-drawn Kitty placements
+// on screen. It must still diff down to an empty slot list so every
+// previously-visible key gets queued for deletion.
+func TestSyncInlineImages_DisablingClearsStaleKittyPlacements(t *testing.T) {
+	a := App{
+		graphicsProtocol: imgview.ProtocolKitty,
+		inlineImages:     false, // disabled: canInlineImages() is false
+		kittyPlacementIDs: map[string]int{
+			"post:p1:0": 1,
+			"post:p2:0": 2,
+		},
+		kittyVisibleKeys: map[string]struct{}{
+			"post:p1:0": {},
+			"post:p2:0": {},
+		},
+	}
+
+	a, _ = a.syncInlineImages()
+
+	if len(a.kittyVisibleKeys) != 0 {
+		t.Errorf("expected kittyVisibleKeys to be cleared, got %v", a.kittyVisibleKeys)
+	}
+	if _, ok := a.pendingKittyDeletes[1]; !ok {
+		t.Errorf("expected placement id 1 to be queued for deletion, got %v", a.pendingKittyDeletes)
+	}
+	if _, ok := a.pendingKittyDeletes[2]; !ok {
+		t.Errorf("expected placement id 2 to be queued for deletion, got %v", a.pendingKittyDeletes)
+	}
+}
+
+// TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2 confirms Sixel and
+// iTerm2 both compute inlineImageStaleRows identically — the two protocols
+// only diverge in what View() does with that fact (see injectInlineImages/
+// sixelFullRepaint in layout.go), not in whether Update() tracks it. Both
+// also bump imageRepaintGen for a stale row: iTerm2's forceRowsDirty resend
+// needs the same collision-proof marker Sixel's full repaint does (see
+// imageRepaintGen's doc comment, App struct) — a fixed marker there was the
+// original bug this test's sibling coverage exists to prevent regressing.
+// Neither queues a Cmd: the repaint decision (forceRowsDirty for iTerm2,
+// sixelFullRepaint for Sixel) is made in View() from this same tracked
+// state, not from a one-shot Update()-side command — deliberately, since a
+// one-shot tea.ClearScreen Cmd both flashed badly (confirmed live) and, per
+// this codebase's own established Bubble Tea pitfall (see the
+// pendingKittyDeletes/inlineImageStaleRows pattern this mirrors), risks
+// being silently dropped by the renderer's throttling.
+func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
+	stale := map[string]inlineImageRect{
+		"post:gone:0": {Row: 3, Col: 1, Cols: 10, Rows: 4},
+	}
+
+	sixel := App{
+		graphicsProtocol:        imgview.ProtocolSixel,
+		inlineImages:            false, // canInlineImages() false: current slots stay empty, so the tracked entry above reads as stale
+		inlineImageVisibleRects: stale,
+	}
+	sixelOut, cmd := sixel.syncInlineImages()
+	if cmd != nil {
+		t.Error("expected no cmd for Sixel — the repaint decision is made in View(), not queued here")
+	}
+	if len(sixelOut.inlineImageStaleRows) == 0 {
+		t.Error("expected inlineImageStaleRows populated for Sixel, same as iTerm2")
+	}
+	if sixelOut.imageRepaintGen == sixel.imageRepaintGen {
+		t.Error("expected imageRepaintGen bumped for a stale Sixel row")
+	}
+
+	iterm := App{
+		graphicsProtocol:        imgview.ProtocolITerm2,
+		inlineImages:            false,
+		inlineImageVisibleRects: stale,
+	}
+	itermOut, cmd := iterm.syncInlineImages()
+	if cmd != nil {
+		t.Error("expected no cmd for a stale iTerm2 row — it relies on forceRowsDirty in View(), not a cmd")
+	}
+	if len(itermOut.inlineImageStaleRows) != len(sixelOut.inlineImageStaleRows) {
+		t.Errorf("expected iTerm2 and Sixel to track the same stale rows, got %v vs %v", itermOut.inlineImageStaleRows, sixelOut.inlineImageStaleRows)
+	}
+	if itermOut.imageRepaintGen == iterm.imageRepaintGen {
+		t.Error("expected imageRepaintGen bumped for a stale iTerm2 row too, same as Sixel")
+	}
+}
+
+// TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates is the regression
+// test for the bug accumulateStaleRows fixes: syncInlineImages runs on every
+// Update(), but Bubble Tea's renderer can coalesce several Updates into one
+// flush (the same premise TestAccumulateKittyDeletes_SurvivesSkippedRenders
+// covers for Kitty deletes). Before the fix, a.inlineImageStaleRows was
+// overwritten fresh each call, so a row that went stale in an earlier Update
+// whose View() never got flushed could be silently replaced by a later
+// Update's unrelated stale row instead of accumulating — losing the row that
+// actually still has stale image pixels on the real, last-flushed terminal
+// screen. Simulates two separate images going stale in two consecutive
+// syncInlineImages calls (mimicking two coalesced Updates) and confirms both
+// rows are present after the second call, then confirms a subsequent quiet
+// call within inlineImageStaleGrace does NOT clear the accumulated set (the
+// bug this test's sibling, TestSyncInlineImages_StaleRowsSurviveQuietTick,
+// covers directly — a single quiet Update isn't a safe clear signal, since
+// this app has several tea.Tick loops unrelated to the feed that can supply
+// that quiet Update before a resend actually flushes), and that it does
+// clear once the grace period has elapsed.
+func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
+	a := App{
+		graphicsProtocol: imgview.ProtocolITerm2,
+		inlineImages:     false, // canInlineImages() false: slots stay empty, so any tracked entry reads as stale
+		inlineImageVisibleRects: map[string]inlineImageRect{
+			"post:A:0": {Row: 10, Col: 1, Cols: 10, Rows: 4},
+		},
+	}
+
+	a1, _ := a.syncInlineImages()
+	if !slices.Contains(a1.inlineImageStaleRows, 10) {
+		t.Fatalf("setup: expected row 10 stale after the first call, got %v", a1.inlineImageStaleRows)
+	}
+
+	// Simulate a second, separate image going stale in what would be a
+	// second coalesced Update — a1.inlineImageVisibleRects is already {}
+	// (computed fresh from the still-empty slots), so this stands in for a
+	// new image having been tracked and then dropped between calls.
+	a1.inlineImageVisibleRects = map[string]inlineImageRect{
+		"post:B:0": {Row: 20, Col: 1, Cols: 10, Rows: 4},
+	}
+	a2, _ := a1.syncInlineImages()
+	if !slices.Contains(a2.inlineImageStaleRows, 10) {
+		t.Errorf("expected row 10 from the first call to survive into the second call's accumulated staleRows, got %v", a2.inlineImageStaleRows)
+	}
+	if !slices.Contains(a2.inlineImageStaleRows, 20) {
+		t.Errorf("expected row 20 from the second call also present, got %v", a2.inlineImageStaleRows)
+	}
+
+	// A quiet call (nothing newly stale — a2.inlineImageVisibleRects is
+	// already {}) immediately afterward, well within inlineImageStaleGrace,
+	// must NOT clear the accumulated set yet.
+	a3, _ := a2.syncInlineImages()
+	if len(a3.inlineImageStaleRows) == 0 {
+		t.Fatalf("expected accumulated staleRows to survive a quiet call within the grace period, got %v", a3.inlineImageStaleRows)
+	}
+
+	// Once the grace period has elapsed, the next quiet call clears it.
+	a3.inlineImageStaleSince = time.Now().Add(-inlineImageStaleGrace - time.Second)
+	a4, _ := a3.syncInlineImages()
+	if len(a4.inlineImageStaleRows) != 0 {
+		t.Errorf("expected accumulated staleRows cleared after the grace period elapsed, got %v", a4.inlineImageStaleRows)
+	}
+}
+
+// TestSyncInlineImages_StaleRowsSurviveQuietTick is the direct regression
+// test for the top-of-feed background-poll repro: syncInlineImages runs
+// after every tea.Msg the whole app processes (App.Update calls it
+// unconditionally), including messages from tea.Tick loops that have
+// nothing to do with the feed (chat/RTDB heartbeats, notification polls,
+// gif-frame ticks). Before inlineImageStaleSince/inlineImageStaleGrace, a
+// single such unrelated "quiet" Update landing between two feed-affecting
+// Updates (e.g. during the feed's ~200ms feedMergeAnimDelay merge-animation
+// gap) would immediately wipe the accumulated staleRows, even though
+// nothing about the feed itself had settled yet. Simulates exactly that:
+// a stale row, then an entirely unrelated quiet call (as an unrelated tick's
+// Update would produce), and confirms the row is still there.
+func TestSyncInlineImages_StaleRowsSurviveQuietTick(t *testing.T) {
+	a := App{
+		graphicsProtocol: imgview.ProtocolITerm2,
+		inlineImages:     false,
+		inlineImageVisibleRects: map[string]inlineImageRect{
+			"post:A:0": {Row: 10, Col: 1, Cols: 10, Rows: 4},
+		},
+	}
+
+	a1, _ := a.syncInlineImages()
+	if len(a1.inlineImageStaleRows) == 0 {
+		t.Fatalf("setup: expected staleRows populated after the first call, got %v", a1.inlineImageStaleRows)
+	}
+
+	// An unrelated quiet call — a1.inlineImageVisibleRects is already {},
+	// so this computes zero new staleRows, standing in for an unrelated
+	// background tick's Update firing before the resend has flushed.
+	a2, _ := a1.syncInlineImages()
+	if !slices.Contains(a2.inlineImageStaleRows, 10) {
+		t.Errorf("expected row 10 to survive an unrelated quiet Update within the grace period, got %v", a2.inlineImageStaleRows)
+	}
+}
+
+// TestAccumulateKittyDeletes_SurvivesSkippedRenders is a regression test for
+// fast-scroll ghosting: a delete computed by one Update must not be lost if
+// Bubble Tea's throttled renderer processes several Updates (each recomputing
+// syncKittyPlacements' fresh, single-frame diff) before actually writing a
+// frame. A prior version of this used a resend countdown, decremented once
+// per Update — but a fast enough scroll can still rack up enough Updates
+// between two real flushes to exhaust that budget on nothing but
+// never-flushed intermediate renders, losing the delete. Simulates many such
+// skipped-render Updates (empty newlyDropped batches) and confirms an
+// earlier delete survives indefinitely, never expiring on its own.
+func TestAccumulateKittyDeletes_SurvivesSkippedRenders(t *testing.T) {
+	pending := accumulateKittyDeletes(nil, []int{7})
+	if _, ok := pending[7]; !ok {
+		t.Fatal("expected id 7 to be pending immediately after being seeded")
+	}
+
+	for i := 0; i < 50; i++ {
+		pending = accumulateKittyDeletes(pending, nil)
+		if _, ok := pending[7]; !ok {
+			t.Fatalf("id 7 disappeared after %d extra call(s), expected it to never auto-expire", i+1)
+		}
+	}
+}
+
+// TestAccumulateKittyDeletes_MergesRatherThanOverwrites confirms a second
+// batch of newly-dropped ids doesn't wipe out a still-pending id from an
+// earlier batch — the exact failure mode a single-value (not accumulating)
+// pendingKittyDeletes had.
+func TestAccumulateKittyDeletes_MergesRatherThanOverwrites(t *testing.T) {
+	pending := accumulateKittyDeletes(nil, []int{1})
+	pending = accumulateKittyDeletes(pending, []int{2})
+	if _, ok := pending[1]; !ok {
+		t.Errorf("expected id 1 to still be pending after a second batch introduced id 2, got %v", pending)
+	}
+	if _, ok := pending[2]; !ok {
+		t.Errorf("expected id 2 to be pending, got %v", pending)
+	}
+}
+
+// --- cacheInlineImage (bounded LRU) ---
+
+func TestCacheInlineImage_EvictsOldestFirstPastCap(t *testing.T) {
+	var a App
+	a = a.cacheInlineImageBounded("k1", "aaaaa", 12) // 5 bytes
+	a = a.cacheInlineImageBounded("k2", "bbbbb", 12) // 10 bytes total, still under cap
+	a = a.cacheInlineImageBounded("k3", "ccccc", 12) // 15 bytes would exceed 12 — evict k1
+
+	if _, ok := a.inlineImageCache["k1"]; ok {
+		t.Error("expected k1 (oldest) to be evicted once the cap was exceeded")
+	}
+	if _, ok := a.inlineImageCache["k2"]; !ok {
+		t.Error("expected k2 to survive")
+	}
+	if _, ok := a.inlineImageCache["k3"]; !ok {
+		t.Error("expected k3 (just inserted) to survive")
+	}
+	if a.inlineImageCacheBytes != 10 {
+		t.Errorf("expected inlineImageCacheBytes to track only the surviving entries (10), got %d", a.inlineImageCacheBytes)
+	}
+}
+
+// TestCacheInlineImage_ReinsertMovesToBackWithoutDoubleCounting confirms
+// re-caching an existing key (e.g. a resize that re-encodes the same slot)
+// updates its size correctly rather than accumulating stale bytes, and
+// treats it as freshly inserted for eviction ordering rather than leaving it
+// at its original (now stale) position.
+func TestCacheInlineImage_ReinsertMovesToBackWithoutDoubleCounting(t *testing.T) {
+	var a App
+	a = a.cacheInlineImageBounded("k1", "aaaaa", 12)   // 5 bytes
+	a = a.cacheInlineImageBounded("k2", "bb", 12)      // 7 bytes total
+	a = a.cacheInlineImageBounded("k1", "aaaaaaa", 12) // k1 grows to 7 bytes: 7+2=9, still under cap
+
+	if got := a.inlineImageCache["k1"]; got != "aaaaaaa" {
+		t.Errorf("expected k1's value to be updated, got %q", got)
+	}
+	if a.inlineImageCacheBytes != 9 {
+		t.Errorf("expected inlineImageCacheBytes=9 (7+2, not double-counting k1's old 5), got %d", a.inlineImageCacheBytes)
+	}
+
+	// Now push over the cap: k2 (never re-touched) should be evicted first,
+	// not k1 (re-inserted more recently, even though it existed earlier).
+	a = a.cacheInlineImageBounded("k3", "c", 12)    // 9+1=10, still under 12... push further
+	a = a.cacheInlineImageBounded("k4", "dddd", 12) // 10+4=14 > 12: evict oldest (k2)
+	if _, ok := a.inlineImageCache["k2"]; ok {
+		t.Error("expected k2 to be evicted first — it's the least-recently-(re)inserted key")
+	}
+	if _, ok := a.inlineImageCache["k1"]; !ok {
+		t.Error("expected k1 to survive — it was re-inserted after k2 and moved to the back of eviction order")
+	}
+}
+
+// TestCacheInlineImage_NeverEvictsTheJustInsertedEntry confirms a single
+// entry larger than the whole cap is still kept (better to go over budget by
+// one entry than to evict the image that was just fetched for the frame
+// asking for it).
+func TestCacheInlineImage_NeverEvictsTheJustInsertedEntry(t *testing.T) {
+	var a App
+	a = a.cacheInlineImageBounded("k1", "aaaaaaaaaaaaaaaaaaaa", 5) // 20 bytes >> cap of 5
+	if _, ok := a.inlineImageCache["k1"]; !ok {
+		t.Error("expected the sole, just-inserted entry to survive even though it alone exceeds the cap")
+	}
+}
+
+// TestTouchInlineImageCache_SurvivesEvictionOverUntouchedEntry is the
+// regression test for a real, no-user-action image blackout: before
+// touchInlineImageCache existed, inlineImageCacheOrder only ever moved on
+// write, so a still-on-screen image whose slot kept hitting the cache
+// (never re-fetched, since it was already cached) could still be evicted
+// purely because *other* images got fetched more recently — eviction was
+// FIFO-by-insertion, not actually LRU-by-access. syncInlineImages now calls
+// touchInlineImageCache on every cache hit for a currently-visible slot
+// (app.go), so k1 here stands in for an image that's stayed visible across
+// several other fetches: it must survive eviction pressure that an
+// equally-old, never-revisited key does not.
+func TestTouchInlineImageCache_SurvivesEvictionOverUntouchedEntry(t *testing.T) {
+	var a App
+	a = a.cacheInlineImageBounded("k1", "aaaaa", 12) // 5 bytes — the still-visible image
+	a = a.cacheInlineImageBounded("k2", "bbbbb", 12) // 10 bytes total — never revisited
+
+	// k1 stays visible (simulates a cache hit on every subsequent frame);
+	// k2 does not.
+	a.touchInlineImageCache("k1")
+
+	a = a.cacheInlineImageBounded("k3", "c", 12)    // 10+1=11, still under 12
+	a = a.cacheInlineImageBounded("k4", "dddd", 12) // 11+4=15 > 12: evict oldest untouched (k2)
+
+	if _, ok := a.inlineImageCache["k1"]; !ok {
+		t.Error("expected k1 (touched — simulating it stayed visible) to survive eviction")
+	}
+	if _, ok := a.inlineImageCache["k2"]; ok {
+		t.Error("expected k2 (never touched) to be evicted first, not k1")
 	}
 }

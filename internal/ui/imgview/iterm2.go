@@ -11,22 +11,41 @@ import (
 // EncodeITerm2 encodes img for display via the iTerm2 inline image protocol,
 // which is also supported by WezTerm. maxCols/maxRows bound the terminal
 // display size; the image is never upscaled beyond its natural pixel size.
-// Returns the OSC escape sequence and the computed display size in terminal
-// columns and rows.
-func EncodeITerm2(img image.Image, maxCols, maxRows int) (encoded string, cols, rows int, err error) {
+// cellPxW/cellPxH is the terminal's real cell pixel size (from
+// TerminalCellPixelSize); if <= 0 (real size unavailable), falls back to the
+// assumed default cell size. Getting this right matters more for iTerm2 than
+// Kitty: iTerm2's preserveAspectRatio=1 letterboxes the image inside the
+// given width/height cell box using iTerm2's own real font metrics, so a
+// wrong assumed cell aspect ratio leaves visible blank space rather than
+// just mildly stretching the image (as Kitty's fill-exact-box behavior
+// does). allowUpscale, when true, lets the image be scaled up past its
+// natural pixel size to fill maxCols/maxRows (used only by the fullscreen
+// modal's user-driven zoom — see imgview.NativeCellBox); false (inline
+// thumbnails) never upscales. Returns the OSC escape sequence and the
+// computed display size in terminal columns and rows.
+func EncodeITerm2(img image.Image, maxCols, maxRows, cellPxW, cellPxH int, allowUpscale bool) (encoded string, cols, rows int, err error) {
+	cellPxW, cellPxH = EffectiveCellPx(cellPxW, cellPxH)
 	bounds := img.Bounds()
 	w := bounds.Max.X - bounds.Min.X
 	h := bounds.Max.Y - bounds.Min.Y
+	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH, allowUpscale)
 
 	var buf bytes.Buffer
-	if encErr := png.Encode(&buf, img); encErr != nil {
+	if encErr := png.Encode(&buf, downscaleToBox(img, cols, rows, cellPxW, cellPxH, allowUpscale)); encErr != nil {
 		return "", 0, 0, fmt.Errorf("imgview: png encode: %w", encErr)
 	}
 	payload := base64.StdEncoding.EncodeToString(buf.Bytes())
-	cols, rows = fitBox(w, h, maxCols, maxRows)
 	// width/height without suffix means terminal character cells in iTerm2.
+	// doNotMoveCursor=1 is a WezTerm extension (ignored by real iTerm2, which
+	// tolerates unknown keys): without it, WezTerm scrolls its whole screen
+	// whenever an image's footprint reaches the terminal's last line
+	// (https://github.com/wezterm/wezterm/issues/3266), which desyncs every
+	// absolute-cursor-positioned draw that follows. Safe here regardless of
+	// terminal since injectInlineImages always repositions the cursor
+	// absolutely before every draw and parks it explicitly after — nothing
+	// relies on the terminal's own post-image cursor advance.
 	encoded = fmt.Sprintf(
-		"\x1b]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1:%s\x07",
+		"\x1b]1337;File=inline=1;width=%d;height=%d;preserveAspectRatio=1;doNotMoveCursor=1:%s\x07",
 		cols, rows, payload,
 	)
 	return

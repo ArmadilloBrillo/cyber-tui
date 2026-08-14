@@ -20,6 +20,8 @@ The count is maintained by:
 - Optimistic in-memory updates (mark read, mark all) when the screen is loaded.
 - A background poll every 60 seconds that fetches the first page of notifications and counts unread items when the screen is not yet loaded.
 
+Above 100 unread, `GET /v1/notifications/unread-count` caps `count` at 100 and reports `exact: false` (v0.8.5+). The badge shows `99+` instead of a specific number in that case (`App.polledUnreadCountExact`, formatted by `notifBadgeText` in `internal/ui/app.go`).
+
 ### Layout
 
 Each notification renders as a single line inside a bordered box:
@@ -52,6 +54,12 @@ Each notification renders as a single line inside a bordered box:
 | `hacker_granted` / `hacker_removed` | `^` |
 | `image_permission_*` / `attachment_permission_*` | `%` |
 | `system_ban` | `☠` |
+| `graffiti_mention` | `@` |
+| `moderator_granted` / `moderator_removed` | `!` |
+| `api_access_granted` / `api_access_removed` | `/` |
+| `system_ban_lifted` | `✓` |
+| `post_cooldown` | `⏱` |
+| `rate_limit_warning` | `⚠` |
 
 ### Day separators
 
@@ -88,6 +96,8 @@ Notifications are grouped by calendar day in the user's configured timezone:
 | `M` | Mark all notifications as read |
 | `u` | Toggle unread-only filter |
 | `esc` | (from PostDetail or profile) return to notifications |
+
+`M` marks the badge as read optimistically, then fires `POST /v1/notifications/read-all` in the background. That endpoint caps at 5,000 marked per call (v0.8.5+) and returns `hasMore`; `markAllNotifsReadCmd` (`internal/ui/app.go`) loops calling it while `hasMore` is `true`, bounded at `markAllNotifsReadMaxCalls` (20 calls / 100,000 notifications) as a defensive guard.
 
 ### Non-navigable types
 
@@ -131,6 +141,21 @@ The API has no concept of room presence — there's no join/leave endpoint, so i
 | `image_permission_granted` / `image_permission_removed` | granted/removed your image permissions. |
 | `attachment_permission_granted` / `attachment_permission_removed` | granted/removed your attachment permissions. |
 | `system_ban` | your account has been banned. |
+| `graffiti_mention` | mentioned you in a graffiti wall post. |
+| `moderator_granted` / `moderator_removed` | granted/removed your Moderator status. |
+| `api_access_granted` / `api_access_removed` | granted your API access. / revoked your API access. |
+| `system_ban_lifted` | your ban has been lifted. |
+| `post_cooldown` | a post was rate-limited and saved as a note instead. |
+| `rate_limit_warning` | you're approaching a posting limit. |
+
+### Actorless notifications (v0.8.5+)
+
+`system_ban`, `system_ban_lifted`, `post_cooldown`, `rate_limit_warning`, `moderator_granted`/`moderator_removed`, and `api_access_granted`/`api_access_removed` are account-level events, not something another user did — the API sends them with either no `actorId`/`actorUsername` at all, or the literal string `"system"`. `graffiti_mention` is the one new type with a real actor, same shape as `post_mention`/`reply_mention`.
+
+The client's `hasActor` helper (`internal/ui/screens/notifications.go`) treats an empty or literal-`"system"` `actorUsername` as "no actor":
+- `renderNotif` omits the `@username` handle entirely for these and shows only the summary text.
+- `p` (view profile) and `c` (start C-Mail conversation) no-op rather than opening a profile/conversation for user "system".
+- If the notification's `reason` field is set, it's shown as the inline preview line (the same `"> …"` treatment mentions get from their content field) since these types explain themselves through `reason` rather than mention text.
 
 ### Inline content preview
 
@@ -177,6 +202,26 @@ Pressing `enter` on a navigable notification opens PostDetail. Pressing `esc` in
 
 A notification can point to a post that has since been deleted; the notification list carries no "deleted target" field, so this only surfaces when the post is opened and `GET /v1/posts/:id` returns `404 NOT_FOUND`. Rather than blocking the screen, the post-open fetch returns `notifPostLoadErrMsg`; `handleNotifications` shows a transient banner **"This post has been deleted"** and leaves the notifications list intact and usable. (A 401 here still redirects to login; other errors show their message in the banner.) See [31-global-notifications.md](31-global-notifications.md) for the banner mechanism and the broader "errors never block a screen" model.
 
+### System notification unreachable via REST (post-too-soon conversion)
+
+When a post is submitted too soon after a previous one, the server silently
+converts it into a journal entry (see `docs/28-extended-posts.md` /
+`docs/00-api-backlog.md`) and generates a "System" notification about it —
+visible on the website and reflected in `GET /v1/notifications/unread-count`.
+Confirmed live (2026-08-12) that this notification is **never returned by
+`GET /v1/notifications`**, under any filter (unfiltered, `read=false`, or a
+full 50-item page) — not a caching delay, a persistent gap between the two
+endpoints. No REST client can fetch or render it; this is not a client-side
+bug. The count/list badge can legitimately be off by however many of these
+exist unread.
+
+The v0.8.5 docs now document a `post_cooldown` type ("an entry you wrote was
+held back and saved as a private note instead") that matches this scenario's
+description exactly — likely the undocumented type behind this "System"
+notification. Not confirmed live (the type still can't be fetched via REST
+per the above), so the client's `post_cooldown` handling (icon/summary) is
+in place but unverified against a real payload.
+
 ---
 
 ## API Endpoints
@@ -213,6 +258,8 @@ A notification can point to a post that has since been deleted; the notification
   "nextCursor": "cursor-xyz"
 }
 ```
+
+`reason` (v0.8.5+) is a top-level field, not inside `metadata`. It's present only on system-generated, actorless notifications (`system_ban`, `system_ban_lifted`, `post_cooldown`, `rate_limit_warning`, and presumably `moderator_granted`/`removed`, `api_access_granted`/`removed`) and explains what happened — the client shows it as the inline preview line in place of mention content. See "Actorless notifications" above.
 
 A `chat_mention` notification's `metadata` carries room context and the mentioning message instead:
 
@@ -261,6 +308,7 @@ type Notification struct {
     RoomSlug             string // metadata.roomSlug; chat_mention room to jump to
     RoomName             string // metadata.roomName; chat_mention room display name
     MessageContent       string // metadata.messageContent; non-empty for chat_mention
+    Reason               string // reason; explains actorless system notifications (v0.8.5+)
 }
 
 type NotificationActor struct {

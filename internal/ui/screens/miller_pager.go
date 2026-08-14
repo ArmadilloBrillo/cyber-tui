@@ -45,12 +45,19 @@ func millerPageNav(delta, paneH, postH int, replyStarts, replyHeights []int, rep
 	}
 
 	// revealAbove scrolls the minimum amount to make an item visible when its
-	// top is hidden above the current viewport.
-	revealAbove := func(itemStart, itemH int) int {
-		if itemH <= paneH {
-			return clamp(itemStart) // align top to viewport top
-		}
-		return clamp(itemStart + itemH - paneH) // taller — align bottom to viewport bottom
+	// top is hidden above the current viewport. Always aligns the item's own
+	// top to the viewport top, taller-than-pane or not — matching
+	// revealBelow's taller-than-pane case and, critically, actually doing
+	// what the name and this comment promise. A previous version
+	// bottom-aligned tall items here instead (mirroring a "continuous
+	// scroll" feel), which left an image reserved near an item's top
+	// permanently out of view the moment you scrolled back onto a
+	// taller-than-viewport post or thread — confirmed live and by
+	// TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack (a 100%
+	// reproducible bug, not a redraw/timing issue at all — see
+	// docs/plan-inline-images-improvements.md Round 4/13).
+	revealAbove := func(itemStart int) int {
+		return clamp(itemStart)
 	}
 
 	if delta > 0 {
@@ -89,16 +96,14 @@ func millerPageNav(delta, paneH, postH int, replyStarts, replyHeights []int, rep
 				newScrollOffset = clamp(scrollOffset - 1)
 			} else {
 				newReplyIndex = replyIndex - 1
-				var prevStart, prevH int
+				var prevStart int
 				if newReplyIndex == -1 {
 					prevStart = 0
-					prevH = postH
 				} else {
 					prevStart = replyStarts[newReplyIndex]
-					prevH = replyHeights[newReplyIndex]
 				}
 				if prevStart < scrollOffset {
-					newScrollOffset = revealAbove(prevStart, prevH)
+					newScrollOffset = revealAbove(prevStart)
 				}
 				// else: previous item's top is visible — keep scrollOffset
 			}

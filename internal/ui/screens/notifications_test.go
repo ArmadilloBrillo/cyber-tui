@@ -1070,3 +1070,181 @@ func TestNotifs_RenderNotif_ChatMention_ShowsMessagePreview(t *testing.T) {
 		t.Errorf("expected message content preview in rendered notification, got: %q", rendered)
 	}
 }
+
+// --- v0.8.5: 8 new notification types ---
+
+func TestNotifSummary_GraffitiMention(t *testing.T) {
+	n := model.Notification{Type: "graffiti_mention"}
+	if got, want := notifSummary(n), "mentioned you in a graffiti wall post."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifIcon_GraffitiMention(t *testing.T) {
+	n := model.Notification{Type: "graffiti_mention", Read: false}
+	if !strings.Contains(notifIcon(n), "@") {
+		t.Errorf("expected @ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_ModeratorGranted(t *testing.T) {
+	n := model.Notification{Type: "moderator_granted"}
+	if got, want := notifSummary(n), "granted you Moderator status."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifSummary_ModeratorRemoved(t *testing.T) {
+	n := model.Notification{Type: "moderator_removed"}
+	if got, want := notifSummary(n), "removed your Moderator status."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifIcon_Moderator(t *testing.T) {
+	n := model.Notification{Type: "moderator_granted", Read: false}
+	if !strings.Contains(notifIcon(n), "!") {
+		t.Errorf("expected ! in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_APIAccessGranted(t *testing.T) {
+	n := model.Notification{Type: "api_access_granted"}
+	if got, want := notifSummary(n), "granted you API access."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifSummary_APIAccessRemoved(t *testing.T) {
+	n := model.Notification{Type: "api_access_removed"}
+	if got, want := notifSummary(n), "revoked your API access."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifIcon_APIAccess(t *testing.T) {
+	n := model.Notification{Type: "api_access_granted", Read: false}
+	if !strings.Contains(notifIcon(n), "/") {
+		t.Errorf("expected / in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_SystemBanLifted(t *testing.T) {
+	n := model.Notification{Type: "system_ban_lifted"}
+	if got, want := notifSummary(n), "your ban has been lifted."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifIcon_SystemBanLifted(t *testing.T) {
+	n := model.Notification{Type: "system_ban_lifted", Read: false}
+	if !strings.Contains(notifIcon(n), "✓") {
+		t.Errorf("expected ✓ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_PostCooldown(t *testing.T) {
+	n := model.Notification{Type: "post_cooldown"}
+	if got, want := notifSummary(n), "a post was rate-limited and saved as a note instead."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifIcon_PostCooldown(t *testing.T) {
+	n := model.Notification{Type: "post_cooldown", Read: false}
+	if !strings.Contains(notifIcon(n), "⏱") {
+		t.Errorf("expected ⏱ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_RateLimitWarning(t *testing.T) {
+	n := model.Notification{Type: "rate_limit_warning"}
+	if got, want := notifSummary(n), "you're approaching a posting limit."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifIcon_RateLimitWarning(t *testing.T) {
+	n := model.Notification{Type: "rate_limit_warning", Read: false}
+	if !strings.Contains(notifIcon(n), "⚠") {
+		t.Errorf("expected ⚠ in icon, got %q", notifIcon(n))
+	}
+}
+
+// --- v0.8.5: actorless notifications ---
+
+func TestHasActor(t *testing.T) {
+	cases := []struct {
+		name     string
+		username string
+		want     bool
+	}{
+		{"real actor", "testuser", true},
+		{"empty actor", "", false},
+		{"literal system actor", "system", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			n := model.Notification{Actor: model.NotificationActor{Username: c.username}}
+			if got := hasActor(n); got != c.want {
+				t.Errorf("hasActor(%q) = %v, want %v", c.username, got, c.want)
+			}
+		})
+	}
+}
+
+func TestNotifs_RenderNotif_NoActor_OmitsAtHandle(t *testing.T) {
+	n := model.Notification{
+		ID:        "n1",
+		Type:      "system_ban_lifted",
+		CreatedAt: time.Now(),
+		Actor:     model.NotificationActor{Username: "system"},
+	}
+	m := initNotifs([]model.Notification{n})
+	rendered := m.renderNotif(n, false)
+	if strings.Contains(rendered, "@") {
+		t.Errorf("expected no @ handle for actorless notification, got: %q", rendered)
+	}
+	if !strings.Contains(rendered, "your ban has been lifted.") {
+		t.Errorf("expected summary text in rendered notification, got: %q", rendered)
+	}
+}
+
+func TestNotifs_RenderNotif_NoActor_ShowsReasonAsPreview(t *testing.T) {
+	n := model.Notification{
+		ID:        "n1",
+		Type:      "post_cooldown",
+		CreatedAt: time.Now(),
+		Reason:    "posted too soon after your last entry",
+	}
+	m := initNotifs([]model.Notification{n})
+	rendered := m.renderNotif(n, false)
+	if !strings.Contains(rendered, "posted too soon after your last entry") {
+		t.Errorf("expected reason text as preview, got: %q", rendered)
+	}
+}
+
+func TestNotifs_P_NoActor_IsNoop(t *testing.T) {
+	notifs := []model.Notification{
+		{ID: "n1", Type: "post_cooldown", CreatedAt: time.Now(), Actor: model.NotificationActor{Username: "system"}},
+	}
+	m := initNotifs(notifs)
+	m2, msg := runKey(m, "p")
+	if msg != nil {
+		t.Errorf("expected no message for p on actorless notification, got %T", msg)
+	}
+	if m2.selectedIndex != m.selectedIndex {
+		t.Error("selection should be unchanged")
+	}
+}
+
+func TestNotifs_C_NoActor_IsNoop(t *testing.T) {
+	notifs := []model.Notification{
+		{ID: "n1", Type: "rate_limit_warning", CreatedAt: time.Now()},
+	}
+	m := initNotifs(notifs)
+	_, msg := runKey(m, "c")
+	if msg != nil {
+		t.Errorf("expected no message for c on actorless notification, got %T", msg)
+	}
+}

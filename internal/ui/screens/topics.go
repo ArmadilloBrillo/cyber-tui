@@ -91,6 +91,13 @@ type TopicsModel struct {
 	itemOffsets []int
 	width       int
 
+	// postImages is parallel to itemOffsets when view == viewTopicPosts —
+	// each post's inline image slots in its own card-local line coordinates,
+	// populated only when inlineImagesEnabled is true (see feed.go's
+	// postImages field for the same convention).
+	postImages          [][]postImageSlot
+	inlineImagesEnabled bool
+
 	bookmarkedPostIDs map[string]struct{}
 	watchedPostIDs    map[string]struct{}
 	height            int
@@ -214,6 +221,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			m.filterNSFW = msg.Settings.FilterNSFW
 			m.postIndex = 0
 		}
+		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -385,9 +393,12 @@ func (m TopicsModel) View() string {
 	return m.viewport.View()
 }
 
-func (m TopicsModel) buildContent() (string, []int) {
+// buildContent returns the rendered viewport content, the per-item line
+// offsets, and — only when view == viewTopicPosts — each post's inline
+// image slots parallel to offsets (nil in the topic-list view).
+func (m TopicsModel) buildContent() (string, []int, [][]postImageSlot) {
 	if m.fetching {
-		return theme.Subtle.Render("  loading topics…"), nil
+		return theme.Subtle.Render("  loading topics…"), nil, nil
 	}
 	sep := "\n"
 	lineInc := 1
@@ -407,9 +418,9 @@ func (m TopicsModel) buildContent() (string, []int) {
 	if m.view == viewTopicList {
 		if len(m.topics) == 0 {
 			if m.err != nil {
-				return prefix + theme.Subtle.Render("  couldn't load topics"), nil
+				return prefix + theme.Subtle.Render("  couldn't load topics"), nil, nil
 			}
-			return prefix + theme.Subtle.Render("  no topics yet"), nil
+			return prefix + theme.Subtle.Render("  no topics yet"), nil, nil
 		}
 		offsets := make([]int, len(m.topics))
 		currentLine := startLine
@@ -422,29 +433,31 @@ func (m TopicsModel) buildContent() (string, []int) {
 		}
 		// Footer
 		out += listFooter(m.loading, m.topicsExhausted && len(m.topics) > 0)
-		return prefix + strings.TrimRight(out, "\n"), offsets
+		return prefix + strings.TrimRight(out, "\n"), offsets, nil
 	}
 
 	// viewTopicPosts
 	if len(m.posts) == 0 {
 		if m.err != nil {
-			return prefix + theme.Subtle.Render("  couldn't load posts"), nil
+			return prefix + theme.Subtle.Render("  couldn't load posts"), nil, nil
 		}
-		return prefix + theme.Subtle.Render("  no posts"), nil
+		return prefix + theme.Subtle.Render("  no posts"), nil, nil
 	}
 	visible := m.visiblePosts()
 	offsets := make([]int, len(visible))
+	postImages := make([][]postImageSlot, len(visible))
 	currentLine := startLine
 	var out string
 	for i, p := range visible {
 		offsets[i] = currentLine
-		rendered := m.renderPostItem(p, i == m.postIndex)
+		rendered, imgSlots := m.renderPostItem(p, i == m.postIndex)
+		postImages[i] = imgSlots
 		out += rendered + sep
 		currentLine += lipgloss.Height(rendered) + lineInc - 1
 	}
 	// Footer
 	out += listFooter(m.loading, m.exhausted)
-	return prefix + strings.TrimRight(out, "\n"), offsets
+	return prefix + strings.TrimRight(out, "\n"), offsets, postImages
 }
 
 func (m TopicsModel) renderTopicItem(index int) string {
@@ -487,17 +500,106 @@ func (m TopicsModel) renderTopicItem(index int) string {
 	return boxStyle.Render(line)
 }
 
-func (m TopicsModel) renderPostItem(p model.Post, selected bool) string {
+func (m TopicsModel) renderPostItem(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
 }
 
 func (m TopicsModel) refreshContent() TopicsModel {
-	content, offsets := m.buildContent()
+	content, offsets, postImages := m.buildContent()
 	m.itemOffsets = offsets
+	m.postImages = postImages
 	m.viewport.SetContent(content)
 	return m.ensureSelectedVisible()
+}
+
+// SelectedPostID returns the ID of the currently selected topic post, or ""
+// when browsing the topic list or nothing is selected — used by App to
+// detect a selection-only move (see FeedModel.SelectedPostID's doc comment).
+func (m TopicsModel) SelectedPostID() string {
+	if m.view != viewTopicPosts {
+		return ""
+	}
+	visible := m.visiblePosts()
+	if m.postIndex < 0 || m.postIndex >= len(visible) {
+		return ""
+	}
+	return visible[m.postIndex].ID
+}
+
+// VisibleInlineImages returns the inline image slots currently fully within
+// the viewport, top to bottom, across every visible topic post — see
+// PostDetailModel.VisibleInlineImages for the full contract.
+func (m TopicsModel) VisibleInlineImages() []InlineImageSlot {
+	if !m.ready || !m.inlineImagesEnabled || m.view != viewTopicPosts {
+		return nil
+	}
+	visible := m.visiblePosts()
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+
+	var slots []InlineImageSlot
+	for i, p := range visible {
+		if i >= len(m.postImages) || i >= len(m.itemOffsets) {
+			continue
+		}
+		for j, img := range m.postImages[i] {
+			abs := m.itemOffsets[i] + img.Line
+			if abs < top || abs+inlineImageMaxRows > bottom {
+				continue
+			}
+			slots = append(slots, InlineImageSlot{
+				URL:       img.URL,
+				Row:       abs - top,
+				ColIndent: 2,
+				MaxCols:   m.width - 4,
+				MaxRows:   inlineImageEncodeMaxRows,
+				Key:       fmt.Sprintf("topicpost:%s:%d", p.ID, j),
+			})
+		}
+	}
+	return slots
+}
+
+// VisibleDetailInlineImages returns the inline image slots for the selected
+// post card in Miller's reading pane (topic post replies aren't
+// inline-image-aware — renderDetailReply renders plain markdown, so there's
+// nothing to report there). width/height must match what MillerLayout passed
+// to DetailView this frame — see FeedModel.VisibleDetailInlineImages for why
+// this recomputes rather than caching.
+func (m TopicsModel) VisibleDetailInlineImages(width, height int) []InlineImageSlot {
+	if !m.ready || !m.inlineImagesEnabled {
+		return nil
+	}
+	visible := m.visiblePosts()
+	if m.postIndex >= len(visible) {
+		return nil
+	}
+	p := visible[m.postIndex]
+	_, bookmarked := m.bookmarkedPostIDs[p.ID]
+	_, watched := m.watchedPostIDs[p.ID]
+	postSelected := m.threadReplyIndex < 0
+	_, imgSlots := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, true)
+	if len(imgSlots) == 0 {
+		return nil
+	}
+	top := m.threadScrollOffset
+	bottom := top + height
+	var slots []InlineImageSlot
+	for j, img := range imgSlots {
+		if img.Line < top || img.Line+inlineImageMaxRows > bottom {
+			continue
+		}
+		slots = append(slots, InlineImageSlot{
+			URL:       img.URL,
+			Row:       img.Line - top,
+			ColIndent: 2,
+			MaxCols:   width - 4,
+			MaxRows:   inlineImageEncodeMaxRows,
+			Key:       fmt.Sprintf("topicpost:%s:%d", p.ID, j),
+		})
+	}
+	return slots
 }
 
 func (m TopicsModel) ensureSelectedVisible() TopicsModel {
@@ -519,7 +621,8 @@ func (m TopicsModel) ensureSelectedVisible() TopicsModel {
 		if selectedIndex >= len(visible) {
 			return m
 		}
-		itemHeight = lipgloss.Height(m.renderPostItem(visible[selectedIndex], false))
+		rendered, _ := m.renderPostItem(visible[selectedIndex], false)
+		itemHeight = lipgloss.Height(rendered)
 	}
 
 	if selectedIndex >= len(m.itemOffsets) {
@@ -577,6 +680,14 @@ func (m TopicsModel) IsViewingTopicPosts() bool { return m.view == viewTopicPost
 
 // ActiveTopicName returns the slug of the currently active topic.
 func (m TopicsModel) ActiveTopicName() string { return m.activeTopic }
+
+// OpenTopic marks slug as the active topic, mirroring what pressing enter on
+// a topic-list row does. Callers still need to dispatch the post-list load
+// themselves (e.g. via LoadTopicPostsMsg) — this only sets the selection.
+func (m TopicsModel) OpenTopic(slug string) TopicsModel {
+	m.activeTopic = slug
+	return m
+}
 
 func (m TopicsModel) IsCompactListActive() bool { return m.IsViewingTopicPosts() }
 func (m TopicsModel) ListTitle() string          { return "posts (# " + m.ActiveTopicName() + ")" }
@@ -654,7 +765,7 @@ func (m TopicsModel) renderDetailReply(node replyNode, selected bool, width int)
 	if node.ParentUsername != "" {
 		header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
 	}
-	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false))
+	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false) + editedSuffix(node.Reply.EditedAt))
 	body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
 	boxStyle := theme.Border
 	if selected {
@@ -749,7 +860,7 @@ func (m TopicsModel) pageThreadNav(delta, paneH, paneW int) TopicsModel {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
 
-	postCard := RenderPost(p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0)
+	postCard, _ := RenderPost(p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
 	postH := lipgloss.Height(postCard)
 
 	replyStarts := make([]int, len(m.threadFlatTree))
@@ -785,7 +896,7 @@ func (m TopicsModel) DetailView(width, height int) string {
 	_, watched := m.watchedPostIDs[p.ID]
 
 	postSelected := m.threadReplyIndex < 0
-	card := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0)
+	card, _ := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
 
 	var parts []string
 	startLines := []int{0}

@@ -465,6 +465,43 @@ func TestRenderAttachments_GifBadge(t *testing.T) {
 	}
 }
 
+// TestImageIcon_DetectsImages confirms the glyph is blank with no images and
+// present (regardless of count) otherwise — audio attachments never trigger
+// it, and markdown-embedded images (the actual mechanism real posts use —
+// see the "markdown only" cases) count the same as structured Attachments.
+func TestImageIcon_DetectsImages(t *testing.T) {
+	cases := []struct {
+		name        string
+		attachments []model.Attachment
+		content     string
+		want        bool
+	}{
+		{"none", nil, "just text", false},
+		{"audio only", []model.Attachment{{Type: "audio"}}, "", false},
+		{"one image", []model.Attachment{{Type: "image"}}, "", true},
+		{"one gif", []model.Attachment{{Type: "gif"}}, "", true},
+		{"image plus gif", []model.Attachment{{Type: "image"}, {Type: "gif"}}, "", true},
+		{"three images", []model.Attachment{{Type: "image"}, {Type: "audio"}, {Type: "image"}, {Type: "image"}}, "", true},
+		{"markdown only, one image", nil, "hi\n\n![a](https://x/a.png)\n\n", true},
+		{"markdown only, two images", nil, "![a](https://x/a.png)\n\n![b](https://x/b.png)\n\n", true},
+		{"attachment plus markdown image", []model.Attachment{{Type: "audio"}}, "![a](https://x/a.png)\n\n", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out := imageIcon(c.attachments, c.content)
+			if !c.want {
+				if out != "" {
+					t.Errorf("expected no icon, got: %q", out)
+				}
+				return
+			}
+			if !strings.Contains(out, "🖼") {
+				t.Errorf("expected icon to contain 🖼, got: %q", out)
+			}
+		})
+	}
+}
+
 // TestRenderCircMessages_AttachmentOnlyBodySkipsDuplicateURL confirms that
 // when Body merely duplicates ImageUrl (an attachment-only message), the URL
 // is shown once via the attachment badge, not a second time as wrapped body text.
@@ -675,8 +712,8 @@ func TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned(t *testi
 	visible.ID = "m2"
 	msgs := []model.Message{muted, visible}
 
-	content, offsets, heights := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "", "", nil, 0,
-		map[string]bool{"alice": true})
+	content, offsets, heights, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "", "", nil, 0,
+		map[string]bool{"alice": true}, false, nil)
 
 	if len(offsets) != len(msgs) || len(heights) != len(msgs) {
 		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
@@ -692,6 +729,34 @@ func TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned(t *testi
 	}
 }
 
+// TestRenderChatMessagesWithSelection_HighlightsSelectedAndMatchesUnselected
+// mirrors TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned
+// for CMail's renderChatMessagesWithSelection: offsets/heights stay 1:1 with
+// msgs, rendering with selectedID == "" is byte-identical to
+// renderChatMessagesStyled, and selecting a message changes its rendered
+// block (the SelectedRow highlight).
+func TestRenderChatMessagesWithSelection_HighlightsSelectedAndMatchesUnselected(t *testing.T) {
+	const width = 60
+	msgs := []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "first", CreatedAt: circMsgTime},
+		{ID: "m2", From: model.User{Username: "case"}, Body: "second", CreatedAt: circMsgTime},
+	}
+
+	unselected := renderChatMessagesStyled(msgs, "case", time.UTC, "datetime", width, 0)
+	content, offsets, heights, _ := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "", false, nil)
+	if content != unselected {
+		t.Errorf("renderChatMessagesWithSelection with selectedID==\"\" should match renderChatMessagesStyled;\ngot:  %q\nwant: %q", content, unselected)
+	}
+	if len(offsets) != len(msgs) || len(heights) != len(msgs) {
+		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
+	}
+
+	selected, _, _, _ := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "m1", false, nil)
+	if selected == unselected {
+		t.Error("expected selecting m1 to change the rendered content (highlight)")
+	}
+}
+
 // TestFeedRenderPost_CachesBodyAcrossSelectionChange guards the fix that
 // splits renderPostBody (cacheable) out from the selection border: moving
 // the cursor between posts must reuse the cached body and only change
@@ -703,8 +768,8 @@ func TestFeedRenderPost_CachesBodyAcrossSelectionChange(t *testing.T) {
 	m.width = 80
 	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "hello world"}
 
-	unselected := m.renderPost(post, false)
-	selected := m.renderPost(post, true)
+	unselected, _ := m.renderPost(post, false)
+	selected, _ := m.renderPost(post, true)
 
 	if unselected == selected {
 		t.Error("expected selected vs unselected rendering to differ (border style)")
@@ -714,12 +779,159 @@ func TestFeedRenderPost_CachesBodyAcrossSelectionChange(t *testing.T) {
 	}
 
 	post.Content = "edited content"
-	edited := m.renderPost(post, false)
+	edited, _ := m.renderPost(post, false)
 	if strings.Contains(ansi.Strip(edited), "hello world") {
 		t.Error("expected cache to invalidate after post content changed, got stale body")
 	}
 	if !strings.Contains(ansi.Strip(edited), "edited content") {
 		t.Errorf("expected edited content in output, got: %q", edited)
+	}
+}
+
+// TestFeedRenderPost_CacheInvalidatesOnTopicsOnlyChange guards against a
+// regression where feedBodyCacheEntry's staleness check only compared
+// Content, not Title/Topics/IsPublic/IsNSFW — fields that became editable
+// via the edit feature (docs/43-edit-post.md) but were previously immutable
+// after creation, so the cache never needed to account for them. Editing
+// only a post's topics (leaving content unchanged) served a stale cached
+// render that never showed the new tags in Feed, even though Post Detail
+// (which has no such cache) updated correctly.
+func TestFeedRenderPost_CacheInvalidatesOnTopicsOnlyChange(t *testing.T) {
+	withTrueColor(t)
+	m := NewFeedModel()
+	m.width = 80
+	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "same content", Topics: []string{"old"}}
+
+	before, _ := m.renderPost(post, false)
+	if !strings.Contains(ansi.Strip(before), "#old") {
+		t.Fatalf("expected #old topic in initial render, got: %q", before)
+	}
+
+	post.Topics = []string{"new"}
+	after, _ := m.renderPost(post, false)
+	if strings.Contains(ansi.Strip(after), "#old") {
+		t.Error("expected cache to invalidate after topics changed, got stale #old topic")
+	}
+	if !strings.Contains(ansi.Strip(after), "#new") {
+		t.Errorf("expected #new topic in output after a topics-only edit, got: %q", after)
+	}
+}
+
+// TestFeedRenderPost_CacheInvalidatesOnEditedAtOnlyChange is the same class
+// of regression as TestFeedRenderPost_CacheInvalidatesOnTopicsOnlyChange,
+// for the "(edited)" marker: a resubmit that changes no tracked field except
+// EditedAt (e.g. the edit panel opened and saved with no actual content/
+// title/topics change) must still invalidate feedBodyCacheEntry, or the
+// marker never appears until something else evicts the cache.
+func TestFeedRenderPost_CacheInvalidatesOnEditedAtOnlyChange(t *testing.T) {
+	withTrueColor(t)
+	m := NewFeedModel()
+	m.width = 80
+	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "same content"}
+
+	before, _ := m.renderPost(post, false)
+	if strings.Contains(ansi.Strip(before), "(edited)") {
+		t.Fatalf("expected no (edited) marker before EditedAt is set, got: %q", before)
+	}
+
+	post.EditedAt = time.Now()
+	after, _ := m.renderPost(post, false)
+	if !strings.Contains(ansi.Strip(after), "(edited)") {
+		t.Errorf("expected cache to invalidate after EditedAt-only change, got stale body: %q", after)
+	}
+}
+
+// TestRenderPost_ShowsEditedMarkerWhenEditedAtSet guards the "(edited)"
+// indicator added once editedAt was confirmed to persist and come back on
+// GET (docs/00-api-backlog.md, 2026-08-12) — previously deferred in feature
+// 43 (docs/43-edit-post.md).
+func TestRenderPost_ShowsEditedMarkerWhenEditedAtSet(t *testing.T) {
+	base := model.Post{ID: "p1", AuthorUsername: "alice", Content: "hello"}
+
+	unedited, _ := RenderPost(base, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false)
+	if strings.Contains(unedited, "(edited)") {
+		t.Errorf("expected no (edited) marker for a never-edited post, got: %q", unedited)
+	}
+
+	edited := base
+	edited.EditedAt = time.Now()
+	got, _ := RenderPost(edited, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false)
+	if !strings.Contains(ansi.Strip(got), "(edited)") {
+		t.Errorf("expected (edited) marker for an edited post, got: %q", got)
+	}
+}
+
+// TestRenderCircMessagesWithSelection_HighlightsImageBandWhenSelected guards
+// the fix extending the SelectedRow highlight into a selected message's
+// reserved inline-image gutter, not just its text. Band size/position must
+// stay identical whether selected or not — only the band rows' background
+// styling should differ.
+func TestRenderCircMessagesWithSelection_HighlightsImageBandWhenSelected(t *testing.T) {
+	withTrueColor(t)
+	const width = 60
+	msg := circMsg("bob", "hi from bob")
+	msg.ID = "m1"
+	msg.ImageUrl = "https://example.com/a.png"
+	msgs := []model.Message{msg}
+
+	unselected, _, unselHeights, unselSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, true, nil)
+	selected, _, selHeights, selSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "m1", nil, 0, nil, true, nil)
+
+	if unselHeights[0] != selHeights[0] {
+		t.Errorf("heights differ between selected/unselected: %d vs %d, want equal", unselHeights[0], selHeights[0])
+	}
+	if unselSlots[0][0].Line != selSlots[0][0].Line {
+		t.Errorf("image slot Line differs between selected/unselected: %d vs %d, want equal", unselSlots[0][0].Line, selSlots[0][0].Line)
+	}
+
+	unselLines := strings.Split(unselected, "\n")
+	selLines := strings.Split(selected, "\n")
+	bandStart := unselSlots[0][0].Line - 1 // Line is 1-indexed relative to the band's first row
+	bandRows := chatImageBandRows(nil, circMsgImageKey("m1"))
+	for i := 0; i < bandRows && bandStart+i < len(unselLines); i++ {
+		if ansi.Strip(unselLines[bandStart+i]) != "" {
+			t.Fatalf("setup: expected unselected band row %d to be blank, got %q", i, unselLines[bandStart+i])
+		}
+	}
+	if !strings.Contains(selLines[bandStart], "\x1b[") {
+		t.Errorf("expected the selected message's image band to carry the SelectedRow background escape, got plain %q", selLines[bandStart])
+	}
+}
+
+// --- chatImageBandRows ---
+
+// TestChatImageBandRows_UnknownFallsBackToMax confirms the pre-fetch
+// fallback (no real row count known yet) reserves the same fixed-max box
+// as before — the safe upper bound the encoder can never exceed, since
+// it's what gets passed as the encoder's own maxRows.
+func TestChatImageBandRows_UnknownFallsBackToMax(t *testing.T) {
+	got := chatImageBandRows(nil, "circmsg:m1:0")
+	want := 1 + inlineImageEncodeMaxRows
+	if got != want {
+		t.Errorf("chatImageBandRows(nil, ...) = %d, want %d (1 leading spacer + fallback max, no trailing spacer)", got, want)
+	}
+}
+
+// TestChatImageBandRows_KnownShrinksToRealSize confirms a known real row
+// count (smaller than the fallback max) shrinks the reserved band to
+// exactly that size, still with no trailing spacer.
+func TestChatImageBandRows_KnownShrinksToRealSize(t *testing.T) {
+	realRows := map[string]int{"circmsg:m1:0": 3}
+	got := chatImageBandRows(realRows, "circmsg:m1:0")
+	if want := 1 + 3; got != want {
+		t.Errorf("chatImageBandRows = %d, want %d (1 leading spacer + the known 3 rows)", got, want)
+	}
+}
+
+// TestChatImageBandRows_KnownAtOrAboveMaxStaysCapped guards against a
+// corrupted/stale cache entry (e.g. a real row count somehow >= the
+// fallback max) ever reserving MORE than the safe upper bound.
+func TestChatImageBandRows_KnownAtOrAboveMaxStaysCapped(t *testing.T) {
+	realRows := map[string]int{"circmsg:m1:0": inlineImageEncodeMaxRows + 5}
+	got := chatImageBandRows(realRows, "circmsg:m1:0")
+	want := 1 + inlineImageEncodeMaxRows
+	if got != want {
+		t.Errorf("chatImageBandRows = %d, want %d (capped at the fallback max)", got, want)
 	}
 }
 
@@ -737,7 +949,7 @@ func BenchmarkRenderCircMessagesWithSelection(b *testing.B) {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil)
+				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, false, nil)
 			}
 		})
 	}

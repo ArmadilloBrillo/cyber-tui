@@ -40,6 +40,16 @@ func TestGuildsModel_InitialState(t *testing.T) {
 	}
 }
 
+// --- OpenGuild ---
+
+func TestGuildsModel_OpenGuild_SetsActiveGuild(t *testing.T) {
+	m := screens.NewGuildsModel()
+	m = m.OpenGuild("night-owls")
+	if got := m.ActiveGuild(); got != "night-owls" {
+		t.Errorf("ActiveGuild() = %q, want %q", got, "night-owls")
+	}
+}
+
 // --- SetGuilds ---
 
 func TestGuildsModel_SetGuilds_MarksLoaded(t *testing.T) {
@@ -598,5 +608,42 @@ func TestGuildsModel_EscBack_ClearsDetailState(t *testing.T) {
 	m2, _ := m.Update(specialKey(tea.KeyEsc))
 	if m2.IsDetailLoaded() {
 		t.Error("navigating back should clear guildDetailLoaded")
+	}
+}
+
+// --- VisibleInlineImages ---
+
+func TestGuildsModel_VisibleInlineImages_DisabledByDefault(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts([]model.Post{
+		{ID: "gp1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+func TestGuildsModel_VisibleInlineImages_ReportsSlotWhenEnabled(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts([]model.Post{
+		{ID: "gp1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected 1 slot, got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != "https://example.com/a.png" {
+		t.Errorf("URL = %q, want https://example.com/a.png", slots[0].URL)
 	}
 }

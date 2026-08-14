@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -203,6 +204,84 @@ func TestFeed_ComposeActive_TrueWhileConfirmingDelete(t *testing.T) {
 	}
 }
 
+// --- CanEditSelected / 'e' key ---
+
+func TestFeed_CanEditSelected_TrueForOwnRecentSupporter(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine", CreatedAt: time.Now()},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+
+	if !m.CanEditSelected() {
+		t.Error("expected CanEditSelected true for own recent post as a supporter")
+	}
+}
+
+func TestFeed_CanEditSelected_FalseForOtherUsersPost(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "bob", Content: "not mine", CreatedAt: time.Now()},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+
+	if m.CanEditSelected() {
+		t.Error("expected CanEditSelected false for another user's post")
+	}
+}
+
+func TestFeed_CanEditSelected_FalseWithoutSupporterStatus(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine", CreatedAt: time.Now()},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(false)
+
+	if m.CanEditSelected() {
+		t.Error("expected CanEditSelected false without supporter status")
+	}
+}
+
+func TestFeed_CanEditSelected_FalseOutsideEditWindow(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine", CreatedAt: time.Now().Add(-10 * time.Minute)},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+
+	if m.CanEditSelected() {
+		t.Error("expected CanEditSelected false outside the 5-minute edit window")
+	}
+}
+
+func TestFeed_EKey_OpensEditPanel_WhenEligible(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "mine", Title: "old title", CreatedAt: time.Now()},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+
+	m, _ = m.Update(keyRune("e"))
+	if !m.ComposeActive() {
+		t.Fatal("expected ComposeActive true after pressing 'e' on an editable post")
+	}
+}
+
+func TestFeed_EKey_NoOp_WhenNotEligible(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "bob", Content: "not mine", CreatedAt: time.Now()},
+	}, "")
+	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
+
+	m, _ = m.Update(keyRune("e"))
+	if m.ComposeActive() {
+		t.Error("expected ComposeActive to stay false pressing 'e' on another user's post")
+	}
+}
+
 // --- Background poll: pending new entries ---
 
 func TestFeed_SetPendingNew_FiltersAlreadyPresentPosts(t *testing.T) {
@@ -350,6 +429,187 @@ func TestFeed_UpAtTop_WithPendingNew_AnimatesThenMergesLocally(t *testing.T) {
 
 	if m.PendingNewCount() != 0 {
 		t.Errorf("PendingNewCount() = %d, want 0 after the merge tick fires", m.PendingNewCount())
+	}
+}
+
+// --- VisibleInlineImages ---
+
+// TestFeed_VisibleInlineImages_DisabledByDefault mirrors PostDetail's
+// equivalent: with InlineImagesEnabled never sent, a post with an eligible
+// image must report no slots — the feature is a strict no-op until enabled.
+func TestFeed_VisibleInlineImages_DisabledByDefault(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+// TestFeed_VisibleInlineImages_MultiplePosts confirms multiple posts on
+// screen at once each report their own image slot, with distinct per-post
+// Keys and strictly increasing Rows — the scenario phase 5 exists to
+// exercise (several images visible simultaneously, not just one post's).
+func TestFeed_VisibleInlineImages_MultiplePosts(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 80})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+		{ID: "p2", AuthorUsername: "bob", Content: "yo\n\n![b](https://example.com/b.png)\n\nlater"},
+	}, "")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 slots (one per post), got %d: %+v", len(slots), slots)
+	}
+	if slots[0].Key != "post:p1:0" || slots[1].Key != "post:p2:0" {
+		t.Errorf("expected distinct per-post keys, got %q and %q", slots[0].Key, slots[1].Key)
+	}
+	if slots[1].Row <= slots[0].Row {
+		t.Errorf("expected the second post's image below the first's: rows %d, %d", slots[0].Row, slots[1].Row)
+	}
+}
+
+// TestFeed_VisibleInlineImages_TrailingImageDoesNotShrinkCard is a
+// regression test: a post whose *last* image has no text after it (very
+// common in real content — many posts end right on the image) used to have
+// its reserved image band silently deleted by a trailing-whitespace trim in
+// renderPostBody, shrinking the card's computed height below what the image
+// actually needed and letting it paint into the next post. p1's image here
+// is the very last thing in its content — the exact trigger.
+func TestFeed_VisibleInlineImages_TrailingImageDoesNotShrinkCard(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 80})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "look at this\n\n![a](https://example.com/a.png)"},
+		{ID: "p2", AuthorUsername: "bob", Content: "yo\n\n![b](https://example.com/b.png)\n\nlater"},
+	}, "")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 slots (one per post), got %d: %+v", len(slots), slots)
+	}
+	// p2's image must land at least a full image band below p1's — if the
+	// bug were present, p1's card would be computed shorter than its actual
+	// rendered content, and p2's row would land inside (or before) p1's own
+	// reserved band instead of safely after it.
+	const minGap = 10 // inlineImageMaxRows(8) + 2 spacer rows
+	if got := slots[1].Row - slots[0].Row; got < minGap {
+		t.Errorf("expected at least %d rows between the two posts' images (card shrunk?), got %d (rows %d, %d)", minGap, got, slots[0].Row, slots[1].Row)
+	}
+}
+
+// TestFeed_VisibleInlineImages_CapsAtFirstImage confirms Feed shows at most
+// one inline image per post even when a post has multiple eligible ones
+// (e.g. mattmanz1/yay-i-have-gear, 2 images) — PostDetail still shows all of
+// them (see postdetail_test.go); Feed's card is compact and truncates body
+// text, so capping to the first keeps its image count predictable rather
+// than 0..N depending on how much intro text precedes the images.
+func TestFeed_VisibleInlineImages_CapsAtFirstImage(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "two photos\n\n![a](https://example.com/a.png)\n\n![b](https://example.com/b.png)"},
+	}, "")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected exactly 1 slot (capped), got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != "https://example.com/a.png" {
+		t.Errorf("expected the first image only, got %q", slots[0].URL)
+	}
+}
+
+// --- VisibleDetailInlineImages (Miller reading pane) ---
+
+// TestFeed_VisibleDetailInlineImages_DisabledByDefault mirrors
+// TestFeed_VisibleInlineImages_DisabledByDefault for Miller's detail pane.
+func TestFeed_VisibleDetailInlineImages_DisabledByDefault(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+
+	if slots := m.VisibleDetailInlineImages(76, 40); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+// TestFeed_VisibleDetailInlineImages_PostImage confirms the selected post's
+// own image is located, using renderDetailPost's inline-image-aware
+// rendering rather than RenderPost's (which always disables it for every
+// non-Feed-list caller — this is the one Feed opts into for Miller).
+func TestFeed_VisibleDetailInlineImages_PostImage(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, "")
+
+	slots := m.VisibleDetailInlineImages(76, 40)
+	if len(slots) != 1 {
+		t.Fatalf("expected 1 slot for the post's own image, got %d: %+v", len(slots), slots)
+	}
+	if slots[0].Key != "post:p1:0" {
+		t.Errorf("expected key %q, got %q", "post:p1:0", slots[0].Key)
+	}
+	if slots[0].URL != "https://example.com/a.png" {
+		t.Errorf("expected the post's image URL, got %q", slots[0].URL)
+	}
+}
+
+// TestFeed_VisibleDetailInlineImages_ReplyImage confirms a reply's image is
+// located below the post, keyed by reply ID — reply image extraction has no
+// Tabs-side equivalent to mirror (Tabs' Feed view never shows replies
+// inline), so this is new logic ported from PostDetailModel's pattern.
+func TestFeed_VisibleDetailInlineImages_ReplyImage(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hello", RepliesCount: 1},
+	}, "")
+	m, _ = m.Update(screens.FeedDetailRepliesMsg{PostID: "p1", Replies: []model.Reply{
+		{ID: "r1", PostID: "p1", AuthorUsername: "bob", Content: "check this\n\n![b](https://example.com/b.png)"},
+	}})
+
+	slots := m.VisibleDetailInlineImages(76, 60)
+	if len(slots) != 1 {
+		t.Fatalf("expected 1 slot for the reply's image, got %d: %+v", len(slots), slots)
+	}
+	if slots[0].Key != "reply:r1:0" {
+		t.Errorf("expected key %q, got %q", "reply:r1:0", slots[0].Key)
+	}
+	if slots[0].Row <= 0 {
+		t.Errorf("expected the reply's image below the post card (row > 0), got %d", slots[0].Row)
+	}
+}
+
+// TestFeed_VisibleDetailInlineImages_OutOfViewHiddenBySmallHeight confirms
+// the visibility window is respected: the same reply image from the test
+// above must be excluded when height is too small to reach it.
+func TestFeed_VisibleDetailInlineImages_OutOfViewHiddenBySmallHeight(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hello", RepliesCount: 1},
+	}, "")
+	m, _ = m.Update(screens.FeedDetailRepliesMsg{PostID: "p1", Replies: []model.Reply{
+		{ID: "r1", PostID: "p1", AuthorUsername: "bob", Content: "check this\n\n![b](https://example.com/b.png)"},
+	}})
+
+	if slots := m.VisibleDetailInlineImages(76, 2); slots != nil {
+		t.Errorf("expected the reply's image to be out of view at height=2, got %+v", slots)
 	}
 }
 

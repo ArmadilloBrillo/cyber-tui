@@ -85,3 +85,24 @@ Line 2 (content preview) shows the post title when set, otherwise the first line
 | `internal/api/client_test.go` | `TestHTTPCreatePost_SendsAllFields` — verifies request body and response parsing |
 | `internal/api/client_test.go` | `TestHTTPGetFeed_ParsesExtendedPostFields` — verifies all 5 new fields are parsed from feed response |
 | `internal/api/mock_test.go` | `TestMockCreatePost_TitleAndFlags` — verifies title/isPublic/isNSFW echoed back |
+| `internal/ui/app_test.go` | `TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg` / `TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg` |
+
+## Undocumented server behavior: posting too soon converts to a journal entry
+
+Confirmed live (2026-08-12, see `docs/00-api-backlog.md`): submitting a post
+within the server's per-account cooldown of a previous one is not rejected
+with `429`. Instead `POST /v1/posts` returns its normal `{ postId, slug }`
+success shape, but the ID doesn't resolve — `GET /v1/posts/:id` 404s — because
+the content was silently saved as a journal/note entry instead. The server
+does generate a "System" notification about it (visible on the website, and
+reflected in `GET /v1/notifications/unread-count`), but that notification is
+never returned by `GET /v1/notifications` under any filter — see the
+`00-api-backlog.md` entry on this. So the dangling `postId` is the only
+signal any REST client, including this one, can actually act on.
+
+`createPostCmd` (`internal/ui/app.go`) now follows every successful
+`CreatePost` with a `GetPost(id)` check. A 404 there produces
+`postConvertedToNoteMsg` instead of `postCreatedMsg`, which surfaces as a
+warning banner ("posted too soon after your last entry — saved to your
+Journal instead") rather than the compose overlay closing as if the post
+went through normally.

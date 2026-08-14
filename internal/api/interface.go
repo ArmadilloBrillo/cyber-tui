@@ -30,6 +30,9 @@ type Client interface {
 	CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error)
 	// GetPost fetches a single post by ID (used when jumping from a notification).
 	GetPost(postID string) (model.Post, error)
+	// GetPostBySlug fetches a single post by its author's username and per-author
+	// slug (used when opening a post permalink URL from post/reply content).
+	GetPostBySlug(username, slug string) (model.Post, error)
 
 	// Replies — first page only (pagination deferred).
 	GetPostReplies(postID string) ([]model.Reply, error)
@@ -56,6 +59,9 @@ type Client interface {
 	Follow(followedID string) (string, error)
 	// Unfollow removes a follow relationship by its document ID.
 	Unfollow(followID string) error
+	// Poke sends a poke notification to a user. Rate limited to 1/hour, 8/day
+	// across all users (not per-target).
+	Poke(username string) error
 
 	// Settings
 	GetSettings() (model.Settings, error)
@@ -107,10 +113,13 @@ type Client interface {
 	// pass nil for all types.
 	GetNotifications(cursor string, unreadOnly bool, types []string) ([]model.Notification, string, error)
 	// GetUnreadNotificationCount returns the server-side count of unread notifications.
-	// The value is cached for ~5 s on the server side.
-	GetUnreadNotificationCount() (int, error)
+	// The value is cached for ~5 s on the server side. exact is false once the true
+	// count exceeds 100 — count is capped at 100 in that case; render "99+".
+	GetUnreadNotificationCount() (count int, exact bool, err error)
 	MarkNotificationRead(id string) error
-	MarkAllNotificationsRead() error
+	// MarkAllNotificationsRead marks up to 5,000 notifications read per call.
+	// hasMore is true if the caller should call it again to mark the rest.
+	MarkAllNotificationsRead() (hasMore bool, err error)
 
 	// Bookmarks — cursor-paginated list; create/delete are fire-and-forget.
 	// Pass empty cursor for the first page; use the returned cursor for subsequent pages.
@@ -161,10 +170,18 @@ type Client interface {
 	// Posts — deletion.
 	// DeletePost soft-deletes a post owned by the authenticated user.
 	DeletePost(postID string) error
+	// EditPost edits a post owned by the authenticated user. Supporter accounts
+	// only, within 5 minutes of publishing; returns an *APIError with Status 403
+	// otherwise. The response carries no fields worth returning — the caller
+	// already has the full edited state and merges it locally.
+	EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool) error
 
 	// Replies — deletion.
 	// DeleteReply soft-deletes a reply owned by the authenticated user.
 	DeleteReply(replyID string) error
+	// EditReply edits a reply owned by the authenticated user. Same permission
+	// window as EditPost; content is the only editable field.
+	EditReply(replyID, content string) error
 
 	// FlagPost reports a post for review. reason is optional (max 500 chars).
 	// Idempotent: reporting the same post again returns alreadyFlagged=true

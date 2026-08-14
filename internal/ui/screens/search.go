@@ -115,6 +115,13 @@ type SearchModel struct {
 	relaxed           bool
 	timeDisplayFormat string
 	filterNSFW        bool
+
+	// rowImages is parallel to rows/itemOffsets — nil for every row except a
+	// rowHit with hitType "posts", which holds that post's inline image
+	// slots (in the card's own line coordinates, matching m.itemOffsets'
+	// convention) when inlineImagesEnabled is true.
+	rowImages           [][]postImageSlot
+	inlineImagesEnabled bool
 }
 
 func NewSearchModel() SearchModel {
@@ -273,6 +280,7 @@ func (m SearchModel) Update(msg tea.Msg) (SearchModel, tea.Cmd) {
 		}
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.filterNSFW = msg.Settings.FilterNSFW
+		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -499,39 +507,42 @@ func (m SearchModel) renderQuery() string {
 }
 
 // buildContent renders the preview or type-list view and returns the rendered
-// string, the per-row line offsets, and the flattened row descriptors — all
-// three indexed identically (including header rows, which are never selected).
-func (m SearchModel) buildContent() (string, []int, []searchRow) {
+// string, the per-row line offsets, the flattened row descriptors, and each
+// row's inline image slots (nil for non-post rows) — all four indexed
+// identically (including header rows, which are never selected).
+func (m SearchModel) buildContent() (string, []int, []searchRow, [][]postImageSlot) {
 	switch m.view {
 	case searchViewPreview:
 		return m.buildPreviewContent()
 	case searchViewTypeList:
 		return m.buildTypeListContent()
 	default:
-		return "", nil, nil
+		return "", nil, nil, nil
 	}
 }
 
-func (m SearchModel) buildPreviewContent() (string, []int, []searchRow) {
+func (m SearchModel) buildPreviewContent() (string, []int, []searchRow, [][]postImageSlot) {
 	if !m.hasSearched {
-		return theme.Subtle.Render("  no search yet"), nil, nil
+		return theme.Subtle.Render("  no search yet"), nil, nil, nil
 	}
 	if len(m.preview.Users) == 0 && len(m.preview.Posts) == 0 && len(m.preview.Replies) == 0 {
 		if m.err != nil {
-			return theme.Subtle.Render("  couldn't load results"), nil, nil
+			return theme.Subtle.Render("  couldn't load results"), nil, nil, nil
 		}
-		return theme.Subtle.Render(fmt.Sprintf("  no results for %q", m.lastQuery)), nil, nil
+		return theme.Subtle.Render(fmt.Sprintf("  no results for %q", m.lastQuery)), nil, nil, nil
 	}
 
 	var rows []searchRow
 	var offsets []int
 	var lines []string
+	var rowImages [][]postImageSlot
 	line := 0
 
-	addRow := func(row searchRow, rendered string) {
+	addRow := func(row searchRow, rendered string, imgSlots []postImageSlot) {
 		rows = append(rows, row)
 		offsets = append(offsets, line)
 		lines = append(lines, rendered)
+		rowImages = append(rowImages, imgSlots)
 		line += lipgloss.Height(rendered)
 	}
 
@@ -539,23 +550,24 @@ func (m SearchModel) buildPreviewContent() (string, []int, []searchRow) {
 		if n == 0 {
 			return
 		}
-		addRow(searchRow{kind: rowHeader}, theme.Subtle.Bold(true).Render(fmt.Sprintf("-- %s (%d) --", title, n)))
+		addRow(searchRow{kind: rowHeader}, theme.Subtle.Bold(true).Render(fmt.Sprintf("-- %s (%d) --", title, n)), nil)
 		for i := range n {
 			selected := len(rows) == m.selected
 			var rendered string
+			var imgSlots []postImageSlot
 			switch hitType {
 			case "users":
 				rendered = m.renderUserHit(m.preview.Users[i], selected)
 			case "posts":
-				rendered = m.renderPostHit(m.preview.Posts[i], selected)
+				rendered, imgSlots = m.renderPostHit(m.preview.Posts[i], selected)
 			case "replies":
 				rendered = m.renderReplyHit(m.preview.Replies[i], selected)
 			}
-			addRow(searchRow{kind: rowHit, hitType: hitType, index: i}, rendered)
+			addRow(searchRow{kind: rowHit, hitType: hitType, index: i}, rendered, imgSlots)
 		}
 		if n == searchCategoryCap {
 			selected := len(rows) == m.selected
-			addRow(searchRow{kind: rowSeeAll, hitType: hitType}, m.renderSeeAllRow(hitType, selected))
+			addRow(searchRow{kind: rowSeeAll, hitType: hitType}, m.renderSeeAllRow(hitType, selected), nil)
 		}
 	}
 
@@ -563,24 +575,26 @@ func (m SearchModel) buildPreviewContent() (string, []int, []searchRow) {
 	appendSection("posts", "posts", len(m.preview.Posts))
 	appendSection("replies", "replies", len(m.preview.Replies))
 
-	return strings.Join(lines, "\n"), offsets, rows
+	return strings.Join(lines, "\n"), offsets, rows, rowImages
 }
 
-func (m SearchModel) buildTypeListContent() (string, []int, []searchRow) {
+func (m SearchModel) buildTypeListContent() (string, []int, []searchRow, [][]postImageSlot) {
 	var rows []searchRow
 	var offsets []int
 	var lines []string
+	var rowImages [][]postImageSlot
 	line := 0
 
-	addRow := func(row searchRow, rendered string) {
+	addRow := func(row searchRow, rendered string, imgSlots []postImageSlot) {
 		rows = append(rows, row)
 		offsets = append(offsets, line)
 		lines = append(lines, rendered)
+		rowImages = append(rowImages, imgSlots)
 		line += lipgloss.Height(rendered)
 	}
 
 	title := theme.Subtle.Bold(true).Render(fmt.Sprintf("-- %s matching %q --", m.activeType, m.lastQuery))
-	addRow(searchRow{kind: rowHeader}, title)
+	addRow(searchRow{kind: rowHeader}, title, nil)
 
 	var n int
 	var exhausted bool
@@ -604,19 +618,20 @@ func (m SearchModel) buildTypeListContent() (string, []int, []searchRow) {
 	for i := range n {
 		selected := len(rows) == m.selected
 		var rendered string
+		var imgSlots []postImageSlot
 		switch m.activeType {
 		case "users":
 			rendered = m.renderUserHit(m.users[i], selected)
 		case "posts":
-			rendered = m.renderPostHit(m.posts[i], selected)
+			rendered, imgSlots = m.renderPostHit(m.posts[i], selected)
 		case "replies":
 			rendered = m.renderReplyHit(m.replies[i], selected)
 		}
-		addRow(searchRow{kind: rowHit, hitType: m.activeType, index: i}, rendered)
+		addRow(searchRow{kind: rowHit, hitType: m.activeType, index: i}, rendered, imgSlots)
 	}
 	lines = append(lines, listFooter(m.loading, exhausted && n > 0))
 
-	return strings.Join(lines, "\n"), offsets, rows
+	return strings.Join(lines, "\n"), offsets, rows, rowImages
 }
 
 func (m SearchModel) renderUserHit(u model.User, selected bool) string {
@@ -647,16 +662,16 @@ func (m SearchModel) renderUserHit(u model.User, selected bool) string {
 	return boxStyle.Render(line)
 }
 
-func (m SearchModel) renderPostHit(p model.Post, selected bool) string {
+func (m SearchModel) renderPostHit(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
 }
 
 func (m SearchModel) renderReplyHit(r model.Reply, selected bool) string {
 	innerWidth := m.width - 4
 	header := theme.Highlight.Render("@" + r.AuthorUsername)
-	header += theme.Subtle.Render("  " + displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, false))
+	header += theme.Subtle.Render("  " + displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, false) + editedSuffix(r.EditedAt))
 	body := r.Content
 	if innerWidth > 0 {
 		body = ansiTruncate(body, innerWidth)
@@ -686,11 +701,62 @@ func (m SearchModel) renderSeeAllRow(hitType string, selected bool) string {
 }
 
 func (m SearchModel) refreshContent() SearchModel {
-	content, offsets, rows := m.buildContent()
+	content, offsets, rows, rowImages := m.buildContent()
 	m.rows = rows
 	m.itemOffsets = offsets
+	m.rowImages = rowImages
 	m.viewport.SetContent(content)
 	return m.ensureSelectedVisible()
+}
+
+// SelectedPostID returns the ID of the currently selected row's post, or ""
+// if no row is selected or the selected row isn't a post — used by App to
+// detect a selection-only move (see FeedModel.SelectedPostID's doc comment).
+func (m SearchModel) SelectedPostID() string {
+	if m.selected < 0 || m.selected >= len(m.rows) {
+		return ""
+	}
+	row := m.rows[m.selected]
+	if row.kind != rowHit || row.hitType != "posts" {
+		return ""
+	}
+	return m.postAt(row).ID
+}
+
+// VisibleInlineImages returns the inline image slots currently fully within
+// the viewport, top to bottom, across every visible post hit — see
+// PostDetailModel.VisibleInlineImages for the full contract.
+func (m SearchModel) VisibleInlineImages() []InlineImageSlot {
+	if !m.ready || !m.inlineImagesEnabled {
+		return nil
+	}
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+
+	var slots []InlineImageSlot
+	for i, row := range m.rows {
+		if row.kind != rowHit || row.hitType != "posts" {
+			continue
+		}
+		if i >= len(m.rowImages) || i >= len(m.itemOffsets) {
+			continue
+		}
+		p := m.postAt(row)
+		for j, img := range m.rowImages[i] {
+			abs := m.itemOffsets[i] + img.Line
+			if abs < top || abs+inlineImageMaxRows > bottom {
+				continue
+			}
+			slots = append(slots, InlineImageSlot{
+				URL:       img.URL,
+				Row:       abs - top,
+				ColIndent: 2,
+				MaxCols:   m.width - 4,
+				MaxRows:   inlineImageEncodeMaxRows,
+				Key:       fmt.Sprintf("searchpost:%s:%d", p.ID, j),
+			})
+		}
+	}
+	return slots
 }
 
 // selectedItemHeight measures the rendered height of the currently selected
@@ -710,7 +776,8 @@ func (m SearchModel) selectedItemHeight() int {
 		case "users":
 			return lipgloss.Height(m.renderUserHit(m.userAt(row), true))
 		case "posts":
-			return lipgloss.Height(m.renderPostHit(m.postAt(row), true))
+			rendered, _ := m.renderPostHit(m.postAt(row), true)
+			return lipgloss.Height(rendered)
 		case "replies":
 			return lipgloss.Height(m.renderReplyHit(m.replyAt(row), true))
 		}

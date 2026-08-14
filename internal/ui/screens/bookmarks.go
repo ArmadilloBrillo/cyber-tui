@@ -337,7 +337,7 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 
 	// Derive display fields from embedded post/reply or fallback.
 	var author, content string
-	var createdAt time.Time
+	var createdAt, editedAt time.Time
 	var attachments []model.Attachment
 	var topics []string
 	switch {
@@ -345,33 +345,31 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 		author = b.Post.AuthorUsername
 		content = b.Post.Content
 		createdAt = b.Post.CreatedAt
+		editedAt = b.Post.EditedAt
 		attachments = b.Post.Attachments
 		topics = b.Post.Topics
 	case b.Reply != nil:
 		author = b.Reply.AuthorUsername
 		content = b.Reply.Content
 		createdAt = b.Reply.CreatedAt
+		editedAt = b.Reply.EditedAt
 		attachments = b.Reply.Attachments
 	default:
 		content = "(content unavailable)"
 		createdAt = b.CreatedAt
 	}
 
-	// Line 1 left: [type]  @author  [img][yt]
+	// Line 1 left: [type]  @author  🖼
 	var authorStyled string
 	if author != "" {
 		authorStyled = "  " + theme.Highlight.Render("@"+author)
 	}
-	attInd := attachmentIndicator(attachments)
-	left1 := typeTag + authorStyled
-	if attInd != "" {
-		left1 += "  " + attInd
-	}
+	left1 := typeTag + authorStyled + imageIcon(attachments, content)
 
 	// Line 1 right: "posted Xh ago · saved Yd ago"
 	postedStr := formatRelativeTime(createdAt, now, loc)
 	savedStr := formatRelativeTime(b.CreatedAt, now, loc)
-	right1 := theme.Subtle.Render("posted " + postedStr + " · saved " + savedStr)
+	right1 := theme.Subtle.Render("posted " + postedStr + " · saved " + savedStr + editedSuffix(editedAt))
 
 	var line1 string
 	if innerWidth > 0 {

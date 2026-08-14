@@ -114,6 +114,37 @@ func TestProfileUpdate_FKey_EmitsUnfollowMsg_WhenFollowing(t *testing.T) {
 	}
 }
 
+// --- 'p' key — poke ---
+
+func TestProfileUpdate_PKey_EmitsPokeMsg_WhenReadOnly(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	_ = updated
+	if cmd == nil {
+		t.Fatal("expected a cmd, got nil")
+	}
+	msg := cmd()
+	pokeMsg, ok := msg.(screens.PokeUserMsg)
+	if !ok {
+		t.Fatalf("expected PokeUserMsg, got %T", msg)
+	}
+	if pokeMsg.Username != "ragnar" {
+		t.Errorf("Username = %q, want ragnar", pokeMsg.Username)
+	}
+}
+
+func TestProfileUpdate_PKey_NoOp_OnOwnProfile(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(false)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd != nil {
+		if _, ok := cmd().(screens.PokeUserMsg); ok {
+			t.Error("did not expect PokeUserMsg on own (non-read-only) profile")
+		}
+	}
+}
+
 // --- IncrementFollowersCount ---
 
 func TestProfileIncrementFollowersCount(t *testing.T) {
@@ -424,5 +455,96 @@ func TestProfile_LoadMore_SkipsWhileInFlight(t *testing.T) {
 	}
 	if fired != 1 {
 		t.Errorf("expected exactly 1 LoadMoreUserPostsMsg while a fetch is in flight, got %d", fired)
+	}
+}
+
+// --- VisibleInlineImages ---
+
+// TestProfile_VisibleInlineImages_DisabledByDefault mirrors Feed's
+// equivalent: a profile with both image URL fields set reports no slots
+// until InlineImagesEnabled arrives via SharedConfigMsg.
+func TestProfile_VisibleInlineImages_DisabledByDefault(t *testing.T) {
+	u := testUser()
+	u.ProfilePictureUrl = "https://example.com/pic.png"
+	u.WebsiteImageUrl = "https://example.com/site.png"
+	m := screens.NewProfileModel().SetUser(u)
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40})
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+// TestProfile_VisibleInlineImages_BothFieldsStackedInOrder confirms both
+// ProfilePictureUrl and WebsiteImageUrl report a slot when set, in that
+// order, with the second strictly below the first.
+func TestProfile_VisibleInlineImages_BothFieldsStackedInOrder(t *testing.T) {
+	u := testUser()
+	u.ProfilePictureUrl = "https://example.com/pic.png"
+	u.WebsiteImageUrl = "https://example.com/site.png"
+	m := screens.NewProfileModel().SetUser(u)
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40, InlineImagesEnabled: true})
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 2 {
+		t.Fatalf("expected 2 slots (picture + website), got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != u.ProfilePictureUrl {
+		t.Errorf("slots[0].URL = %q, want ProfilePictureUrl %q", slots[0].URL, u.ProfilePictureUrl)
+	}
+	if slots[1].URL != u.WebsiteImageUrl {
+		t.Errorf("slots[1].URL = %q, want WebsiteImageUrl %q", slots[1].URL, u.WebsiteImageUrl)
+	}
+	if slots[1].Row <= slots[0].Row {
+		t.Errorf("expected the website image below the profile picture: rows %d, %d", slots[0].Row, slots[1].Row)
+	}
+}
+
+// TestProfile_VisibleInlineImages_OnlyOneFieldSet confirms only the set
+// field reports a slot when the other is empty.
+func TestProfile_VisibleInlineImages_OnlyOneFieldSet(t *testing.T) {
+	u := testUser()
+	u.ProfilePictureUrl = "https://example.com/pic.png"
+	m := screens.NewProfileModel().SetUser(u)
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40, InlineImagesEnabled: true})
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected 1 slot, got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != u.ProfilePictureUrl {
+		t.Errorf("URL = %q, want %q", slots[0].URL, u.ProfilePictureUrl)
+	}
+}
+
+// TestProfile_VisibleInlineImages_WebsiteImageMovesWithContentHeight guards
+// the reorder: the website image band sits below all tab content, so its
+// row must move down as that content grows (e.g. switching to a tab with
+// several loaded items) rather than staying at a small fixed row near the
+// header the way it used to.
+func TestProfile_VisibleInlineImages_WebsiteImageMovesWithContentHeight(t *testing.T) {
+	u := testUser()
+	u.WebsiteImageUrl = "https://example.com/site.png"
+	m := screens.NewProfileModel().SetUser(u)
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 200, InlineImagesEnabled: true})
+
+	baseline := m.VisibleInlineImages()
+	if len(baseline) != 1 {
+		t.Fatalf("expected 1 slot on the Info tab, got %d: %+v", len(baseline), baseline)
+	}
+
+	m = m.SetUserPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "ragnar", Content: "one"},
+		{ID: "p2", AuthorUsername: "ragnar", Content: "two"},
+		{ID: "p3", AuthorUsername: "ragnar", Content: "three"},
+	}, "")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Info -> Posts
+
+	afterPosts := m.VisibleInlineImages()
+	if len(afterPosts) != 1 {
+		t.Fatalf("expected 1 slot on the Posts tab, got %d: %+v", len(afterPosts), afterPosts)
+	}
+	if afterPosts[0].Row <= baseline[0].Row {
+		t.Errorf("expected the website image's row to move down with more tab content: Info row=%d, Posts row=%d", baseline[0].Row, afterPosts[0].Row)
 	}
 }

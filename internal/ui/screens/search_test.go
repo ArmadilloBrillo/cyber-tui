@@ -411,3 +411,44 @@ func TestSearch_ScrollDown_KeepsWholeSelectedCardVisible(t *testing.T) {
 		m, _ = pressKey(m, "j")
 	}
 }
+
+// --- VisibleInlineImages ---
+
+// TestSearch_VisibleInlineImages_DisabledByDefault mirrors Feed's equivalent:
+// a post hit with an eligible image reports no slots until InlineImagesEnabled
+// arrives via SharedConfigMsg.
+func TestSearch_VisibleInlineImages_DisabledByDefault(t *testing.T) {
+	m := readySearch()
+	m = m.SetTypeResults("posts", []model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+	}, nil, nil, "")
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots while disabled, got %+v", slots)
+	}
+}
+
+// TestSearch_VisibleInlineImages_PostHitReportsSlot confirms a post hit's
+// eligible image is reported once inline images are enabled, and a user/reply
+// hit (no post body) never contributes a slot.
+func TestSearch_VisibleInlineImages_PostHitReportsSlot(t *testing.T) {
+	m := readySearch()
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPreview(model.SearchPreview{
+		Users: []model.User{{Username: "bob"}},
+		Posts: []model.Post{
+			{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
+		},
+	}, "query")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected 1 slot (the post hit's image), got %d: %+v", len(slots), slots)
+	}
+	if slots[0].URL != "https://example.com/a.png" {
+		t.Errorf("URL = %q, want https://example.com/a.png", slots[0].URL)
+	}
+	if !strings.Contains(slots[0].Key, ":p1:") {
+		t.Errorf("Key = %q, want it to contain :p1:", slots[0].Key)
+	}
+}

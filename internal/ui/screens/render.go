@@ -12,6 +12,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
+	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
 const postMaxBodyLines = 4
@@ -22,8 +23,10 @@ const postMaxBodyLines = 4
 // width is the full terminal width; loc and timeFormat control the timestamp display.
 // maxBodyLines caps body text at that many lines (postMaxBodyLines for list views,
 // 0 for the reading pane where the full content should be shown).
-func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int) string {
-	content := renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines)
+// inlineImagesEnabled mirrors renderPostBody's parameter of the same name;
+// the returned []postImageSlot is nil whenever it's false.
+func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled bool) (string, []postImageSlot) {
+	content, imgSlots := renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines, inlineImagesEnabled)
 	boxStyle := theme.Border
 	if selected {
 		boxStyle = theme.ActiveBorder
@@ -31,7 +34,7 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 	if width-4 > 0 {
 		boxStyle = boxStyle.Width(width - 2)
 	}
-	return boxStyle.Render(content)
+	return boxStyle.Render(content), imgSlots
 }
 
 // renderPostBody renders everything in a post's card except the selection
@@ -41,17 +44,14 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 // arrow-key navigation) can cache this per post ID/width and skip the
 // markdown re-parse, instead of rebuilding every loaded post on every
 // keystroke.
-func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int) string {
+func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled bool) (string, []postImageSlot) {
 	innerWidth := width - 4
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
 		theme.Highlight.Render("@"+p.AuthorUsername),
-		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)),
-	) + audioIcon(p.Attachments) + bookmarkIcon(bookmarked) + watchIcon(watched)
+		theme.Subtle.Render("  "+displayTime(p.CreatedAt, loc, timeFormat, false)+editedSuffix(p.EditedAt)),
+	) + imageIcon(p.Attachments, p.Content) + audioIcon(p.Attachments) + bookmarkIcon(bookmarked) + watchIcon(watched)
 	var rightParts []string
-	if ind := attachmentIndicator(p.Attachments); ind != "" {
-		rightParts = append(rightParts, ind)
-	}
 	switch p.RepliesCount {
 	case 1:
 		rightParts = append(rightParts, theme.Subtle.Render("1 reply"))
@@ -86,16 +86,50 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 	}
 	badges := strings.Join(badgeParts, "  ")
 
+	rows := []string{header}
+	if badges != "" {
+		rows = append(rows, badges)
+	}
+	if p.Title != "" {
+		rows = append(rows, theme.Highlight.Render(p.Title))
+	}
+	// 1 = the card's own top border row, added by RenderPost/FeedModel.renderPost.
+	lineBase := 1 + lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, rows...))
+
 	var body string
+	var imgSlots []postImageSlot
 	if innerWidth > 0 {
-		rendered := markdown.Render(p.Content, innerWidth)
-		lines := strings.Split(rendered, "\n")
-		if maxBodyLines > 0 && len(lines) > maxBodyLines {
-			body = strings.Join(lines[:maxBodyLines], "\n")
-			more := len(lines) - maxBodyLines
-			body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
+		if inlineImagesEnabled {
+			rendered, hits := markdown.RenderLocatingImages(p.Content, innerWidth)
+			// Feed's card is compact and truncates body text to maxBodyLines,
+			// so a post's later images can already fall past that cutoff and
+			// simply not fit — capping to the first eligible image here keeps
+			// Feed predictable rather than showing a variable 0..N of them.
+			// PostDetail (no text truncation) still shows every eligible image.
+			if len(hits) > 1 {
+				hits = hits[:1]
+			}
+			lines := strings.Split(rendered, "\n")
+			more := 0
+			if maxBodyLines > 0 && len(lines) > maxBodyLines {
+				more = len(lines) - maxBodyLines
+				lines = lines[:maxBodyLines]
+			}
+			lines, imgSlots = spliceInlineImageBands(lines, hits, lineBase)
+			body = strings.Join(lines, "\n")
+			if more > 0 {
+				body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
+			}
 		} else {
-			body = rendered
+			rendered := markdown.Render(p.Content, innerWidth)
+			lines := strings.Split(rendered, "\n")
+			if maxBodyLines > 0 && len(lines) > maxBodyLines {
+				body = strings.Join(lines[:maxBodyLines], "\n")
+				more := len(lines) - maxBodyLines
+				body += "\n" + theme.Subtle.Render(fmt.Sprintf("  ▼ %d more lines", more))
+			} else {
+				body = rendered
+			}
 		}
 	} else {
 		body = markdown.Render(p.Content, 0)
@@ -111,28 +145,34 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 	}
 	topics := topicsSB.String()
 
-	body = strings.TrimRight(body, "\n")
-	rows := []string{header}
-	if badges != "" {
-		rows = append(rows, badges)
-	}
-	if p.Title != "" {
-		rows = append(rows, theme.Highlight.Render(p.Title))
+	if len(imgSlots) == 0 {
+		// Only safe when nothing was spliced in: an image band's reserved
+		// rows are blank strings, and when the last image in a post has no
+		// text after it (common — many posts end right on the image),
+		// blindly trimming trailing "\n"s deletes that whole reservation,
+		// shrinking the card below what VisibleInlineImages/App assume it
+		// occupies and letting the image paint into the next post's card.
+		body = strings.TrimRight(body, "\n")
 	}
 	rows = append(rows, body)
 	if topics != "" {
 		rows = append(rows, "\n"+topics)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	return lipgloss.JoinVertical(lipgloss.Left, rows...), imgSlots
 }
 
-// attachmentIndicator returns a compact header badge for any attachments present,
-// e.g. "[img]". Returns "" when there are no attachments.
-func attachmentIndicator(attachments []model.Attachment) string {
+// imageIcon returns a 🖼 icon (with leading spaces) when any image is present
+// — counting both structured image/gif Attachments and images embedded as
+// markdown syntax in content (most real posts use the latter; see
+// urlutil.CountImages) — else "". Audio attachments get their own icon (audioIcon).
+func imageIcon(attachments []model.Attachment, content string) string {
 	for _, a := range attachments {
-		if a.Type == "image" {
-			return theme.Subtle.Render("[img]")
+		if a.Type == "image" || a.Type == "gif" {
+			return "  " + theme.Highlight.Render("🖼")
 		}
+	}
+	if urlutil.CountImages(content) > 0 {
+		return "  " + theme.Highlight.Render("🖼")
 	}
 	return ""
 }
@@ -161,6 +201,16 @@ func watchIcon(watched bool) string {
 		return "  " + theme.Highlight.Render("◉")
 	}
 	return ""
+}
+
+// editedSuffix returns " (edited)" when editedAt is set, for appending
+// inside an existing theme.Subtle.Render call alongside the timestamp —
+// else "".
+func editedSuffix(editedAt time.Time) string {
+	if editedAt.IsZero() {
+		return ""
+	}
+	return " (edited)"
 }
 
 // renderAttachments returns a formatted block for each attachment,
@@ -331,6 +381,49 @@ func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisp
 	return sb.String()
 }
 
+// circMsgImageKey and cmailMsgImageKey build a message's inline-image slot
+// Key — single source of truth shared between VisibleInlineImages (which
+// assigns it) and the band-sizing code in renderCircMessagesWithSelection/
+// renderChatMessagesWithSelection (which needs to predict it to look up a
+// possibly-already-known real row count before the slot officially exists).
+// Chat messages only ever carry one inline image, so the trailing index is
+// always 0 — unlike posts, which can have several per card.
+func circMsgImageKey(msgID string) string  { return "circmsg:" + msgID + ":0" }
+func cmailMsgImageKey(msgID string) string { return "cmailmsg:" + msgID + ":0" }
+
+// chatImageBandRows returns how many blank lines to reserve for a chat
+// message's inline image: one leading spacer line plus however many rows
+// the image actually needs — its real fetched/fitted row count from
+// realRows if already known (App.recordInlineImageRealRows), else the same
+// fallback-max encode budget Feed/PostDetail use. There is deliberately no
+// trailing spacer — unlike posts' inlineImageBandRows, chat images reserve
+// exactly enough room and nothing more, so a message with a small image
+// never leaves a wall of blank lines below it. This is still always safe
+// against overlapping the next message even before the real size is known:
+// the fallback figure IS the upper bound passed to the encoder as maxRows,
+// so the image can never render taller than what's reserved.
+func chatImageBandRows(realRows map[string]int, key string) int {
+	rows := inlineImageEncodeMaxRows
+	if known, ok := realRows[key]; ok && known > 0 && known < rows {
+		rows = known
+	}
+	return 1 + rows
+}
+
+// circMessageTextIndent returns the left indent a cIRC message's own wrapped
+// body text starts at — the same rawPrefixWidth formula
+// renderCircMessagesStyled/renderActionLine use, so an inline image slot can
+// line its left edge up with where that message's text actually begins
+// instead of a generic guess. IsAction messages use "* " + " " (3) instead of
+// "<>" + "  " (4); their username is sanitize.Strip'd first, matching
+// renderActionLine.
+func circMessageTextIndent(msg model.Message) int {
+	if msg.IsAction {
+		return len(sanitize.Strip(msg.From.Username)) + 3
+	}
+	return len(msg.From.Username) + 4
+}
+
 // renderDeletedTombstone renders a soft-deleted cIRC message: the author and
 // original timestamp stay (per the API), but the body is replaced with a
 // muted "[DELETED]" marker — no markdown, no attachments, no text style.
@@ -360,16 +453,57 @@ func renderDeletedTombstone(username, ts string, viewportWidth int) string {
 // the selected message's block is stripped back to plain text (ansi.Strip)
 // and only that plain text is wrapped in theme.SelectedRow — the same
 // approach settings.go uses for its selected-row highlight.
-func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int, muted map[string]bool) (content string, offsets []int, heights []int) {
+// inlineImagesEnabled, when true, appends a reserved inline-image band (see
+// inlineimage.go) right after any message carrying an eligible image URL
+// (chatInlineImageURL), rendering that message from a sanitizeChatMessageForInlineImage
+// copy so the text the image replaces (attachment badge, or a body that's
+// nothing but the image URL) isn't shown redundantly underneath it — see
+// that function's doc comment for exactly what is and isn't stripped.
+// imgSlots is 1:1 with msgs, nil per message unless it got a band;
+// ColIndent is left for the caller (VisibleInlineImages) to fill in,
+// matching postImageSlot's convention elsewhere. realRows (keyed by
+// circMsgImageKey) supplies each image's already-known real row count, if
+// any — see chatImageBandRows.
+func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int, muted map[string]bool, inlineImagesEnabled bool, realRows map[string]int) (content string, offsets []int, heights []int, imgSlots [][]postImageSlot) {
 	offsets = make([]int, len(msgs))
 	heights = make([]int, len(msgs))
+	imgSlots = make([][]postImageSlot, len(msgs))
 	var sb strings.Builder
 	var lineCount int
 	for i, msg := range msgs {
-		rendered := renderCircMessagesStyled([]model.Message{msg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame, muted)
+		hasImage := inlineImagesEnabled && !msg.IsSystem && !muted[strings.ToLower(msg.From.Username)]
+		url := ""
+		renderMsg := msg
+		if hasImage {
+			url = chatInlineImageURL(msg)
+			if url != "" {
+				renderMsg = sanitizeChatMessageForInlineImage(msg, url)
+			}
+		}
+		rendered := renderCircMessagesStyled([]model.Message{renderMsg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame, muted)
 		if selectedID != "" && msg.ID == selectedID {
 			plain := strings.TrimSuffix(ansi.Strip(rendered), "\n")
 			rendered = theme.SelectedRow.Width(viewportWidth).Render(plain) + "\n"
+		}
+		if url != "" {
+			bandLine := strings.Count(rendered, "\n")
+			bandRows := chatImageBandRows(realRows, circMsgImageKey(msg.ID))
+			if selectedID != "" && msg.ID == selectedID {
+				// Extend the highlight into the image's reserved gutter so the
+				// selection band visually wraps the image, not just the text
+				// above it. Safe against the same corruption class the modal/
+				// animation fix guarded against: this only changes these rows'
+				// bytes when the selection moves onto/off msg, and that exact
+				// case is already handled generically by selectionTouchesSlot/
+				// inlineImagePaintGen (app.go), which forces the image to be
+				// redrawn in place whenever a selection change recolors the row
+				// range under it.
+				blankRow := theme.SelectedRow.Width(viewportWidth).Render("") + "\n"
+				rendered += strings.Repeat(blankRow, bandRows)
+			} else {
+				rendered += strings.Repeat("\n", bandRows)
+			}
+			imgSlots[i] = []postImageSlot{{URL: url, Line: bandLine + 1}}
 		}
 		offsets[i] = lineCount
 		// Not lipgloss.Height: it's strings.Count(s, "\n")+1, which treats
@@ -386,7 +520,7 @@ func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, t
 		lineCount += h
 		sb.WriteString(rendered)
 	}
-	return sb.String(), offsets, heights
+	return sb.String(), offsets, heights, imgSlots
 }
 
 // renderActionLine renders a /me-style action message in classic IRC form:
@@ -554,4 +688,50 @@ func renderChatMessagesStyled(msgs []model.Message, currentUser string, loc *tim
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+// renderChatMessagesWithSelection renders msgs exactly like
+// renderChatMessagesStyled (byte-identical when selectedID == ""),
+// additionally returning each message's start-line offset and rendered
+// line-height (1:1 with msgs), and highlighting the message whose ID
+// matches selectedID with theme.SelectedRow — the same approach
+// renderCircMessagesWithSelection uses.
+// inlineImagesEnabled behaves exactly as documented on
+// renderCircMessagesWithSelection — additive image bands, never replacing
+// existing content, imgSlots 1:1 with msgs. realRows (keyed by
+// cmailMsgImageKey) supplies each image's already-known real row count, if
+// any — see chatImageBandRows.
+func renderChatMessagesWithSelection(msgs []model.Message, currentUser string, loc *time.Location, timeDisplayFormat string, viewportWidth int, frame int, selectedID string, inlineImagesEnabled bool, realRows map[string]int) (content string, offsets []int, heights []int, imgSlots [][]postImageSlot) {
+	offsets = make([]int, len(msgs))
+	heights = make([]int, len(msgs))
+	imgSlots = make([][]postImageSlot, len(msgs))
+	var sb strings.Builder
+	var lineCount int
+	for i, msg := range msgs {
+		url := ""
+		renderMsg := msg
+		if inlineImagesEnabled && !msg.IsSystem {
+			url = chatInlineImageURL(msg)
+			if url != "" {
+				renderMsg = sanitizeChatMessageForInlineImage(msg, url)
+			}
+		}
+		rendered := renderChatMessagesStyled([]model.Message{renderMsg}, currentUser, loc, timeDisplayFormat, viewportWidth, frame)
+		if selectedID != "" && msg.ID == selectedID {
+			plain := strings.TrimSuffix(ansi.Strip(rendered), "\n")
+			rendered = theme.SelectedRow.Width(viewportWidth).Render(plain) + "\n"
+		}
+		if url != "" {
+			bandLine := strings.Count(rendered, "\n")
+			bandRows := chatImageBandRows(realRows, cmailMsgImageKey(msg.ID))
+			rendered += strings.Repeat("\n", bandRows)
+			imgSlots[i] = []postImageSlot{{URL: url, Line: bandLine + 1}}
+		}
+		offsets[i] = lineCount
+		h := strings.Count(rendered, "\n")
+		heights[i] = h
+		lineCount += h
+		sb.WriteString(rendered)
+	}
+	return sb.String(), offsets, heights, imgSlots
 }

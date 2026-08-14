@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/ragnar/cyber-tui/internal/ui/imgview"
+	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -35,9 +35,6 @@ func (l TabsLayout) NeedsCompactAutoFill(termHeight int) int { return 0 }
 
 // View renders the full terminal output for the tabs layout.
 func (l TabsLayout) View(a App) string {
-	if a.active == screenLogin {
-		return a.login.View()
-	}
 	contentHeight := a.height - theme.ChromeHeight
 	content := lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(l.renderActiveScreen(a))
 	base := lipgloss.JoinVertical(lipgloss.Left,
@@ -46,59 +43,15 @@ func (l TabsLayout) View(a App) string {
 		content,
 		l.renderBottomBar(a),
 	)
-	if a.themePickerOpen {
-		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
-	}
-	if a.themeEditorOpen {
-		return overlayCenter(base, l.renderThemeEditor(a), a.width, a.height)
-	}
-	if a.pathPromptOpen {
-		return overlayCenter(base, l.renderPathPrompt(a), a.width, a.height)
-	}
-	if a.helpModalOpen {
-		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
-	}
-	if a.urlPickerOpen {
-		return overlayCenter(base, l.renderURLPicker(a), a.width, a.height)
-	}
-	if a.imageModalOpen {
-		textModal := l.renderImageModal(a)
-		composed := overlayCenter(base, textModal, a.width, a.height)
-		// Compute the same offsets overlayCenter used so we can position
-		// the image sequence inside the border without embedding it in the
-		// overlay string (which would corrupt overlayCenter's ANSI splicing).
-		modalW := lipgloss.Width(textModal)
-		modalH := len(strings.Split(textModal, "\n"))
-		xOff := (a.width - modalW) / 2
-		yOff := (a.height - modalH) / 2
-		if xOff < 0 {
-			xOff = 0
-		}
-		if yOff < 0 {
-			yOff = 0
-		}
-		// theme.ActiveBorder: 1-char border + 1-char horizontal padding on each
-		// side. Image content therefore starts 2 cols right of the border edge.
-		// ANSI cursor sequences are 1-indexed; the border top row is yOff+1.
-		imgRow := yOff + 2
-		imgCol := xOff + 3
-		return composed + fmt.Sprintf("\x1b[%d;%dH%s\x1b[%d;1H", imgRow, imgCol, a.imageModalEncoded, a.height)
-	}
-	if a.imageNeedsCleanup && a.graphicsProtocol == imgview.ProtocolKitty {
-		// Inject the Kitty delete-all command onto the line that held the modal's
-		// top border so Bubble Tea's diff renderer delivers it to the terminal.
-		modalH := a.imageModalRows + 2
-		yOff := (a.height - modalH) / 2
-		if yOff < 0 {
-			yOff = 0
-		}
-		lines := strings.Split(base, "\n")
-		if yOff < len(lines) {
-			lines[yOff] = "\x1b_Ga=d,d=A\x1b\\" + lines[yOff]
-		}
-		return strings.Join(lines, "\n")
-	}
-	return base
+	return compositeOverlays(l, a, base)
+}
+
+// InlineImageSlots returns the active screen's visible inline-image slots and
+// this layout's fixed screen origin for them: row 1 is the tab bar, row 2 the
+// feed-pending/separator row, so content's own row 0 is ANSI row 3; column 1
+// is the content pane's left edge (no left margin in this layout).
+func (l TabsLayout) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int, string) {
+	return a.activeInlineImageSlots(), 3, 1, a.activeSelectionKey()
 }
 
 // HandleNav processes navigation key presses for the tabs layout: the "1"-"9"
@@ -177,12 +130,16 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 func (l TabsLayout) ContentWidth(termWidth int) int   { return termWidth }
 func (l TabsLayout) ContentHeight(termHeight int) int { return termHeight }
 
+// ModalMaxWidth: no side chrome in this layout (the tab bar is a top row,
+// not a side pane), so a modal can use the full terminal width.
+func (l TabsLayout) ModalMaxWidth(termWidth int) int { return termWidth }
+
 func (l TabsLayout) renderTabBar(a App) string {
 	var tabs string
 	for _, t := range visibleTabs() {
 		badge := ""
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
-			badge = fmt.Sprintf(" (%d)", a.polledUnreadCount)
+			badge = " (" + notifBadgeText(a.polledUnreadCount, a.polledUnreadCountExact) + ")"
 		}
 		if t.s == screenFeed {
 			if n := a.feed.PendingNewCount(); n > 0 {
@@ -376,12 +333,19 @@ func (l TabsLayout) screenHints(a App) []hint {
 		if a.feed.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}, more}
+		hints := []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, {"l", "copy link"}, {"c", "message"}}
+		if a.feed.CanEditSelected() {
+			hints = append(hints, hint{"e", "edit"})
+		}
+		return append(hints, more)
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
 			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		hints := []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"c", "message"}}
+		hints := []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"l", "copy link"}, {"c", "message"}}
+		if a.postDetail.CanEditSelected() {
+			hints = append(hints, hint{"e", "edit"})
+		}
 		if a.postDetail.HasTheme() {
 			hints = append(hints, hint{"T", "try theme"})
 		}
@@ -391,7 +355,7 @@ func (l TabsLayout) screenHints(a App) []hint {
 			return []hint{{"Ctrl+s", "save"}, {"Esc", "cancel"}, {"tab", "cycle"}}
 		}
 		if a.profile.IsReadOnly() {
-			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"c", "message"}, {"tab", "cycle"}, more}
+			return []hint{{"↑↓", "navigate"}, {"f", "follow"}, {"c", "message"}, {"p", "poke"}, {"tab", "cycle"}, more}
 		}
 		return []hint{{"↑↓", "navigate"}, {"e", "edit"}, {"tab", "cycle"}, more}
 	case screenNotifications:
@@ -532,6 +496,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 				row("p", "view profile"),
 				row("c", "message"),
 				row("d", "delete own"),
+				row("e", "edit own, <5min"),
 			)
 		}
 	case screenPostDetail:
@@ -540,6 +505,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		} else {
 			localSection = section("post detail",
 				row("d", "delete own"),
+				row("e", "edit own, <5min"),
 				row("p", "view profile"),
 				row("c", "message"),
 			)
@@ -551,6 +517,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 			localSection = section("profile",
 				row("enter", "open"),
 				row("c", "message"),
+				row("p", "poke"),
 			)
 		} else {
 			localSection = section("profile (own)",

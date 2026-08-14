@@ -253,8 +253,16 @@ func (m *MockClient) DeletePost(postID string) error {
 	return nil // no-op: in-memory feed is rebuilt on each GetFeed call
 }
 
+func (m *MockClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool) error {
+	return nil
+}
+
 func (m *MockClient) DeleteReply(replyID string) error {
 	return nil // no-op: in-memory replies are rebuilt on each GetPostReplies call
+}
+
+func (m *MockClient) EditReply(replyID, content string) error {
+	return nil
 }
 
 func (m *MockClient) FlagPost(postID, reason string) (string, bool, error) {
@@ -273,6 +281,16 @@ func (m *MockClient) GetPost(postID string) (model.Post, error) {
 		}
 	}
 	return model.Post{ID: postID, AuthorUsername: "unknown", Content: "[post not found]"}, nil
+}
+
+func (m *MockClient) GetPostBySlug(username, slug string) (model.Post, error) {
+	posts, _, _ := m.GetFeed("")
+	for _, p := range posts {
+		if p.AuthorUsername == username && p.Slug == slug {
+			return p, nil
+		}
+	}
+	return model.Post{AuthorUsername: username, Slug: slug, Content: "[post not found]"}, nil
 }
 
 func (m *MockClient) GetBookmarks(cursor string) ([]model.Bookmark, string, error) {
@@ -370,19 +388,19 @@ func (m *MockClient) GetNotifications(cursor string, unreadOnly bool, types []st
 	return out, "", nil
 }
 
-func (m *MockClient) GetUnreadNotificationCount() (int, error) {
+func (m *MockClient) GetUnreadNotificationCount() (int, bool, error) {
 	count := 0
 	for _, n := range mockNotifications {
 		if !n.Read {
 			count++
 		}
 	}
-	return count, nil
+	return count, true, nil
 }
 
 func (m *MockClient) MarkNotificationRead(id string) error { return nil }
 
-func (m *MockClient) MarkAllNotificationsRead() error { return nil }
+func (m *MockClient) MarkAllNotificationsRead() (bool, error) { return false, nil }
 
 func (m *MockClient) GetOwnProfile() (model.User, error) {
 	return mockUsers[0], nil
@@ -673,6 +691,10 @@ func (m *MockClient) Follow(followedID string) (string, error) {
 }
 
 func (m *MockClient) Unfollow(followID string) error {
+	return nil
+}
+
+func (m *MockClient) Poke(username string) error {
 	return nil
 }
 

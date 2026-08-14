@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.8.3
+# ᑕ¥βєяรקค¢є API v0.8.5
 
 ## Access
 
@@ -194,6 +194,39 @@ Returns `{ "data": { "postId": "...", "slug": "...", "title": "..." } }` (201). 
 
 Rate limit: 2/min, 15/day.
 
+### Edit Entry
+
+```
+PATCH /v1/posts/:id
+```
+
+```json
+{
+  "content": "Corrected entry content (markdown)",
+  "title": "New Title",
+  "topics": ["tag1", "tag2"],
+  "isPublic": true,
+  "isNSFW": false
+}
+```
+
+Available to supporters, within **5 minutes** of publishing, on their own entries. Outside that window -- or on an account without it -- the request returns `403`.
+
+Every field is optional; only what you send changes. Send at least one, or you get a `400`.
+
+- `content` -- max 32,768 characters
+- `title` -- max 100 characters. Send `""` to remove a title.
+- `topics` -- max 3, must be lowercase. Replaces the existing list.
+- `isPublic` -- boolean
+- `isNSFW` -- boolean
+- `attachments` -- replaces the existing attachments. Send `[]` to remove them.
+
+The `slug` is fixed once an entry is published, so share links keep working; sending one returns `400`. `createdAt` never changes, and an edit sends no notifications -- the people who were notified when you published aren't notified again.
+
+Returns `{ "data": { "postId": "..." } }` (200). The entry then carries an `editedAt` timestamp.
+
+Rate limit: 5/min, 30/day.
+
 ### Delete Entry
 
 ```
@@ -259,6 +292,24 @@ Returns `{ "data": { "replyId": "..." } }` (201).
 Posting a reply auto-watches the thread (see Thread Watching) unless you've disabled `autoWatchOnReply` in Settings.
 
 Rate limit: 3/min, 15/day.
+
+### Edit Reply
+
+```
+PATCH /v1/replies/:id
+```
+
+```json
+{ "content": "Corrected reply content (markdown)" }
+```
+
+Same permission and window as [Edit Entry](#edit-entry): supporters, within 5 minutes, on their own replies. `content` is the only editable field and is required, max 32,768 characters.
+
+Editing doesn't bump the thread -- the entry's reply count and last-activity time are untouched.
+
+Returns `{ "data": { "replyId": "..." } }` (200). The reply then carries an `editedAt` timestamp.
+
+Rate limit: 5/min, 30/day.
 
 ### Delete Reply
 
@@ -408,6 +459,20 @@ PATCH /v1/users/me
 - `locationName` -- max 64 characters, or `null` to clear
 
 Rate limit: 2/min, 15/day.
+
+### Poke a User
+
+```
+POST /v1/users/:username/poke
+```
+
+No body. Sends the user a `poke` notification -- the same nudge as the **[P] Poke** button on a profile on the web. Returns `{ "data": { "userId": "...", "username": "...", "poked": true } }` (`201`).
+
+- Poking yourself returns `400`.
+- Blocked in either direction (you blocked them, or they blocked you) returns `403`.
+- Unknown user returns `404`.
+
+Rate limit: 1/hour, 8/day -- across all users, not per user. A rejected poke (`400`/`403`/`404`) doesn't count against it.
 
 ---
 
@@ -636,7 +701,9 @@ Query params:
 - `read` -- `true` or `false` to filter by read status. Omit for all.
 - `type` -- comma-separated list of notification types (1-20 values). Omit for all.
 
-Notification types: `bookmark`, `reply`, `thread_reply`, `new_follower`, `unfollowed`, `new_post_following`, `new_post_friend`, `poke`, `chat_mention`, `post_mention`, `reply_mention`, `dm_message`, `guild_new_thread`, `supporter_granted`, `supporter_removed`, `hacker_granted`, `hacker_removed`, `image_permission_granted`, `image_permission_removed`, `attachment_permission_granted`, `attachment_permission_removed`, `system_ban`.
+Notification types: `bookmark`, `reply`, `thread_reply`, `new_follower`, `unfollowed`, `new_post_following`, `new_post_friend`, `poke`, `chat_mention`, `post_mention`, `reply_mention`, `graffiti_mention`, `dm_message`, `guild_new_thread`, `supporter_granted`, `supporter_removed`, `hacker_granted`, `hacker_removed`, `moderator_granted`, `moderator_removed`, `api_access_granted`, `api_access_removed`, `image_permission_granted`, `image_permission_removed`, `attachment_permission_granted`, `attachment_permission_removed`, `system_ban`, `system_ban_lifted`, `post_cooldown`, `rate_limit_warning`.
+
+This list excludes notifications you've muted, blocked, or switched off under `notifications` in `GET /v1/settings` — the same set the website shows you. A page can come back shorter than `limit` for that reason; keep paginating while `cursor` is non-null rather than stopping on a short page.
 
 Rate limit: 30/min.
 
@@ -659,7 +726,7 @@ Each notification has this shape:
 }
 ```
 
-- `actorId` / `actorUsername` — who triggered the notification (denormalized so no extra lookup is needed).
+- `actorId` / `actorUsername` — who triggered the notification (denormalized so no extra lookup is needed). Both are **optional**: notifications about your own account have no sender. `system_ban` omits them entirely, and `post_cooldown`, `rate_limit_warning` and `system_ban_lifted` carry the literal `"system"` — don't try to open a profile for it.
 - `targetType` — `post` or `reply`; `targetId` is the related entry's ID.
 - `read` — always `false` on creation.
 - `reason` — present only on some system notifications (e.g. `system_ban`).
@@ -678,8 +745,11 @@ The API emits these notifications server-side — clients don't create them:
 - `post_mention` / `reply_mention` — you're `@`-mentioned in an entry or reply. Mentions use the `@username` syntax (case-insensitive). Mentioning a user in an entry also subscribes them to that thread, so they receive `thread_reply` for future replies.
 - `thread_reply` — a new reply is posted to a thread you're watching.
 - `guild_new_thread` — a new thread is posted in a guild you belong to.
+- `poke` — someone pokes you (`POST /v1/users/:username/poke`).
 
 Notifications are never sent to yourself for your own actions, and a user who would otherwise receive several notifications for the same event gets only one (the most specific). Remaining types in the list above are produced by other parts of the platform (DMs, chat, moderation, role/permission changes).
+
+A few concern your own account rather than someone else's action, and arrive with no sender: `post_cooldown` (an entry you wrote was held back and saved as a private note instead), `rate_limit_warning` (you're approaching a posting limit), `system_ban` and `system_ban_lifted` (a restriction was applied or removed), `moderator_granted` / `moderator_removed` and `api_access_granted` / `api_access_removed` (a role changed). Their `reason` field explains what happened.
 
 ### Unread Count
 
@@ -687,9 +757,11 @@ Notifications are never sent to yourself for your own actions, and a user who wo
 GET /v1/notifications/unread-count
 ```
 
-Returns `{ "data": { "count": 7 } }` -- the number of unread notifications for the authenticated user.
+Returns `{ "data": { "count": 7, "exact": true } }` -- the number of unread notifications for the authenticated user.
 
-Cached for 5 seconds. The count may be slightly higher than the number of notifications returned by `GET /v1/notifications`, which applies additional filtering.
+The count covers the same set `GET /v1/notifications` returns, so a badge built on it matches the list. `exact` is `false` once you have more than 100 unread, where `count` covers only the 100 most recent -- render "99+" instead of the number when that happens.
+
+Cached for 5 seconds. Marking anything read clears the cache, so the count drops immediately.
 
 ### Mark as Read
 
@@ -707,7 +779,7 @@ POST /v1/notifications/read-all
 
 No body needed. Marks all unread notifications as read.
 
-Returns `{ "data": { "updated": 12 } }` with the count of notifications marked read.
+Returns `{ "data": { "updated": 12, "hasMore": false } }` with the count of notifications marked read. Up to 5,000 are marked per call; if `hasMore` is `true`, call it again until it's `false`.
 
 ---
 
@@ -1286,6 +1358,7 @@ All responses follow this structure:
 | Replies | 3 | 15 |
 | Follows | 3 | 15 |
 | Unfollows | 3 | 15 |
+| Pokes | — | 8 |
 | Notes | 3 | 30 |
 | Bookmarks | 5 | 75 |
 | Guild threads | 2 | 15 |
@@ -1304,7 +1377,7 @@ All responses follow this structure:
 | cIRC presence heartbeat / leave | 15 per room, 90 overall | — |
 | Flag an entry, reply or message | 5 | 50 |
 
-C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour). Flagging is capped at 20/hour, and the three flag endpoints share one budget between them. Presence is counted per room, and C-Mail typing per conversation.
+Pokes are capped at 1/hour rather than per minute. C-Mail messaging also has an hourly cap (150/hour); starting conversations is capped at 30/hour. cIRC messaging has the same hourly cap (150/hour). Flagging is capped at 20/hour, and the three flag endpoints share one budget between them. Presence is counted per room, and C-Mail typing per conversation.
 
 `POST /v1/auth/resend-verification` is limited separately to 1/min and 5/hour. `POST /v1/auth/check-username` is limited to 10/min and 60/hour per IP.
 
@@ -1354,3 +1427,20 @@ Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for 
 | Location name | 64 chars |
 | Topics per entry | 3 |
 | Username | 3-20 chars |
+
+## TypeScript definitions
+
+Every response shape on this page is available as a TypeScript definition file at
+[`/types.d.ts`](/types.d.ts). Save it next to your code and import from it:
+
+```ts
+import type { ApiList, ApiSingle, Entry, OwnUser } from './cyberspace-api-types'
+
+const res = await fetch('https://api.cyberspace.online/v1/posts', {
+  headers: { Authorization: `Bearer ${idToken}` },
+})
+const feed: ApiList<Entry> = await res.json()
+```
+
+Timestamps are ISO 8601 strings everywhere except cIRC and C-Mail, where they're
+millisecond epoch numbers.

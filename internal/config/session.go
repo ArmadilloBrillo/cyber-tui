@@ -78,8 +78,59 @@ type Config struct {
 	// fullscreen modal; "browser" always opens in the OS default browser.
 	ImageViewer string `json:"imageViewer,omitempty"`
 
+	// InlineImages enables rendering each post's first image attachment
+	// directly in the feed and post detail views, instead of just a link.
+	// Experimental — off by default. Still subject to the same graphics
+	// protocol detection and ImageViewer/ephemeral-session gating as the
+	// fullscreen image viewer.
+	InlineImages bool `json:"inlineImages,omitempty"`
+
 	// Layout selects the UI layout. "" or "tabs" = tab bar (default); "miller" = sidebar columns.
 	Layout string `json:"layout,omitempty"`
+
+	// GraphicsProtocol overrides automatic terminal graphics-protocol
+	// detection. "" (default) autodetects via env vars and a DA1 probe; set
+	// to "kitty", "iterm2", "sixel", or "none" to force a choice when
+	// autodetection is unreliable — e.g. mintty/Git Bash on Windows, which
+	// supports Sixel but doesn't reliably answer the DA1 probe query.
+	GraphicsProtocol string `json:"graphicsProtocol,omitempty"`
+
+	// ImageScale multiplies the fullscreen image modal's display size,
+	// relative to the image's own native (1:1 pixel) size — 1.0 shows it at
+	// native size (clamped to fit the terminal), not a fraction of the
+	// terminal window. 0 (absent from the file) means the default, 1.0.
+	// Terminal graphics protocols disagree on how a requested cell box maps
+	// to on-screen pixels (font metrics, DPI, terminal zoom all vary), so
+	// this is a manual per-machine correction rather than something the app
+	// can detect — see docs/46-image-modal-scale.md. Also adjustable live
+	// with +/- while the modal is open, for the current session only.
+	ImageScale float64 `json:"imageScale,omitempty"`
+}
+
+// MinImageScale and MaxImageScale bound both the config value and live +/-
+// adjustment: 0.2x to 2x the image's native size. Upscaling past native
+// resolution is allowed (unlike inline thumbnails) since this is a deliberate
+// user zoom, capped at 2x so it doesn't get too blurry.
+const (
+	MinImageScale = 0.2
+	MaxImageScale = 2.0
+)
+
+// GetImageScale returns ImageScale, substituting the default (1.0) when the
+// field is zero (absent from the config file) and clamping to
+// [MinImageScale, MaxImageScale].
+func (c Config) GetImageScale() float64 {
+	s := c.ImageScale
+	if s <= 0 {
+		s = 1.0
+	}
+	if s < MinImageScale {
+		s = MinImageScale
+	}
+	if s > MaxImageScale {
+		s = MaxImageScale
+	}
+	return s
 }
 
 // GetMaxThreadDepth returns MaxThreadDepth, substituting the default (3) when
@@ -204,4 +255,3 @@ func ShouldWanderNow(cfg Config) bool {
 	return cfg.LastWandered.IsZero() ||
 		time.Since(cfg.LastWandered) >= WanderInterval
 }
-

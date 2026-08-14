@@ -36,7 +36,6 @@ func main() {
 		theme.SetCustomPalette(*cfg.CustomPalette)
 	}
 	theme.Set(cfg.Theme)
-	gfxProto := imgview.DetectProtocol()
 
 	if !cfg.UseMock {
 		if err := validateBaseURL(cfg.APIBaseURL, cfg.AllowInsecureAPI); err != nil {
@@ -82,7 +81,38 @@ func main() {
 		return
 	}
 
+	// cfg.Debug ("debug": true in ~/.cyber-tui.json) enables verbose RTDB
+	// output (api.HTTPClient.isDebug) — redirect the standard log package to
+	// a file for the run so that output, wherever it's logged from, never
+	// hits the terminal and corrupts the alt-screen display. Set up before
+	// protocol detection below so that TEMPORARY diagnostic logging (see
+	// imgview.ProbeSixel) is captured too.
+	if cfg.Debug {
+		logFile, err := tea.LogToFile("cyber-tui-debug.log", "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "debug: %v\n", err)
+		} else {
+			defer logFile.Close()
+		}
+	}
+
 	// Local TUI mode
+	gfxProto, overridden := imgview.ProtocolFromName(cfg.GraphicsProtocol)
+	if !overridden {
+		gfxProto = imgview.DetectProtocol()
+		// Sixel terminals don't set a reliable env var, so probe only when
+		// env-var detection came up empty — Kitty/iTerm2 are higher fidelity
+		// when known. Autodetection is unreliable on some terminals (e.g.
+		// mintty/Git Bash on Windows not answering the DA1 probe); set
+		// "graphicsProtocol" in ~/.cyber-tui.json to bypass it.
+		if gfxProto == imgview.ProtocolNone && imgview.ProbeSixel(os.Stdin, os.Stdout) {
+			gfxProto = imgview.ProtocolSixel
+		}
+	}
+	if cfg.Debug {
+		log.Printf("imgview: KITTY_WINDOW_ID=%q TERM_PROGRAM=%q TERM=%q -> graphicsProtocol=%v",
+			os.Getenv("KITTY_WINDOW_ID"), os.Getenv("TERM_PROGRAM"), os.Getenv("TERM"), gfxProto)
+	}
 	app := ui.NewApp(newClient()).WithGraphicsProtocol(gfxProto)
 	// Prefer saved session (token-based) over autoEmail/autoPassword credentials.
 	if cfg.RefreshToken != "" {
@@ -109,18 +139,6 @@ func main() {
 				}
 				return msg // pure observer — never alters the message
 			}))
-		}
-	}
-	// cfg.Debug ("debug": true in ~/.cyber-tui.json) enables verbose RTDB
-	// output (api.HTTPClient.isDebug) — redirect the standard log package to
-	// a file for the run so that output, wherever it's logged from, never
-	// hits the terminal and corrupts the alt-screen display.
-	if cfg.Debug {
-		logFile, err := tea.LogToFile("cyber-tui-debug.log", "")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "debug: %v\n", err)
-		} else {
-			defer logFile.Close()
 		}
 	}
 	p := tea.NewProgram(app, opts...)

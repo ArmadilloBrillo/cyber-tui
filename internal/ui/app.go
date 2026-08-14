@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -9,12 +10,15 @@ import (
 	"math/rand"
 	neturl "net/url"
 	"os"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muesli/termenv"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -176,10 +180,205 @@ type App struct {
 	// single-image view (existing behavior, arrows never shown).
 	imageCarouselItems []string
 	imageCarouselIndex int
+	// carouselCycleGen is bumped on every left/right carousel keypress and
+	// captured by the debounce tick cycleImageCarousel schedules (see its
+	// doc comment) — holding the key down just moves imageCarouselIndex and
+	// reschedules the tick; only the tick whose gen still matches when it
+	// fires actually starts the (expensive: real decode+encode work even on
+	// a cache hit, see openImageInTerminal) fetch for wherever the index
+	// ended up. Without this, holding the key fired one fetch per repeat,
+	// almost all wasted on results that would just be discarded by
+	// imageFetchGen's newest-wins guard — confirmed live to leave the
+	// carousel's counter racing far ahead of the displayed image, and,
+	// after enough of a backlog, an occasional black screen (needing a
+	// keypress to recover) plausibly from the sheer volume of near-
+	// simultaneous full-frame renders that backlog produced.
+	carouselCycleGen int
 	// imageCache holds decoded images already fetched during the current
 	// modal's lifetime, keyed by URL, so cycling back to one skips the
 	// network fetch. Cleared whenever the modal closes.
 	imageCache map[string]cachedImage
+
+	// inlineImageCache holds encoded inline-image escape sequences, keyed by
+	// inlineImageCacheKey (slot key + URL + column budget + protocol),
+	// bounded by inlineImageCacheMaxBytes — see cacheInlineImage, which
+	// evicts the oldest-inserted entry first once exceeded.
+	// inlineImageCacheOrder/inlineImageCacheElems/inlineImageCacheBytes are
+	// cacheInlineImage's bookkeeping for that eviction; nothing else should
+	// touch them. inlineImageFetching tracks keys with a fetch already in
+	// flight, so syncInlineImages (called every Update) doesn't refire the
+	// same request every frame while it's pending. inlineImageFailedAt
+	// records when a key last failed to fetch, so a permanently-broken URL
+	// gets a cooldown (inlineImageFailureCooldown) instead of being retried
+	// on every single Update its slot stays visible for.
+	//
+	// Sixel/iTerm2 have no placement-delete primitive (Kitty does, see
+	// kittyPlacementIDs) and need two independent mechanisms:
+	//
+	//   - inlineImageVisibleRects (previous frame's key->rect map) and
+	//     inlineImageStaleRows (this frame's absolute row numbers whose
+	//     previously-drawn image content is now stale — a moved or removed
+	//     image, whose old and new screen position can differ) — see
+	//     syncInlineImageErasures' doc comment. These rows get an inert
+	//     dirty marker (forceRowsDirty in layout.go) rather than a manual
+	//     blank-fill: Bubble Tea's own per-line diff then resends each
+	//     row's real, always-correct current content. Earlier designs tried
+	//     a full tea.ClearScreen (flashed on every scroll) and then an
+	//     out-of-band absolute-cursor blank-fill that accumulated forever
+	//     waiting for an exact-rect "claim" that, for a scrolled-off or
+	//     tab-switched-away image, could never come — corrupting whatever
+	//     unrelated content later rendered at that same screen position.
+	//     Forcing a real resend of the row's true content sidesteps both:
+	//     it's always correct (not a guessed replacement), and it only
+	//     needs to fire for the one transition frame — recomputed fresh
+	//     every Update with no carry-forward — since even losing that one
+	//     frame to Bubble Tea's renderer coalescing self-heals as soon as
+	//     that row's content next changes, rather than corrupting anything.
+	//   - inlineImageLastSelKey (previous frame's activeSelectionKey) and
+	//     inlineImagePaintGen (bumped for a selection change that touches
+	//     a visible image, read by injectInlineImages to force its
+	//     trailing paint line "changed" to Bubble Tea's per-line diff)
+	//     handle a selection change recoloring a card's border without
+	//     moving anything — old and new position are identical here, so
+	//     reissuing the same paint in place is safe. Selection changes
+	//     that don't touch any visible image skip this — bumping on every
+	//     selection move regardless caused a visible blink on every
+	//     arrow-key step through a feed with any inline image on screen
+	//     (an earlier, since-fixed regression).
+	//
+	// A smaller single-line flash still remains on the selection-touches-
+	// image case and is an accepted ceiling, not an unnoticed gap: Lip
+	// Gloss regenerates a card's whole bordered box as one string whenever
+	// its border color changes (selection), so the image band row's bytes
+	// differ too (border color chars) even though its interior content
+	// didn't conceptually change — Bubble Tea's line-diff rewrites that
+	// line, incidentally overwriting the image pixels, and
+	// inlineImagePaintGen's reissue happens right after but is still a
+	// second, visible terminal-side paint. The clean fix would be Bubble
+	// Tea shipping DECSET 2026 synchronized-output support (v1.3.10, the
+	// latest release, doesn't have it); hand-rolling begin/end markers
+	// ourselves was evaluated and rejected — Bubble Tea's renderer diffs
+	// and skips lines independently, so a mismatched pair could leave the
+	// terminal stuck buffering indefinitely, a worse regression than the
+	// flash. The other alternative — keeping the image band's border color
+	// constant regardless of selection, so those rows never need rewriting
+	// — would fix it at the source but requires replacing Lip Gloss's
+	// single-call box styling with manual per-line border construction in
+	// feed.go/postdetail.go, judged too large/risky for this.
+	inlineImageCache        map[string]string
+	inlineImageCacheOrder   *list.List
+	inlineImageCacheElems   map[string]*list.Element
+	inlineImageCacheBytes   int
+	inlineImageFetching     map[string]bool
+	inlineImageFailedAt     map[string]time.Time
+	inlineImageVisibleRects map[string]inlineImageRect
+	inlineImageStaleRows    []int
+	// inlineImageStaleSince is when a row was last newly added to
+	// inlineImageStaleRows. syncInlineImages runs after every tea.Msg the
+	// whole app processes, including several independent tea.Tick loops
+	// unrelated to the active screen (chat/RTDB heartbeats, notification
+	// polls, gif-frame ticks) — so "the very next Update computed nothing
+	// new" is not a reliable signal that a forced-dirty resend actually got
+	// flushed to the terminal; it just as easily means an unrelated tick
+	// fired first. Clearing inlineImageStaleRows requires both a quiet
+	// Update AND inlineImageStaleGrace elapsed since this timestamp (see
+	// syncInlineImages) — long enough to comfortably outlast known
+	// multi-Update gaps like the feed's feedMergeAnimDelay, regardless of
+	// how many unrelated Updates interleave.
+	inlineImageStaleSince time.Time
+	inlineImageLastSelKey string
+	inlineImagePaintGen   int
+	// imageRepaintGen is a monotonically incrementing counter, bumped
+	// (never reset — same never-auto-expire posture as pendingKittyDeletes)
+	// each time an inline-image repaint is newly triggered for either
+	// protocol (a stale row in syncInlineImages, a selection change that
+	// touches a visible image, or a size-changed carousel cycle in
+	// handleImageViewer). Encoded via imageDirtyMarker (layout.go) into a
+	// zero-width true-color SGR marker so two consecutive *actually
+	// flushed* repaint frames never produce identical bytes for an
+	// unchanged row — a fixed marker (or a %2 toggle) isn't enough here:
+	// Bubble Tea's per-line diff would skip resending any row whose bytes
+	// match the last flushed frame, which for Sixel's real erase
+	// (sixelFullRepaint) means a skipped row comes back genuinely blank
+	// rather than merely stale, and for iTerm2's in-place resend
+	// (forceRowsDirty) means a skipped row silently keeps its old content —
+	// confirmed live for Sixel as stale pixels on fast scroll and, worse,
+	// the whole screen going black on fast carousel cycling; the identical
+	// mechanism affects iTerm2's resend path, just with a less visually
+	// obvious symptom (an occasional not-fully-drawn image on fast feed
+	// scroll/refresh) — originally scoped to Sixel only in the round-5/6
+	// fix (docs/plan-inline-images-improvements.md §10), extended to both
+	// protocols once the same collision was confirmed possible for iTerm2.
+	imageRepaintGen int
+
+	// screenSwitchedAt is when a.active last changed (App.Update, comparing
+	// active before/after updateInner). injectInlineImages (layout.go) uses
+	// it to briefly hold back inline image draws right after a screen
+	// switch — see inlineImageSwitchSettleDelay's doc comment for why: live
+	// debug-log evidence (docs/plan-inline-images-improvements.md Round 7)
+	// showed the app correctly recomputes and reissues the exact right
+	// draw command on returning to a screen after a fast switch away and
+	// back, yet the image still failed to render on real iTerm2 — pointing
+	// at the terminal still processing the large, unrelated screen-redraw
+	// content when the image's OSC sequence arrives, the same class of
+	// issue already mitigated for the fullscreen carousel
+	// (carouselCycleDebounce).
+	screenSwitchedAt time.Time
+
+	// kittyPlacementIDs assigns a stable id (used as both image id and
+	// placement id, see imgview.EncodeKitty) to each inline image slot ever
+	// seen, keyed by InlineImageSlot.Key. Entries are PERMANENT — never
+	// removed once assigned, even after the slot scrolls off-screen and gets
+	// deleted on the terminal side. This matters because inlineImageCacheKey
+	// doesn't vary by id (only by slot key/URL/width/protocol): if a key's id
+	// changed on every re-entry into view, a slot scrolling back into view
+	// would hit its OLD cache entry (still embedding the OLD, already-deleted
+	// id) and, since that old id sits permanently in pendingKittyDeletes (see
+	// below), get deleted again the instant it's redrawn — invisible forever
+	// after its first scroll-off. Keeping the id (and thus the cache entry)
+	// stable for a key's whole session lifetime avoids that entirely.
+	// kittyNextPlacementID is the session-lived counter handing out new ids —
+	// never reused/freed within a session. This stays safe even now that
+	// inlineImageCache is bounded (see its doc comment): evicting a cache
+	// entry doesn't touch its id, since inlineImageCacheKey doesn't embed
+	// one — a slot whose entry got evicted just re-fetches and re-encodes
+	// using its already-stable id, same as any other cache miss. If ids were
+	// ever evicted too, that would have to happen in the same step as
+	// evicting the matching cache entry, or a reissued id could collide with
+	// a still-cached payload embedding the old one.
+	//
+	// kittyVisibleKeys is the set of slot keys visible as of the last sync
+	// call. Because kittyPlacementIDs is never pruned, "not in
+	// kittyPlacementIDs" can no longer be used to detect a drop — nearly
+	// every key ever seen is "not currently visible" at any given moment, not
+	// just ones that just transitioned. Comparing against kittyVisibleKeys
+	// instead of kittyPlacementIDs is what lets syncKittyPlacements detect
+	// exactly the visible->invisible and invisible->visible transitions.
+	//
+	// pendingKittyDeletes is the set of dropped-out placement ids whose
+	// delete sequence gets resent on every subsequent frame. Deletes are the
+	// one part of this feature that's a single-shot event rather than
+	// something re-emitted every frame a slot is visible (creates/
+	// repositions are, by nature of the normal per-frame render loop) — and
+	// Bubble Tea's renderer batches/throttles actual terminal writes, so it
+	// can call View() many times between two real flushes and only the last
+	// computed View() before a flush tick ever reaches the terminal. A
+	// countdown-based resend budget was tried here first, decremented once
+	// per Update; a fast enough scroll can still rack up enough Updates
+	// between two real flushes to exhaust that budget on nothing but
+	// never-flushed intermediate renders, losing the delete exactly like the
+	// original single-shot version. Since Kitty placement ids are never
+	// reused within a session (kittyNextPlacementID only grows), resending an
+	// already-deleted id's delete is always a harmless no-op — so, like
+	// imageNeedsCleanup above (same underlying race, same fix), entries here
+	// are never auto-expired by a countdown; they're only removed early when
+	// syncKittyPlacements reports the same key has become visible again (see
+	// "revived" in syncInlineImages), which cancels the stale delete before it
+	// can wipe out the slot's freshly redrawn placement.
+	kittyPlacementIDs    map[string]int
+	kittyNextPlacementID int
+	kittyVisibleKeys     map[string]struct{}
+	pendingKittyDeletes  map[int]struct{}
 
 	// timezone is the active UTC offset label (e.g. "UTC+2"). Empty = UTC.
 	// loc is the parsed *time.Location derived from timezone.
@@ -227,6 +426,9 @@ type App struct {
 	// It is synced from: 60-second server poll, m/M key, and enter on a notification.
 	// Never overwrite with the local list count — the server count is always authoritative.
 	polledUnreadCount int
+	// polledUnreadCountExact is false once polledUnreadCount was capped at 100 by the
+	// server (v0.8.5+); the badge renders "99+" instead of the number in that case.
+	polledUnreadCountExact bool
 
 	// settings holds the user's preferences fetched from GET /v1/settings on login.
 	settings model.Settings
@@ -244,14 +446,43 @@ type App struct {
 	// image URLs always open in the OS browser even if a protocol is detected.
 	imageViewer string
 
+	// graphicsProtocolName is the user's raw override preference from
+	// config.GraphicsProtocol ("" autodetects; "kitty"/"iterm2"/"sixel" forces a
+	// choice). Kept alongside the already-resolved graphicsProtocol so the
+	// settings screen can display/edit it; saving re-resolves graphicsProtocol
+	// (see settingsSavedMsg handling) without re-running the Sixel DA1 probe,
+	// which requires raw terminal access before Bubble Tea takes over stdin.
+	graphicsProtocolName string
+
+	// inlineImages is the user's raw preference from config.InlineImages.
+	// See canInlineImages for the fully-gated value broadcast to screens.
+	inlineImages bool
+
+	// imageScale multiplies the computed size of the fullscreen image modal.
+	// Starts from config.Config.GetImageScale() and is live-adjustable with
+	// +/- while the modal is open (session-only, not persisted). <= 0 is
+	// treated as the default (1.0) — see openImageInTerminal.
+	imageScale float64
+
 	// imageModal holds the state for the inline image overlay. When imageModalOpen
 	// is true, View composites the encoded image sequence over the base content.
 	imageModalOpen    bool
 	imageModalEncoded string
 	imageModalCols    int
 	imageModalRows    int
-	imageNeedsCleanup bool // true after modal closes until a delete-placement frame reaches the terminal
-	imageFetchGen     int  // bumped on every fetch and on close; stale imageFetchedMsg results are dropped
+	// imageModalURL is the URL of the currently displayed modal image, kept
+	// so a live +/- scale adjustment can re-run openImageInTerminal for the
+	// same image (a cache hit, so it only re-encodes, not re-fetches).
+	imageModalURL string
+	// imageModalPrevRows/Cols are the modal's interior size as of the
+	// previous frame — 0 means no previous box to worry about (a fresh
+	// open, not a carousel cycle). Used by compositeOverlays to force the
+	// previous box's row range dirty when a cycle changes its size, instead
+	// of a full tea.ClearScreen — see compositeOverlays' doc comment.
+	imageModalPrevRows int
+	imageModalPrevCols int
+	imageNeedsCleanup  bool // true after modal closes until a delete-placement frame reaches the terminal
+	imageFetchGen      int  // bumped on every fetch and on close; stale imageFetchedMsg results are dropped
 
 	// ephemeral marks an SSH-hosted session whose state must never be read from
 	// or written to the host operator's config file.
@@ -354,13 +585,19 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.wanderLust = s.WanderLust
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
+	a.graphicsProtocolName = s.GraphicsProtocol
+	a.inlineImages = s.InlineImages
+	a.imageScale = s.GetImageScale()
 	a.layoutName = s.Layout
 	a.layout = layoutFromName(s.Layout)
 	a.customPalette = s.CustomPalette
 	return a
 }
 
-func layoutFromName(_ string) Layout {
+func layoutFromName(name string) Layout {
+	if name == "miller" {
+		return MillerLayout{}
+	}
 	return TabsLayout{}
 }
 
@@ -411,7 +648,29 @@ func (a App) Init() tea.Cmd {
 // handlers so each can claim the message and return early. WindowSizeMsg is
 // handled first and always falls through to delegateUpdate so the active
 // screen can also react to it.
+// Update is the top-level bubbletea entry point. It delegates to updateInner
+// for all existing message handling, then runs syncInlineImages once per
+// message on the resulting state — after the active screen has already
+// processed msg, so VisibleInlineImages() reflects any scroll/selection
+// change from this same message — batching its command (if any) with
+// whatever updateInner returned.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	prevActive := a.active
+	a2, cmd := a.updateInner(msg)
+	if a2.active != prevActive {
+		// See screenSwitchedAt's doc comment (App struct) and
+		// inlineImageSwitchSettleDelay's — injectInlineImages uses this to
+		// briefly hold back inline image draws right after a screen switch.
+		a2.screenSwitchedAt = time.Now()
+	}
+	a3, syncCmd := a2.syncInlineImages()
+	if syncCmd == nil {
+		return a3, cmd
+	}
+	return a3, tea.Batch(cmd, syncCmd)
+}
+
+func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
 		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
@@ -436,12 +695,28 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a.cycleImageCarousel(+1)
 			}
 		}
+		switch km.String() {
+		case "+", "=":
+			return a.adjustImageScale(imageScaleStep)
+		case "-":
+			return a.adjustImageScale(-imageScaleStep)
+		}
 		a.imageModalOpen = false
+		a.chatrooms = a.chatrooms.SetAnimPaused(false)
+		a.cmail = a.cmail.SetAnimPaused(false)
 		a.imageNeedsCleanup = (a.graphicsProtocol == imgview.ProtocolKitty)
 		a.imageCarouselItems = nil
 		a.imageCarouselIndex = 0
-		a.imageFetchGen++ // invalidate anything still in flight
+		a.imageFetchGen++    // invalidate anything still in flight
+		a.carouselCycleGen++ // invalidate any pending debounce tick — see its doc comment for why a stale one firing after imageCarouselItems is nil'd would panic
 		a.imageCache = nil
+		if a.graphicsProtocol == imgview.ProtocolSixel {
+			// Sixel has no delete-placement primitive like Kitty's a=d,d=A, and
+			// Bubble Tea's diff renderer can skip re-emitting a row whose text
+			// happens to match the prior frame, leaving stray pixels behind. A
+			// full repaint is the only reliable way to clear them.
+			return a, tea.ClearScreen
+		}
 		return a, nil
 	}
 	if a2, cmd, ok := a.handleKeys(msg); ok {
@@ -507,6 +782,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a2, cmd, ok := a.handleImageViewer(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleInlineImageFetched(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleErr(msg); ok {
 		return a2, cmd
 	}
@@ -535,7 +813,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -742,7 +1020,28 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.cmail, _ = a.cmail.Update(contentMsg)
 			a.chatrooms, _ = a.chatrooms.Update(contentMsg)
 		}
-		return a, a.afterLoginCmd(), true
+		loginCmd := a.afterLoginCmd()
+		// Windows-only notice: every graphics protocol this app supports has
+		// turned up a confirmed or documented Windows-specific rendering bug
+		// during the WezTerm/ConPTY investigation (see
+		// docs/plan-inline-images-improvements.md §9) — not fixable from
+		// here, so surface it rather than silently leaving images broken.
+		// Deliberately does NOT require a.graphicsProtocol != ProtocolNone:
+		// that's our own detection heuristic succeeding (env-var based, see
+		// imgview.DetectProtocol), not the user's intent — mintty/Git Bash on
+		// Windows, for one, sets no TERM_PROGRAM at all and detects as
+		// ProtocolNone, but still goes through the same ConPTY layer as any
+		// other Windows terminal, so the user should still be warned if
+		// they've asked for terminal image viewing. Fired here (not Init())
+		// since the notify banner only renders in the post-login layouts and
+		// has a short TTL that would tick away unseen during login if set
+		// any earlier.
+		if !a.ephemeral && a.imageViewer != "browser" && runtime.GOOS == "windows" {
+			var notifyCmd tea.Cmd
+			a, notifyCmd = a.notify(notifyWarn, "images may not render correctly on Windows (known ConPTY issue) — try Settings → Image Viewer: browser")
+			return a, tea.Batch(loginCmd, notifyCmd), true
+		}
+		return a, loginCmd, true
 	case screens.LoginErrMsg:
 		var cmd tea.Cmd
 		a.login, cmd = a.login.Update(msg)
@@ -835,6 +1134,14 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case repliesLoadedMsg:
+		if msg.postID != a.postDetail.PostID() {
+			// Superseded: the user navigated away from this post (and,
+			// possibly, back to a different one) before this request
+			// resolved. Applying it anyway would silently rewrite the
+			// current post's reply tree with another post's data — see
+			// repliesLoadedMsg's doc comment.
+			return a, nil, true
+		}
 		a.postDetail = a.postDetail.SetReplies(msg.replies)
 		if a.pendingReplyID != "" {
 			a.postDetail = a.postDetail.ScrollToReply(a.pendingReplyID)
@@ -845,8 +1152,28 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
+	case postConvertedToNoteMsg:
+		a, notifyCmd := a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
+		return a, tea.Batch(notifyCmd, a.loadFeedCmd()), true
+	case screens.SubmitPostEditMsg:
+		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW), true
+	case postEditedMsg:
+		// Both Feed and PostDetail may hold their own local copy of this post;
+		// PostDetail's ApplyPostEdit has no postID param, so guard it here —
+		// otherwise editing from Feed while PostDetail has an unrelated post
+		// open would overwrite that unrelated post's content.
+		a.feed = a.feed.ApplyPostEdit(msg.postID, msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt)
+		if a.postDetail.PostID() == msg.postID {
+			a.postDetail = a.postDetail.ApplyPostEdit(msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt)
+		}
+		return a, nil, true
 	case screens.SubmitReplyMsg:
 		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID), true
+	case screens.SubmitReplyEditMsg:
+		return a, a.editReplyCmd(msg.ReplyID, msg.Content), true
+	case replyEditedMsg:
+		a.postDetail = a.postDetail.ApplyReplyEdit(msg.replyID, msg.content, msg.editedAt)
+		return a, nil, true
 	case replyCreatedMsg:
 		if a.settings.AutoWatchOnReply {
 			if _, alreadyWatched := a.watchedPostIDs[msg.postID]; !alreadyWatched {
@@ -902,9 +1229,15 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.chatrooms, cmd = a.chatrooms.OpenPendingRoom()
 		return a, cmd, true
 	case screens.OpenRoomMsg:
-		// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
-		if a.polledUnreadCount > 0 {
-			a.polledUnreadCount--
+		// NotifID is empty when this came from a URL open (routeURL) rather
+		// than a chat_mention notification — nothing to mark read there.
+		var markReadCmd tea.Cmd
+		if msg.NotifID != "" {
+			// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
+			if a.polledUnreadCount > 0 {
+				a.polledUnreadCount--
+			}
+			markReadCmd = a.markNotifReadCmd(msg.NotifID)
 		}
 		a.chatroomsReturn = a.active
 		a.chatrooms = a.chatrooms.SetPendingRoomSlug(msg.RoomSlug)
@@ -912,7 +1245,7 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		// Chatrooms, so it must be set true *after* that call, not before.
 		a, activateCmd := activateScreen(a, screenChatrooms)
 		a.chatrooms = a.chatrooms.SetCanGoBack(true)
-		return a, tea.Batch(a.markNotifReadCmd(msg.NotifID), activateCmd), true
+		return a, tea.Batch(markReadCmd, activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
 	case screens.FlagMessageMsg:
@@ -1006,8 +1339,8 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.currentUser = msg.user
 		a.profile = a.profile.ClearTabs().SetUser(msg.user).SetCanGoBack(false)
 		// Propagate the confirmed username to screens that guard own-content actions.
-		a.feed = a.feed.SetCurrentUsername(msg.user.Username)
-		a.postDetail = a.postDetail.SetCurrentUsername(msg.user.Username)
+		a.feed = a.feed.SetCurrentUsername(msg.user.Username).SetCurrentUserIsSupporter(msg.user.IsSupporter)
+		a.postDetail = a.postDetail.SetCurrentUsername(msg.user.Username).SetCurrentUserIsSupporter(msg.user.IsSupporter)
 		return a, nil, true
 	case userProfileLoadedMsg:
 		isOwn := msg.user.Username == a.currentUser.Username
@@ -1025,6 +1358,8 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.followUserCmd(msg.UserID), true
 	case screens.UnfollowUserMsg:
 		return a, a.unfollowUserCmd(msg.FollowID), true
+	case screens.PokeUserMsg:
+		return a, a.pokeUserCmd(msg.Username), true
 	case followResultMsg:
 		a.profile = a.profile.SetFollowState(true, msg.followID).IncrementFollowersCount(1).SetFollowFeedback("following.")
 		return a, nil, true
@@ -1120,6 +1455,8 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
+		gp := msg.GraphicsProtocol
+		ii := msg.InlineImages
 		ln := msg.LayoutName
 		return a, func() tea.Msg {
 			if msg.RemoteChanged {
@@ -1132,9 +1469,11 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
+				cfg.GraphicsProtocol = gp
+				cfg.InlineImages = ii
 				cfg.Layout = ln
 			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, layoutName: ln}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -1143,15 +1482,28 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
+		a.graphicsProtocolName = msg.graphicsProtocol
+		if proto, ok := imgview.ProtocolFromName(msg.graphicsProtocol); ok {
+			a.graphicsProtocol = proto
+		} else {
+			// "" (auto): re-resolve via env-var detection only. The Sixel DA1
+			// probe (imgview.ProbeSixel) needs raw terminal access before Bubble
+			// Tea takes over stdin, so it can't safely re-run mid-session — see
+			// its doc comment. Best-effort here; a full restart re-probes Sixel.
+			a.graphicsProtocol = imgview.DetectProtocol()
+		}
+		a.inlineImages = msg.inlineImages
 		a.layoutName = msg.layoutName
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
+		var notifyCmd tea.Cmd
+		a, notifyCmd = a.notify(notifyInfo, "settings saved")
 		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
-			var cmds []tea.Cmd
+			cmds := []tea.Cmd{notifyCmd}
 			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < min {
 				cmds = append(cmds, a.loadFeedPageCmd(cursor))
 			}
@@ -1165,11 +1517,9 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 					cmds = append(cmds, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), cursor))
 				}
 			}
-			if len(cmds) > 0 {
-				return a, tea.Batch(cmds...), true
-			}
+			return a, tea.Batch(cmds...), true
 		}
-		return a, nil, true
+		return a, notifyCmd, true
 
 	case wanderTickMsg:
 		if msg.gen != a.sessionGen {
@@ -1333,6 +1683,19 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.postDetail = a.postDetail.SetPost(msg.post)
 		a.pendingReplyID = msg.replyID
 		return a, a.loadRepliesCmd(msg.post.ID), true
+	case screens.CopyLinkMsg:
+		// termenv.Copy writes an OSC 52 escape sequence to the host process's
+		// os.Stdout — for an SSH/wish session that's the host machine's own
+		// terminal, not the connected client's, so it can't reach the SSH
+		// user's clipboard at all (same reason inline images are gated on
+		// a.ephemeral). Gate it here rather than silently claim success.
+		if a.ephemeral {
+			a, cmd := a.notify(notifyInfo, "Copying links is disabled in SSH sessions")
+			return a, cmd, true
+		}
+		termenv.Copy(urlutil.PostPermalink(msg.Post.AuthorUsername, msg.Post.Slug))
+		a, cmd := a.notify(notifyInfo, "Copied link to clipboard")
+		return a, cmd, true
 	case screens.BookmarkPostMsg:
 		if msg.ReplyID != "" {
 			replyID := msg.ReplyID
@@ -2047,7 +2410,12 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 
 // --- view ---
 
-func (a App) View() string { return a.layout.View(a) }
+func (a App) View() string {
+	if a.active == screenLogin {
+		return a.login.View()
+	}
+	return a.layout.View(a)
+}
 
 // activeScreenHasFocusedInput returns true when the current screen has a
 // text input that is focused, preventing arrow keys from being consumed by
@@ -2237,6 +2605,19 @@ func (a App) handleOpenURL(urls []string) (App, tea.Cmd) {
 	return a, nil
 }
 
+// reservedTopLevelPaths are real, distinct top-level pages on
+// cyberspace.online (confirmed live) that must never be misread as a bare
+// `/{username}` profile path. None of them map to a TUI screen, so they fall
+// through to the OS browser like any other non-cyberspace URL.
+var reservedTopLevelPaths = map[string]bool{
+	"topics": true, "guilds": true, "chat": true,
+	"search": true, "notifications": true, "bookmarks": true, "settings": true,
+	"jukebox": true, "globe": true, "fortune": true, "wiki": true,
+	"webring": true, "faq": true, "netiquette": true, "contact": true,
+	"impressum": true, "support": true, "terms": true, "privacy-policy": true,
+	"changelog": true, "admin": true,
+}
+
 // routeURL navigates to an internal screen for known cyberspace.online paths,
 // opens images in the terminal viewer when supported, or falls through to the
 // OS default browser.
@@ -2250,9 +2631,40 @@ func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 	}
 	if parsed.Host == "cyberspace.online" || parsed.Host == "www.cyberspace.online" {
 		parts := strings.SplitN(strings.TrimPrefix(parsed.Path, "/"), "/", 3)
-		if len(parts) >= 2 && parts[0] == "u" && parts[1] != "" {
+		switch {
+		case parts[0] == "topics":
+			if len(parts) >= 2 && parts[1] != "" {
+				a.topics = a.topics.OpenTopic(parts[1])
+				a, cmd := activateScreen(a, screenTopics)
+				return a, tea.Batch(cmd, a.loadTopicPostsCmd(parts[1]))
+			}
+			return activateScreen(a, screenTopics)
+		case parts[0] == "guilds":
+			if len(parts) >= 2 && parts[1] != "" {
+				a.guilds = a.guilds.OpenGuild(parts[1])
+				a, cmd := activateScreen(a, screenGuilds)
+				return a, tea.Batch(cmd, a.loadGuildPostsCmd(parts[1]), a.loadGuildDetailCmd(parts[1]))
+			}
+			return activateScreen(a, screenGuilds)
+		case parts[0] == "chat":
+			if len(parts) >= 2 && parts[1] != "" {
+				slug := parts[1]
+				return a, func() tea.Msg { return screens.OpenRoomMsg{RoomSlug: slug} }
+			}
+			return activateScreen(a, screenChatrooms)
+		case len(parts) >= 2 && parts[0] == "u" && parts[1] != "":
 			a.profileReturn = a.active
 			return a, a.loadUserProfileCmd(parts[1])
+		case len(parts) == 3 && parts[1] == "blog" && parts[0] != "" && parts[2] != "":
+			// /{username}/blog/{slug} — the canonical-form post permalink.
+			return a, a.loadPostBySlugCmd(parts[0], parts[2], a.active)
+		case len(parts) == 2 && parts[0] != "" && parts[1] != "" && !reservedTopLevelPaths[parts[0]]:
+			// /{username}/{slug} — the short-form post permalink.
+			return a, a.loadPostBySlugCmd(parts[0], parts[1], a.active)
+		case len(parts) == 1 && parts[0] != "" && !reservedTopLevelPaths[parts[0]]:
+			// /{username} — profile.
+			a.profileReturn = a.active
+			return a, a.loadUserProfileCmd(parts[0])
 		}
 	}
 	// Ephemeral (SSH-hosted) sessions must never launch host processes or make
@@ -2279,6 +2691,611 @@ func (a App) canRenderImageInline(u string) bool {
 		a.imageViewer != "browser"
 }
 
+// canInlineImages reports whether Feed/PostDetail should render post
+// attachments inline: the user's InlineImages preference is on, plus the
+// same protocol/imageViewer/ephemeral gates as the fullscreen image viewer
+// (see canRenderImageInline). There's no URL to check yet here — this gates
+// the feature as a whole, per-attachment checks happen when rendering.
+func (a App) canInlineImages() bool {
+	return a.inlineImages &&
+		!a.ephemeral &&
+		a.graphicsProtocol != imgview.ProtocolNone &&
+		a.imageViewer != "browser"
+}
+
+// activeInlineImageSlots returns the active screen's currently visible
+// inline image slots, or nil for screens that don't support inline images.
+// Used by TabsLayout.InlineImageSlots; MillerLayout has its own equivalent
+// since its screen geometry (and, for Feed/Guilds/Topics, which screen
+// method even has the current content — see FeedModel.VisibleDetailInlineImages)
+// differs from Tabs'.
+func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
+	switch a.active {
+	case screenPostDetail:
+		return a.postDetail.VisibleInlineImages()
+	case screenFeed:
+		return a.feed.VisibleInlineImages()
+	case screenSearch:
+		return a.search.VisibleInlineImages()
+	case screenTopics:
+		return a.topics.VisibleInlineImages()
+	case screenGuilds:
+		return a.guilds.VisibleInlineImages()
+	case screenCMail:
+		return a.cmail.VisibleInlineImages()
+	case screenChatrooms:
+		return a.chatrooms.VisibleInlineImages()
+	case screenProfile:
+		return a.profile.VisibleInlineImages()
+	default:
+		return nil
+	}
+}
+
+// activeSelectionKey returns the ID of whatever's currently selected on the
+// active screen (a post or reply ID, matching the format embedded in
+// InlineImageSlot.Key) — used by syncInlineImages/selectionTouchesSlot to
+// detect a selection change that recolors a card hosting a currently-visible
+// inline image: selection changes the (de)selected card's border color
+// across every one of its lines, including its inline-image band rows,
+// which erases the image pixels there without moving anything
+// inlineImageSignature (position-only) tracks.
+func (a App) activeSelectionKey() string {
+	switch a.active {
+	case screenPostDetail:
+		// SelectedReplyID returns "" when the post itself is selected (not
+		// a reply) — but selectionTouchesSlot treats "" as "nothing
+		// selected" and always returns false for it (its own doc comment:
+		// an id that's merely a substring of another id must not match, and
+		// "" would match everything). Without this fallback, toggling
+		// between the post and a reply selected — recoloring the post's
+		// own border, including the rows its inline image sits in — never
+		// registers as touching that image at all, so imageRepaintGen
+		// never bumps and the image can be silently wiped by the border's
+		// own legitimate resend with nothing forcing it back. Confirmed
+		// live and via debug logging (docs/plan-inline-images-
+		// improvements.md Round 14) — this fired once on entering
+		// PostDetail (Feed's own non-empty selection key) but never again
+		// for any subsequent post/reply toggle within PostDetail itself.
+		if id := a.postDetail.SelectedReplyID(); id != "" {
+			return id
+		}
+		return a.postDetail.PostID()
+	case screenFeed:
+		return a.feed.SelectedPostID()
+	case screenSearch:
+		return a.search.SelectedPostID()
+	case screenTopics:
+		return a.topics.SelectedPostID()
+	case screenGuilds:
+		return a.guilds.SelectedPostID()
+	case screenCMail:
+		return a.cmail.SelectedMessageID()
+	case screenChatrooms:
+		return a.chatrooms.SelectedMessageID()
+	default:
+		return ""
+	}
+}
+
+// selectionTouchesSlot reports whether id (from activeSelectionKey or
+// FeedModel.DetailSelectionKey) belongs to any currently-visible
+// inline-image slot — i.e. whether a selection change involving id could
+// have recolored a card that hosts an on-screen image. Slot keys are always
+// "post:<id>:<n>" or "reply:<id>:<n>" (see feed.go/postdetail.go's
+// VisibleInlineImages), so a ":id:" substring match catches both without
+// needing to know which, and the leading/trailing ":" delimiters keep an id
+// that's merely a substring of another id from matching.
+func selectionTouchesSlot(id string, slots []screens.InlineImageSlot) bool {
+	if id == "" {
+		return false
+	}
+	needle := ":" + id + ":"
+	for _, s := range slots {
+		if strings.Contains(s.Key, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// inlineImageRect is an absolute-screen-position rectangle an iTerm2/Sixel
+// inline image occupies or occupied. Cols/Rows come from
+// InlineImageSlot.MaxCols/MaxRows (the reserved band bounds), which are
+// always >= the image's actual displayed size (see imgview's fitBox), so
+// Row/Rows always cover the image's full footprint regardless of the
+// image's real aspect-ratio-fitted extent — see syncInlineImageErasures,
+// which uses that range to compute which screen rows to force redrawn.
+type inlineImageRect struct {
+	Row, Col, Cols, Rows int
+}
+
+// syncInlineImageErasures computes this frame's key->rect map from slots
+// (resolving each slot's viewport-relative position to an absolute one via
+// rowOrigin/colOrigin) and diffs it against prevRects, the previous frame's
+// map, to find rows whose previously-drawn image content is now stale: any
+// key that's gone or moved contributes its OLD rect's row range. Rather than
+// guessing "blank" is the right replacement for those rows — an out-of-band
+// write invisible to Bubble Tea's own per-line diff cache, and wrong the
+// moment different real content later renders there — the caller
+// (forceRowsDirty in layout.go) uses the returned row numbers to force
+// Bubble Tea's own diff to resend each row's real, always-correct content,
+// the same technique inlineImagePaintGen already uses for the
+// selection-touch case. That makes this safe to recompute fresh every call
+// with no carry-forward: even losing a transition to Bubble Tea's renderer
+// coalescing several Update() calls before a flush just leaves a row stale
+// a little longer, self-healing as soon as that row's content next changes
+// — never the permanent corruption of unrelated content an unclaimed
+// out-of-band blank-fill risked.
+func syncInlineImageErasures(slots []screens.InlineImageSlot, rowOrigin, colOrigin int, prevRects map[string]inlineImageRect) (current map[string]inlineImageRect, staleRows []int) {
+	current = make(map[string]inlineImageRect, len(slots))
+	for _, s := range slots {
+		current[s.Key] = inlineImageRect{Row: rowOrigin + s.Row, Col: colOrigin + s.ColIndent, Cols: s.MaxCols, Rows: s.MaxRows}
+	}
+	seen := make(map[int]bool)
+	for key, oldRect := range prevRects {
+		newRect, stillThere := current[key]
+		if !stillThere || newRect != oldRect {
+			for r := oldRect.Row; r < oldRect.Row+oldRect.Rows; r++ {
+				if !seen[r] {
+					seen[r] = true
+					staleRows = append(staleRows, r)
+				}
+			}
+		}
+	}
+	sort.Ints(staleRows)
+	return current, staleRows
+}
+
+// inlineImageCacheKey identifies one encoded rendering of a slot's image —
+// slot key, URL, column budget, and protocol. Keying by slot (not just URL)
+// matters for Kitty, whose encoded bytes embed a placement id specific to
+// one on-screen instance (see imgview.EncodeKitty) — two slots showing the
+// same URL must never share an encode. Also matches how a resize (which
+// changes MaxCols) or a protocol change naturally invalidates old entries.
+func inlineImageCacheKey(slot screens.InlineImageSlot, proto imgview.GraphicsProtocol) string {
+	return fmt.Sprintf("%s|%s|%d|%d", slot.Key, slot.URL, slot.MaxCols, proto)
+}
+
+// kittyModalPlacementID is a fixed, reserved Kitty placement/image id used
+// exclusively by the fullscreen image modal — distinct from inline
+// rendering's per-slot ids (see App.kittyPlacementIDs), which start from 1
+// and grow with normal use. Giving the modal a dedicated id (rather than
+// the anonymous placementID==0 mode EncodeKitty also supports) means its
+// own open/close/cycle lifecycle never has to blunt-delete-all placements —
+// which would erase every inline image's placement too, now that both
+// features can be on screen at once. Re-sending a=T with this same id on
+// each open/cycle replaces any previous modal placement per the protocol
+// spec, so no separate self-heal delete is needed there either. Deliberately
+// NOT the top of Kitty's 32-bit id range (4294967295 / 0xFFFFFFFF): that
+// exact value is a conventional "no id"/sentinel value in a lot of unsigned-
+// integer code, and terminals implementing the protocol are free to special-
+// case it — consistent with the modal flashing open then immediately
+// vanishing once this id was used, rather than staying on screen like any
+// other named placement. 999000000 is an arbitrary value nowhere near any
+// common sentinel (0, 1, INT32_MAX, UINT32_MAX) yet still astronomically far
+// from the small incrementing counter inline rendering uses, so it can never
+// collide with it either.
+const kittyModalPlacementID = 999000000
+
+// syncKittyPlacements assigns a stable id (used as both image id and
+// placement id, see imgview.EncodeKitty) to every slot ever seen — new keys
+// get the next counter value, permanently; already-tracked keys keep theirs
+// forever, whether currently visible or not (see kittyPlacementIDs' doc
+// comment on the App struct for why). Comparing this sync's visible set
+// against kittyVisibleKeys (last sync's) reports exactly two transitions:
+// toDelete, ids for keys that just became invisible, and revived, ids for
+// keys that just became visible again — the caller cancels any pending
+// delete for a revived id before it can wipe out that key's freshly redrawn
+// placement. Returns the updated App, the current key->id mapping (for
+// fetchInlineImageCmd to look up), toDelete, and revived.
+func (a App) syncKittyPlacements(slots []screens.InlineImageSlot) (App, map[string]int, []int, []int) {
+	if a.kittyPlacementIDs == nil {
+		a.kittyPlacementIDs = make(map[string]int)
+	}
+	current := make(map[string]bool, len(slots))
+	for _, s := range slots {
+		current[s.Key] = true
+		if _, ok := a.kittyPlacementIDs[s.Key]; !ok {
+			a.kittyNextPlacementID++
+			a.kittyPlacementIDs[s.Key] = a.kittyNextPlacementID
+		}
+	}
+	var toDelete, revived []int
+	for key := range a.kittyVisibleKeys {
+		if !current[key] {
+			toDelete = append(toDelete, a.kittyPlacementIDs[key])
+		}
+	}
+	for key := range current {
+		if _, wasVisible := a.kittyVisibleKeys[key]; !wasVisible {
+			revived = append(revived, a.kittyPlacementIDs[key])
+		}
+	}
+	visible := make(map[string]struct{}, len(current))
+	for key := range current {
+		visible[key] = struct{}{}
+	}
+	a.kittyVisibleKeys = visible
+	return a, a.kittyPlacementIDs, toDelete, revived
+}
+
+// accumulateKittyDeletes merges newlyDropped ids into pending. Merging
+// (never overwriting or expiring) is what makes a delete robust against
+// Bubble Tea's throttled renderer processing several Updates before it
+// actually writes a frame — see pendingKittyDeletes' doc comment on the App
+// struct for why even a resend countdown could still lose a delete that was
+// never rendered.
+func accumulateKittyDeletes(pending map[int]struct{}, newlyDropped []int) map[int]struct{} {
+	if pending == nil {
+		pending = make(map[int]struct{})
+	}
+	for _, id := range newlyDropped {
+		pending[id] = struct{}{}
+	}
+	return pending
+}
+
+// accumulateStaleRows unions fresh into pending instead of replacing it — the
+// same "never lose a transition to Bubble Tea's throttled renderer coalescing
+// several Updates before a flush" reasoning as accumulateKittyDeletes, applied
+// to inlineImageStaleRows. Without this, a row that goes stale in an Update
+// whose View() never actually gets flushed (superseded by a later Update
+// before the next render tick) is silently lost: the *next* Update diffs
+// against its own freshly tracked position, not against whatever was last
+// really painted on the terminal, so the row nothing ever resends can be a
+// completely different one than the row that's actually still showing stale
+// image pixels on the real screen. Bounded and cheap regardless — row indices
+// are capped at the terminal's height — and the caller (syncInlineImages)
+// clears the accumulated set once a quiet Update reports no new staleRows,
+// so this doesn't grow or persist forever.
+func accumulateStaleRows(pending, fresh []int) []int {
+	if len(fresh) == 0 {
+		return pending
+	}
+	seen := make(map[int]bool, len(pending)+len(fresh))
+	merged := make([]int, 0, len(pending)+len(fresh))
+	for _, r := range pending {
+		if !seen[r] {
+			seen[r] = true
+			merged = append(merged, r)
+		}
+	}
+	for _, r := range fresh {
+		if !seen[r] {
+			seen[r] = true
+			merged = append(merged, r)
+		}
+	}
+	sort.Ints(merged)
+	return merged
+}
+
+// syncInlineImages diffs the active screen's current VisibleInlineImages()
+// against inlineImageCache and returns a command that fetches+encodes
+// anything missing. It's called once per Update, after the active screen
+// has already processed the message. Kitty gets precise per-image
+// create/delete via kittyPlacementIDs/pendingKittyDeletes (see
+// syncKittyPlacements); Sixel/iTerm2 have no placement-delete primitive, so
+// they need two different repaint strategies depending on what changed:
+//
+//   - A moved or removed image (a scroll changed a slot's Row, or the slot
+//     disappeared) means its old and new screen position can differ, and
+//     injectInlineImages only ever draws at the *current* position
+//     (layout.go, "row := rowOrigin + slot.Row") — nothing there fixes up
+//     the old one. syncInlineImageErasures tracks each image's actual
+//     on-screen rectangle frame to frame and returns the stale rows (see
+//     its doc comment); forceRowsDirty (layout.go) forces Bubble Tea's own
+//     per-line diff to resend those rows' real, always-correct content — no
+//     reliance on incidental line-diff overwrite, no full-screen
+//     tea.ClearScreen (an earlier version used one; flashed on every
+//     scroll), and no out-of-band blank-fill guess (a later version used
+//     one; could never be safely dropped once unclaimed, corrupting
+//     whatever unrelated content later rendered at that screen position).
+//   - A selection change that touches a visible image (see
+//     selectionTouchesSlot) never moves any slot's Row, so old and new
+//     position are always identical — reissuing the same paint in place is
+//     guaranteed to fully recover whatever the border recolor incidentally
+//     erased, with no risk of a partial-footprint gap. Bumping
+//     inlineImagePaintGen (which injectInlineImages reads to force its
+//     trailing paint line dirty) gets Bubble Tea's own per-line diff to
+//     repaint just that line — the same seamless mechanism an ordinary
+//     scroll already uses — without a full-screen flash. Selection changes
+//     that don't touch any visible image skip this entirely — bumping on
+//     every selection move regardless caused a visible blink on every
+//     arrow-key step through a feed with any inline image on screen (an
+//     earlier, since-fixed regression). A scroll needs no paint-gen bump
+//     of its own: a moved slot's own cursor-jump text already differs in
+//     bytes purely because its row/col changed, so Bubble Tea's line-diff
+//     already resends it, and a changed inlineImageStaleRows set
+//     independently forces the affected rows dirty too.
+func (a App) syncInlineImages() (App, tea.Cmd) {
+	var slots []screens.InlineImageSlot
+	var rowOrigin, colOrigin int
+	var selKey string
+	if a.canInlineImages() {
+		slots, rowOrigin, colOrigin, selKey = a.layout.InlineImageSlots(a)
+	}
+	var cmds []tea.Cmd
+
+	isKitty := a.graphicsProtocol == imgview.ProtocolKitty
+	var placementIDs map[string]int
+	if isKitty {
+		var toDelete, revived []int
+		a, placementIDs, toDelete, revived = a.syncKittyPlacements(slots)
+		for _, id := range revived {
+			delete(a.pendingKittyDeletes, id)
+		}
+		a.pendingKittyDeletes = accumulateKittyDeletes(a.pendingKittyDeletes, toDelete)
+		a.inlineImageStaleRows = nil
+	} else {
+		// iTerm2 and Sixel both need to know which rows just went stale (a
+		// moved or removed image) — the two protocols just do different
+		// things with that fact in View() (see injectInlineImages,
+		// layout.go): iTerm2 resends the row's real content in place with no
+		// erase (forceRowsDirty). Sixel needs an actual full-screen erase —
+		// proven, on real Konsole hardware across three rounds of live
+		// testing, to be the only thing that reliably clears its raster
+		// pixels at all — done as a single write from View()
+		// (ansi.EraseEntireScreen prepended to the frame plus every row
+		// forced dirty) rather than a tea.ClearScreen Cmd, whose immediate
+		// erase-write followed by a delayed content flush on the next render
+		// tick is what caused the bad flicker in the tea.ClearScreen attempt
+		// (confirmed by reading bubbletea's
+		// standardRenderer.clearScreen()/flush(), v1.3.10). Both protocols
+		// need imageRepaintGen bumped here regardless: whichever repaint
+		// mechanism runs, it must be collision-proof against Bubble Tea
+		// dropping intermediate View() calls under fast input — see
+		// imageRepaintGen's doc comment (App struct).
+		// Accumulate rather than overwrite a.inlineImageStaleRows: see
+		// accumulateStaleRows' doc comment for why a fresh staleRows computed
+		// against only the immediately preceding Update's tracked position
+		// can miss the row that's actually still stale on the real,
+		// last-flushed terminal screen if several Updates get coalesced into
+		// one flush. Cleared only once a quiet Update (no new staleRows) AND
+		// inlineImageStaleGrace has elapsed since inlineImageStaleSince — see
+		// its doc comment (App struct) for why "the very next quiet Update"
+		// alone isn't a safe clear signal in this app.
+		current, staleRows := syncInlineImageErasures(slots, rowOrigin, colOrigin, a.inlineImageVisibleRects)
+		a.inlineImageVisibleRects = current
+		if len(staleRows) > 0 {
+			a.inlineImageStaleRows = accumulateStaleRows(a.inlineImageStaleRows, staleRows)
+			a.inlineImageStaleSince = time.Now()
+			a.imageRepaintGen++
+		} else if time.Since(a.inlineImageStaleSince) > inlineImageStaleGrace {
+			a.inlineImageStaleRows = nil
+		}
+
+		selChanged := selKey != a.inlineImageLastSelKey
+		touchesVisible := selChanged && (selectionTouchesSlot(selKey, slots) || selectionTouchesSlot(a.inlineImageLastSelKey, slots))
+		a.inlineImageLastSelKey = selKey
+		if touchesVisible {
+			a.inlineImagePaintGen++
+			// See imageRepaintGen's doc comment (App struct): a selection
+			// recolor without a position change never touches
+			// inlineImageStaleRows, so this is the only trigger for that
+			// case — needed so injectInlineImages' trailing-line marker
+			// (layout.go) is collision-proof here too, not just for the
+			// stale-row case.
+			a.imageRepaintGen++
+		}
+	}
+
+	if a.inlineImageFetching == nil {
+		a.inlineImageFetching = make(map[string]bool)
+	}
+	for _, slot := range slots {
+		key := inlineImageCacheKey(slot, a.graphicsProtocol)
+		if _, cached := a.inlineImageCache[key]; cached {
+			a.touchInlineImageCache(key)
+			continue
+		}
+		if a.inlineImageFetching[key] {
+			continue
+		}
+		if failedAt, failed := a.inlineImageFailedAt[key]; failed && time.Since(failedAt) < inlineImageFailureCooldown {
+			continue
+		}
+		a.inlineImageFetching[key] = true
+		placementID := 0
+		if isKitty {
+			placementID = placementIDs[slot.Key]
+		}
+		cmds = append(cmds, a.fetchInlineImageCmd(slot, key, placementID))
+	}
+	if len(cmds) == 0 {
+		return a, nil
+	}
+	return a, tea.Batch(cmds...)
+}
+
+// inlineImageFetchedMsg reports the result of one fetchInlineImageCmd.
+// slotKey/rows are only meaningful on success: slotKey is the originating
+// slot's stable Key (screens.InlineImageSlot.Key, e.g. "circmsg:m1:0"),
+// used to route the real row count back to the screen that owns it (see
+// handleInlineImageFetched); rows is the actual terminal rows the image was
+// fit into — from the encoder's own aspect-ratio-preserving fit-box
+// calculation, always <= the maxRows requested.
+type inlineImageFetchedMsg struct {
+	key     string
+	slotKey string
+	rows    int
+	encoded string
+	err     error
+}
+
+// fetchInlineImageCmd fetches and encodes slot's image for the currently
+// detected protocol. placementID is only used for Kitty (see
+// imgview.EncodeKitty); callers pass 0 for Sixel/iTerm2. Unlike the
+// fullscreen modal, there's no user-visible loading state to manage: a miss
+// this frame just means the reserved blank band stays blank until the
+// result lands.
+func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, placementID int) tea.Cmd {
+	proto := a.graphicsProtocol
+	maxCols, maxRows := slot.MaxCols, slot.MaxRows
+	url := slot.URL
+	slotKey := slot.Key
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		img, err := imgview.Fetch(ctx, url)
+		if err != nil {
+			return inlineImageFetchedMsg{key: key, err: err}
+		}
+		var encoded string
+		var rows int
+		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
+		switch proto {
+		case imgview.ProtocolITerm2:
+			encoded, _, rows, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH, false)
+		case imgview.ProtocolSixel:
+			encoded, _, rows, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH, false)
+		case imgview.ProtocolKitty:
+			encoded, _, rows, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID, false)
+		default:
+			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
+		}
+		if err != nil {
+			return inlineImageFetchedMsg{key: key, err: err}
+		}
+		return inlineImageFetchedMsg{key: key, slotKey: slotKey, rows: rows, encoded: encoded}
+	}
+}
+
+// inlineImageStaleGrace bounds how soon a.inlineImageStaleRows can be
+// cleared after its last addition — see inlineImageStaleSince's doc comment
+// (App struct) for why a single quiet Update isn't a safe clear signal on
+// its own. Chosen comfortably larger than the feed's known multi-Update gap
+// (feedMergeAnimDelay, 200ms — the top-of-feed background-poll merge
+// animation) so the accumulator survives however many unrelated ticks land
+// in between, while still clearing well within a second of the last real
+// change rather than accumulating indefinitely.
+const inlineImageStaleGrace = 500 * time.Millisecond
+
+// inlineImageFailureCooldown bounds how often a permanently-broken image URL
+// gets refetched — without it, a dead link left visible while the user is
+// idle-scrolling elsewhere on the same screen fires a fresh HTTP request on
+// every single Update (keystroke, tick, anything) that includes its slot in
+// the visible set. Not tied to a resize/navigation-triggered retry: the slot
+// naturally gets another attempt on its own once the cooldown lapses.
+const inlineImageFailureCooldown = 60 * time.Second
+
+// handleInlineImageFetched processes an inlineImageFetchedMsg: on success,
+// caches the encoded result so the next frame's render picks it up, and
+// clears any earlier failure record for the key; on failure, records when it
+// failed (see inlineImageFailureCooldown) so syncInlineImages doesn't retry
+// it on every subsequent Update — there's no modal to fall back to here, the
+// slot simply stays blank until either the cooldown lapses or something
+// invalidates the key outright (e.g. a resize changing its column budget).
+func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
+	m, ok := msg.(inlineImageFetchedMsg)
+	if !ok {
+		return a, nil, false
+	}
+	delete(a.inlineImageFetching, m.key)
+	if m.err != nil {
+		if a.inlineImageFailedAt == nil {
+			a.inlineImageFailedAt = make(map[string]time.Time)
+		}
+		a.inlineImageFailedAt[m.key] = time.Now()
+		return a, nil, true
+	}
+	delete(a.inlineImageFailedAt, m.key)
+	a = a.cacheInlineImage(m.key, m.encoded)
+	a = a.recordInlineImageRealRows(m.slotKey, m.rows)
+	return a, nil, true
+}
+
+// recordInlineImageRealRows tells whichever screen owns slotKey how many
+// rows its image actually rendered into, so that screen can shrink its
+// reserved band down from the fallback-max placeholder to the image's real
+// size — see CMailModel/ChatroomsModel.SetImageRealRows. Only chat screens
+// support this today (Feed/PostDetail/Search/Topics/Guilds/Profile still use
+// a fixed fallback band); a slotKey belonging to one of those, or rows <= 0
+// (encode error/degenerate case), is a no-op.
+func (a App) recordInlineImageRealRows(slotKey string, rows int) App {
+	if rows <= 0 {
+		return a
+	}
+	switch {
+	case strings.HasPrefix(slotKey, "cmailmsg:"):
+		a.cmail = a.cmail.SetImageRealRows(slotKey, rows)
+	case strings.HasPrefix(slotKey, "circmsg:"):
+		a.chatrooms = a.chatrooms.SetImageRealRows(slotKey, rows)
+	}
+	return a
+}
+
+// inlineImageCacheMaxBytes bounds inlineImageCache's total payload size —
+// see cacheInlineImage. A long scrolling session or a terminal resized many
+// times would otherwise grow the cache for the life of the process. Chosen
+// as a reasonable starting cap, not derived from measurement (ponytail:
+// revisit if real sessions show it's too tight or too loose in practice).
+const inlineImageCacheMaxBytes = 16 << 20 // 16 MiB
+
+// touchInlineImageCache marks key as most-recently-used without changing its
+// cached value — called for every cache hit on a currently-visible slot
+// (syncInlineImages), so a still-on-screen image is never the oldest entry
+// and therefore never the one cacheInlineImageBounded evicts first. Without
+// this, inlineImageCacheOrder only ever moved on write (cacheInlineImage),
+// making eviction FIFO-by-insertion rather than truly LRU: an image that's
+// been sitting on screen the whole time could still get evicted purely
+// because other images were fetched more recently, leaving its row a cache
+// miss (injectInlineImages, layout.go) — a real, no-user-action image
+// blackout distinct from any of the scroll/redraw-timing bugs fixed
+// earlier. inlineImageCacheOrder/inlineImageCacheElems are reference types
+// (*list.List, map), so mutating through the pointer/map here is visible
+// without needing to reassign or return App.
+func (a App) touchInlineImageCache(key string) {
+	if a.inlineImageCacheOrder == nil {
+		return
+	}
+	if elem, ok := a.inlineImageCacheElems[key]; ok {
+		a.inlineImageCacheOrder.MoveToBack(elem)
+	}
+}
+
+// cacheInlineImage stores encoded under key in inlineImageCache, evicting
+// the oldest-inserted entries first once inlineImageCacheMaxBytes is
+// exceeded. Eviction only removes the cache entry, never the corresponding
+// kittyPlacementIDs id (see that field's doc comment) — cache keys don't
+// embed the id, so a slot whose entry gets evicted just re-fetches and
+// re-encodes using its already-stable id on the next sync, the same as any
+// other cache miss.
+func (a App) cacheInlineImage(key, encoded string) App {
+	return a.cacheInlineImageBounded(key, encoded, inlineImageCacheMaxBytes)
+}
+
+// cacheInlineImageBounded is cacheInlineImage with an injectable cap, so
+// tests can exercise eviction with a small maxBytes instead of megabytes of
+// fixture data.
+func (a App) cacheInlineImageBounded(key, encoded string, maxBytes int) App {
+	if a.inlineImageCache == nil {
+		a.inlineImageCache = make(map[string]string)
+		a.inlineImageCacheOrder = list.New()
+		a.inlineImageCacheElems = make(map[string]*list.Element)
+	}
+	if old, exists := a.inlineImageCache[key]; exists {
+		a.inlineImageCacheBytes -= len(old)
+		a.inlineImageCacheOrder.MoveToBack(a.inlineImageCacheElems[key])
+	} else {
+		a.inlineImageCacheElems[key] = a.inlineImageCacheOrder.PushBack(key)
+	}
+	a.inlineImageCache[key] = encoded
+	a.inlineImageCacheBytes += len(encoded)
+
+	for a.inlineImageCacheBytes > maxBytes && a.inlineImageCacheOrder.Len() > 1 {
+		oldest := a.inlineImageCacheOrder.Front()
+		oldestKey := oldest.Value.(string)
+		a.inlineImageCacheBytes -= len(a.inlineImageCache[oldestKey])
+		delete(a.inlineImageCache, oldestKey)
+		delete(a.inlineImageCacheElems, oldestKey)
+		a.inlineImageCacheOrder.Remove(oldest)
+	}
+	return a
+}
+
 // openExternalURL opens u in the OS default browser as a fire-and-forget command.
 func openExternalURL(u string) tea.Cmd {
 	return func() tea.Msg {
@@ -2287,17 +3304,132 @@ func openExternalURL(u string) tea.Cmd {
 	}
 }
 
+// imageScaleStep is the fraction of the image's own native size that +/-
+// nudges App.imageScale by per keypress while the fullscreen image modal is
+// open — scale is relative to native size (see openImageInTerminal), not
+// the terminal window, so this is normally a visible change. adjustImageScale
+// additionally guarantees at least a 1-cell step regardless of this fraction,
+// for images small enough that 10% of their native size would otherwise
+// round away to nothing. Bounds match config.Config.GetImageScale's clamp.
+const imageScaleStep = 0.1
+
+// modalScreenMarginFrac caps the image modal at 80% of the terminal's
+// width/height on every layout, regardless of scale — the exact fraction
+// the modal was hard-capped to before native-relative scaling and
+// upscaling existed (the original "a.width*4/5" box). Raw Sixel/iTerm2/
+// Kitty image payloads are spliced directly into Bubble Tea's rendered
+// frame via cursor-jump sequences (compositeOverlays, layout.go) and are a
+// documented source of terminal-side rendering desync when they get large
+// — see sixelFullRepaint's and forceRowsDirty's doc comments (layout.go)
+// for the same class of bug fought before scale ever let the modal approach
+// full-screen size. Keeping this headroom is a mitigation, not a fix for
+// that underlying fragility — restores the margin that kept it from
+// surfacing in practice.
+const modalScreenMarginFrac = 0.8
+
+// adjustImageScale nudges the live modal image scale by delta (positive to
+// grow, negative to shrink) and re-runs openImageInTerminal for the
+// currently open image so the modal re-renders at the new scale
+// immediately. Unlike a flat float add, the step is computed in terminal
+// cells against the image's own native size (imgview.NativeCellBox) and
+// floored at 1 cell — so every press changes the rendered size by at least
+// one cell until the true min (config.MinImageScale) or max
+// (config.MaxImageScale) bound is hit, rather than being silently absorbed
+// by rounding (or, before this design, by fitBox's never-upscale native-size
+// cap — see docs/46-image-modal-scale.md for the investigation that found
+// this). No-op if the modal's image isn't cached yet, which shouldn't happen
+// while it's open (the cache is populated the moment it opens) but avoids a
+// lookup panic.
+//
+// The step is based on a.imageModalCols — the box actually on screen right
+// now — not on a value recomputed from a.imageScale. Those two can diverge:
+// openImageInTerminal additionally clamps the rendered box to
+// modalScreenMarginFrac/Layout.ModalMaxWidth, which is a tighter ceiling
+// than config.MaxImageScale in a small terminal. Stepping from the
+// unclamped scale let repeated "+" presses at that ceiling keep inflating
+// a.imageScale with no visible effect (correctly, since the box was already
+// maxed), but then the first "-" press only walked the invisible excess
+// back down one step, so it visibly did nothing either — reported live as
+// "+ does nothing at max size, but then - does nothing too, the first
+// time." Anchoring to the real rendered box instead means the very next
+// "-" press always immediately shrinks it.
+func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
+	cached, hit := a.imageCache[a.imageModalURL]
+	if !hit || len(cached.frames) == 0 {
+		return a, nil
+	}
+	cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
+	b := cached.frames[0].Bounds()
+	nativeCols, _ := imgview.NativeCellBox(b.Dx(), b.Dy(), cellW, cellH)
+
+	currentCols := a.imageModalCols
+	if currentCols < 1 {
+		scale := a.imageScale
+		if scale <= 0 {
+			scale = 1.0
+		}
+		currentCols = int(float64(nativeCols)*scale + 0.5)
+	}
+	step := int(float64(nativeCols)*imageScaleStep + 0.5)
+	if step < 1 {
+		step = 1
+	}
+	targetCols := currentCols + step
+	if delta < 0 {
+		targetCols = currentCols - step
+	}
+	minCols := int(float64(nativeCols) * config.MinImageScale)
+	if minCols < 1 {
+		minCols = 1
+	}
+	maxCols := int(float64(nativeCols) * config.MaxImageScale)
+	if maxCols < minCols {
+		maxCols = minCols
+	}
+	if targetCols < minCols {
+		targetCols = minCols
+	}
+	if targetCols > maxCols {
+		targetCols = maxCols
+	}
+
+	a.imageScale = float64(targetCols) / float64(nativeCols)
+	return a.openImageInTerminal(a.imageModalURL)
+}
+
 // openImageInTerminal fetches rawURL, encodes it for the detected graphics
 // protocol, and returns a command that sends an imageFetchedMsg when done.
 // GIF URLs are decoded and encoded frame-by-frame so the modal can animate.
+//
+// The target display box is a.imageScale multiplied against the image's own
+// native size in cells (imgview.NativeCellBox), not a fraction of the
+// terminal window — deliberately, so a scale change always has a
+// proportional, visible effect: a box expressed as "80% of the terminal"
+// mostly went unnoticed for typical post images, which are usually much
+// smaller than that box to begin with, so fitBox's never-upscale cap
+// silently absorbed every "+" press and "-" needed many presses before
+// crossing below the image's own native size (see
+// docs/46-image-modal-scale.md). Upscaling past native size is allowed here
+// (encoders called with allowUpscale=true) — unlike inline thumbnails, this
+// is a user-driven zoom the caller explicitly asked for.
+//
+// width is clamped through a.layout.ModalMaxWidth rather than raw a.width:
+// the modal is centered against the full terminal width by
+// compositeOverlays regardless of layout, so in Miller layout a box wide
+// enough to approach a.width would have its left edge splice into the nav
+// sidebar — see ModalMaxWidth's doc comment. Both width and height are then
+// additionally capped at modalScreenMarginFrac of the terminal size — see
+// its doc comment for why the modal must stay well clear of the real screen
+// edges, not just merely within them.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
 	isGIF := urlutil.IsGIFURL(rawURL)
-	displayCols := a.width * 4 / 5
-	displayRows := a.height*4/5 - 2 // reserve 2 rows for the modal border
-	if displayRows < 1 {
-		displayRows = 1
+	scale := a.imageScale
+	if scale <= 0 {
+		scale = 1.0
 	}
+	width := min(a.layout.ModalMaxWidth(a.width), int(float64(a.width)*modalScreenMarginFrac))
+	height := min(a.height-2, int(float64(a.height)*modalScreenMarginFrac)) // reserve 2 rows for the modal border
 	a.imageFetchGen++
 	gen := a.imageFetchGen
 	cached, hit := a.imageCache[rawURL]
@@ -2322,15 +3454,42 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 				delays = nil
 			}
 		}
+		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
+		nativeBounds := frames[0].Bounds()
+		nativeCols, nativeRows := imgview.NativeCellBox(nativeBounds.Dx(), nativeBounds.Dy(), cellW, cellH)
+		displayCols := int(float64(nativeCols) * scale)
+		displayRows := int(float64(nativeRows) * scale)
+		if displayCols > width {
+			displayCols = width
+		}
+		if displayRows > height {
+			displayRows = height
+		}
+		if displayCols < 1 {
+			displayCols = 1
+		}
+		if displayRows < 1 {
+			displayRows = 1
+		}
 		encodedFrames := make([]string, len(frames))
 		var cols, rows int
 		for i, img := range frames {
 			switch proto {
 			case imgview.ProtocolKitty:
-				encodedFrames[i], cols, rows = imgview.EncodeKitty(img, displayCols, displayRows)
+				var err error
+				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, cellW, cellH, kittyModalPlacementID, true)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
 			case imgview.ProtocolITerm2:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows)
+				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows, cellW, cellH, true)
+				if err != nil {
+					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
+				}
+			case imgview.ProtocolSixel:
+				var err error
+				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH, true)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
@@ -2365,22 +3524,42 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 			}
 			return a, openExternalURL(m.rawURL), true
 		}
+		// wasOpen is true only for a genuine carousel cycle (the modal was
+		// already open), not a fresh o-open or reopen-after-close, which
+		// have no previous on-screen box to worry about.
+		wasOpen := a.imageModalOpen
+		// Snapshot the outgoing box size only for a genuine cycle.
+		// compositeOverlays uses this, when the new image is a different
+		// size, to force the previous box's row range dirty (iTerm2) or
+		// trigger a full single-write repaint (Sixel) — see its doc comment.
+		if wasOpen {
+			a.imageModalPrevRows = a.imageModalRows
+			a.imageModalPrevCols = a.imageModalCols
+		} else {
+			a.imageModalPrevRows = 0
+			a.imageModalPrevCols = 0
+		}
+		// Bumped unconditionally, not just when the box size changed: the
+		// "cycled" prev-box cleanup below still reads this same counter (see
+		// compositeOverlays' doc comment), and compositeOverlays' modal
+		// image-draw line also needs it on every change so it can use
+		// imageDirtyMarker(a.imageRepaintGen) rather than relying only on the
+		// payload bytes happening to differ — see imageDirtyMarker's doc
+		// comment (App struct) for why a fixed/absent marker isn't enough.
+		a.imageRepaintGen++
 		a.imageModalEncoded = m.encoded
 		a.imageModalCols = m.cols
 		a.imageModalRows = m.rows
+		a.imageModalURL = m.rawURL
 		a.imageModalOpen = true
+		a.chatrooms = a.chatrooms.SetAnimPaused(true)
+		a.cmail = a.cmail.SetAnimPaused(true)
 		a.imageNeedsCleanup = false
 		if a.imageCache == nil {
 			a.imageCache = make(map[string]cachedImage)
 		}
 		a.imageCache[m.rawURL] = cachedImage{frames: m.frames, delays: m.delays}
 		var cmds []tea.Cmd
-		if a.graphicsProtocol == imgview.ProtocolITerm2 && len(a.imageCarouselItems) > 1 {
-			// iTerm2/WezTerm has no Kitty-style delete-all self-heal; force a
-			// full repaint so a cycled-to smaller image can't leave stray
-			// pixels from the previous one in rows the new frame skips.
-			cmds = append(cmds, tea.ClearScreen)
-		}
 		if len(m.encodedFrames) > 1 {
 			cmds = append(cmds, gifFrameTickCmd(m.encodedFrames, m.delays, 1, m.delays[0], m.gen))
 		}
@@ -2392,17 +3571,66 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageModalEncoded = m.encodedFrames[m.idx]
 		nextIdx := (m.idx + 1) % len(m.encodedFrames)
 		return a, gifFrameTickCmd(m.encodedFrames, m.delays, nextIdx, m.delays[m.idx], m.gen), true
+	case carouselCycleSettledMsg:
+		if m.gen != a.carouselCycleGen {
+			return a, nil, true // superseded by a later left/right press
+		}
+		a2, cmd := a.openImageInTerminal(a.imageCarouselItems[a.imageCarouselIndex])
+		return a2, cmd, true
 	}
 	return a, nil, false
 }
 
+// carouselCycleDebounce bounds how long cycleImageCarousel waits after the
+// last left/right press before actually starting a fetch — see
+// carouselCycleGen's doc comment (App struct) for why. 300ms rather than the
+// original 120ms: live-reported on real iTerm2, fast/held cycling (but never
+// slow deliberate presses) occasionally leaves the modal black. No erase is
+// ever sent on the iTerm2 path (confirmed — the only tea.ClearScreen/
+// EraseEntireScreen in this file are Sixel-gated), so this isn't a Bubble
+// Tea diff/flush bug; the most plausible mechanism is the terminal itself —
+// iTerm2 decoding one large, unchunked base64 OSC 1337 payload per image
+// with no pacing, and the next debounced write landing before it's finished.
+// A larger debounce gives it more real wall-clock headroom between actual
+// image writes under sustained key-repeat. This is a mitigation for a
+// terminal-side timing constraint this app can't measure directly, not a
+// structural fix — revisit if it's still reported after this change.
+const carouselCycleDebounce = 300 * time.Millisecond
+
+// inlineImageSwitchSettleDelay bounds how long injectInlineImages
+// (layout.go) holds back inline image draws after a screen switch — see
+// App.screenSwitchedAt's doc comment for the live-log evidence this
+// responds to. Between carouselCycleDebounce (300ms) and
+// inlineImageStaleGrace (500ms): long enough to give the terminal real
+// headroom after a large screen-redraw write, short enough that the delay
+// before an image reappears on switching to its screen stays barely
+// perceptible. A mitigation for a suspected terminal-side timing
+// constraint this app can't measure directly, not a structural fix —
+// revisit if it's still reported after this change.
+const inlineImageSwitchSettleDelay = 250 * time.Millisecond
+
+// carouselCycleSettledMsg fires carouselCycleDebounce after a left/right
+// carousel press; only acted on if gen still matches a.carouselCycleGen
+// (handleImageViewer), i.e. no further press has happened since.
+type carouselCycleSettledMsg struct{ gen int }
+
 // cycleImageCarousel moves to the next/prev image in imageCarouselItems
-// (wrapping around) and starts fetching it. The currently displayed image
-// stays on screen until the new one arrives.
+// (wrapping around) — the counter/displayed index updates immediately, so
+// holding the key down feels responsive — but doesn't start fetching it
+// directly. See carouselCycleGen's doc comment (App struct): fetching is
+// real, non-trivial work (openImageInTerminal decodes+encodes even on an
+// image-bytes cache hit), so firing one per keypress while a key is held
+// wastes almost all of it on results imageFetchGen's newest-wins guard
+// would just discard anyway. Debouncing via carouselCycleDebounce means a
+// held key only ever fetches the image the user actually lands on.
 func (a App) cycleImageCarousel(delta int) (App, tea.Cmd) {
 	n := len(a.imageCarouselItems)
 	a.imageCarouselIndex = (a.imageCarouselIndex + delta + n) % n
-	return a.openImageInTerminal(a.imageCarouselItems[a.imageCarouselIndex])
+	a.carouselCycleGen++
+	gen := a.carouselCycleGen
+	return a, tea.Tick(carouselCycleDebounce, func(time.Time) tea.Msg {
+		return carouselCycleSettledMsg{gen: gen}
+	})
 }
 
 // handleURLPickerKey processes keyboard input while the URL picker overlay is open.
@@ -2551,11 +3779,11 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 func (a *App) afterLoginCmd() tea.Cmd {
 	a.active = screenFeed
 	a.profile = a.profile.SetUser(a.currentUser)
-	a.feed = a.feed.SetCurrentUsername(a.currentUser.Username)
+	a.feed = a.feed.SetCurrentUsername(a.currentUser.Username).SetCurrentUserIsSupporter(a.currentUser.IsSupporter)
 	a.feed = a.feed.SetFetching()
 	a.bookmarks = a.bookmarks.SetFetching()
 	a.topics = a.topics.SetFetching()
-	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username)
+	a.postDetail = a.postDetail.SetCurrentUsername(a.currentUser.Username).SetCurrentUserIsSupporter(a.currentUser.IsSupporter)
 	a.broadcastConfig()
 	// Conversation list has no REST seed — the live subscription's own first
 	// event (a full snapshot, like chat_presence's) populates it. Seeding via
@@ -2590,6 +3818,7 @@ type feedPageMsg struct {
 	cursor string
 }
 type roomsLoadedMsg struct{ rooms []model.Room }
+
 // roomCommandReplyMsg/cmailCommandReplyMsg carry a reply-only slash command's
 // text (e.g. /help) back from the send response, for local display only —
 // nothing was posted, so nothing arrives via the RTDB subscription.
@@ -2611,22 +3840,52 @@ type userProfileLoadedMsg struct {
 }
 type followResultMsg struct{ followID string }
 type unfollowResultMsg struct{}
-type repliesLoadedMsg struct{ replies []model.Reply }
+
+// repliesLoadedMsg carries postID so a request superseded by the user
+// navigating to a different post before it resolves can be detected and
+// dropped instead of silently overwriting the now-current post's reply tree
+// — see loadRepliesCmd and its handler in handlePostDetail.
+type repliesLoadedMsg struct {
+	postID  string
+	replies []model.Reply
+}
 type replyCreatedMsg struct{ postID, replyID string }
 type replyDeletedMsg struct{ replyID string }
 type postCreatedMsg struct{}
+
+// postConvertedToNoteMsg is returned instead of postCreatedMsg when the server
+// silently turned a too-soon post into a journal entry — see createPostCmd.
+type postConvertedToNoteMsg struct{}
 type postDeletedMsg struct {
 	postID   string
 	fromFeed bool // true = delete was triggered from the feed; false = from post detail
 }
+
+// postEditedMsg carries the fields submitted in a successful post edit. The
+// PATCH response echoes back no fields worth using (same as CreatePost), so
+// editedAt is set optimistically to the time the request completed.
+type postEditedMsg struct {
+	postID           string
+	content, title   string
+	topics           []string
+	isPublic, isNSFW bool
+	editedAt         time.Time
+}
+
+type replyEditedMsg struct {
+	replyID, content string
+	editedAt         time.Time
+}
 type settingsLoadedMsg struct{ settings model.Settings }
 type settingsSavedMsg struct {
-	settings       model.Settings
-	wanderLust     bool
-	maxThreadDepth int
-	timezone       string
-	imageViewer    string
-	layoutName     string
+	settings         model.Settings
+	wanderLust       bool
+	maxThreadDepth   int
+	timezone         string
+	imageViewer      string
+	graphicsProtocol string
+	inlineImages     bool
+	layoutName       string
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
@@ -2637,6 +3896,11 @@ type errMsg struct{ err error }
 // friendly transient banner ("This post has been deleted") instead of routing
 // through handleErr and blanking the list.
 type notifPostLoadErrMsg struct{ err error }
+
+// urlPostLoadErrMsg is the failure of opening a post permalink URL (see
+// routeURL). Handled the same way as notifPostLoadErrMsg — a friendly
+// transient banner rather than routing through handleErr.
+type urlPostLoadErrMsg struct{ err error }
 
 // imageFetchedMsg carries the result of fetching and encoding an image for
 // terminal display. err is non-nil when the download or decode failed; rawURL
@@ -2879,9 +4143,20 @@ type notifsPageMsg struct {
 	cursor string
 }
 type notifPostLoadedMsg struct{ post model.Post }
+
+// urlPostLoadedMsg carries the result of opening a post permalink URL (see
+// routeURL). origin travels with the message rather than being read from
+// a.active on arrival, since a.active can change while the fetch is in flight.
+type urlPostLoadedMsg struct {
+	post   model.Post
+	origin screen
+}
 type profilePostLoadedMsg struct{ post model.Post }
 type pollUnreadTickMsg struct{ gen int }
-type unreadCountMsg struct{ count int }
+type unreadCountMsg struct {
+	count int
+	exact bool
+}
 type feedPollTickMsg struct{ gen int }
 type feedPeekMsg struct{ posts []model.Post }
 type logoAnimTickMsg struct{ gen int } // 30s idle trigger — begins the scramble animation
@@ -3002,6 +4277,33 @@ func (a *App) unfollowUserCmd(followID string) tea.Cmd {
 	}
 }
 
+func (a *App) pokeUserCmd(username string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.Poke(username); err != nil {
+			return pokeErrorMsg(err)
+		}
+		return notifyMsg{level: notifyInfo, text: "poked @" + username}
+	}
+}
+
+// pokeErrorMsg converts a poke-action error into the message to emit. A 429
+// is expected here far more than on other actions (1/hour, 8/day cap across
+// all users) so it gets a friendly banner instead of the raw API error text;
+// a 403 (blocked either direction) also gets a friendlier message. Anything
+// else falls through to actionErrMsg's normal handling.
+func pokeErrorMsg(err error) tea.Msg {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.Status {
+		case 429:
+			return notifyMsg{level: notifyError, text: "poke limit reached — try again later"}
+		case 403:
+			return notifyMsg{level: notifyError, text: "can't poke this user"}
+		}
+	}
+	return actionErrMsg{err}
+}
+
 func (a *App) loadUserPostsCmd(username, cursor string) tea.Cmd {
 	return func() tea.Msg {
 		posts, next, err := a.client.GetUserPosts(username, cursor)
@@ -3110,7 +4412,7 @@ func (a *App) loadRepliesCmd(postID string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		return repliesLoadedMsg{replies: replies}
+		return repliesLoadedMsg{postID: postID, replies: replies}
 	}
 }
 
@@ -3156,9 +4458,21 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 
 func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW)
+		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW)
 		if err != nil {
 			return actionErrMsg{err}
+		}
+		// The server silently converts a post submitted too soon after a
+		// previous one into a journal entry instead of rejecting it — the
+		// response still looks like a normal success (postId/slug), but the
+		// post doesn't actually exist. No notification is ever generated for
+		// this server-side, so the only way to detect it client-side is to
+		// check whether the returned ID resolves.
+		if _, err := a.client.GetPost(post.ID); err != nil {
+			var apiErr *api.APIError
+			if errors.As(err, &apiErr) && apiErr.Status == 404 {
+				return postConvertedToNoteMsg{}
+			}
 		}
 		return postCreatedMsg{}
 	}
@@ -3233,6 +4547,7 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.MarkAllNotifsReadMsg:
 		// Optimistic update already applied in NotificationsModel.Update; fire API call.
 		a.polledUnreadCount = 0
+		a.polledUnreadCountExact = true
 		return a, a.markAllNotifsReadCmd(), true
 	case screens.ShowNotificationPostMsg:
 		// Optimistic mark-read already applied in NotificationsModel.Update; confirm with API.
@@ -3261,6 +4576,22 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		a, cmd := a.notify(notifyError, msg.err.Error())
 		return a, cmd, true
+	case urlPostLoadedMsg:
+		a.postDetailReturn = msg.origin
+		a.active = screenPostDetail
+		a.postDetail = a.postDetail.SetPost(msg.post)
+		return a, a.loadRepliesCmd(msg.post.ID), true
+	case urlPostLoadErrMsg:
+		if errors.Is(msg.err, api.ErrUnauthorized) {
+			return a, nil, false
+		}
+		var apiErr *api.APIError
+		if errors.As(msg.err, &apiErr) && apiErr.Status == 404 {
+			a, cmd := a.notify(notifyWarn, "This post has been deleted")
+			return a, cmd, true
+		}
+		a, cmd := a.notify(notifyError, msg.err.Error())
+		return a, cmd, true
 	case screens.ShowUserProfileMsg:
 		if a.active != screenNotifications {
 			return a, nil, false
@@ -3279,6 +4610,7 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	case unreadCountMsg:
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count
+		a.polledUnreadCountExact = msg.exact
 		if msg.count > prev && !a.notifications.HasPaginated() {
 			return a, a.loadNotifsCmd(), true
 		}
@@ -3348,9 +4680,21 @@ func (a *App) markNotifReadCmd(id string) tea.Cmd {
 	}
 }
 
+// markAllNotifsReadMaxCalls bounds the read-all loop below in case a server
+// bug ever reports hasMore indefinitely; 20 calls covers 100,000 notifications
+// (5,000/call), far beyond any real account's unread backlog.
+const markAllNotifsReadMaxCalls = 20
+
 func (a *App) markAllNotifsReadCmd() tea.Cmd {
 	return func() tea.Msg {
-		_ = a.client.MarkAllNotificationsRead() // fire-and-forget; UI already updated
+		// Fire-and-forget; UI already updated. read-all caps at 5,000/call — loop
+		// while the server says more remain.
+		for i := 0; i < markAllNotifsReadMaxCalls; i++ {
+			hasMore, err := a.client.MarkAllNotificationsRead()
+			if err != nil || !hasMore {
+				break
+			}
+		}
 		return nil
 	}
 }
@@ -3731,6 +5075,18 @@ func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 	}
 }
 
+func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW); err != nil {
+			return editErrorMsg(err)
+		}
+		return postEditedMsg{
+			postID: postID, content: content, title: title, topics: topics,
+			isPublic: isPublic, isNSFW: isNSFW, editedAt: time.Now(),
+		}
+	}
+}
+
 func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := a.client.DeleteReply(replyID); err != nil {
@@ -3738,6 +5094,28 @@ func (a *App) deleteReplyCmd(replyID string) tea.Cmd {
 		}
 		return replyDeletedMsg{replyID: replyID}
 	}
+}
+
+func (a *App) editReplyCmd(replyID, content string) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.client.EditReply(replyID, content); err != nil {
+			return editErrorMsg(err)
+		}
+		return replyEditedMsg{replyID: replyID, content: content, editedAt: time.Now()}
+	}
+}
+
+// editErrorMsg converts a post/reply-edit error into the message to emit. A
+// 403 here means outside the 5-minute window or not a supporter — the
+// CanEditSelected gate should prevent most of these, but a race is possible
+// (window expires or supporter status lapses between opening the editor and
+// submitting). Anything else falls through to actionErrMsg's normal handling.
+func editErrorMsg(err error) tea.Msg {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.Status == 403 {
+		return notifyMsg{level: notifyError, text: "can't edit — outside the 5-minute window or not a supporter"}
+	}
+	return actionErrMsg{err}
 }
 
 // flagResultText picks the banner text for a completed report, distinguishing
@@ -3886,12 +5264,21 @@ func (a *App) checkAndWanderCmd() tea.Cmd {
 
 func (a *App) fetchUnreadCountCmd() tea.Cmd {
 	return func() tea.Msg {
-		count, err := a.client.GetUnreadNotificationCount()
+		count, exact, err := a.client.GetUnreadNotificationCount()
 		if err != nil {
 			return nil
 		}
-		return unreadCountMsg{count}
+		return unreadCountMsg{count: count, exact: exact}
 	}
+}
+
+// notifBadgeText formats the tab-bar unread count, rendering "99+" once the
+// server-reported count is inexact (v0.8.5+: true count exceeds 100).
+func notifBadgeText(count int, exact bool) string {
+	if !exact {
+		return "99+"
+	}
+	return strconv.Itoa(count)
 }
 
 func (a *App) loadPostAndShowCmd(postID string) tea.Cmd {
@@ -3901,6 +5288,20 @@ func (a *App) loadPostAndShowCmd(postID string) tea.Cmd {
 			return notifPostLoadErrMsg{err}
 		}
 		return notifPostLoadedMsg{post: post}
+	}
+}
+
+// loadPostBySlugCmd fetches a post permalink (see routeURL) by its author's
+// username and per-author slug. origin is the screen to return to when
+// PostDetail closes; it travels through urlPostLoadedMsg rather than being
+// read from a.active when the response arrives.
+func (a *App) loadPostBySlugCmd(username, slug string, origin screen) tea.Cmd {
+	return func() tea.Msg {
+		post, err := a.client.GetPostBySlug(username, slug)
+		if err != nil {
+			return urlPostLoadErrMsg{err}
+		}
+		return urlPostLoadedMsg{post: post, origin: origin}
 	}
 }
 

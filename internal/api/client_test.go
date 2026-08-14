@@ -2321,15 +2321,37 @@ func TestHTTPGetUnreadNotificationCount_ReturnsCount(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		io.WriteString(w, `{"data":{"count":7}}`)
+		io.WriteString(w, `{"data":{"count":7,"exact":true}}`)
 	})))
 	c.LoginWithRefreshToken("tok")
-	count, err := c.GetUnreadNotificationCount()
+	count, exact, err := c.GetUnreadNotificationCount()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if count != 7 {
 		t.Errorf("expected count 7, got %d", count)
+	}
+	if !exact {
+		t.Error("expected exact true")
+	}
+}
+
+func TestHTTPGetUnreadNotificationCount_InexactAboveCap(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"data":{"count":100,"exact":false}}`)
+	})))
+	c.LoginWithRefreshToken("tok")
+	count, exact, err := c.GetUnreadNotificationCount()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 100 {
+		t.Errorf("expected count 100, got %d", count)
+	}
+	if exact {
+		t.Error("expected exact false above the 100 cap")
 	}
 }
 
@@ -2361,17 +2383,37 @@ func TestHTTPMarkAllNotificationsRead_Method(t *testing.T) {
 		capturedPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		io.WriteString(w, `{"data":null}`)
+		io.WriteString(w, `{"data":{"updated":12,"hasMore":false}}`)
 	})))
 	c.LoginWithRefreshToken("tok")
-	if err := c.MarkAllNotificationsRead(); err != nil {
+	hasMore, err := c.MarkAllNotificationsRead()
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if hasMore {
+		t.Error("expected hasMore false")
 	}
 	if capturedMethod != "POST" {
 		t.Errorf("expected POST, got %s", capturedMethod)
 	}
 	if capturedPath != "/v1/notifications/read-all" {
 		t.Errorf("expected /v1/notifications/read-all, got %s", capturedPath)
+	}
+}
+
+func TestHTTPMarkAllNotificationsRead_HasMoreTrue(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, `{"data":{"updated":5000,"hasMore":true}}`)
+	})))
+	c.LoginWithRefreshToken("tok")
+	hasMore, err := c.MarkAllNotificationsRead()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !hasMore {
+		t.Error("expected hasMore true when the 5,000/call cap was hit")
 	}
 }
 
@@ -2409,6 +2451,41 @@ func TestHTTPGetPost_ParsesPost(t *testing.T) {
 	}
 	if post.RepliesCount != 3 {
 		t.Errorf("RepliesCount mismatch: %d", post.RepliesCount)
+	}
+}
+
+func TestHTTPGetPostBySlug_ParsesPost(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/users/castle/posts/podcast-recommendations" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{
+			"postId":         "p99",
+			"authorId":       "u1",
+			"authorUsername": "castle",
+			"slug":           "podcast-recommendations",
+			"content":        "hello world",
+			"topics":         []string{"tui"},
+			"repliesCount":   3,
+			"isPublic":       true,
+			"isNSFW":         false,
+			"deleted":        false,
+			"createdAt":      "2026-01-01T10:00:00Z",
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	post, err := c.GetPostBySlug("castle", "podcast-recommendations")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if post.ID != "p99" {
+		t.Errorf("ID mismatch: %s", post.ID)
+	}
+	if post.AuthorUsername != "castle" {
+		t.Errorf("AuthorUsername mismatch: %s", post.AuthorUsername)
+	}
+	if post.Slug != "podcast-recommendations" {
+		t.Errorf("Slug mismatch: %s", post.Slug)
 	}
 }
 
@@ -3324,6 +3401,139 @@ func TestHTTPWatchPost_CallsCorrectEndpoint(t *testing.T) {
 	}
 	if gotPath != "/v1/posts/p42/watch" {
 		t.Errorf("path = %q, want /v1/posts/p42/watch", gotPath)
+	}
+}
+
+func TestHTTPPoke_CallsCorrectEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		writeOK(t, w, map[string]any{"userId": "u1", "username": "alice", "poked": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.Poke("alice"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "POST" {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/v1/users/alice/poke" {
+		t.Errorf("path = %q, want /v1/users/alice/poke", gotPath)
+	}
+}
+
+func TestHTTPPoke_RateLimited(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many pokes")
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.Poke("alice")
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Status != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429", apiErr.Status)
+	}
+}
+
+func TestHTTPEditPost_CallsCorrectEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"postId": "p1"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.EditPost("p1", "corrected content", "New Title", []string{"go", "cli"}, true, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "PATCH" {
+		t.Errorf("method = %q, want PATCH", gotMethod)
+	}
+	if gotPath != "/v1/posts/p1" {
+		t.Errorf("path = %q, want /v1/posts/p1", gotPath)
+	}
+	if gotBody["content"] != "corrected content" {
+		t.Errorf("content = %v, want %q", gotBody["content"], "corrected content")
+	}
+	if gotBody["title"] != "New Title" {
+		t.Errorf("title = %v, want %q", gotBody["title"], "New Title")
+	}
+}
+
+// TestHTTPEditPost_SendsEmptyTitleToClear confirms the wire request has no
+// omitempty on Title — the API documents sending "" to clear an existing
+// title, and createPostRequest's omitempty (a different struct, reused
+// nowhere here) would silently drop that intent if it were reused for edits.
+func TestHTTPEditPost_SendsEmptyTitleToClear(t *testing.T) {
+	var gotBody map[string]any
+	sawTitleKey := false
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		sawTitleKey = strings.Contains(string(raw), `"title"`)
+		json.Unmarshal(raw, &gotBody)
+		writeOK(t, w, map[string]any{"postId": "p1"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.EditPost("p1", "content", "", nil, false, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !sawTitleKey {
+		t.Fatal(`request body missing "title" key — omitempty would drop an intentionally-cleared title`)
+	}
+	if gotBody["title"] != "" {
+		t.Errorf("title = %v, want empty string", gotBody["title"])
+	}
+}
+
+func TestHTTPEditPost_Forbidden(t *testing.T) {
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErr(w, http.StatusForbidden, "FORBIDDEN", "outside edit window")
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.EditPost("p1", "content", "title", nil, false, false)
+	apiErr, ok := asAPIError(err)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Status != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", apiErr.Status)
+	}
+}
+
+func TestHTTPEditReply_CallsCorrectEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"replyId": "r1"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	err := c.EditReply("r1", "corrected reply")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != "PATCH" {
+		t.Errorf("method = %q, want PATCH", gotMethod)
+	}
+	if gotPath != "/v1/replies/r1" {
+		t.Errorf("path = %q, want /v1/replies/r1", gotPath)
+	}
+	if gotBody["content"] != "corrected reply" {
+		t.Errorf("content = %v, want %q", gotBody["content"], "corrected reply")
 	}
 }
 

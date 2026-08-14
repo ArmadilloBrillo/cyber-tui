@@ -188,6 +188,7 @@ type wirePost struct {
 	IsNSFW         bool             `json:"isNSFW"`
 	Deleted        bool             `json:"deleted"`
 	CreatedAt      apiTimestamp     `json:"createdAt"`
+	EditedAt       apiTimestamp     `json:"editedAt"`
 	Attachments    []wireAttachment `json:"attachments"`
 }
 
@@ -245,6 +246,7 @@ type wireReply struct {
 	Content        string           `json:"content"`
 	ParentReplyID  string           `json:"parentReplyId"`
 	CreatedAt      apiTimestamp     `json:"createdAt"`
+	EditedAt       apiTimestamp     `json:"editedAt"`
 	Attachments    []wireAttachment `json:"attachments"`
 }
 
@@ -363,6 +365,20 @@ type createPostResponseData struct {
 	Title  string `json:"title"`
 }
 
+// editPostRequest deliberately omits omitempty on Title: the API accepts ""
+// to clear an existing title, and omitempty would silently drop that intent.
+type editPostRequest struct {
+	Content  string   `json:"content"`
+	Title    string   `json:"title"`
+	Topics   []string `json:"topics"`
+	IsPublic bool     `json:"isPublic"`
+	IsNSFW   bool     `json:"isNSFW"`
+}
+
+type editReplyRequest struct {
+	Content string `json:"content"`
+}
+
 type createReplyRequest struct {
 	PostID        string `json:"postId"`
 	Content       string `json:"content"`
@@ -395,6 +411,7 @@ type wireNotification struct {
 	ActorUsername string                   `json:"actorUsername"`
 	TargetID      string                   `json:"targetId"`
 	TargetType    string                   `json:"targetType"`
+	Reason        string                   `json:"reason"`
 	Metadata      wireNotificationMetadata `json:"metadata"`
 }
 
@@ -945,6 +962,7 @@ func wirePostToModel(w wirePost) model.Post {
 		IsNSFW:         w.IsNSFW,
 		Deleted:        w.Deleted,
 		CreatedAt:      t,
+		EditedAt:       parseTime(string(w.EditedAt)),
 		Attachments:    wireAttachmentsToModel(w.Attachments),
 	}
 }
@@ -960,6 +978,7 @@ func wireReplyToModel(w wireReply) model.Reply {
 		Content:        w.Content,
 		ParentReplyID:  w.ParentReplyID,
 		CreatedAt:      t,
+		EditedAt:       parseTime(string(w.EditedAt)),
 		Attachments:    wireAttachmentsToModel(w.Attachments),
 	}
 }
@@ -1089,6 +1108,7 @@ func wireNotificationToModel(w wireNotification) model.Notification {
 		RoomSlug:             w.Metadata.RoomSlug,
 		RoomName:             w.Metadata.RoomName,
 		MessageContent:       w.Metadata.MessageContent,
+		Reason:               w.Reason,
 	}
 }
 
@@ -1293,8 +1313,24 @@ func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, is
 	}, nil
 }
 
+func (c *HTTPClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool) error {
+	_, err := c.doJSON("PATCH", "/v1/posts/"+url.PathEscape(postID), editPostRequest{
+		Content:  content,
+		Title:    title,
+		Topics:   topics,
+		IsPublic: isPublic,
+		IsNSFW:   isNSFW,
+	})
+	return err
+}
+
 func (c *HTTPClient) DeletePost(postID string) error {
 	_, err := c.doRequest("DELETE", "/v1/posts/"+url.PathEscape(postID), nil)
+	return err
+}
+
+func (c *HTTPClient) EditReply(replyID, content string) error {
+	_, err := c.doJSON("PATCH", "/v1/replies/"+url.PathEscape(replyID), editReplyRequest{Content: content})
 	return err
 }
 
@@ -1357,6 +1393,18 @@ func (c *HTTPClient) CreateReply(postID, content, parentReplyID string) (model.R
 
 func (c *HTTPClient) GetPost(postID string) (model.Post, error) {
 	env, err := c.doRequest("GET", "/v1/posts/"+url.PathEscape(postID), nil)
+	if err != nil {
+		return model.Post{}, err
+	}
+	var wire wirePost
+	if err := json.Unmarshal(env.Data, &wire); err != nil {
+		return model.Post{}, err
+	}
+	return wirePostToModel(wire), nil
+}
+
+func (c *HTTPClient) GetPostBySlug(username, slug string) (model.Post, error) {
+	env, err := c.doRequest("GET", "/v1/users/"+url.PathEscape(username)+"/posts/"+url.PathEscape(slug), nil)
 	if err != nil {
 		return model.Post{}, err
 	}
@@ -1457,23 +1505,34 @@ func (c *HTTPClient) MarkNotificationRead(id string) error {
 	return err
 }
 
-func (c *HTTPClient) MarkAllNotificationsRead() error {
-	_, err := c.doRequest("POST", "/v1/notifications/read-all", nil)
-	return err
-}
-
-func (c *HTTPClient) GetUnreadNotificationCount() (int, error) {
-	env, err := c.doRequest("GET", "/v1/notifications/unread-count", nil)
+func (c *HTTPClient) MarkAllNotificationsRead() (bool, error) {
+	env, err := c.doRequest("POST", "/v1/notifications/read-all", nil)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 	var data struct {
-		Count int `json:"count"`
+		Updated  int  `json:"updated"`
+		HasMore  bool `json:"hasMore"`
 	}
 	if err := json.Unmarshal(env.Data, &data); err != nil {
-		return 0, err
+		return false, err
 	}
-	return data.Count, nil
+	return data.HasMore, nil
+}
+
+func (c *HTTPClient) GetUnreadNotificationCount() (int, bool, error) {
+	env, err := c.doRequest("GET", "/v1/notifications/unread-count", nil)
+	if err != nil {
+		return 0, false, err
+	}
+	var data struct {
+		Count int  `json:"count"`
+		Exact bool `json:"exact"`
+	}
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return 0, false, err
+	}
+	return data.Count, data.Exact, nil
 }
 
 // --- Bookmarks ---
@@ -1536,6 +1595,11 @@ func (c *HTTPClient) WatchPost(postID string) error {
 
 func (c *HTTPClient) UnwatchPost(postID string) error {
 	_, err := c.doRequest("DELETE", "/v1/posts/"+url.PathEscape(postID)+"/watch", nil)
+	return err
+}
+
+func (c *HTTPClient) Poke(username string) error {
+	_, err := c.doRequest("POST", "/v1/users/"+url.PathEscape(username)+"/poke", nil)
 	return err
 }
 

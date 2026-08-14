@@ -158,12 +158,13 @@ Defines the `Client` interface — the only type the UI layer imports from this 
 | Group | Methods |
 |---|---|
 | Auth | `Login(email, password)`, `LoginWithRefreshToken(token)`, `Logout()`, `ResendVerification(idToken)` |
-| Feed | `GetFeed(cursor)`, `CreatePost(content, title, slug, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)` |
+| Feed | `GetFeed(cursor)`, `CreatePost(content, title, slug, topics, isPublic, isNSFW)`, `GetPost(postID)`, `DeletePost(postID)`, `EditPost(postID, content, title, topics, isPublic, isNSFW)` |
 | Thread watching | `GetWatches(cursor)`, `WatchPost(postID)`, `UnwatchPost(postID)` |
-| Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)` |
+| Replies | `GetPostReplies(postID)`, `GetReply(replyID)`, `CreateReply(postID, content, parentReplyID)`, `DeleteReply(replyID)`, `EditReply(replyID, content)` |
 | Profile | `GetOwnProfile()`, `GetProfile(username)`, `UpdateProfile(update)` |
 | User History | `GetUserPosts(username, cursor)`, `GetUserReplies(username, cursor)` |
 | Follows | `GetFollowing(cursor)`, `GetFollowers(cursor)`, `GetUserFollows(userID, followType, cursor)`, `Follow(followedID)`, `Unfollow(followID)` |
+| Poke | `Poke(username)` |
 | Settings | `GetSettings()`, `UpdateSettings(update)` |
 | Rooms | `GetRooms()`, `GetRoomMessages(roomID, limit)`, `SendRoomMessage(roomID, body)` |
 | Notifications | `GetNotifications(cursor, unreadOnly, types)`, `GetUnreadNotificationCount()`, `MarkNotificationRead(id)`, `MarkAllNotificationsRead()` |
@@ -370,6 +371,7 @@ Home feed of posts from followed users.
 - `d` on the selected post (own posts only) shows a y/n confirmation overlay; on `y` emits `DeletePostMsg`
 - Dense/relaxed display modes; post content truncated to 4 lines in list view
 - Timezone-aware timestamps via `displayTime()`
+- Every eligible inline image in a post's body renders inline (not just the first) when the InlineImages setting is on and a graphics protocol was detected (`VisibleInlineImages()`, `internal/ui/screens/inlineimage.go`) — see the `internal/ui/imgview` package section for protocol details and `docs/plan-inline-images-improvements.md` for the iTerm2/Sixel repaint workarounds this depends on
 
 Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg` (Content, Title, Topics, IsPublic, IsNSFW), `DeletePostMsg`  
 Key function: `ParseTopics(s string) []string` — splits comma-separated string, caps at 3  
@@ -387,6 +389,7 @@ Single post with all its replies in a scrollable pager.
 - `ScrollToReply(replyID)` scrolls to a specific reply (used by Notifications to deep-link)
 - **Persists across tab switches**: switching away from PostDetail (any nav key) no longer closes it — `PostDetailModel.SetPost` (the only thing that resets its state) isn't called again until a *different* post is opened, so the open post, its scroll position, and any in-progress reply draft just sit there until you come back. `activateScreen` (`layout.go`) checks `PostDetailModel.HasPost()`: landing on the origin tab *from elsewhere* resumes the post instead of showing that tab's own list; re-navigating to the origin tab *from PostDetail itself* (its own key/chord, or plain/ctrl `←`/`→` landing back on it, though cycling never does in one step — see `tabIndexOf`) is the escape hatch that actually closes it, matching Circ/C-Mail's re-press-the-tab-key convention. If the post was opened from inside a browsed Guild/Topic, closing it lands back on that same guild/topic, not the top-level list — Guilds/Topics' own browse state is untouched throughout, and PostDetail's check runs first in `activateScreen` so it "wins" while open. Mirrors Circ's background-room persistence (`docs/33-circ.md`) but architecturally simpler: pure REST content, no live subscription to keep alive. The tab-bar/nav "in detail" marker (`docs/02-menu-bar-navigation.md`) reflects this the same way it does for Circ/Guilds/Topics.
 - Plain `←`/`→` cycle tabs from PostDetail exactly like `ctrl+←`/`ctrl+→` already did (previously excluded — a live bug, not intentional). Cycling's tab-position lookup (`tabIndexOf`) resolves `screenPostDetail` to `postDetailReturn`'s position rather than defaulting to Feed's, so cycling away is anchored to wherever the post was actually opened from.
+- Inline images render for both the post and its replies (`VisibleInlineImages()`) — same gating/mechanism as Feed's, see that section
 
 Key types: `PostDetailModel`, `BackToFeedMsg`, `SubmitReplyMsg` (postID, parentReplyID, content), `DeletePostMsg`, `DeleteReplyMsg`  
 Key methods: `SetCurrentUsername(username)`, `RemoveReply(replyID)`, `HasPost()`, `Close()`
@@ -408,6 +411,7 @@ View and edit user profiles (own or others'). Includes five sub-tabs accessible 
 - `SetReadOnly(true)` hides edit controls when viewing another user's profile
 - `SetCanGoBack(true)` allows ESC to emit `BackFromProfileMsg`
 - `ClearTabs()` resets sub-tab state (called when switching to a new user's profile)
+- When the InlineImages setting is gated on (`VisibleInlineImages()`), `ProfilePictureUrl` renders inline between the username line and the followers/following count line; `WebsiteImageUrl` renders inline below all tab content instead (`viewBodyBeforeWebsiteBand()` recomputes that height since it varies by tab) — both use a smaller, Profile-specific row budget than Feed/PostDetail/chat. `infoTabView`'s existing "Picture"/"img" URL text rows are untouched
 
 Key types: `ProfileModel`, `SaveProfileMsg`, `ShowProfilePostMsg`, `ShowUserPostsMsg`, `ShowUserRepliesMsg`, `ShowUserFollowingMsg`, `ShowUserFollowersMsg`, `LoadMoreUserPostsMsg`, `LoadMoreUserRepliesMsg`, `LoadMoreUserFollowingMsg`, `LoadMoreUserFollowersMsg`
 
@@ -443,6 +447,8 @@ Settings are organised into static `settingsGroups`, each containing `settingsIt
 
 **Deferred fields** (read from API, never patched): `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics`
 
+**Local-only fields** (persisted to `~/.cyber-tui.json`, never sent to the API): `imageViewer` (enum, "terminal"/"browser" — "terminal" tries inline/fullscreen-modal rendering via `internal/ui/imgview` when a graphics protocol was detected, falling back to the browser only if none was; "browser" always opens images externally regardless of protocol detection), `inlineImages` (bool, gates Feed/Post Detail's automatic inline rendering independent of the fullscreen modal), `layoutName` ("tabs"/"miller" — see `internal/ui/layout.go`'s `layoutFromName`)
+
 - `j`/`k` navigate; Space/Enter toggle booleans or cycle enum options
 - ctrl+s emits `SaveSettingsMsg` with the updated settings; ESC discards
 - Unsaved changes are highlighted
@@ -457,7 +463,8 @@ Direct messages (C-Mail) with live Firebase RTDB integration.
 - Subscribes to RTDB SSE stream via `api.Client.SubscribeDMs()` on conversation selection; cancelled on ESC (leaving the conversation) or logout — an ordinary tab switch now leaves it running in the background (see below)
 - `waitForDM(sub)` is a Bubble Tea `Cmd` that blocks on the subscription channel and returns each incoming message as a `tea.Msg`
 - Other person's messages left-aligned; my messages right-aligned (driven by `currentUser` field)
-- `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history in detail mode
+- `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history one line in detail mode, or move message-by-message once browsing is entered (see below)
+- **Per-message browsing:** mirrors `chatrooms.go`'s browsing mode. Reaching the top of the loaded messages via `↑` selects the newest message (`selectedMsgID`, blurs the compose input) instead of scrolling further; `↑`/`↓` then move the selection message-by-message via the shared `selectableMessageIndices`/`selectablePos`/`millerPageNav`/`selOffsets`/`selHeights`/`ensureMessageVisible` helpers (generalized out of `chatrooms.go` to take plain slices instead of a `ChatroomsModel`, so both screens use the same code), `Esc` or `↓` past the newest exits back to typing. `refreshMessages()` (mirroring `ChatroomsModel.refreshMessages`) renders via `renderChatMessagesWithSelection` (`render.go`), tracking each message's `msgOffsets`/`msgHeights` and highlighting the selected one with `theme.SelectedRow`. No flag/delete (no CMail message flag/delete API endpoint — see `docs/00-api-backlog.md`) or spoiler/l33t reveal (unsupported here); `updateCMailBrowsingKey` is the trimmed CMail counterpart to `updateBrowsingKey`. `SelectedMessageID() string` exposes the current selection for testing/App. `GetFocusedURLs()` scopes to just the selected message while browsing, falling back to aggregating every loaded message otherwise — same change made to `ChatroomsModel.GetFocusedURLs()`.
 - **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile (or opening a `dm_message` notification) emits `StartConversationMsg{Username}` (defined in `messages.go`); App records the originating screen in `App.cmailReturn` and sets `CMailModel.canGoBack = true`, then calls `StartConversation(username)` via REST, switches to C-Mail, and opens the returned conversation in detail mode; self-DMs are dropped in the App handler. Distinct from `g m` (see "Keyboard Shortcuts" → Global): `c` targets the specific highlighted user, `g m` just opens the C-Mail tab's conversation list — the in-app hint for `c` reads "message" rather than "c-mail" to keep the two from being conflated
 - **Background across tab switches:** `activateScreen` (`layout.go`) no longer cancels the C-Mail subscription on tab-away — it calls `CMailModel.SetFocused(false)` instead, which only stops unread-count bumping; the RTDB message/typing streams and reconnect-retry chains keep running because `App.handleCMail` (`app.go`) routes any message matching `screens.IsDMStreamMsg` to `a.cmail.Update` whenever C-Mail isn't the active screen. Unlike Chatrooms, there's no separate `unreadCount` counter — a `dmReceivedMsg` while unfocused increments the currently-open conversation's existing `UnreadCount` in `m.conversations` (via `bumpActiveConvUnread`), so it's immediately reflected in the same aggregate `TotalUnread()` tab-bar badge (sum across *all* conversations, kept current live via the `user_conversations/<uid>` RTDB subscription — see below — rather than a poll) rather than adding a second counter; `SetFocused(true)` on return zeroes it back via `zeroActiveConvUnread`. Switching back into C-Mail from a *different* tab skips `ResetToList()` when `HasLiveConv()` is true, resuming the same conversation; re-pressing the C-Mail key while *already* on it still resets to the list (the escape hatch out of a deep-linked conversation — see below). Only the one conversation the user had open stays live.
 - **Deep-link ESC:** when `canGoBack` is true, ESC in detail mode emits `LeaveCMailMsg` instead of dropping to the conversation list; App sets `active = cmailReturn`, returning straight to whatever screen the conversation was opened from. Entering C-Mail through ordinary tab/leader-key navigation calls `CMailModel.ResetToList()` in `activateScreen` (`layout.go`), which clears `canGoBack` *and* forces `mode` back to list — so manually switching to the C-Mail tab while a deep-linked conversation is still open also drops to the list instead of leaving it stuck in detail mode, same as ESC — this mirrors the `canGoBack`/`profileReturn` pattern in `profile.go`
@@ -465,6 +472,7 @@ Direct messages (C-Mail) with live Firebase RTDB integration.
 - **Live-stream reconnect:** when `dmStreamClosedMsg` fires for the still-active conversation (idToken expiry, an idle-read timeout, a terminal `auth_revoked`/`cancel` event, or a network error — see `internal/rtdb`), `reconnectConvCmd` calls `api.Client.RefreshSession()` then re-subscribes; on failure it retries with backoff (`reconnectDelay`/`reconnectBackoffSchedule` in `reconnect.go`, shared with `chatrooms.go`: `1s, 2s, 4s, 8s, 15s`, 6 attempts total) via `scheduleReconnectRetryCmd`/`tea.Tick`, tracked by `m.reconnecting`/`m.reconnectAttempt`/`m.reconnectFailed`. Success emits `CMailReconnectedMsg`, which App turns into a "reconnected to live chat" toast, and clears the retry state. While retrying, `View()` shows `(live updates lost, reconnecting… N/6)` in the header; once attempts are exhausted, `(live updates lost)` persists until the user leaves and re-enters — independent of `renderMessages()`'s empty-list error path, so it's visible even with history already loaded. `cancelDMSub()` (called on navigation away) cancels any in-flight retry sequence via `m.reconnectCancel`. A stale close event (from an abandoned conversation) is a no-op.
 - **Live conversation list:** an account-wide `SubscribeUserConversations(ctx, uid, initial)` RTDB subscription on `user_conversations/<uid>` keeps the conversation list and unread badge current, opened directly in `afterLoginCmd` (`CMailModel.OpenUserConvsSubscription()`) right after login — **no REST seed**: the subscription's own first event is a full snapshot (same as `chat_presence`'s), so it's the sole writer to `CMailModel.conversations` after login. (A REST `GetConversations()` seed followed by the live subscription was tried first and reverted — the REST call and the subscription's internal merge state were two independent writers with no reconciliation, so a REST-only update would get silently clobbered by the next unrelated live event; `activateScreen`'s C-Mail case and the post-`StartConversation` refresh both used to call `GetConversations()` for the same reason and were removed for the same reason.) Torn down only on session end (`CancelUserConvsSubscription()`, called from `handleUnauthorized`) — independent of `dmSub`/`activeConvID` and unaffected by tab switches or leaving a conversation. Its own reconnect sequence (`userConvsReconnect*` fields/messages) mirrors `reconnectConvCmd`'s backoff schedule but gives up silently with no UI indicator on exhaustion. `pollUnreadTickMsg`'s 60s ticker no longer touches C-Mail — it now drives only the notifications unread-count badge.
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendMessage`'s reply text is routed through app.go's `cmailCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice`. `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live for CIRC, parsed defensively here) rendered via `renderActionLine` as classic IRC `* username body *`
+- When InlineImages is gated on, a message's image (its `ImageUrl`/`GifUrl` attachment field, or the first image-looking URL found in its body — `chatInlineImageURL()`, `shared.go`) renders inline in a reserved band appended after that message; the message is rendered from a `sanitizeChatMessageForInlineImage()` copy so its attachment badge or URL-only body isn't shown redundantly behind the image (a URL alongside other text is left alone — `renderChatMessagesWithSelection`, `render.go`); `VisibleInlineImages()` exposes the currently on-screen slots the same way Feed/PostDetail do. The band starts at a fixed fallback-max size and shrinks to the image's real fetched row count once known (`chatImageBandRows()`, `App.recordInlineImageRealRows` → `SetImageRealRows()`) — never a trailing spacer, so a small image never leaves a wall of blank lines below it
 - **Typing indicator:** while the compose input is non-empty, `announceTypingCmd`/`AnnounceTyping` announces "typing" and a self-rescheduling heartbeat `tea.Tick` (`scheduleTypingHeartbeatCmd`, cadence from the server response, never hard-coded) re-announces it; an idle-check `tea.Tick` chain (`scheduleTypingIdleCheckCmd`, 2.5s threshold) clears it (`clearTypingCmd`/`ClearTyping`) once keystrokes stop, or immediately if the input is emptied. Sending a message clears the local flag without a network call (the server auto-clears typing on send). Opening a conversation also subscribes to the other participant's live typing status (`SubscribeDMTyping`, `dm_presence/<convID>` — full filtered snapshot per receive, mirroring `SubscribeRoomPresence`); when fresh, `View()` appends `@other is typing…` to the detail header. Detail-header-only, no list-mode badge.
 
 Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`, `CMailReconnectedMsg`, `LeaveCMailMsg`
@@ -490,6 +498,8 @@ Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integrati
 - **Jump-to-room from a notification:** Notifications' `enter` on a `chat_mention` emits `OpenRoomMsg{RoomSlug, NotifID}`; App records the originating screen in `App.chatroomsReturn`, activates this screen (reloading the room list, since Chatrooms wasn't already active and has no live room yet — `activateScreen` calls `ChatroomsModel.ResetToList()` as part of that, clearing `canGoBack` and forcing list mode, so `canGoBack` is set back to `true` right after), and calls `SetPendingRoomSlug`, then `OpenPendingRoom()` (called from the `roomsLoadedMsg` handler) auto-enters detail mode for the matching room via the shared `enterRoomDetail` helper — the same code path the list `enter` keybinding uses
 - **Deep-link ESC:** when `canGoBack` is true, ESC in detail mode emits `LeaveChatroomsMsg` instead of dropping to the room list; App sets `active = chatroomsReturn`, returning straight to Notifications (or wherever else a future deep link originates). Re-pressing the Chatrooms key while *already* on the screen still calls `ChatroomsModel.ResetToList()` in `activateScreen`, clearing `canGoBack` and forcing `mode` back to list — the intentional escape hatch out of a deep-linked room without ESC. Switching into Chatrooms from a *different* tab, however, resumes whatever room was left open instead of resetting (`activateScreen` only resets when the previously active screen wasn't already Chatrooms — see "Background across tab switches" above) — this mirrors the `canGoBack`/`profileReturn` pattern in `profile.go`, also just adopted by `cmail.go`
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendRoomMessage`'s reply text is routed through app.go's `roomCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice` (shared with `cmail.go`). `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live) rendered via `renderActionLine` as classic IRC `* username body *` — see `docs/33-circ.md` for the live-testing findings. Before sending, the `"enter"` handler checks a `/`-prefixed input's first word against `isKnownSlashCommand` (shared with `cmail.go`); an unrecognized command is rejected locally via `AppendSystemMessage` (`*** unknown command: /xyz`) instead of being sent as a literal chat message — see `docs/33-circ.md`
+- Same inline-image rendering/text-suppression as `cmail.go` — see that section (shared `chatInlineImageURL()`/`sanitizeChatMessageForInlineImage()`/`renderCircMessagesWithSelection` machinery). `VisibleInlineImages()` additionally computes each slot's `ColIndent` from `circMessageTextIndent()` (username-length-derived), so the image lines up with where that message's own wrapped body text starts
+- **Per-message browsing:** reaching the top of the loaded messages via `↑` selects the newest message (`selectedMsgID`, blurs the compose input) instead of scrolling further; `↑`/`↓` then move the selection message-by-message (`updateBrowsingKey`, via `selectableMessageIndices`/`selectablePos`/`millerPageNav`), `Esc` or `↓` past the newest exits back to typing. `!` flags the selected message (opens the shared `FlagPrompt` overlay, `FlagKindMessage`) and `d` soft-deletes your own (`DeleteRoomMessageMsg`, y/n confirm); `Enter` toggles a spoiler/l33t message's reveal state. `refreshMessages()` renders via `renderCircMessagesWithSelection` (`render.go`), tracking `msgOffsets`/`msgHeights` and highlighting the selection with `theme.SelectedRow`. `GetFocusedURLs()` scopes to just the selected message while browsing, falling back to aggregating every loaded message otherwise. `cmail.go`'s browsing mode mirrors this (minus flag/delete/reveal, which CMail doesn't support) via free functions generalized out of this file to take plain slices instead of a `ChatroomsModel`, so both screens share the same navigation code.
 
 Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`, `OpenRoomMsg`, `LeaveChatroomsMsg`
 Key internal types: `roomSubscription` (RTDB channel + cancel func + `RoomID`), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `roomReconnectedMsg`, `roomReconnectFailedMsg`, `roomReconnectRetryDueMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`; presence: `roomPresenceSubscription`, `roomPresenceAnnouncedMsg`, `roomHeartbeatTickMsg`, `roomUsersLoadedMsg`, `roomPresenceSubscribedMsg`, `roomPresenceReceivedMsg`, `roomPresenceStreamClosedMsg`
@@ -520,6 +530,7 @@ Browse the guild directory, drill into threads, and view guild members.
 - Thread feed is a standard paginated post list; `m` opens the member list, `esc` returns to the guild list
 - Thread feed shows a membership hint bar (`J` to join, `l` to leave) with y/n confirmation; `GetGuild` is fetched alongside the thread list to populate membership state
 - Member list is cursor-paginated oldest-joined first; `enter` navigates to the member's profile, `esc` returns to the thread feed
+- Thread feed now supports inline images the same as Feed (`RenderPost(..., inlineImagesEnabled)`, `VisibleInlineImages()`/`VisibleDetailInlineImages()` for Miller's list+detail split) — replies in the Miller detail pane are still plain markdown, not inline-image-aware
 
 Key types: `GuildsModel`, `LoadMoreGuildsMsg`, `LoadGuildPostsMsg`, `LoadMoreGuildPostsMsg`, `LoadGuildMembersMsg`, `LoadMoreGuildMembersMsg`, `JoinGuildMsg`, `LeaveGuildMsg`  
 Key methods: `SetGuilds`, `AppendGuilds`, `SetGuildPosts`, `AppendGuildPosts`, `SetGuildMembers`, `AppendGuildMembers`, `SetGuildDetail`, `BackToGuildList`  
@@ -532,6 +543,7 @@ Browse all topics (tags) and drill into posts for a selected topic.
 - Two-mode screen: topic list → topic feed
 - Topic list sorted by post count, cursor-paginated; `enter` opens the topic feed
 - Topic feed is a standard paginated post list; `esc` returns to the topic list
+- Same inline-image support as `guilds.go`'s thread feed — see that section
 
 Key types: `TopicsModel`, `LoadMoreTopicsMsg`, `LoadTopicPostsMsg`, `LoadMoreTopicPostsMsg`  
 Key methods: `SetTopics(topics, cursor)`, `AppendTopics(topics, cursor)`, `SetTopicPosts(posts, cursor)`, `AppendTopicPosts(posts, cursor)`
@@ -558,6 +570,7 @@ Full-text search across users, posts, and replies — tab `search` (no number ke
 - `esc` peels back one level at a time — type-list → preview → query (focused) — and, from the query box (the outermost level; no result list is showing there, so there's nothing left to peel back), leaves Search entirely and returns to the screen `/` was pressed from (`App.searchReturn`, the same return-to-origin pattern as `profileReturn`/`postDetailReturn`). Also the escape hatch if a search request fails: `SetError` never changes the view, so this is otherwise the only way back to normal tab/quit navigation. `esc` always blurs the query box on its way out so a later arrival via tab-cycling (which doesn't call `FocusQuery`) never inherits a stuck focused state.
 - `j`/`k` navigate a flattened row list (section headers are not selectable); `enter` opens a hit or drills into a "see all" row.
 - User hits emit the shared `ShowUserProfileMsg`; post hits emit `ShowSearchPostMsg`; reply hits emit `ShowSearchReplyMsg{PostID, ReplyID}` (fetches the parent post, then scrolls to the reply — same mechanism as the Notifications reply deep-link).
+- Post hits support inline images the same as Feed (`RenderPost(..., inlineImagesEnabled)`, `VisibleInlineImages()`); user/reply hits never contribute a slot
 
 Key types: `SearchModel`, `SubmitSearchMsg`, `DrillSearchTypeMsg`, `LoadMoreSearchMsg`, `ShowSearchPostMsg`, `ShowSearchReplyMsg`, `LeaveSearchMsg`  
 Key methods: `SetPreview(preview, query)`, `SetTypeResults(hitType, posts, replies, users, cursor)`, `AppendTypeResults(...)`, `FocusQuery()`, `InputFocused()`, `IsInTypeList()`, `LastQuery()`
@@ -645,6 +658,30 @@ Because all colors are package variables, styles automatically inherit the new p
 
 ---
 
+### `internal/ui/imgview`
+
+Fetches and displays images in the terminal using native graphics protocols (Kitty, iTerm2, Sixel). Used by Feed/Post Detail's inline rendering and the fullscreen image modal (`o` key). See `docs/plan-inline-images-improvements.md` for the feature's build-out history and known workarounds.
+
+**Protocol detection** (`protocol.go`):
+
+| Identifier | Kind | Purpose |
+|---|---|---|
+| `GraphicsProtocol` | type | `ProtocolNone`, `ProtocolKitty` (Kitty, Ghostty), `ProtocolITerm2` (iTerm2, WezTerm), `ProtocolSixel` (xterm, foot, mlterm, contour, mintty, yaft, …) |
+| `DetectProtocol() GraphicsProtocol` | func | Env-var based (`KITTY_WINDOW_ID`, `TERM_PROGRAM`); returns `ProtocolNone` for an unrecognized terminal, including any Sixel-capable one — Sixel has no reliable env-var signal |
+| `ProbeSixel(stdin, stdout *os.File) bool` | func | Active DA1 (Primary Device Attributes) terminal query, only run when `DetectProtocol` returns none; must run before Bubble Tea takes over stdin. Returns `false` on any error, timeout, or non-terminal stdin |
+| `ParseDA1SixelSupport(resp []byte) bool` | func | Pure parser for a raw DA1 response, checking for attribute `4` — exported so `ProbeSixel`'s parsing is unit-testable independent of live terminal I/O |
+| `ProtocolFromName(name string) (GraphicsProtocol, bool)` | func | Maps `Config.GraphicsProtocol` ("kitty"/"iterm2"/"sixel"/"none") to a protocol, bypassing autodetection — see `docs/41-graphics-protocol-override.md` |
+
+**Encoders** (one file per protocol — `kitty.go`, `iterm2.go`, `sixel.go`): each takes `(img image.Image, maxCols, maxRows, cellPxW, cellPxH int, ..., allowUpscale bool)` and returns the ready-to-write escape sequence plus the computed display size in terminal columns/rows. `allowUpscale=false` (inline thumbnails) never upscales beyond the image's natural pixel size; `allowUpscale=true` (fullscreen modal only) lets the result exceed native size, resampled up via the same bilinear `downscaleToBox`. `cellPxW`/`cellPxH` (from `TerminalCellPixelSize`, run through `EffectiveCellPx` — `<= 0` falls back to an assumed 10×20px cell) matter most for iTerm2 — its `preserveAspectRatio=1` letterboxes against the terminal's real font metrics, so a wrong guess leaves visible blank space; Kitty instead stretches to exactly fill the given box, so a wrong guess there only mildly distorts. `EncodeKitty` additionally takes `placementID`: `0` for the fullscreen modal's anonymous mode (self-heals via a blunt `a=d,d=A` delete-all), non-zero for inline rendering's named placements (never blunt-deletes — see `DeleteKittyPlacement`, which targets exactly one placement). `EncodeSixel` has no terminal-side scale-to-fit, so it downscales/upscales in pixel space itself before encoding (256 colors, hardcoded — true for essentially every Sixel-capable terminal in practice).
+
+**Fetching** (`fetch.go`, `frames.go`): `Fetch(ctx, url) (image.Image, error)` and `FetchGIF(ctx, url) (*gif.GIF, error)` (PNG/JPEG/WebP/GIF), capped at 10 MiB response body and ~52 megapixels declared dimensions before decode (matching the API/RTDB client's response cap and guarding against a small file claiming huge dimensions). `GIFFrames(g) (frames, delays)` composites each frame into its own full-canvas RGBA image for the fullscreen modal's animation, bounded at 512 frames and 64M combined frame×width×height pixels.
+
+**Cell geometry** (`cellsize_unix.go` real impl via `TIOCGWINSZ`, `cellsize_windows.go` stub always returning `ok=false`): `TerminalCellPixelSize(fd int) (cellW, cellH int, ok bool)` — real terminal cell pixel size when available, used by all three encoders' `cellPxW`/`cellPxH` fallback logic above. `NativeCellBox(imgWidth, imgHeight, cellPxW, cellPxH int) (cols, rows int)` — the image's own 1:1-pixel size in cells (ceiling-divided per axis), used by the modal's scale math below.
+
+**Modal scale**: since none of the three protocols let the app read back what it actually rendered at, `Config.ImageScale` (`internal/config/session.go`) is a user-set multiplier on the modal's target box — relative to the image's own native size (`imgview.NativeCellBox`), not the terminal window, so a scale change always has a proportional, visible effect. Applied in `openImageInTerminal` before the box reaches the encoder (`allowUpscale=true`). Also live-adjustable with `+`/`-` while the modal is open — `App.adjustImageScale` steps by 10% of native size, floored at 1 cell, so every press changes the rendered size until the true `[0.2, 2.0]` bound. See `docs/46-image-modal-scale.md`.
+
+---
+
 ## Configuration File
 
 Location: `~/.cyber-tui.json`  
@@ -671,6 +708,8 @@ Permissions: `0600` (owner read/write only)
 | `allowRemoteSsh` | bool | `false` | Permit `sshListenAddr` to bind a non-loopback address. SSH server mode is unauthenticated, so this is off by default |
 | `wanderLust` | bool | `false` | Wander mode toggle; `true` = on, `false` = off |
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
+| `graphicsProtocol` | string | `""` (autodetect) | `"kitty"`, `"iterm2"`, `"sixel"`, or `"none"` — bypasses autodetection when it's unreliable (e.g. mintty/Git Bash). Also editable live from the Settings screen (nested under "image viewer", terminal-only) as `"auto"`/`"kitty"`/`"iterm2"`/`"sixel"` — `"none"` stays config-file-only. See `docs/41-graphics-protocol-override.md` |
+| `imageScale` | number | `0` (= `1.0`) | Multiplier on the fullscreen image modal's display size, relative to the image's own native (1:1 pixel) size — not the terminal window. Clamped to `[0.2, 2.0]`; upscaling past native resolution is allowed (only for the modal). Also live-adjustable with `+`/`-` while the modal is open (session-only, guaranteed at least a 1-cell step per press). See `docs/46-image-modal-scale.md` |
 
 ---
 
@@ -776,7 +815,7 @@ Other global keys:
 | `?` | Help modal (no ctrl-twin exists — `ctrl+?` is indistinguishable from `ctrl+backspace`/DEL in most terminals) |
 | `t` | Theme picker |
 | `ctrl+t` | Same as `t`, but reaches the handler even while a compose input is focused |
-| `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused |
+| `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused. An image opens in the fullscreen modal if a graphics protocol was detected and the Image Viewer setting isn't "browser" (otherwise it opens in the OS browser); `←`/`→` cycle multiple images from the same post without closing the modal, `+`/`-` scale the image live (session-only, see `docs/46-image-modal-scale.md`), any other key closes it |
 | `ctrl+o` | Same as `o`, but reaches the handler even while a compose input is focused — the only way to open links in CIRC/C-Mail, since their input is focused for the entire detail view, not just a transient compose sub-mode |
 | `q` / `ctrl+c` | Quit |
 | `ctrl+q` | Same as `q`, but reaches the handler even while a compose input is focused (`ctrl+c` already worked as a hard escape hatch; `ctrl+q` matches the bare-key mnemonic) |
@@ -806,6 +845,7 @@ cycle), not a global shortcut.
 | `e` | Edit profile (own profile, Info tab) |
 | `f` | Follow / unfollow (read-only profiles) |
 | `c` | Start C-Mail conversation (read-only profiles only) |
+| `p` | Poke (read-only profiles only) |
 | `esc` | Back to previous screen |
 
 ### Feed
@@ -818,6 +858,7 @@ cycle), not a global shortcut.
 | `r` | Reply to selected post |
 | `n` | New post |
 | `d` | Delete selected post (own posts only — prompts y/n) |
+| `e` | Edit selected post (own posts, supporter account, within 5 min of publishing — see `docs/43-edit-post.md`) |
 | `p` | View author's profile |
 | `c` | Start C-Mail conversation with post author |
 | `w` | Watch / unwatch the selected thread |
@@ -830,6 +871,7 @@ cycle), not a global shortcut.
 | `k` / `↑` | Scroll up / previous reply |
 | `r` | Reply to selected post or reply |
 | `d` | Delete selected post or reply (own content only — prompts y/n) |
+| `e` | Edit selected post or reply (own content, supporter account, within 5 min of publishing — see `docs/43-edit-post.md`) |
 | `p` | View author's profile |
 | `c` | Start C-Mail conversation with focused author |
 | `w` | Watch / unwatch the thread (root post focused only; no-op on replies) |
@@ -958,8 +1000,15 @@ Listed from `go.mod`. Only direct dependencies:
 | `github.com/charmbracelet/lipgloss` | v1.1.0 | Terminal styling: colors, borders, layout |
 | `github.com/charmbracelet/ssh` | v0.0.0-20250826160808-ebfa259c7309 | SSH protocol library |
 | `github.com/charmbracelet/wish` | v1.4.7 | SSH server middleware wrapping Bubble Tea |
+| `github.com/mattn/go-sixel` | v0.0.12 | Sixel graphics protocol encoding (`internal/ui/imgview`) |
+| `github.com/muesli/cancelreader` | v0.2.2 | Cancelable stdin reads for the Sixel DA1 capability probe (`imgview.ProbeSixel`) |
+| `golang.org/x/image` | v0.44.0 | WebP decoding and image scaling (`internal/ui/imgview`) |
+| `golang.org/x/term` | v0.44.0 | Raw terminal mode for the Sixel DA1 probe |
 
-32 transitive dependencies cover color detection, terminal input, crypto (SSH), and other library support.
+Several other direct dependencies (`goldmark` for markdown, `go-colorful`/`go-runewidth` for
+theming/rendering, etc.) predate this table's last update and aren't listed above — see
+`go.mod` for the authoritative current list. 32+ transitive dependencies cover color
+detection, terminal input, crypto (SSH), and other library support.
 
 ---
 
@@ -999,11 +1048,14 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized. `mutedUsersByRoom` is also read but excluded from PATCH for a different reason — it's server-managed via `/mute` slash commands only (see `docs/37-circ-mute.md`), never client-patched |
 | **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |
 | **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |
-| **Attachments** | Image and YouTube audio attachments on posts/replies are not supported in the TUI |
+| **Attachments** | Images render inline (Feed, Post Detail, Search, Topics, Guilds post lists, C-Mail, cIRC, Profile — gated by the InlineImages setting; see `docs/45-inline-images-everywhere.md`) and open in a fullscreen modal (`o`) via `internal/ui/imgview` (Kitty/iTerm2/Sixel, falling back to the OS browser when no protocol is detected or the Image Viewer setting is "browser"). YouTube audio attachments are still not supported |
+| **iTerm2/Sixel inline-image repaint workarounds** | First real-terminal testing of the feature (native macOS iTerm2, this was previously only eyeballed on Kitty) found several rendering bugs whose fixes lean on genuine workarounds rather than clean solutions — an inert dirty-marker byte to force Bubble Tea's per-line diff to reissue a line, and explicit on-screen-rectangle tracking to erase stale image pixels (iTerm2/Sixel have no placement/compositing concept like Kitty's). A residual single-line flash on a selection change touching a visible image was evaluated and accepted rather than fixed. See `docs/plan-inline-images-improvements.md` §8 for what each workaround depends on and when to revisit it. On Windows specifically, Sixel detection via `imgview.ProbeSixel`'s DA1 query has been observed to never receive a response from WezTerm — `DetectProtocol()`'s env-var check (`TERM_PROGRAM=WezTerm` → iTerm2 protocol) is the reliable path there instead |
+| **Inline/fullscreen images on Windows: known, accepted limitation** | Do not reliably render — a fragment appears in the wrong screen position instead. This is a Windows/ConPTY problem, not a WezTerm one: WezTerm supports the iTerm2 protocol per its own docs, and the same escape sequence renders correctly on real iTerm2 (macOS, no ConPTY involved) and in isolated replay outside Bubble Tea. Root cause: `injectInlineImages` batches each image's cursor-position (CUP) escape with the image OSC sequence into one write, and Bubble Tea's renderer (`standard_renderer.go`, vendored) always appends its own trailing cursor-position CSI after all frame content in the same syscall write — ConPTY (Windows' only pty layer, unavoidable for a native Win32 console app) is known to reorder an OSC relative to a CSI that follows it in the same write (`microsoft/terminal#17314`). Every graphics protocol this app supports has turned up a confirmed or documented Windows-specific problem during this investigation, not just iTerm2 — Kitty is unimplemented on WezTerm's Windows build entirely (`wezterm/wezterm#5757`), and Sixel is documented broken there too (`wezterm/wezterm#5758`) — so the app shows a one-time post-login notice on Windows (any terminal, any detected protocol, including terminals like Git Bash/mintty that `DetectProtocol()` doesn't even recognize) suggesting the workaround: Settings → Image Viewer → `browser`, which routes `o` through the OS browser instead (fully functional) and simply skips inline thumbnails. Not fixable within cyber-tui without bypassing Bubble Tea's renderer for image writes entirely — judged not worth the architectural risk for a Windows-only ConPTY bug; not planned, and deliberately not auto-disabled (kept fully user-controlled via the existing toggle). See `docs/plan-inline-images-improvements.md` §9 for the full investigation. The unrelated fixes found along the way (WezTerm's own scroll-on-last-line bug, and images not being downscaled to their display size before encoding) are kept — both genuinely correct regardless of this outcome |
 | **Note revision pagination** | `GetNoteRevisions` cursor is implemented in the API client but the UI loads only the first page |
 | **Profile navigation depth** | Navigating from a Following/Followers tab to another user's profile is single-level; ESC returns to the original `profileReturn` destination, not the intermediate profile |
 | **Feed position — deep pagination** | When returning to the Feed tab, the selected post is restored by ID from the fresh first-page load. If the post was reached via pagination it will not be in page 1 and the feed falls back to the top. Fix options: re-fetch pages sequentially until found (expensive), or skip the tab-switch reload (stale data). Neither is warranted for typical usage. |
 | **Ambiguous-width character stripping** | Unicode EAW = "A" characters (kaomoji symbols, `©`, `®`, `™`, Greek letters, etc.) are stripped at two points: (1) `stripAmbiguousRunes` in `shared.go` strips them from post/reply content before display; (2) `filterAmbiguousKeyMsg` in `shared.go` intercepts `tea.KeyRunes` messages before they reach any `textarea` or `textinput` component (compose, topics, profile fields, C-Mail, chatrooms). Their column width is undefined and varies by terminal/font, causing border overflow and cursor misalignment. Wide (CJK), halfwidth, and zero-width characters are unaffected. |
+| **C-Mail detail viewport height has no floor — potential panic on a very short terminal** | `CMailModel`'s `tea.WindowSizeMsg` handler computes `detailH := msg.Height - theme.ChromeHeight - cmailDetailChrome` with no `if detailH < 1 { detailH = 1 }` clamp, unlike `ChatroomsModel.viewportHeight()`'s equivalent. A short enough terminal height drives it negative, and bubbles' `viewport.Model.visibleLines()`/`GotoBottom()` panics on a negative `Height` (slice bounds out of range). Not hit by any real terminal size — found via an overly-aggressive test height (5 rows) while testing the inline-images sticky-bottom fix (`docs/45-inline-images-everywhere.md`) — but worth a one-line fix (mirror `ChatroomsModel`'s clamp) next time `cmail.go` is touched. |
 
 ---
 

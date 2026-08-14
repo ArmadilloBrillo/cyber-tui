@@ -44,8 +44,20 @@ type SharedConfigMsg struct {
 	MaxThreadDepth int
 	Timezone       string
 	ImageViewer    string
-	OwnGuildSlug   string
-	LayoutName     string // "tabs" or "miller"; used by settings screen to show current value
+	// GraphicsProtocol is the user's raw override preference
+	// (config.Config.GraphicsProtocol): "" autodetects, or "kitty"/"iterm2"/"sixel"
+	// forces a choice. Used by the settings screen to display/edit the enum.
+	GraphicsProtocol string
+	// InlineImages is the user's raw preference (config.Config.InlineImages),
+	// used by the settings screen to display/edit the toggle.
+	InlineImages bool
+	// InlineImagesEnabled is the fully-gated value — InlineImages AND a
+	// graphics protocol is available AND ImageViewer != "browser" AND the
+	// session isn't ephemeral (SSH-hosted). Feed and PostDetail should check
+	// only this field; they never need to know about the individual gates.
+	InlineImagesEnabled bool
+	OwnGuildSlug        string
+	LayoutName          string // "tabs" or "miller"; used by settings screen to show current value
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -92,13 +104,15 @@ type LeaveChatroomsMsg struct{}
 // with unsaved changes. App.handleSettings calls UpdateSettings and returns
 // settingsSavedMsg or errMsg.
 type SaveSettingsMsg struct {
-	Settings       model.Settings
-	WanderLust     bool
-	MaxThreadDepth int
-	Timezone       string
-	ImageViewer    string
-	LayoutName     string // "tabs" or "miller"
-	RemoteChanged  bool   // true when API-managed fields differ from the last saved baseline
+	Settings         model.Settings
+	WanderLust       bool
+	MaxThreadDepth   int
+	Timezone         string
+	ImageViewer      string
+	GraphicsProtocol string
+	InlineImages     bool
+	LayoutName       string // "tabs" or "miller"
+	RemoteChanged    bool   // true when API-managed fields differ from the last saved baseline
 }
 
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark
@@ -110,6 +124,9 @@ type FollowUserMsg struct{ UserID string }
 
 // UnfollowUserMsg is emitted by ProfileModel when the user presses 'f' to unfollow.
 type UnfollowUserMsg struct{ FollowID string }
+
+// PokeUserMsg is emitted by ProfileModel when the user presses 'p' to poke another user.
+type PokeUserMsg struct{ Username string }
 
 // LoadMoreJournalMsg is emitted by JournalModel when the viewport reaches the bottom
 // and a next-page cursor is available. App intercepts this and fires the API call.

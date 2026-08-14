@@ -88,27 +88,105 @@ var mdInstance = goldmark.New(
 // Render parses content as GFM and returns an ANSI-styled string suitable for
 // viewport display. width is the inner content width for word-wrapping.
 func Render(content string, width int) string {
+	src, width, empty := preprocessMarkdown(content, width)
+	if empty {
+		return ""
+	}
+	doc := mdInstance.Parser().Parse(text.NewReader(src))
+	r := &renderer{source: src, width: width}
+	docNode, ok := doc.(*ast.Document)
+	if !ok {
+		return theme.Base.Width(width).Render(string(src))
+	}
+	return r.renderDocument(docNode)
+}
+
+// ImageHit reports the location of one eligible inline image found by
+// RenderLocatingImages.
+type ImageHit struct {
+	URL  string
+	Line int // 0-based index into strings.Split(out, "\n")
+}
+
+// RenderLocatingImages is Render plus a report of every markdown image
+// eligible for inline graphics rendering, in document order: each is
+// considered only when it is the sole child of a top-level paragraph (alone
+// on its own line — not mixed with other text, not nested in a
+// list/blockquote/table/heading; see eligibleImageParagraphs). hits is empty
+// when there are none. out is byte-identical to what Render would produce
+// either way — this is a pure side-channel report of where each image's
+// placeholder line landed, so a caller can splice each one out and overlay
+// the real image there.
+func RenderLocatingImages(content string, width int) (out string, hits []ImageHit) {
+	src, width, empty := preprocessMarkdown(content, width)
+	if empty {
+		return "", nil
+	}
+	doc := mdInstance.Parser().Parse(text.NewReader(src))
+	docNode, docOK := doc.(*ast.Document)
+	if !docOK {
+		return theme.Base.Width(width).Render(string(src)), nil
+	}
+	targets, urls := eligibleImageParagraphs(docNode)
+	r := &renderer{source: src, width: width, findImages: targets}
+	out = r.renderDocument(docNode)
+	hits = make([]ImageHit, len(r.imageLines))
+	for i, line := range r.imageLines {
+		hits[i] = ImageHit{URL: urls[i], Line: line}
+	}
+	return out, hits
+}
+
+// eligibleImageParagraphs walks doc for every *ast.Image node, in document
+// order, and reports which are eligible for inline graphics rendering: the
+// image's parent must be a top-level (direct child of doc) *ast.Paragraph or
+// *ast.TextBlock, and the image must be that paragraph's only child. Returns
+// parallel slices (target block node, its image's URL) — one entry per
+// eligible image; an ineligible image is simply skipped, not substituted.
+func eligibleImageParagraphs(doc *ast.Document) (targets []ast.Node, urls []string) {
+	ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		img, isImg := n.(*ast.Image)
+		if !isImg {
+			return ast.WalkContinue, nil
+		}
+		parent := img.Parent()
+		switch parent.(type) {
+		case *ast.Paragraph, *ast.TextBlock:
+		default:
+			return ast.WalkContinue, nil
+		}
+		if parent.Parent() != doc {
+			return ast.WalkContinue, nil
+		}
+		if parent.FirstChild() != img || parent.LastChild() != img {
+			return ast.WalkContinue, nil
+		}
+		targets = append(targets, parent)
+		urls = append(urls, string(img.Destination))
+		return ast.WalkContinue, nil
+	})
+	return targets, urls
+}
+
+// preprocessMarkdown applies Render's/RenderLocatingImage's shared
+// preprocessing (HTML-entity unescaping, control-char stripping, Unicode
+// normalization, ambiguous-rune stripping, width default) and reports
+// whether the result is empty (nothing to render).
+func preprocessMarkdown(content string, width int) (src []byte, resolvedWidth int, empty bool) {
 	content = html.UnescapeString(content)
 	content = sanitize.Strip(content)
 	content = norm.NFC.String(content)
 	content = stripAmbiguousRunes(content)
 	if strings.TrimSpace(content) == "" {
-		return ""
+		return nil, width, true
 	}
 	if width < 1 {
 		width = 80
 	}
-
-	src := []byte(content)
-	reader := text.NewReader(src)
-	doc := mdInstance.Parser().Parse(reader)
-
-	r := &renderer{source: src, width: width}
-	docNode, ok := doc.(*ast.Document)
-	if !ok {
-		return theme.Base.Width(width).Render(content)
-	}
-	return r.renderDocument(docNode)
+	return []byte(content), width, false
 }
 
 // mdInlineParser registers only a paragraph block parser (no heading, list,
@@ -117,13 +195,19 @@ func Render(content string, width int) string {
 // block syntax — it stays literal chat text. Inline parsing still runs the
 // normal CommonMark set (parser.DefaultInlineParsers: code span, link,
 // autolink, raw HTML, emphasis/strong) plus bare-URL detection
-// (extension.NewLinkifyParser, the same one extension.GFM's Linkify wraps).
+// (extension.NewLinkifyParser, the same one extension.GFM's Linkify wraps)
+// and strikethrough (extension.NewStrikethroughParser, same priority as
+// extension.GFM uses for mdInstance — accepts both ~single~ and ~~double~~
+// tilde runs; see goldmark's strikethroughParser.Parse).
 // No @mention node here — CIRC has its own bespoke mention system layered on
 // top by the caller.
 var mdInlineParser = parser.NewParser(
 	parser.WithBlockParsers(util.Prioritized(parser.NewParagraphParser(), 1000)),
 	parser.WithInlineParsers(
-		append(parser.DefaultInlineParsers(), util.Prioritized(extension.NewLinkifyParser(), 999))...,
+		append(parser.DefaultInlineParsers(),
+			util.Prioritized(extension.NewLinkifyParser(), 999),
+			util.Prioritized(extension.NewStrikethroughParser(), 500),
+		)...,
 	),
 )
 
@@ -234,13 +318,34 @@ type renderer struct {
 	// doc comment for why this happens here rather than as a post-render
 	// pass. Compiled once per RenderInline call, not per text node.
 	highlightRe *regexp.Regexp
+
+	// findImages and imageLines are used only by RenderLocatingImages:
+	// findImages holds the target block nodes (each eligible image's parent
+	// paragraph), in document order, set before rendering begins.
+	// renderDocument appends to imageLines as its loop reaches each one,
+	// since it's the only place that knows the accumulated line count of
+	// every preceding block (a block can itself span multiple lines) — both
+	// it and findImages visit nodes in the same document order, so a single
+	// index pointer is enough to match them up (see the loop below). nil/
+	// empty for every other caller (Render, RenderInline, FirstLine) — no
+	// effect on their output.
+	findImages []ast.Node
+	imageLines []int
 }
 
 func (r *renderer) renderDocument(doc *ast.Document) string {
 	var parts []string
+	lineOffset := 0
+	nextImage := 0
 	for child := doc.FirstChild(); child != nil; child = child.NextSibling() {
-		if rendered := r.renderBlock(child); rendered != "" {
+		if nextImage < len(r.findImages) && child == r.findImages[nextImage] {
+			r.imageLines = append(r.imageLines, lineOffset)
+			nextImage++
+		}
+		rendered := r.renderBlock(child)
+		if rendered != "" {
 			parts = append(parts, rendered)
+			lineOffset += strings.Count(rendered, "\n") + 1
 		}
 	}
 	return strings.Join(parts, "\n")

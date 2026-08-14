@@ -98,10 +98,11 @@ type ProfileModel struct {
 	followFeedback string
 
 	// Display settings (from SharedConfigMsg).
-	timeDisplayFormat string
-	loc               *time.Location
-	filterNSFW        bool
-	showFollowerCount bool
+	timeDisplayFormat   string
+	loc                 *time.Location
+	filterNSFW          bool
+	showFollowerCount   bool
+	inlineImagesEnabled bool
 
 	// Sub-tab state (view mode only).
 	activeTab   profileTab
@@ -572,6 +573,7 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 			}
 		}
 		m.showFollowerCount = msg.Settings.ShowFollowerCount
+		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		w := msg.Width
 		if w > 80 {
 			w = 80
@@ -677,6 +679,11 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 				username := m.user.Username
 				return m, func() tea.Msg { return StartConversationMsg{Username: username} }
 			}
+		case "p":
+			if m.readOnly {
+				username := m.user.Username
+				return m, func() tea.Msg { return PokeUserMsg{Username: username} }
+			}
 		}
 
 	// ComposeSubmitMsg arrives when Ctrl+S is pressed inside the bio compose box.
@@ -691,6 +698,19 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 	}
 	return m, nil
 }
+
+// profileImageMaxRows is Profile's own (smaller) inline-image row budget —
+// separate from the shared inlineImageMaxRows Feed/PostDetail/chat use.
+// Profile only ever shows one or two small avatar-ish images at a time, so
+// the full 8-row budget those other screens use left visibly more blank
+// space inside the reserved band than a typical square profile picture or
+// webring badge actually needs. profileImageBandRows keeps the same
+// 1-spacer/image/1-spacer shape as inlineImageBandRows, just smaller;
+// profileImageEncodeMaxRows keeps the same 2-row Sixel-imprecision margin
+// as inlineImageEncodeMaxRows — see that constant's doc comment.
+const profileImageMaxRows = 6
+const profileImageBandRows = profileImageMaxRows + 2
+const profileImageEncodeMaxRows = profileImageMaxRows - 2
 
 // View renders the profile screen.
 func (m ProfileModel) View() string {
@@ -712,6 +732,29 @@ func (m ProfileModel) View() string {
 
 	// --- View mode: compact header + tab bar + content ---
 
+	out := m.viewBodyBeforeWebsiteBand(username)
+	if m.inlineImagesEnabled && m.user.WebsiteImageUrl != "" {
+		// Directly abutting out with the band string gives exactly one blank
+		// line before the image (the band's own leading spacer) and one
+		// after (its trailing spacer) — no extra separator needed.
+		out = lipgloss.JoinVertical(lipgloss.Left, out, strings.Repeat("\n", profileImageBandRows-1))
+	}
+	if availH := m.height - theme.ChromeHeight; availH > 0 {
+		out = lipgloss.NewStyle().MaxHeight(availH).Render(out)
+	}
+	return out
+}
+
+// viewBodyBeforeWebsiteBand builds everything View() shows except the
+// trailing WebsiteImageUrl band: the username line (with its ProfilePictureUrl
+// band, if any), the follower/following count, the tab bar, and the active
+// tab's content. Factored out so VisibleInlineImages() can measure this
+// block's real height (it varies with the active tab and how much data is
+// loaded) to know where the website band actually lands — the same
+// "recompute fresh, don't try to persist it" approach
+// FeedModel.VisibleDetailInlineImages uses, since a value-receiver View()
+// can't stash this back onto the model for VisibleInlineImages to read.
+func (m ProfileModel) viewBodyBeforeWebsiteBand(username string) string {
 	var counts string
 	if m.showFollowerCount {
 		counts = theme.Subtle.Render(fmt.Sprintf(
@@ -769,15 +812,61 @@ func (m ProfileModel) View() string {
 	}
 
 	headerParts := []string{usernameLine}
+	// Reserved inline-image band for ProfilePictureUrl: a fixed-height blank
+	// block an inline image gets composited over later (see
+	// VisibleInlineImages/injectInlineImages) — the "Picture" text row in
+	// infoTabView is untouched, this is purely additive. WebsiteImageUrl
+	// gets its own band appended after all tab content instead — see View().
+	if m.inlineImagesEnabled && m.user.ProfilePictureUrl != "" {
+		headerParts = append(headerParts, strings.Repeat("\n", profileImageBandRows-1))
+	}
 	if m.showFollowerCount {
 		headerParts = append(headerParts, counts)
 	}
 	headerParts = append(headerParts, "", tabBar, "", content)
-	out := lipgloss.JoinVertical(lipgloss.Left, headerParts...)
-	if availH := m.height - theme.ChromeHeight; availH > 0 {
-		out = lipgloss.NewStyle().MaxHeight(availH).Render(out)
+	return lipgloss.JoinVertical(lipgloss.Left, headerParts...)
+}
+
+// VisibleInlineImages returns the inline image slot(s) currently on screen:
+// ProfilePictureUrl in the header (fixed row — row 0 is always the username
+// line) and WebsiteImageUrl below all tab content (a row that varies with
+// the active tab/loaded data, recomputed here via viewBodyBeforeWebsiteBand
+// the same way View() computes it). This mirrors PostDetailModel.VisibleInlineImages'
+// contract: a "where, if anywhere" query App uses to fetch/encode/place,
+// never fetching itself. A band that wouldn't fully fit within the screen's
+// available height (mirroring View()'s own MaxHeight clamp) is omitted
+// rather than reported at a row that's actually been clipped away.
+func (m ProfileModel) VisibleInlineImages() []InlineImageSlot {
+	if !m.inlineImagesEnabled || m.editMode || m.user.Username == "" {
+		return nil
 	}
-	return out
+	availH := m.height - theme.ChromeHeight
+	maxCols := max(m.width-4, 10)
+
+	var slots []InlineImageSlot
+	addBand := func(url, kind string, row int) {
+		if url == "" {
+			return
+		}
+		if availH > 0 && row+profileImageBandRows > availH {
+			return
+		}
+		slots = append(slots, InlineImageSlot{
+			URL:       url,
+			Row:       row + 1,
+			ColIndent: 2,
+			MaxCols:   maxCols,
+			MaxRows:   profileImageEncodeMaxRows,
+			Key:       fmt.Sprintf("profile:%s:%s", m.user.Username, kind),
+		})
+	}
+	addBand(m.user.ProfilePictureUrl, "picture", 1) // row 0 is the username line
+	if m.user.WebsiteImageUrl != "" {
+		username := theme.Title.Render("@" + m.user.Username)
+		bodyHeight := lipgloss.Height(m.viewBodyBeforeWebsiteBand(username))
+		addBand(m.user.WebsiteImageUrl, "website", bodyHeight)
+	}
+	return slots
 }
 
 // infoTabView renders the Info tab content (bio, website, location, hint).
@@ -928,7 +1017,7 @@ func (m ProfileModel) renderPostItem(p model.Post, selected bool) string {
 	if innerWidth < 1 {
 		innerWidth = 40
 	}
-	ts := theme.Subtle.Render(displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, true))
+	ts := theme.Subtle.Render(displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, true) + editedSuffix(p.EditedAt))
 	previewText := markdown.FirstLine(p.Content)
 	if p.Title != "" {
 		previewText = p.Title
@@ -957,7 +1046,7 @@ func (m ProfileModel) renderReplyItem(r model.Reply, selected bool) string {
 	if innerWidth < 1 {
 		innerWidth = 40
 	}
-	ts := theme.Subtle.Render(displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, true))
+	ts := theme.Subtle.Render(displayTime(r.CreatedAt, m.location(), m.timeDisplayFormat, true) + editedSuffix(r.EditedAt))
 	tag := theme.Subtle.Render("↩ ")
 	previewMaxW := innerWidth - lipgloss.Width(ts) - lipgloss.Width(tag) - 2
 	if previewMaxW < 10 {
