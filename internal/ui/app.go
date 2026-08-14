@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log"
 	"math"
 	"math/rand"
 	neturl "net/url"
@@ -3381,6 +3382,20 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 			default:
 				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: fmt.Errorf("no graphics protocol")}
 			}
+		}
+		// TEMPORARY: diagnosing +/- image scale appearing to have no visible
+		// effect, reported across mintty/Sixel, iTerm2, and Ghostty/Kitty —
+		// leading hypothesis is fitBox's native-size cap (never upscales, and
+		// many post images are already smaller than the display box at
+		// scale=1.0). Strip once confirmed — see docs/46-image-modal-scale.md.
+		if os.Getenv("CYBERSPACE_DEBUG_KEYS") != "" {
+			nativeW, nativeH := 0, 0
+			if len(frames) > 0 {
+				b := frames[0].Bounds()
+				nativeW, nativeH = b.Dx(), b.Dy()
+			}
+			log.Printf("image scale=%.2f displayBox=%dx%d cellPx=%dx%d nativePx=%dx%d -> box=%dx%d",
+				scale, displayCols, displayRows, cellW, cellH, nativeW, nativeH, cols, rows)
 		}
 		return imageFetchedMsg{
 			rawURL: rawURL, gen: gen,
