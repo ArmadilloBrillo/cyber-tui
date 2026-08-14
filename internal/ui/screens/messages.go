@@ -44,6 +44,10 @@ type SharedConfigMsg struct {
 	MaxThreadDepth int
 	Timezone       string
 	ImageViewer    string
+	// GraphicsProtocol is the user's raw override preference
+	// (config.Config.GraphicsProtocol): "" autodetects, or "kitty"/"iterm2"/"sixel"
+	// forces a choice. Used by the settings screen to display/edit the enum.
+	GraphicsProtocol string
 	// InlineImages is the user's raw preference (config.Config.InlineImages),
 	// used by the settings screen to display/edit the toggle.
 	InlineImages bool
@@ -100,14 +104,15 @@ type LeaveChatroomsMsg struct{}
 // with unsaved changes. App.handleSettings calls UpdateSettings and returns
 // settingsSavedMsg or errMsg.
 type SaveSettingsMsg struct {
-	Settings       model.Settings
-	WanderLust     bool
-	MaxThreadDepth int
-	Timezone       string
-	ImageViewer    string
-	InlineImages   bool
-	LayoutName     string // "tabs" or "miller"
-	RemoteChanged  bool   // true when API-managed fields differ from the last saved baseline
+	Settings         model.Settings
+	WanderLust       bool
+	MaxThreadDepth   int
+	Timezone         string
+	ImageViewer      string
+	GraphicsProtocol string
+	InlineImages     bool
+	LayoutName       string // "tabs" or "miller"
+	RemoteChanged    bool   // true when API-managed fields differ from the last saved baseline
 }
 
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark

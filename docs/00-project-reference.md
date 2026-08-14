@@ -708,7 +708,7 @@ Permissions: `0600` (owner read/write only)
 | `allowRemoteSsh` | bool | `false` | Permit `sshListenAddr` to bind a non-loopback address. SSH server mode is unauthenticated, so this is off by default |
 | `wanderLust` | bool | `false` | Wander mode toggle; `true` = on, `false` = off |
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
-| `graphicsProtocol` | string | `""` (autodetect) | `"kitty"`, `"iterm2"`, `"sixel"`, or `"none"` — bypasses autodetection when it's unreliable (e.g. mintty/Git Bash). See `docs/41-graphics-protocol-override.md` |
+| `graphicsProtocol` | string | `""` (autodetect) | `"kitty"`, `"iterm2"`, `"sixel"`, or `"none"` — bypasses autodetection when it's unreliable (e.g. mintty/Git Bash). Also editable live from the Settings screen (nested under "image viewer", terminal-only) as `"auto"`/`"kitty"`/`"iterm2"`/`"sixel"` — `"none"` stays config-file-only. See `docs/41-graphics-protocol-override.md` |
 | `imageScale` | number | `0` (= `1.0`) | Multiplier on the fullscreen image modal's display size, relative to the image's own native (1:1 pixel) size — not the terminal window. Clamped to `[0.2, 2.0]`; upscaling past native resolution is allowed (only for the modal). Also live-adjustable with `+`/`-` while the modal is open (session-only, guaranteed at least a 1-cell step per press). See `docs/46-image-modal-scale.md` |
 
 ---

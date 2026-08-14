@@ -45,7 +45,7 @@ func keyMsg(key string) tea.KeyMsg {
 	case "right":
 		msg = tea.KeyMsg{Type: tea.KeyRight}
 	case "ctrl+s":
-		// Bubble Tea represents ctrl+s differently — just send the raw rune with ctrl modifier
+		// Bubble Tea represents ctrl+s differently â€” just send the raw rune with ctrl modifier
 		msg = tea.KeyMsg{Type: tea.KeyCtrlS, Runes: []rune{'s'}}
 	default:
 		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
@@ -64,14 +64,14 @@ func TestSettings_CursorDown_Increments(t *testing.T) {
 func TestSettings_CursorUp_WrapsToBottom(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m, _ = m.Update(keyMsg("k"))
-	if m.cursor != len(flatItems())-1 {
-		t.Errorf("expected cursor=%d (wrapped), got %d", len(flatItems())-1, m.cursor)
+	if m.cursor != len(flatItems(m))-1 {
+		t.Errorf("expected cursor=%d (wrapped), got %d", len(flatItems(m))-1, m.cursor)
 	}
 }
 
 func TestSettings_CursorDown_WrapsToTop(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = len(flatItems()) - 1
+	m.cursor = len(flatItems(m)) - 1
 	m, _ = m.Update(keyMsg("j"))
 	if m.cursor != 0 {
 		t.Errorf("expected cursor=0 (wrapped), got %d", m.cursor)
@@ -250,7 +250,7 @@ func TestSettings_Esc_ClearsError(t *testing.T) {
 func TestSettings_SetSaved_ClearsError(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetError(testErr)
-	m = m.SetSaved(false, 3, "UTC", "terminal", false, "tabs")
+	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, "tabs")
 	if m.err != nil {
 		t.Error("SetSaved should clear error")
 	}
@@ -262,7 +262,7 @@ func TestSettings_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty after change")
 	}
-	m = m.SetSaved(false, 3, "UTC", "terminal", false, "tabs")
+	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, "tabs")
 	if m.IsDirty() {
 		t.Error("after SetSaved, should not be dirty")
 	}
@@ -387,7 +387,7 @@ func TestSettings_View_DirtyFooterHint(t *testing.T) {
 
 func TestSettings_View_SavedMessage(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m = m.SetSaved(false, 3, "UTC", "terminal", false, "tabs")
+	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, "tabs")
 	view := m.View()
 	if !containsSubstring(view, "saved!") {
 		t.Error("View should show 'saved!' when saved=true")
@@ -416,7 +416,7 @@ func TestSettings_WanderGroup_Visible(t *testing.T) {
 func TestSettings_WanderToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
-	m.cursor = 12 // wander mode item
+	m.cursor = 13 // wander mode item
 	m, _ = m.Update(keyMsg("enter"))
 	if m.wanderLust {
 		t.Error("toggling wander mode should flip wanderLust to false")
@@ -458,7 +458,7 @@ func TestSettings_WanderSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
 	m.originalWanderLust = false // dirty
-	m = m.SetSaved(true, 3, "UTC", "terminal", false, "tabs")
+	m = m.SetSaved(true, 3, "UTC", "terminal", "", false, "tabs")
 	if m.originalWanderLust != true {
 		t.Error("SetSaved should update originalWanderLust to the saved value")
 	}
@@ -493,7 +493,7 @@ func TestSettings_Timezone_CyclesBackward(t *testing.T) {
 
 func TestSettings_Timezone_Wraps(t *testing.T) {
 	m := initSettings(defaultSettings())
-	items := flatItems()
+	items := flatItems(m)
 	last := items[9].options[len(items[9].options)-1]
 	m.timezone = last
 	m.originalTimezone = last
