@@ -172,23 +172,38 @@ func glitchHash(msgID string, index, frame int) uint32 {
 	return h.Sum32()
 }
 
-// applyWave flips the case of a single rune position that sweeps
-// left-to-right across body, advancing one position per animation frame —
-// the same case-toggle mechanism as applyGlitch, but restricted to one
-// moving position instead of jittering ~1/3 of all letters at once. Sweeping
-// onto a non-letter (space, punctuation) is a no-op that frame, same as the
-// wave passing invisibly through whitespace.
+// waveSpacing is the gap, in runes, between simultaneously-highlighted
+// positions in applyWave's comb pattern.
+const waveSpacing = 10
+
+// applyWave flips the case of a comb of rune positions, spaced waveSpacing
+// apart and anchored at index 0, that bounces back and forth: the comb
+// shifts right one position per animation frame until it reaches the far
+// end of a waveSpacing-wide cycle, then reverses and shifts left, ping-pong
+// style, rather than snapping back to the start. Sweeping onto a non-letter
+// (space, punctuation) is a no-op that frame, same as the wave passing
+// invisibly through whitespace.
 func applyWave(body string, frame int) string {
 	runes := []rune(body)
-	if len(runes) == 0 {
+	n := len(runes)
+	if n == 0 {
 		return body
 	}
-	pos := frame % len(runes)
-	r := runes[pos]
-	if unicode.IsUpper(r) {
-		runes[pos] = unicode.ToLower(r)
-	} else if unicode.IsLower(r) {
-		runes[pos] = unicode.ToUpper(r)
+	const bouncePeriod = 2 * (waveSpacing - 1)
+	t := frame % bouncePeriod
+	phase := t
+	if t > waveSpacing-1 {
+		phase = bouncePeriod - t
+	}
+	for i, r := range runes {
+		if i%waveSpacing != phase {
+			continue
+		}
+		if unicode.IsUpper(r) {
+			runes[i] = unicode.ToLower(r)
+		} else if unicode.IsLower(r) {
+			runes[i] = unicode.ToUpper(r)
+		}
 	}
 	return string(runes)
 }

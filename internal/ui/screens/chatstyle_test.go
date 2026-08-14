@@ -81,18 +81,27 @@ func TestSubstituteChars_Slow_SameAcrossFrames(t *testing.T) {
 	}
 }
 
-func TestSubstituteChars_Wave_TogglesOneMovingPosition(t *testing.T) {
-	got0 := substituteChars("abc", "m1", []string{styleWave}, 0)
-	if got0 != "Abc" {
-		t.Errorf("substituteChars wave frame=0 = %q, want Abc", got0)
+func TestSubstituteChars_Wave_CombBouncesBackAndForth(t *testing.T) {
+	// 12 runes, waveSpacing 10: comb starts at index 0 and shifts right each
+	// frame through frame 9 (the far end of the 10-wide cycle), then
+	// reverses and shifts left back through frame 17, mirroring frames 1-8.
+	body := "abcdefghijkl"
+	cases := []struct {
+		frame int
+		want  string
+	}{
+		{0, "AbcdefghijKl"},  // comb at {0,10}: start, anchored left
+		{1, "aBcdefghijkL"},  // comb at {1,11}: shifted right
+		{9, "abcdefghiJkl"},  // comb at {9}: far end of the cycle
+		{10, "abcdefghIjkl"}, // comb at {8}: reversed, shifting left
+		{17, "aBcdefghijkL"}, // comb at {1,11}: mirrors frame 1
+		{18, "AbcdefghijKl"}, // comb at {0,10}: mirrors frame 0, cycle repeats
 	}
-	got1 := substituteChars("abc", "m1", []string{styleWave}, 1)
-	if got1 != "aBc" {
-		t.Errorf("substituteChars wave frame=1 = %q, want aBc", got1)
-	}
-	got3 := substituteChars("abc", "m1", []string{styleWave}, 3) // wraps: 3%3 == 0
-	if got3 != "Abc" {
-		t.Errorf("substituteChars wave frame=3 = %q, want Abc (wraps to position 0)", got3)
+	for _, c := range cases {
+		got := substituteChars(body, "m1", []string{styleWave}, c.frame)
+		if got != c.want {
+			t.Errorf("substituteChars wave frame=%d = %q, want %q", c.frame, got, c.want)
+		}
 	}
 }
 
