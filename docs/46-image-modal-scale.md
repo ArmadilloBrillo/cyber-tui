@@ -105,6 +105,36 @@ Scoped to the image modal rather than reworking `compositeOverlays` itself —
 the other modals have fixed, narrow content and have never been wide enough
 to trigger this.
 
+## General screen margin: `ModalMaxWidth` alone still wasn't enough
+
+Follow-up report (mintty/Sixel, Miller layout, a compact list+thread
+screen): at high scale, surrounding UI chrome — not just the nav sidebar,
+but list/thread pane text — showed visibly corrupted/truncated text, and
+the layout itself looked "deformed." This is a broader symptom than the
+sidebar-splice case above, and not layout-specific.
+
+Raw Sixel/iTerm2/Kitty image payloads are spliced directly into Bubble
+Tea's rendered frame via cursor-jump sequences (`compositeOverlays`,
+`internal/ui/layout.go`) — a documented source of terminal-side rendering
+desync when they get large, already fought once before (see
+`sixelFullRepaint`'s and `forceRowsDirty`'s doc comments in `layout.go`,
+originally added for the carousel-cycle case, reportedly confirmed on real
+Konsole hardware). Before scale existed, the modal was always capped at a
+flat 4/5-of-terminal box, which — incidentally — kept it far enough from
+the real screen edges that this fragility never surfaced in practice.
+Native-relative scaling plus upscaling to 2x removed that incidental
+headroom.
+
+Fix: `modalScreenMarginFrac = 0.8` (`internal/ui/app.go`) caps the modal at
+80% of the terminal's width *and* height, on every layout, regardless of
+scale — restoring the exact headroom the original design had, layered on
+top of (not replacing) the native-relative scale math and the Miller
+`ModalMaxWidth` clamp above. This is a mitigation, not a fix for the
+underlying terminal-rendering fragility — if corruption is still observed
+at exactly this margin, that's a signal the true trigger is closer to "any
+non-trivial image size" than "close to full screen," and would need the
+compositing mechanism itself addressed rather than a bigger margin.
+
 ## Non-fix
 
 This does not change the underlying protocol behavior (iTerm2 still

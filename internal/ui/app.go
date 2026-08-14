@@ -3292,6 +3292,20 @@ func openExternalURL(u string) tea.Cmd {
 // round away to nothing. Bounds match config.Config.GetImageScale's clamp.
 const imageScaleStep = 0.1
 
+// modalScreenMarginFrac caps the image modal at 80% of the terminal's
+// width/height on every layout, regardless of scale — the exact fraction
+// the modal was hard-capped to before native-relative scaling and
+// upscaling existed (the original "a.width*4/5" box). Raw Sixel/iTerm2/
+// Kitty image payloads are spliced directly into Bubble Tea's rendered
+// frame via cursor-jump sequences (compositeOverlays, layout.go) and are a
+// documented source of terminal-side rendering desync when they get large
+// — see sixelFullRepaint's and forceRowsDirty's doc comments (layout.go)
+// for the same class of bug fought before scale ever let the modal approach
+// full-screen size. Keeping this headroom is a mitigation, not a fix for
+// that underlying fragility — restores the margin that kept it from
+// surfacing in practice.
+const modalScreenMarginFrac = 0.8
+
 // adjustImageScale nudges the live modal image scale by delta (positive to
 // grow, negative to shrink) and re-runs openImageInTerminal for the
 // currently open image so the modal re-renders at the new scale
@@ -3366,7 +3380,10 @@ func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
 // the modal is centered against the full terminal width by
 // compositeOverlays regardless of layout, so in Miller layout a box wide
 // enough to approach a.width would have its left edge splice into the nav
-// sidebar — see ModalMaxWidth's doc comment.
+// sidebar — see ModalMaxWidth's doc comment. Both width and height are then
+// additionally capped at modalScreenMarginFrac of the terminal size — see
+// its doc comment for why the modal must stay well clear of the real screen
+// edges, not just merely within them.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
 	isGIF := urlutil.IsGIFURL(rawURL)
@@ -3374,7 +3391,8 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	if scale <= 0 {
 		scale = 1.0
 	}
-	width, height := a.layout.ModalMaxWidth(a.width), a.height
+	width := min(a.layout.ModalMaxWidth(a.width), int(float64(a.width)*modalScreenMarginFrac))
+	height := min(a.height-2, int(float64(a.height)*modalScreenMarginFrac)) // reserve 2 rows for the modal border
 	a.imageFetchGen++
 	gen := a.imageFetchGen
 	cached, hit := a.imageCache[rawURL]
@@ -3407,8 +3425,8 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 		if displayCols > width {
 			displayCols = width
 		}
-		if displayRows > height-2 { // reserve 2 rows for the modal border
-			displayRows = height - 2
+		if displayRows > height {
+			displayRows = height
 		}
 		if displayCols < 1 {
 			displayCols = 1

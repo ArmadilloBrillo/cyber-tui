@@ -2990,6 +2990,40 @@ func TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap(t *testing.T
 	}
 }
 
+// TestOpenImageInTerminal_NeverExceedsScreenMargin confirms the modal never
+// occupies more than modalScreenMarginFrac (80%) of the terminal in either
+// dimension, on any layout, even at max scale with a huge source image —
+// see modalScreenMarginFrac's doc comment for why this headroom matters
+// beyond just avoiding Miller's sidebar (a documented class of terminal
+// rendering desync around large raw image payloads, reported live as
+// surrounding UI chrome getting visibly corrupted at close to full-screen
+// modal size).
+func TestOpenImageInTerminal_NeverExceedsScreenMargin(t *testing.T) {
+	hugeImg := image.NewRGBA(image.Rect(0, 0, 6000, 6000))
+
+	for _, layout := range []Layout{TabsLayout{}, MillerLayout{}} {
+		a := loggedInApp()
+		a.graphicsProtocol = imgview.ProtocolKitty
+		a.layout = layout
+		a.width, a.height = 300, 100
+		a.imageScale = config.MaxImageScale
+		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{hugeImg}}}
+		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+		msg := cmd().(imageFetchedMsg)
+		if msg.err != nil {
+			t.Fatalf("unexpected error: %v", msg.err)
+		}
+		maxCols := int(float64(a.width) * modalScreenMarginFrac)
+		maxRows := int(float64(a.height) * modalScreenMarginFrac)
+		if msg.cols > maxCols {
+			t.Errorf("%T: cols=%d, want <= %d (80%% of width %d)", layout, msg.cols, maxCols, a.width)
+		}
+		if msg.rows > maxRows {
+			t.Errorf("%T: rows=%d, want <= %d (80%% of height %d)", layout, msg.rows, maxRows, a.height)
+		}
+	}
+}
+
 // --- Image cache: cycling back to an already-viewed image skips the fetch ---
 
 func TestOpenImageInTerminal_CacheHit_SkipsFetch(t *testing.T) {
