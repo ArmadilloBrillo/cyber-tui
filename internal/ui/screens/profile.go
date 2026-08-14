@@ -113,6 +113,8 @@ type ProfileModel struct {
 	replies   []model.Reply
 	following []model.Follow
 	followers []model.Follow
+
+	apprenticeships []model.GuildMembership
 }
 
 // SaveProfileMsg carries all editable profile fields.
@@ -195,8 +197,24 @@ func (m ProfileModel) SetUser(u model.User) ProfileModel {
 	m.user = u
 	m.followFeedback = ""
 	m.err = nil
+	m.apprenticeships = nil
 	return m
 }
+
+// Username returns the username of the profile currently displayed.
+func (m ProfileModel) Username() string { return m.user.Username }
+
+// SetApprenticeships stores the current user's apprenticeship guilds (role
+// "apprentice" entries from GET /v1/users/:username/guilds) for display on
+// the Info tab. Non-fatal to omit — the profile renders without them.
+func (m ProfileModel) SetApprenticeships(memberships []model.GuildMembership) ProfileModel {
+	m.apprenticeships = memberships
+	return m
+}
+
+// Apprenticeships returns the apprenticeship guilds currently stored for
+// this profile, as set by SetApprenticeships.
+func (m ProfileModel) Apprenticeships() []model.GuildMembership { return m.apprenticeships }
 
 func (m ProfileModel) SetError(err error) ProfileModel {
 	m.err = err
@@ -872,9 +890,9 @@ func (m ProfileModel) VisibleInlineImages() []InlineImageSlot {
 // infoTabView renders the Info tab content (bio, website, location, hint).
 func (m ProfileModel) infoTabView() string {
 	// lbl pads the keyword to a fixed width so all values left-align.
-	// "supporter" is the longest keyword at 9 chars; total label = 11 ("keyword: ").
+	// "Apprentice" is the longest keyword at 10 chars; total label = 12 ("keyword: ").
 	lbl := func(s string) string {
-		return theme.Subtle.Render(fmt.Sprintf("%-9s: ", s))
+		return theme.Subtle.Render(fmt.Sprintf("%-10s: ", s))
 	}
 
 	contentW := m.width
@@ -921,6 +939,21 @@ func (m ProfileModel) infoTabView() string {
 	}
 	if guildName != "" {
 		rows = append(rows, lbl("Guild")+theme.Base.Render(guildName))
+	}
+
+	var apprentice []string
+	for _, g := range m.apprenticeships {
+		if g.Role != "apprentice" {
+			continue
+		}
+		name := g.Name
+		if isEmojiIcon(g.Icon) {
+			name = g.Icon + " " + name
+		}
+		apprentice = append(apprentice, name)
+	}
+	if len(apprentice) > 0 {
+		rows = append(rows, lbl("Apprentice")+theme.Base.Render(strings.Join(apprentice, ", ")))
 	}
 
 	if m.user.ProfilePictureUrl != "" {

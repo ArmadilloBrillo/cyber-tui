@@ -375,15 +375,20 @@ func (l TabsLayout) screenHints(a App) []hint {
 			return []hint{{"↑↓", "navigate"}, {"enter", "view profile"}, {"esc", "back"}, more}
 		}
 		if a.guilds.IsBrowsingGuild() {
-			if a.guilds.IsConfirmingJoin() || a.guilds.IsConfirmingLeave() {
+			if a.guilds.IsConfirmingJoin() || a.guilds.IsConfirmingLeave() || a.guilds.IsConfirmingPromote() {
 				return []hint{{"y", "confirm"}, {"n/esc", "cancel"}}
 			}
 			hints := []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "members"}, {"n", "new thread"}, {"esc", "back"}}
 			d := a.guilds.GuildDetail()
-			if a.guilds.IsDetailLoaded() && !d.IsMember && a.currentUser.GuildSlug == "" {
-				hints = append(hints, hint{"J", "join"})
-			} else if a.guilds.IsDetailLoaded() && d.IsMember && d.Role != "founder" {
-				hints = append(hints, hint{"L", "leave"})
+			if a.guilds.IsDetailLoaded() {
+				switch d.Role {
+				case "":
+					hints = append(hints, hint{"J", "join"})
+				case "apprentice":
+					hints = append(hints, hint{"L", "leave"}, hint{"P", "promote"})
+				case "member":
+					hints = append(hints, hint{"L", "leave"})
+				}
 			}
 			return append(hints, more)
 		}

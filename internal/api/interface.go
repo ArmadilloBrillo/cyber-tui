@@ -151,12 +151,24 @@ type Client interface {
 	// GetGuildMembers returns paginated members for a guild, oldest-joined first.
 	// Pass empty cursor for first page; use returned cursor for next page.
 	GetGuildMembers(slug, cursor string) ([]model.GuildMember, string, error)
-	// JoinGuild joins the guild identified by slug. Returns an error if the user is
-	// already a member of another guild (409) or if the slug does not exist (404).
-	JoinGuild(slug string) error
+	// GetUserGuilds returns every guild a user belongs to: their badge guild
+	// (founder/member) first, then apprenticeships oldest-first. At most 6,
+	// never paginated. 404 for an unknown username.
+	GetUserGuilds(username string) ([]model.GuildMembership, error)
+	// JoinGuild joins the guild identified by slug and returns the role the
+	// server assigned: "member" if the caller had no badge guild yet,
+	// otherwise "apprentice". Returns an error if the caller is already a
+	// member of this guild or already holds 5 apprenticeships (409), or the
+	// slug does not exist (404).
+	JoinGuild(slug string) (string, error)
 	// LeaveGuild leaves the guild identified by slug. Returns an error if the user
-	// is the founder (403) or is not a member.
+	// is the founder (403) or is not a member/apprentice (404).
 	LeaveGuild(slug string) error
+	// PromoteGuild makes an apprenticeship the caller's new badge guild; the
+	// old badge guild becomes an apprenticeship. Returns the resulting role
+	// ("member"). 404 if the caller isn't in this guild; 403 if the caller
+	// founded their current badge guild.
+	PromoteGuild(slug string) (string, error)
 
 	// Thread watching — watch/unwatch individual threads.
 	// GetWatches returns all watched threads, cursor-paginated (limit=50).

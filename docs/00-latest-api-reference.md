@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.8.5
+# ᑕ¥βєяรקค¢є API v0.8.6
 
 ## Access
 
@@ -396,6 +396,46 @@ GET /v1/users/me
 GET /v1/users/:username
 ```
 
+A profile's `guildId`, `guildSlug`, `guildIcon` and `guildName` describe the one guild the user is a member of — the badge. Any apprenticeships are in `GET /v1/users/:username/guilds`.
+
+Rate limit: 30/min.
+
+### List a User's Guilds
+
+```
+GET /v1/users/me/guilds
+GET /v1/users/:username/guilds
+```
+
+Every guild the user is in — the guild they're a member of first, then their apprenticeships oldest first. At most six, so there's no pagination and `cursor` is always `null`.
+
+```json
+{
+  "data": [
+    {
+      "guildId": "guildId",
+      "slug": "night-owls",
+      "name": "Night Owls",
+      "icon": "🦉",
+      "profilePictureUrl": "https://…",
+      "role": "member",
+      "joinedAt": "2026-03-27T10:12:01.516Z"
+    },
+    {
+      "guildId": "otherGuildId",
+      "slug": "deep-divers",
+      "name": "Deep Divers",
+      "icon": "🐳",
+      "role": "apprentice",
+      "joinedAt": "2026-05-02T18:44:12.004Z"
+    }
+  ],
+  "cursor": null
+}
+```
+
+`role` is `"founder"`, `"member"` or `"apprentice"`. 404 for an unknown username.
+
 Rate limit: 30/min.
 
 ### List User's Entries
@@ -554,7 +594,14 @@ Rate limit: 3/min, 15/day.
 
 ## Guilds
 
-Guilds are member groups with their own forum of threads. A user can belong to **one guild at a time**. Guilds are identified in the API by their **slug**.
+Guilds are member groups with their own forum of threads. Guilds are identified in the API by their **slug**.
+
+You can be in several guilds at once, in one of two capacities:
+
+- **Your guild** — one at a time, with the role `founder` or `member`. Its name and icon are the guild badge on your profile, and they're the `guildId`/`guildSlug`/`guildIcon`/`guildName` fields on a user object.
+- **Apprenticeships** — up to **five** more, with the role `apprentice`. You appear in the guild's member list and get its new-thread notifications, but the badge on your profile stays the one guild you're a member of.
+
+`GET /v1/users/:username/guilds` lists both for any user.
 
 Founding a guild and editing its profile happen on the web, not through the API. The API covers discovery, membership, and the forum.
 
@@ -565,6 +612,8 @@ GET /v1/guilds?limit=20&cursor=<guildId>
 ```
 
 Returns guilds with at least one member, most populated first. `cursor` is a guild ID.
+
+Ordering is by `memberCount` only, so apprentices don't move a guild up the list.
 
 Each guild object:
 
@@ -581,9 +630,13 @@ Each guild object:
   "link": "https://…",
   "linkText": "our site",
   "memberCount": 42,
+  "apprenticeCount": 7,
   "createdAt": "2026-03-27T10:12:01.516Z"
 }
 ```
+
+- `memberCount` -- founders and members
+- `apprenticeCount` -- apprentices. Missing on guilds that predate apprenticeships; read it as 0. Total headcount is `memberCount + apprenticeCount`.
 
 Rate limit: 30/min.
 
@@ -593,7 +646,7 @@ Rate limit: 30/min.
 GET /v1/guilds/:slug
 ```
 
-Returns the guild object plus the caller's membership state: `isMember` (boolean) and `role` (`"founder"`, `"member"`, or `null`). 404 if no guild has that slug.
+Returns the guild object plus the caller's membership state: `isMember` (boolean) and `role` (`"founder"`, `"member"`, `"apprentice"`, or `null`). 404 if no guild has that slug.
 
 ### List Guild Members
 
@@ -602,6 +655,8 @@ GET /v1/guilds/:slug/members?limit=20&cursor=<membershipId>
 ```
 
 Returns memberships oldest-joined first, enriched with each member's `displayName` and `profilePictureUrl`. `cursor` is a membership ID.
+
+Members and apprentices come back in the same list; group them by `role` if you want them separated the way the website shows them.
 
 ```json
 {
@@ -621,6 +676,8 @@ Returns memberships oldest-joined first, enriched with each member's `displayNam
   "cursor": null
 }
 ```
+
+`role` is `"founder"`, `"member"` or `"apprentice"`.
 
 Rate limit: 30/min.
 
@@ -668,9 +725,29 @@ Rate limit: 2/min, 15/day.
 POST /v1/guilds/:slug/join
 ```
 
-No body. Joins the guild as a `member`. Returns `{ "data": { "guildId": "...", "role": "member" } }` (201).
+No body. The API picks your role:
 
-A user can only be in one guild. If you're already in another guild, this returns `409` — leave your current guild first.
+- If you aren't in a guild yet, you join as a `member` and the guild's badge is written to your profile.
+- Otherwise you join as an `apprentice`, and your badge stays with the guild you're a member of.
+
+Returns `{ "data": { "guildId": "...", "role": "member" | "apprentice" } }` (201).
+
+- `409` if you're already in this guild
+- `409` if you already hold five apprenticeships — leave one first
+
+Rate limit: 3/min, 15/day.
+
+### Change Your Guild Badge
+
+```
+POST /v1/guilds/:slug/promote
+```
+
+No body. Makes an apprenticeship your guild — its badge replaces the one on your profile, and the guild you were a member of becomes an apprenticeship, so you don't drop out of it. Returns `{ "data": { "guildId": "...", "role": "member" } }`.
+
+- `404` if you aren't in this guild
+- `403` if you founded the guild you're currently a member of — leave or hand it over on the web first
+- `200` with nothing changed if this is already your guild, with `role` reporting what you already are (`"member"` or `"founder"`)
 
 Rate limit: 3/min, 15/day.
 
@@ -680,7 +757,9 @@ Rate limit: 3/min, 15/day.
 POST /v1/guilds/:slug/leave
 ```
 
-No body. Removes your membership and clears your guild fields. Returns `{ "data": { "guildId": "..." } }`.
+No body. Removes your membership. Returns `{ "data": { "guildId": "..." } }`.
+
+Leaving an apprenticeship doesn't touch your guild badge. Leaving the guild you're a member of clears the badge and promotes nothing — if you want one of your apprenticeships to take its place, call `POST /v1/guilds/:slug/promote` instead.
 
 Founders cannot leave through the API (`403`) — manage the guild on the web. `404` if you aren't a member.
 
@@ -1364,6 +1443,7 @@ All responses follow this structure:
 | Guild threads | 2 | 15 |
 | Guild join | 3 | 15 |
 | Guild leave | 3 | 15 |
+| Guild promote | 3 | 15 |
 | Profile updates | 2 | 15 |
 | Settings updates | 2 | 15 |
 | Watch thread | 10 | 100 |
@@ -1397,7 +1477,7 @@ Pokes are capped at 1/hour rather than per minute. C-Mail messaging also has an 
 | Unread notification count | 30 |
 | List followers/following | 30 |
 | View user profile | 30 |
-| List guilds / members | 30 |
+| List guilds / members / a user's guilds | 30 |
 | List guild threads | 45 |
 | Watch status / list watched | 30 |
 | List C-Mail conversations | 30 |

@@ -4327,3 +4327,128 @@ func TestTouchInlineImageCache_SurvivesEvictionOverUntouchedEntry(t *testing.T) 
 		t.Error("expected k2 (never touched) to be evicted first, not k1")
 	}
 }
+
+// --- Guild apprenticeships: role-conditional badge mutation ---
+
+func TestHandleGuilds_GuildJoinedAsMember_SetsBadge(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case"}
+	a.guilds = a.guilds.SetGuildDetail(model.Guild{ID: "g1", Slug: "night-owls", Name: "Night Owls", Icon: "🦉"})
+
+	a2, _, handled := a.handleGuilds(guildJoinedMsg{slug: "night-owls", name: "Night Owls", role: "member"})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildJoinedMsg")
+	}
+	if a2.currentUser.GuildSlug != "night-owls" {
+		t.Errorf("GuildSlug = %q, want night-owls", a2.currentUser.GuildSlug)
+	}
+	if a2.currentUser.GuildName != "Night Owls" || a2.currentUser.GuildIcon != "🦉" {
+		t.Errorf("badge fields not set: %+v", a2.currentUser)
+	}
+}
+
+func TestHandleGuilds_GuildJoinedAsApprentice_LeavesBadgeUntouched(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls", GuildName: "Night Owls"}
+	a.guilds = a.guilds.SetGuildDetail(model.Guild{ID: "g2", Slug: "deep-divers", Name: "Deep Divers"})
+
+	a2, _, handled := a.handleGuilds(guildJoinedMsg{slug: "deep-divers", name: "Deep Divers", role: "apprentice"})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildJoinedMsg")
+	}
+	if a2.currentUser.GuildSlug != "night-owls" {
+		t.Errorf("badge should stay on night-owls, got %q", a2.currentUser.GuildSlug)
+	}
+}
+
+func TestHandleGuilds_GuildLeft_BadgeGuild_ClearsBadge(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls", GuildName: "Night Owls", GuildIcon: "🦉"}
+
+	a2, _, handled := a.handleGuilds(guildLeftMsg{slug: "night-owls", name: "Night Owls"})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildLeftMsg")
+	}
+	if a2.currentUser.GuildSlug != "" || a2.currentUser.GuildName != "" || a2.currentUser.GuildIcon != "" {
+		t.Errorf("expected badge fields cleared, got %+v", a2.currentUser)
+	}
+}
+
+func TestHandleGuilds_GuildLeft_Apprenticeship_LeavesBadgeUntouched(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls", GuildName: "Night Owls"}
+
+	a2, _, handled := a.handleGuilds(guildLeftMsg{slug: "deep-divers", name: "Deep Divers"})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildLeftMsg")
+	}
+	if a2.currentUser.GuildSlug != "night-owls" {
+		t.Errorf("badge should stay on night-owls, got %q", a2.currentUser.GuildSlug)
+	}
+}
+
+func TestHandleGuilds_GuildPromoted_SwapsBadge(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls", GuildName: "Night Owls"}
+	a.guilds = a.guilds.SetGuildDetail(model.Guild{ID: "g2", Slug: "deep-divers", Name: "Deep Divers", Icon: "🐳"})
+
+	a2, _, handled := a.handleGuilds(guildPromotedMsg{slug: "deep-divers", name: "Deep Divers", role: "member"})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildPromotedMsg")
+	}
+	if a2.currentUser.GuildSlug != "deep-divers" || a2.currentUser.GuildIcon != "🐳" {
+		t.Errorf("expected badge to swap to deep-divers, got %+v", a2.currentUser)
+	}
+	if a2.guilds.GuildDetail().Role != "member" {
+		t.Errorf("expected active guild detail role updated to member, got %q", a2.guilds.GuildDetail().Role)
+	}
+}
+
+// TestHandleProfile_OwnProfileLoad_FetchesApprenticeships is the regression
+// test for a real bug: navigating to your own profile via the tab bar goes
+// through loadProfileCmd/profileLoadedMsg (activateScreen in layout.go), a
+// separate path from viewing someone else's profile (loadUserProfileCmd/
+// userProfileLoadedMsg). Apprenticeships were only wired into the latter, so
+// your own apprenticeships never loaded when opening your own profile tab.
+func TestHandleProfile_OwnProfileLoad_FetchesApprenticeships(t *testing.T) {
+	a := loggedInApp()
+
+	a2, cmd, handled := a.handleProfile(profileLoadedMsg{user: model.User{Username: "case", GuildSlug: "technica"}})
+	if !handled {
+		t.Fatal("expected handleProfile to handle profileLoadedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected profileLoadedMsg to trigger a guilds-load cmd")
+	}
+	msg := cmd()
+	gm, ok := msg.(userGuildsLoadedMsg)
+	if !ok {
+		t.Fatalf("expected userGuildsLoadedMsg, got %T", msg)
+	}
+	if gm.username != "case" {
+		t.Errorf("username = %q, want case", gm.username)
+	}
+	_ = a2
+}
+
+func TestHandleGuilds_UserGuildsLoaded_GuardsOnUsernameMatch(t *testing.T) {
+	a := loggedInApp()
+	a.profile = a.profile.SetUser(model.User{Username: "molly"})
+	memberships := []model.GuildMembership{{Slug: "deep-divers", Role: "apprentice"}}
+
+	a2, _, handled := a.handleProfile(userGuildsLoadedMsg{username: "someone-else", guilds: memberships})
+	if !handled {
+		t.Fatal("expected handleProfile to handle userGuildsLoadedMsg")
+	}
+	if len(a2.profile.Apprenticeships()) != 0 {
+		t.Errorf("expected stale response for a different username to be dropped, got %+v", a2.profile.Apprenticeships())
+	}
+
+	a3, _, handled3 := a.handleProfile(userGuildsLoadedMsg{username: "molly", guilds: memberships})
+	if !handled3 {
+		t.Fatal("expected handleProfile to handle userGuildsLoadedMsg")
+	}
+	if len(a3.profile.Apprenticeships()) != 1 {
+		t.Errorf("expected apprenticeships applied for matching username, got %+v", a3.profile.Apprenticeships())
+	}
+}

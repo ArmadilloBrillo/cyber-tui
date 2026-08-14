@@ -366,8 +366,13 @@ func (m *MockClient) GetGuildMembers(slug, cursor string) ([]model.GuildMember, 
 	return nil, "", nil
 }
 
-func (m *MockClient) JoinGuild(slug string) error  { return nil }
-func (m *MockClient) LeaveGuild(slug string) error { return nil }
+func (m *MockClient) GetUserGuilds(username string) ([]model.GuildMembership, error) {
+	return nil, nil
+}
+
+func (m *MockClient) JoinGuild(slug string) (string, error)    { return "member", nil }
+func (m *MockClient) LeaveGuild(slug string) error             { return nil }
+func (m *MockClient) PromoteGuild(slug string) (string, error) { return "member", nil }
 
 func (m *MockClient) GetWatches(cursor string) ([]model.Watch, string, error) {
 	return nil, "", nil
