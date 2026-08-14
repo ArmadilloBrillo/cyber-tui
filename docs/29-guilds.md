@@ -4,7 +4,7 @@
 
 Guilds are member communities on cyberspace.online, each with their own thread forum. The guilds screen lets users browse the guild directory, read guild threads, and view the member list.
 
-A user can belong to one guild at a time. Joining and leaving guilds can be done from the guild threads view using `J` and `l`.
+A user can belong to their own guild (founder or member — this is the profile "badge" guild) plus up to five apprenticeships in other guilds. Apprentices show up in a guild's member list and get its thread notifications, but the profile badge only ever follows the founder/member guild. Joining, leaving, and promoting an apprenticeship to badge status are all done from the guild threads view using `J`, `L`, and `P`.
 
 ## Menu placement
 
@@ -44,21 +44,23 @@ Navigation:
 - `enter` — open thread in PostDetail; ESC from PostDetail returns here
 - `m` — open the member list for this guild
 - `n` — open compose panel
-- `J` (shift+j) — join this guild (available when not a member)
-- `L` (shift+l) — leave this guild (available when a member; blocked for founders)
+- `J` (shift+j) — join this guild (available when not a member or apprentice of it). Joins as a badge member if the user has no badge guild yet, otherwise as an apprentice.
+- `L` (shift+l) — leave this guild (available for members and apprentices; blocked for founders)
+- `P` (shift+p) — promote this apprenticeship to the profile badge (available only when the user is an apprentice here)
 - `esc` — cancel compose or confirm prompt if open, otherwise return to the guild list
 
-The status bar shows contextual hints: `J join` when the user is not a member (once detail loads), `l leave` when a member and not the founder. Pressing `J` or `l` opens a confirmation prompt at the bottom of the screen. Confirm with `y` or cancel with `n` / `esc`.
+The status bar shows contextual hints: `J join` when the user has no role in this guild (once detail loads), `L leave` (+ `P promote` if an apprentice) otherwise, except for founders who get neither. Pressing `J`, `L`, or `P` opens a confirmation prompt at the bottom of the screen. Confirm with `y` or cancel with `n` / `esc`.
 
 **API constraints:**
-- A user can only be in one guild at a time. Attempting to join while already a member of another guild returns a 409 error from the server.
-- Founders cannot leave via the API (403). The `l` key is hidden for founders.
+- The 5-apprenticeship cap and "already a member of this guild" checks are enforced server-side only (409) — the screen does not pre-check them, the same way the founder-leave 403 is left to the server. A capacity or duplicate-membership error surfaces via the standard error banner.
+- Founders cannot leave via the API (403). The `L` key is hidden for founders.
+- Promoting an apprenticeship 404s if the user isn't in that guild, or 403s if the user founded their current badge guild (must be handled on the web).
 
 ### Guild members (members view)
 
-Shows all members of the selected guild, oldest-joined first. Each row shows:
+Shows all members and apprentices of the selected guild, oldest-joined first (mixed in one list). Each row shows:
 
-- Role icon (`◆` for founder, `•` for member)
+- Role icon (`◆` founder, `•` member, `◇` apprentice)
 - Username (highlighted when selected)
 - Role label and join date (right-aligned)
 
@@ -84,22 +86,26 @@ After a successful post the thread list reloads.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/v1/guilds?limit=20&cursor=<id>` | Paginated guild list |
-| GET | `/v1/guilds/:slug` | Guild detail including `isMember` and `role` |
+| GET | `/v1/guilds/:slug` | Guild detail including `isMember` and `role` (`"founder"`, `"member"`, `"apprentice"`, or `""`) |
 | GET | `/v1/guilds/:slug/posts?limit=20&cursor=<id>` | Paginated thread list for a guild |
-| GET | `/v1/guilds/:slug/members?limit=20&cursor=<membershipId>` | Paginated member list for a guild |
+| GET | `/v1/guilds/:slug/members?limit=20&cursor=<membershipId>` | Paginated member+apprentice list for a guild |
+| GET | `/v1/users/:username/guilds` | All guilds a user belongs to (badge guild + apprenticeships), max 6, unpaginated |
 | POST | `/v1/guilds/:slug/posts` | Create a guild thread (server enforces membership) |
-| POST | `/v1/guilds/:slug/join` | Join this guild |
+| POST | `/v1/guilds/:slug/join` | Join this guild (member if no badge guild yet, else apprentice) |
 | POST | `/v1/guilds/:slug/leave` | Leave this guild (founders get 403) |
+| POST | `/v1/guilds/:slug/promote` | Make an apprenticeship the new badge guild |
 
 ## Implementation
 
-- `internal/model/types.go` — `Guild` struct (includes `IsMember`, `Role`); `GuildMember` struct
-- `internal/api/interface.go` — `GetGuilds`, `GetGuild`, `GetGuildPosts`, `CreateGuildPost`, `GetGuildMembers`, `JoinGuild`, `LeaveGuild`
+- `internal/model/types.go` — `Guild` struct (`IsMember`, `Role`, `ApprenticeCount`); `GuildMember` struct; `GuildMembership` struct (per-user guilds list)
+- `internal/api/interface.go` — `GetGuilds`, `GetGuild`, `GetGuildPosts`, `CreateGuildPost`, `GetGuildMembers`, `GetUserGuilds`, `JoinGuild`, `LeaveGuild`, `PromoteGuild`
 - `internal/api/client.go` — wire types and HTTP implementations
 - `internal/ui/screens/guilds.go` — `GuildsModel` (three-view screen + embedded `PostComposePanel`)
-- `internal/ui/app.go` — `screenGuilds` enum, `handleGuilds`, load/create commands, menu wiring
+- `internal/ui/screens/profile.go` — apprenticeships row on the Info tab (`SetApprenticeships`)
+- `internal/ui/app.go` — `screenGuilds` enum, `handleGuilds`, load/create/promote commands, menu wiring
 
 ## Known limitations / out of scope
 
 - Public/NSFW toggles are shown in the compose panel but have no effect on guild posts
 - The API may not surface title or topics in the thread list on the website
+- The profile's apprenticeships row has no keybinding to jump into that guild from the profile screen

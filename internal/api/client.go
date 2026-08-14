@@ -279,6 +279,7 @@ type wireGuild struct {
 	Icon              string `json:"icon"`
 	Bio               string `json:"bio"`
 	MemberCount       int    `json:"memberCount"`
+	ApprenticeCount   int    `json:"apprenticeCount"`
 	FounderUsername   string `json:"founderUsername"`
 	CreatedAt         string `json:"createdAt"`
 	IsMember          bool   `json:"isMember"`
@@ -298,6 +299,16 @@ type wireGuildMember struct {
 	JoinedAt          string `json:"joinedAt"`
 	DisplayName       string `json:"displayName"`
 	ProfilePictureURL string `json:"profilePictureUrl"`
+}
+
+type wireGuildMembership struct {
+	GuildID           string `json:"guildId"`
+	Slug              string `json:"slug"`
+	Name              string `json:"name"`
+	Icon              string `json:"icon"`
+	ProfilePictureUrl string `json:"profilePictureUrl"`
+	Role              string `json:"role"`
+	JoinedAt          string `json:"joinedAt"`
 }
 
 type createGuildPostRequest struct {
@@ -1129,6 +1140,7 @@ func wireGuildToModel(w wireGuild) model.Guild {
 		Icon:              w.Icon,
 		Bio:               w.Bio,
 		MemberCount:       w.MemberCount,
+		ApprenticeCount:   w.ApprenticeCount,
 		FounderUsername:   w.FounderUsername,
 		CreatedAt:         parseTime(w.CreatedAt),
 		IsMember:          w.IsMember,
@@ -1151,6 +1163,19 @@ func wireGuildMemberToModel(w wireGuildMember) model.GuildMember {
 		JoinedAt:          parseTime(w.JoinedAt),
 		DisplayName:       w.DisplayName,
 		ProfilePictureUrl: w.ProfilePictureURL,
+	}
+}
+
+func wireGuildMembershipToModel(w wireGuildMembership) model.GuildMembership {
+	sanitize.Strings(&w)
+	return model.GuildMembership{
+		GuildID:           w.GuildID,
+		Slug:              w.Slug,
+		Name:              w.Name,
+		Icon:              w.Icon,
+		ProfilePictureUrl: w.ProfilePictureUrl,
+		Role:              w.Role,
+		JoinedAt:          parseTime(w.JoinedAt),
 	}
 }
 
@@ -1511,8 +1536,8 @@ func (c *HTTPClient) MarkAllNotificationsRead() (bool, error) {
 		return false, err
 	}
 	var data struct {
-		Updated  int  `json:"updated"`
-		HasMore  bool `json:"hasMore"`
+		Updated int  `json:"updated"`
+		HasMore bool `json:"hasMore"`
 	}
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return false, err
@@ -1717,14 +1742,42 @@ func (c *HTTPClient) GetGuildMembers(slug, cursor string) ([]model.GuildMember, 
 	return fetchPage(c, path, wireGuildMemberToModel)
 }
 
-func (c *HTTPClient) JoinGuild(slug string) error {
-	_, err := c.doRequest("POST", "/v1/guilds/"+url.PathEscape(slug)+"/join", nil)
-	return err
+func (c *HTTPClient) GetUserGuilds(username string) ([]model.GuildMembership, error) {
+	memberships, _, err := fetchPage(c, "/v1/users/"+url.PathEscape(username)+"/guilds", wireGuildMembershipToModel)
+	return memberships, err
+}
+
+type guildRoleResponse struct {
+	Role string `json:"role"`
+}
+
+func (c *HTTPClient) JoinGuild(slug string) (string, error) {
+	env, err := c.doRequest("POST", "/v1/guilds/"+url.PathEscape(slug)+"/join", nil)
+	if err != nil {
+		return "", err
+	}
+	var data guildRoleResponse
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", err
+	}
+	return data.Role, nil
 }
 
 func (c *HTTPClient) LeaveGuild(slug string) error {
 	_, err := c.doRequest("POST", "/v1/guilds/"+url.PathEscape(slug)+"/leave", nil)
 	return err
+}
+
+func (c *HTTPClient) PromoteGuild(slug string) (string, error) {
+	env, err := c.doRequest("POST", "/v1/guilds/"+url.PathEscape(slug)+"/promote", nil)
+	if err != nil {
+		return "", err
+	}
+	var data guildRoleResponse
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return "", err
+	}
+	return data.Role, nil
 }
 
 func (c *HTTPClient) CreateGuildPost(slug, content, title, postSlug string, topics []string) (model.Post, error) {

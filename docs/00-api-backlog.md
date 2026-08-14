@@ -92,6 +92,21 @@ Notes:
 | Guild join (`POST /v1/guilds/:slug/join`) | Now an official API endpoint. One guild per user; 409 if already in one. | **Done** |
 | Guild leave (`POST /v1/guilds/:slug/leave`) | Now an official API endpoint. Founders get 403 — must use web. | **Done** |
 
+### Guilds — apprenticeships (new in v0.8.6)
+
+A user's own guild (founder/member, still one at a time — the profile badge) can now be supplemented with up to 5 "apprenticeships" (role `apprentice`) in other guilds. Apprentices appear in the guild's member list and get its thread notifications, but the badge only follows the founder/member guild.
+
+| Endpoint | Method | Description | Status |
+|---|---|---|---|
+| `/v1/users/:username/guilds` | GET | All guilds a user belongs to (badge guild first, apprenticeships oldest-first), max 6, unpaginated | **Done** — feature 29 (apprenticeships), profile Info tab |
+| `/v1/guilds/:slug/promote` | POST | Make an apprenticeship the new badge guild | **Done** — `P` key in guild threads view |
+| `/v1/guilds/:slug/join` | POST | Changed: no longer 409s just because the caller is already in a guild — joins as apprentice instead. 409 only for "already in this guild" or "already 5 apprenticeships" | **Done** |
+| `/v1/guilds/:slug/leave` | POST | Changed: leaving an apprenticeship no longer touches the badge; leaving the badge guild clears it with no auto-promote | **Done** |
+
+Notes:
+- `Guild.apprenticeCount` added to the guild list/detail response; missing on guilds that predate apprenticeships — client treats missing as 0.
+- The 5-apprenticeship cap and duplicate-membership checks are enforced server-side only; the client does not pre-fetch a count to gate the `J` key, matching the existing pattern of leaving founder-leave 403s to the server.
+
 ### C-Mail (new in v0.7)
 
 All REST endpoints and the RTDB SSE subscription are fully implemented. See `docs/08-cmail.md` for details.

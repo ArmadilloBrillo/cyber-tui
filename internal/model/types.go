@@ -225,11 +225,12 @@ type Guild struct {
 	Slug              string
 	Icon              string
 	Bio               string
-	MemberCount       int
+	MemberCount       int // founders + members
+	ApprenticeCount   int // apprentices; missing on guilds that predate apprenticeships, treat as 0
 	FounderUsername   string
 	CreatedAt         time.Time
 	IsMember          bool
-	Role              string // "founder", "member", or ""
+	Role              string // "founder", "member", "apprentice", or "" (GetGuild only)
 	Link              string
 	LinkText          string
 	ProfilePictureUrl string
@@ -243,10 +244,23 @@ type GuildMember struct {
 	GuildSlug         string
 	UserID            string
 	Username          string
-	Role              string // "founder" or "member"
+	Role              string // "founder", "member", or "apprentice"
 	JoinedAt          time.Time
 	DisplayName       string
 	ProfilePictureUrl string
+}
+
+// GuildMembership is one entry from GET /v1/users/:username/guilds — every
+// guild a user belongs to, badge guild first then apprenticeships
+// oldest-first. At most 6 entries, never paginated.
+type GuildMembership struct {
+	GuildID           string
+	Slug              string
+	Name              string
+	Icon              string
+	ProfilePictureUrl string
+	Role              string // "founder", "member", or "apprentice"
+	JoinedAt          time.Time
 }
 
 // Note is a private note visible only to the author.
