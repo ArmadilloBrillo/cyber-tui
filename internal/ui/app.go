@@ -3319,20 +3319,36 @@ const modalScreenMarginFrac = 0.8
 // this). No-op if the modal's image isn't cached yet, which shouldn't happen
 // while it's open (the cache is populated the moment it opens) but avoids a
 // lookup panic.
+//
+// The step is based on a.imageModalCols — the box actually on screen right
+// now — not on a value recomputed from a.imageScale. Those two can diverge:
+// openImageInTerminal additionally clamps the rendered box to
+// modalScreenMarginFrac/Layout.ModalMaxWidth, which is a tighter ceiling
+// than config.MaxImageScale in a small terminal. Stepping from the
+// unclamped scale let repeated "+" presses at that ceiling keep inflating
+// a.imageScale with no visible effect (correctly, since the box was already
+// maxed), but then the first "-" press only walked the invisible excess
+// back down one step, so it visibly did nothing either — reported live as
+// "+ does nothing at max size, but then - does nothing too, the first
+// time." Anchoring to the real rendered box instead means the very next
+// "-" press always immediately shrinks it.
 func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
 	cached, hit := a.imageCache[a.imageModalURL]
 	if !hit || len(cached.frames) == 0 {
 		return a, nil
 	}
-	scale := a.imageScale
-	if scale <= 0 {
-		scale = 1.0
-	}
 	cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 	b := cached.frames[0].Bounds()
 	nativeCols, _ := imgview.NativeCellBox(b.Dx(), b.Dy(), cellW, cellH)
 
-	currentCols := int(float64(nativeCols)*scale + 0.5)
+	currentCols := a.imageModalCols
+	if currentCols < 1 {
+		scale := a.imageScale
+		if scale <= 0 {
+			scale = 1.0
+		}
+		currentCols = int(float64(nativeCols)*scale + 0.5)
+	}
 	step := int(float64(nativeCols)*imageScaleStep + 0.5)
 	if step < 1 {
 		step = 1

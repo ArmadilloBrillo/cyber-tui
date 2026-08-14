@@ -2920,6 +2920,58 @@ func TestAdjustImageScale_TinyImage_AlwaysMovesAtLeastOneCell(t *testing.T) {
 	}
 }
 
+// TestAdjustImageScale_MinusImmediatelyShrinksAfterHittingScreenMargin is a
+// regression test: openImageInTerminal's screen-margin clamp
+// (modalScreenMarginFrac/Layout.ModalMaxWidth) can cap the rendered box well
+// below what config.MaxImageScale alone would allow for a large native
+// image on a small terminal. adjustImageScale used to step from a value
+// recomputed off a.imageScale, which kept climbing on repeated "+" presses
+// even after the box stopped growing (correctly clamped) — so the first "-"
+// press afterward only walked that invisible excess back down one step,
+// visibly doing nothing either. Reported live as "+ does nothing at max
+// size, then - does nothing the first time too." Fixed by anchoring the
+// step to a.imageModalCols (the box actually on screen), so "-" always
+// shrinks immediately.
+func TestAdjustImageScale_MinusImmediatelyShrinksAfterHittingScreenMargin(t *testing.T) {
+	// 500x500, not something more extreme: large enough that scale=2.0
+	// still hits the screen-margin ceiling (reproducing the bug), but small
+	// enough that scale=0.2 does NOT also collapse onto the same ceiling —
+	// an image so much bigger than the terminal that every scale in
+	// [0.2, 2.0] renders identically would trivially "pass" without
+	// exercising the fix at all.
+	bigImg := image.NewRGBA(image.Rect(0, 0, 500, 500))
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.width, a.height = 100, 40
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{bigImg}}}
+	a.imageScale = config.MaxImageScale // simulate having already pressed + repeatedly
+
+	// Render once to populate a.imageModalCols with the true,
+	// screen-margin-clamped box — mirrors what handleImageViewer does for a
+	// real imageFetchedMsg.
+	_, cmd := a.openImageInTerminal(a.imageModalURL)
+	msg := cmd().(imageFetchedMsg)
+	a.imageModalCols = msg.cols
+	a.imageModalRows = msg.rows
+
+	// Setup check: a further "+" is a no-op visually — already at the
+	// screen-margin ceiling, not the (much larger) native-size-relative max.
+	a2, cmd2 := a.adjustImageScale(imageScaleStep)
+	msg2 := cmd2().(imageFetchedMsg)
+	if msg2.cols != msg.cols {
+		t.Fatalf("setup: expected + to have no visible effect at the screen-margin ceiling, got cols %d -> %d", msg.cols, msg2.cols)
+	}
+	a2.imageModalCols = msg2.cols
+
+	// The regression: the very next "-" must immediately shrink the box.
+	_, cmd3 := a2.adjustImageScale(-imageScaleStep)
+	msg3 := cmd3().(imageFetchedMsg)
+	if msg3.cols >= msg2.cols {
+		t.Errorf("expected the first - press after hitting the ceiling to immediately shrink the box, got cols %d -> %d", msg2.cols, msg3.cols)
+	}
+}
+
 // TestOpenImageInTerminal_Scale_ChangesComputedBox confirms imageScale
 // actually reaches the encoder: a larger scale should never produce a
 // smaller cols/rows box than a smaller scale, for a source image large
