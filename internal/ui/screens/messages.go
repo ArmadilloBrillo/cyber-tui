@@ -66,8 +66,9 @@ type URLProvider interface {
 	GetFocusedURLs() []string
 }
 
-// ShowUserProfileMsg is emitted by Feed, PostDetail, and Notifications when
-// the user presses 'p' on the highlighted item.
+// ShowUserProfileMsg is emitted by Feed, PostDetail, Notifications,
+// Guilds, Search, Chatrooms, and CMail when the user presses 'p' on the
+// highlighted item.
 type ShowUserProfileMsg struct{ Username string }
 
 // StartConversationMsg is emitted by any screen when the user presses 'c' on a

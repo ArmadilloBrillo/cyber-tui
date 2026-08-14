@@ -1215,12 +1215,12 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 
 // updateCMailBrowsingKey handles keys while a message is selected
 // (m.selectedMsgID != ""): up/down move the selection, esc returns to
-// typing. Everything else is swallowed rather than typed, since the input
-// is blurred for the duration of browsing — mirrors
-// ChatroomsModel.updateBrowsingKey, trimmed to what CMail supports: no
-// flag/delete (the API has no CMail message flag/delete endpoint) and no
-// spoiler/l33t reveal (CMail's render pipeline doesn't support those
-// styles).
+// typing, 'p' views the sender's profile. Everything else is swallowed
+// rather than typed, since the input is blurred for the duration of
+// browsing — mirrors ChatroomsModel.updateBrowsingKey, trimmed to what
+// CMail supports: no flag/delete (the API has no CMail message
+// flag/delete endpoint) and no spoiler/l33t reveal (CMail's render
+// pipeline doesn't support those styles).
 func (m CMailModel) updateCMailBrowsingKey(msg tea.KeyMsg) (CMailModel, tea.Cmd) {
 	if m.activeConv == nil {
 		m.selectedMsgID = ""
@@ -1270,6 +1270,13 @@ func (m CMailModel) updateCMailBrowsingKey(msg tea.KeyMsg) (CMailModel, tea.Cmd)
 		m.selectedMsgID = m.activeConv.Messages[sel[newPos]].ID
 		m.viewport.SetYOffset(newOffset)
 		return m.refreshMessages(), nil
+	case "p":
+		targetMsg, ok := findMessageByID(m.activeConv.Messages, m.selectedMsgID)
+		if !ok {
+			return m, nil
+		}
+		username := targetMsg.From.Username
+		return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 	}
 	return m, nil
 }
