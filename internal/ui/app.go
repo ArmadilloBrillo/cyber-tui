@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"log"
 	"math"
 	"math/rand"
 	neturl "net/url"
@@ -3128,11 +3127,11 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, place
 		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 		switch proto {
 		case imgview.ProtocolITerm2:
-			encoded, _, rows, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH)
+			encoded, _, rows, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH, false)
 		case imgview.ProtocolSixel:
-			encoded, _, rows, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH)
+			encoded, _, rows, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH, false)
 		case imgview.ProtocolKitty:
-			encoded, _, rows, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID)
+			encoded, _, rows, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID, false)
 		default:
 			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
 		}
@@ -3284,33 +3283,84 @@ func openExternalURL(u string) tea.Cmd {
 	}
 }
 
-// imageScaleStep is the amount +/- adjusts App.imageScale by per keypress
-// while the fullscreen image modal is open. Bounds match
-// config.Config.GetImageScale's clamp.
+// imageScaleStep is the fraction of the image's own native size that +/-
+// nudges App.imageScale by per keypress while the fullscreen image modal is
+// open — scale is relative to native size (see openImageInTerminal), not
+// the terminal window, so this is normally a visible change. adjustImageScale
+// additionally guarantees at least a 1-cell step regardless of this fraction,
+// for images small enough that 10% of their native size would otherwise
+// round away to nothing. Bounds match config.Config.GetImageScale's clamp.
 const imageScaleStep = 0.1
 
-// adjustImageScale nudges the live modal image scale by delta, clamps it,
-// and re-runs openImageInTerminal for the currently open image so the
-// modal re-renders at the new scale immediately.
+// adjustImageScale nudges the live modal image scale by delta (positive to
+// grow, negative to shrink) and re-runs openImageInTerminal for the
+// currently open image so the modal re-renders at the new scale
+// immediately. Unlike a flat float add, the step is computed in terminal
+// cells against the image's own native size (imgview.NativeCellBox) and
+// floored at 1 cell — so every press changes the rendered size by at least
+// one cell until the true min (config.MinImageScale) or max
+// (config.MaxImageScale) bound is hit, rather than being silently absorbed
+// by rounding (or, before this design, by fitBox's never-upscale native-size
+// cap — see docs/46-image-modal-scale.md for the investigation that found
+// this). No-op if the modal's image isn't cached yet, which shouldn't happen
+// while it's open (the cache is populated the moment it opens) but avoids a
+// lookup panic.
 func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
+	cached, hit := a.imageCache[a.imageModalURL]
+	if !hit || len(cached.frames) == 0 {
+		return a, nil
+	}
 	scale := a.imageScale
 	if scale <= 0 {
 		scale = 1.0
 	}
-	scale += delta
-	if scale < config.MinImageScale {
-		scale = config.MinImageScale
+	cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
+	b := cached.frames[0].Bounds()
+	nativeCols, _ := imgview.NativeCellBox(b.Dx(), b.Dy(), cellW, cellH)
+
+	currentCols := int(float64(nativeCols)*scale + 0.5)
+	step := int(float64(nativeCols)*imageScaleStep + 0.5)
+	if step < 1 {
+		step = 1
 	}
-	if scale > config.MaxImageScale {
-		scale = config.MaxImageScale
+	targetCols := currentCols + step
+	if delta < 0 {
+		targetCols = currentCols - step
 	}
-	a.imageScale = scale
+	minCols := int(float64(nativeCols) * config.MinImageScale)
+	if minCols < 1 {
+		minCols = 1
+	}
+	maxCols := int(float64(nativeCols) * config.MaxImageScale)
+	if maxCols < minCols {
+		maxCols = minCols
+	}
+	if targetCols < minCols {
+		targetCols = minCols
+	}
+	if targetCols > maxCols {
+		targetCols = maxCols
+	}
+
+	a.imageScale = float64(targetCols) / float64(nativeCols)
 	return a.openImageInTerminal(a.imageModalURL)
 }
 
 // openImageInTerminal fetches rawURL, encodes it for the detected graphics
 // protocol, and returns a command that sends an imageFetchedMsg when done.
 // GIF URLs are decoded and encoded frame-by-frame so the modal can animate.
+//
+// The target display box is a.imageScale multiplied against the image's own
+// native size in cells (imgview.NativeCellBox), not a fraction of the
+// terminal window — deliberately, so a scale change always has a
+// proportional, visible effect: a box expressed as "80% of the terminal"
+// mostly went unnoticed for typical post images, which are usually much
+// smaller than that box to begin with, so fitBox's never-upscale cap
+// silently absorbed every "+" press and "-" needed many presses before
+// crossing below the image's own native size (see
+// docs/46-image-modal-scale.md). Upscaling past native size is allowed here
+// (encoders called with allowUpscale=true) — unlike inline thumbnails, this
+// is a user-driven zoom the caller explicitly asked for.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
 	isGIF := urlutil.IsGIFURL(rawURL)
@@ -3318,20 +3368,7 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	if scale <= 0 {
 		scale = 1.0
 	}
-	displayCols := int(float64(a.width*4/5) * scale)
-	displayRows := int(float64(a.height*4/5-2) * scale) // reserve 2 rows for the modal border
-	if displayCols > a.width {
-		displayCols = a.width
-	}
-	if displayRows > a.height-2 {
-		displayRows = a.height - 2
-	}
-	if displayCols < 1 {
-		displayCols = 1
-	}
-	if displayRows < 1 {
-		displayRows = 1
-	}
+	width, height := a.width, a.height
 	a.imageFetchGen++
 	gen := a.imageFetchGen
 	cached, hit := a.imageCache[rawURL]
@@ -3356,46 +3393,48 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 				delays = nil
 			}
 		}
+		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
+		nativeBounds := frames[0].Bounds()
+		nativeCols, nativeRows := imgview.NativeCellBox(nativeBounds.Dx(), nativeBounds.Dy(), cellW, cellH)
+		displayCols := int(float64(nativeCols) * scale)
+		displayRows := int(float64(nativeRows) * scale)
+		if displayCols > width {
+			displayCols = width
+		}
+		if displayRows > height-2 { // reserve 2 rows for the modal border
+			displayRows = height - 2
+		}
+		if displayCols < 1 {
+			displayCols = 1
+		}
+		if displayRows < 1 {
+			displayRows = 1
+		}
 		encodedFrames := make([]string, len(frames))
 		var cols, rows int
-		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 		for i, img := range frames {
 			switch proto {
 			case imgview.ProtocolKitty:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, cellW, cellH, kittyModalPlacementID)
+				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, cellW, cellH, kittyModalPlacementID, true)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			case imgview.ProtocolITerm2:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows, cellW, cellH)
+				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows, cellW, cellH, true)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			case imgview.ProtocolSixel:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH)
+				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH, true)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			default:
 				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: fmt.Errorf("no graphics protocol")}
 			}
-		}
-		// TEMPORARY: diagnosing +/- image scale appearing to have no visible
-		// effect, reported across mintty/Sixel, iTerm2, and Ghostty/Kitty —
-		// leading hypothesis is fitBox's native-size cap (never upscales, and
-		// many post images are already smaller than the display box at
-		// scale=1.0). Strip once confirmed — see docs/46-image-modal-scale.md.
-		if os.Getenv("CYBERSPACE_DEBUG_KEYS") != "" {
-			nativeW, nativeH := 0, 0
-			if len(frames) > 0 {
-				b := frames[0].Bounds()
-				nativeW, nativeH = b.Dx(), b.Dy()
-			}
-			log.Printf("image scale=%.2f displayBox=%dx%d cellPx=%dx%d nativePx=%dx%d -> box=%dx%d",
-				scale, displayCols, displayRows, cellW, cellH, nativeW, nativeH, cols, rows)
 		}
 		return imageFetchedMsg{
 			rawURL: rawURL, gen: gen,

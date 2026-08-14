@@ -2816,20 +2816,29 @@ func TestUpdate_ImageModal_OtherKey_ClosesAndClearsCarousel(t *testing.T) {
 
 // --- Image modal scale: live +/- adjustment (config.Config.ImageScale) ---
 
+// modalTestImage is a 100x200px image, chosen so its native cell size at the
+// fallback cell pixel default (10x20, since TerminalCellPixelSize returns
+// ok=false in tests) is a clean 10x10 cols/rows — makes expected imageScale
+// values after a guaranteed-1-cell step easy to state exactly.
+func modalTestImage() image.Image {
+	return image.NewRGBA(image.Rect(0, 0, 100, 200))
+}
+
 func TestUpdate_ImageModal_Plus_IncreasesScaleAndRerenders(t *testing.T) {
 	a := loggedInApp()
 	a.graphicsProtocol = imgview.ProtocolKitty
 	a.imageModalOpen = true
 	a.imageModalURL = "https://x.com/a.jpg"
-	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{image.NewRGBA(image.Rect(0, 0, 10, 10))}}}
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{modalTestImage()}}}
 
 	m, cmd := a.Update(keyMsg("+"))
 	a2 := m.(App)
 	if !a2.imageModalOpen {
 		t.Error("expected the modal to stay open on a scale-adjust keypress")
 	}
-	if a2.imageScale != 1.0+imageScaleStep {
-		t.Errorf("imageScale = %v, want %v", a2.imageScale, 1.0+imageScaleStep)
+	// nativeCols=10, step=max(1, round(10*0.1))=1, currentCols=10 -> targetCols=11 -> scale=1.1.
+	if want := 1.1; a2.imageScale != want {
+		t.Errorf("imageScale = %v, want %v", a2.imageScale, want)
 	}
 	if cmd == nil {
 		t.Fatal("expected a re-render cmd for the current modal image")
@@ -2841,28 +2850,73 @@ func TestUpdate_ImageModal_Minus_DecreasesScale(t *testing.T) {
 	a.graphicsProtocol = imgview.ProtocolKitty
 	a.imageModalOpen = true
 	a.imageModalURL = "https://x.com/a.jpg"
-	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{image.NewRGBA(image.Rect(0, 0, 10, 10))}}}
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{modalTestImage()}}}
 
 	m, _ := a.Update(keyMsg("-"))
 	a2 := m.(App)
-	if a2.imageScale != 1.0-imageScaleStep {
-		t.Errorf("imageScale = %v, want %v", a2.imageScale, 1.0-imageScaleStep)
+	if want := 0.9; a2.imageScale != want {
+		t.Errorf("imageScale = %v, want %v", a2.imageScale, want)
 	}
 }
 
 func TestAdjustImageScale_ClampsAtBounds(t *testing.T) {
 	a := loggedInApp()
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{modalTestImage()}}}
 	a.imageScale = config.MaxImageScale
 
-	a2, _ := a.adjustImageScale(imageScaleStep)
+	a2, cmd := a.adjustImageScale(imageScaleStep)
 	if a2.imageScale != config.MaxImageScale {
 		t.Errorf("expected clamp at MaxImageScale (%v), got %v", config.MaxImageScale, a2.imageScale)
+	}
+	if cmd == nil {
+		t.Error("expected a re-render cmd even when already at the max (still a legitimate re-render request)")
 	}
 
 	a.imageScale = config.MinImageScale
 	a3, _ := a.adjustImageScale(-imageScaleStep)
 	if a3.imageScale != config.MinImageScale {
 		t.Errorf("expected clamp at MinImageScale (%v), got %v", config.MinImageScale, a3.imageScale)
+	}
+}
+
+// TestAdjustImageScale_NoCacheIsNoop confirms a scale-adjust keypress before
+// the modal's image has actually landed in the cache (shouldn't normally
+// happen — the cache is populated the instant the modal opens) doesn't
+// panic on the map lookup.
+func TestAdjustImageScale_NoCacheIsNoop(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalURL = "https://x.com/never-cached.jpg"
+	a.imageScale = 1.0
+
+	a2, cmd := a.adjustImageScale(imageScaleStep)
+	if a2.imageScale != 1.0 {
+		t.Errorf("expected imageScale unchanged, got %v", a2.imageScale)
+	}
+	if cmd != nil {
+		t.Error("expected no cmd when there's nothing cached to re-render")
+	}
+}
+
+// TestAdjustImageScale_TinyImage_AlwaysMovesAtLeastOneCell confirms the
+// guaranteed-visible-step design: even for an image whose native size is a
+// single cell (so a flat 10% step would round to nothing), a press still
+// moves the box by at least 1 cell — this is the property that was missing
+// before the fix (see docs/46-image-modal-scale.md): +/- appeared to do
+// nothing for typical images because fitBox's never-upscale cap silently
+// absorbed the old percent-of-terminal-box scale steps.
+func TestAdjustImageScale_TinyImage_AlwaysMovesAtLeastOneCell(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalURL = "https://x.com/tiny.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/tiny.jpg": {frames: []image.Image{image.NewRGBA(image.Rect(0, 0, 2, 2))}}}
+	a.imageScale = 1.0 // nativeCols=1 at the fallback cell size, so scale=1.0 -> currentCols=1
+
+	a2, _ := a.adjustImageScale(imageScaleStep)
+	// step=max(1, round(1*0.1))=1 -> targetCols=2 -> scale=2.0 (also happens
+	// to be config.MaxImageScale here, since nativeCols=1 leaves no room
+	// between "native" and "2x native" other than a single whole cell).
+	if a2.imageScale != config.MaxImageScale {
+		t.Errorf("imageScale = %v, want %v (a 1-cell step from a 1-cell native size)", a2.imageScale, config.MaxImageScale)
 	}
 }
 

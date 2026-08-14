@@ -38,18 +38,19 @@ import (
 // TerminalCellPixelSize); if <= 0 (real size unavailable), falls back to the
 // assumed default cell size. Kitty stretches the image to exactly fill the
 // computed c/r box regardless, so this only affects how closely the aspect
-// ratio is preserved, not whether blank space appears.
-func EncodeKitty(img image.Image, maxCols, maxRows, cellPxW, cellPxH, placementID int) (encoded string, cols, rows int, err error) {
-	if cellPxW <= 0 || cellPxH <= 0 {
-		cellPxW, cellPxH = pxPerCol, 2*pxPerCol
-	}
+// ratio is preserved, not whether blank space appears. allowUpscale, when
+// true, lets the image be scaled up past its natural pixel size to fill
+// maxCols/maxRows (used only by the fullscreen modal's user-driven zoom —
+// see imgview.NativeCellBox); false (inline thumbnails) never upscales.
+func EncodeKitty(img image.Image, maxCols, maxRows, cellPxW, cellPxH, placementID int, allowUpscale bool) (encoded string, cols, rows int, err error) {
+	cellPxW, cellPxH = EffectiveCellPx(cellPxW, cellPxH)
 	bounds := img.Bounds()
 	w := bounds.Max.X - bounds.Min.X
 	h := bounds.Max.Y - bounds.Min.Y
-	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH)
+	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH, allowUpscale)
 
 	var buf bytes.Buffer
-	if encErr := png.Encode(&buf, downscaleToBox(img, cols, rows, cellPxW, cellPxH)); encErr != nil {
+	if encErr := png.Encode(&buf, downscaleToBox(img, cols, rows, cellPxW, cellPxH, allowUpscale)); encErr != nil {
 		return "", 0, 0, fmt.Errorf("imgview: png encode: %w", encErr)
 	}
 	payload := base64.StdEncoding.EncodeToString(buf.Bytes())

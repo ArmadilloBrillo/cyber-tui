@@ -17,18 +17,19 @@ import (
 // (cellPxW x cellPxH, from TerminalCellPixelSize) so the reported cols/rows
 // match what the terminal will actually display. If cellPxW or cellPxH is
 // <= 0 (real size unavailable), falls back to the assumed default cell size
-// used by Kitty/iTerm2. Returns the DCS escape sequence and the computed
-// display size in terminal columns and rows.
-func EncodeSixel(img image.Image, maxCols, maxRows, cellPxW, cellPxH int) (encoded string, cols, rows int, err error) {
-	if cellPxW <= 0 || cellPxH <= 0 {
-		cellPxW, cellPxH = pxPerCol, 2*pxPerCol
-	}
+// used by Kitty/iTerm2. allowUpscale, when true, lets the image be scaled up
+// past its natural pixel size to fill maxCols/maxRows (used only by the
+// fullscreen modal's user-driven zoom — see imgview.NativeCellBox); false
+// (inline thumbnails) never upscales. Returns the DCS escape sequence and
+// the computed display size in terminal columns and rows.
+func EncodeSixel(img image.Image, maxCols, maxRows, cellPxW, cellPxH int, allowUpscale bool) (encoded string, cols, rows int, err error) {
+	cellPxW, cellPxH = EffectiveCellPx(cellPxW, cellPxH)
 	bounds := img.Bounds()
 	w := bounds.Dx()
 	h := bounds.Dy()
 
-	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH)
-	src := downscaleToBox(img, cols, rows, cellPxW, cellPxH)
+	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH, allowUpscale)
+	src := downscaleToBox(img, cols, rows, cellPxW, cellPxH, allowUpscale)
 
 	var buf bytes.Buffer
 	enc := sixel.NewEncoder(&buf)

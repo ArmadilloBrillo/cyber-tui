@@ -95,22 +95,25 @@ type Config struct {
 	// supports Sixel but doesn't reliably answer the DA1 probe query.
 	GraphicsProtocol string `json:"graphicsProtocol,omitempty"`
 
-	// ImageScale multiplies the computed size of the fullscreen image modal.
-	// 0 (absent from the file) means the default, 1.0. Terminal graphics
-	// protocols disagree on how a requested cell box maps to on-screen
-	// pixels (font metrics, DPI, terminal zoom all vary), so this is a
-	// manual per-machine correction rather than something the app can
-	// detect — see docs/46-image-modal-scale.md. Also adjustable live with
-	// +/- while the modal is open, for the current session only.
+	// ImageScale multiplies the fullscreen image modal's display size,
+	// relative to the image's own native (1:1 pixel) size — 1.0 shows it at
+	// native size (clamped to fit the terminal), not a fraction of the
+	// terminal window. 0 (absent from the file) means the default, 1.0.
+	// Terminal graphics protocols disagree on how a requested cell box maps
+	// to on-screen pixels (font metrics, DPI, terminal zoom all vary), so
+	// this is a manual per-machine correction rather than something the app
+	// can detect — see docs/46-image-modal-scale.md. Also adjustable live
+	// with +/- while the modal is open, for the current session only.
 	ImageScale float64 `json:"imageScale,omitempty"`
 }
 
 // MinImageScale and MaxImageScale bound both the config value and live +/-
-// adjustment, so a bad hand-edit or runaway keypresses can't shrink the
-// modal to nothing or blow it past the terminal bounds.
+// adjustment: 0.2x to 2x the image's native size. Upscaling past native
+// resolution is allowed (unlike inline thumbnails) since this is a deliberate
+// user zoom, capped at 2x so it doesn't get too blurry.
 const (
 	MinImageScale = 0.2
-	MaxImageScale = 3.0
+	MaxImageScale = 2.0
 )
 
 // GetImageScale returns ImageScale, substituting the default (1.0) when the

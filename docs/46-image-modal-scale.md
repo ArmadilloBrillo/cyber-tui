@@ -3,14 +3,10 @@
 ## Problem
 
 The fullscreen image modal (`o`, `internal/ui/app.go`'s `openImageInTerminal`)
-computes a target cell box (`displayCols`/`displayRows`, 4/5 of the terminal
-size) and hands it to whichever encoder matches the detected graphics
-protocol (`internal/ui/imgview`: `EncodeKitty`, `EncodeITerm2`, `EncodeSixel`).
-
-That computation is identical across all three protocols — same box, same
-cell-pixel-size query, same fallback default. But how a given cell box maps
-to actual on-screen pixels is a terminal-side decision the app cannot see or
-query:
+computes a target cell box and hands it to whichever encoder matches the
+detected graphics protocol (`internal/ui/imgview`: `EncodeKitty`,
+`EncodeITerm2`, `EncodeSixel`). How a given cell box maps to actual
+on-screen pixels is a terminal-side decision the app cannot see or query:
 
 - iTerm2's `preserveAspectRatio=1` letterboxes the image inside the box using
   iTerm2's own real font metrics — if `cellPxW`/`cellPxH` (from
@@ -26,29 +22,62 @@ at, so this can't be auto-corrected — DPI, terminal zoom, and font metrics
 vary per machine and are effectively a moving target. See the code comments
 in `internal/ui/imgview/{kitty,iterm2,sixel}.go` for the full breakdown.
 
+## First attempt, and why it didn't work
+
+The first version of this feature expressed `Config.ImageScale` as a
+fraction of "4/5 of the terminal window" and applied it to
+`displayCols`/`displayRows` before they reached the encoder. Live-tested on
+mintty/Sixel, iTerm2, and Ghostty/Kitty, `+`/`-` appeared to do nothing.
+`CYBERSPACE_DEBUG_KEYS=1` (`cmd/cyber-tui/main.go`) confirmed the keys were
+detected correctly and the requested box genuinely grew/shrank each press —
+but the *encoded* box stayed frozen:
+
+```
+image scale=1.00 displayBox=188x46 cellPx=16x36 nativePx=773x512 -> box=49x14
+image scale=1.50 displayBox=236x58 cellPx=16x36 nativePx=773x512 -> box=49x14
+```
+
+Root cause: `773px/16 ≈ 49 cols`, `512px/36 ≈ 14 rows` — the image's native
+pixel size in cells was already smaller than 4/5 of the terminal, even at
+`scale=1.0`. `fitBox`/`downscaleToBox` never upscaled past native
+resolution, so every `+` was silently absorbed by that cap, and `-` needed
+many presses before crossing below the native-size threshold. Not a bug —
+just `scale` being expressed relative to a box the image was nowhere near
+filling in the first place.
+
 ## Fix
 
-A user-controlled multiplier, `Config.ImageScale` (`internal/config/session.go`),
-applied to `displayCols`/`displayRows` before they reach the encoder
-(`openImageInTerminal`, `internal/ui/app.go`). Clamped to
-`[config.MinImageScale, config.MaxImageScale]` = `[0.2, 3.0]` via
-`Config.GetImageScale()`.
+`Config.ImageScale` (`internal/config/session.go`) is now relative to the
+image's own native (1:1 pixel) size in cells, not the terminal window —
+`imgview.NativeCellBox(imgWidth, imgHeight, cellPxW, cellPxH)` computes that
+native cell box, ceiling-dividing each axis independently. `1.0` = native
+size (clamped to fit the terminal); this also allows upscaling past native
+resolution — accepting some blur — up to `2.0` (`config.MaxImageScale`),
+since a user pressing `+` is explicitly asking to zoom in, unlike an inline
+thumbnail that should never blow up a small image. `EncodeKitty`,
+`EncodeITerm2`, `EncodeSixel`, `fitBox`, and `downscaleToBox` all take an
+`allowUpscale bool` — `true` only for the fullscreen modal; inline
+thumbnails still pass `false` and keep the old never-upscale behavior.
 
-Two ways to set it:
+Two ways to set the scale:
 
 1. **Config file** — `"imageScale"` in `~/.cyber-tui.json` (e.g. `1.3`).
    Unset or `0` defaults to `1.0`. Applies from the next modal open.
-2. **Live, while the modal is open** — `+`/`=` increases, `-` decreases, in
-   steps of `imageScaleStep` (0.1). Each press re-runs
-   `openImageInTerminal` for the currently displayed image
-   (`App.imageModalURL`) and re-renders immediately — a cache hit
-   (`App.imageCache`), so it only re-encodes, not re-fetches. This is
-   session-only and does not write back to the config file; it resets to
+2. **Live, while the modal is open** — `+`/`=` increases, `-` decreases.
+   `App.adjustImageScale` computes the step in terminal cells against the
+   image's own native size (`imageScaleStep`, 10%) and floors it at 1 cell
+   (`max(1, round(nativeCols*0.1))`) — so every press changes the rendered
+   size by at least one cell until the true min (`config.MinImageScale`,
+   0.2x) or max (2x) bound, rather than a fixed float step getting rounded
+   away to nothing for images whose native size is small relative to a flat
+   10% step. Each press re-runs `openImageInTerminal` for the currently
+   displayed image (`App.imageModalURL`) and re-renders immediately — a
+   cache hit (`App.imageCache`), so it only re-encodes, not re-fetches. This
+   is session-only and does not write back to the config file; it resets to
    the config value on the next app start.
 
-`displayCols`/`displayRows` are still clamped to the terminal's actual
-width/height after scaling, so a large scale can't request a box bigger than
-the screen.
+The resulting box is still clamped to the terminal's actual width/height
+after scaling, so a large scale can't request a box bigger than the screen.
 
 ## Non-fix
 

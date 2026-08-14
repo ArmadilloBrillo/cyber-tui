@@ -18,19 +18,20 @@ import (
 // given width/height cell box using iTerm2's own real font metrics, so a
 // wrong assumed cell aspect ratio leaves visible blank space rather than
 // just mildly stretching the image (as Kitty's fill-exact-box behavior
-// does). Returns the OSC escape sequence and the computed display size in
-// terminal columns and rows.
-func EncodeITerm2(img image.Image, maxCols, maxRows, cellPxW, cellPxH int) (encoded string, cols, rows int, err error) {
-	if cellPxW <= 0 || cellPxH <= 0 {
-		cellPxW, cellPxH = pxPerCol, 2*pxPerCol
-	}
+// does). allowUpscale, when true, lets the image be scaled up past its
+// natural pixel size to fill maxCols/maxRows (used only by the fullscreen
+// modal's user-driven zoom — see imgview.NativeCellBox); false (inline
+// thumbnails) never upscales. Returns the OSC escape sequence and the
+// computed display size in terminal columns and rows.
+func EncodeITerm2(img image.Image, maxCols, maxRows, cellPxW, cellPxH int, allowUpscale bool) (encoded string, cols, rows int, err error) {
+	cellPxW, cellPxH = EffectiveCellPx(cellPxW, cellPxH)
 	bounds := img.Bounds()
 	w := bounds.Max.X - bounds.Min.X
 	h := bounds.Max.Y - bounds.Min.Y
-	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH)
+	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH, allowUpscale)
 
 	var buf bytes.Buffer
-	if encErr := png.Encode(&buf, downscaleToBox(img, cols, rows, cellPxW, cellPxH)); encErr != nil {
+	if encErr := png.Encode(&buf, downscaleToBox(img, cols, rows, cellPxW, cellPxH, allowUpscale)); encErr != nil {
 		return "", 0, 0, fmt.Errorf("imgview: png encode: %w", encErr)
 	}
 	payload := base64.StdEncoding.EncodeToString(buf.Bytes())
