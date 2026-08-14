@@ -678,6 +678,8 @@ Fetches and displays images in the terminal using native graphics protocols (Kit
 
 **Cell geometry** (`cellsize_unix.go` real impl via `TIOCGWINSZ`, `cellsize_windows.go` stub always returning `ok=false`): `TerminalCellPixelSize(fd int) (cellW, cellH int, ok bool)` — real terminal cell pixel size when available, used by all three encoders' `cellPxW`/`cellPxH` fallback logic above.
 
+**Modal scale**: since none of the three protocols let the app read back what it actually rendered at, `Config.ImageScale` (`internal/config/session.go`) is a user-set multiplier on the modal's `displayCols`/`displayRows`, applied in `openImageInTerminal` before the box reaches the encoder. Also live-adjustable with `+`/`-` while the modal is open. See `docs/46-image-modal-scale.md`.
+
 ---
 
 ## Configuration File
@@ -707,6 +709,7 @@ Permissions: `0600` (owner read/write only)
 | `wanderLust` | bool | `false` | Wander mode toggle; `true` = on, `false` = off |
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
 | `graphicsProtocol` | string | `""` (autodetect) | `"kitty"`, `"iterm2"`, `"sixel"`, or `"none"` — bypasses autodetection when it's unreliable (e.g. mintty/Git Bash). See `docs/41-graphics-protocol-override.md` |
+| `imageScale` | number | `0` (= `1.0`) | Multiplier on the fullscreen image modal's computed display box, clamped to `[0.2, 3.0]`. Also live-adjustable with `+`/`-` while the modal is open (session-only). See `docs/46-image-modal-scale.md` |
 
 ---
 
@@ -812,7 +815,7 @@ Other global keys:
 | `?` | Help modal (no ctrl-twin exists — `ctrl+?` is indistinguishable from `ctrl+backspace`/DEL in most terminals) |
 | `t` | Theme picker |
 | `ctrl+t` | Same as `t`, but reaches the handler even while a compose input is focused |
-| `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused. An image opens in the fullscreen modal if a graphics protocol was detected and the Image Viewer setting isn't "browser" (otherwise it opens in the OS browser); `←`/`→` cycle multiple images from the same post without closing the modal, any other key closes it |
+| `o` | Open URLs/images from the focused item (direct-open if one, picker if several) — no-op while any screen's compose input is focused. An image opens in the fullscreen modal if a graphics protocol was detected and the Image Viewer setting isn't "browser" (otherwise it opens in the OS browser); `←`/`→` cycle multiple images from the same post without closing the modal, `+`/`-` scale the image live (session-only, see `docs/46-image-modal-scale.md`), any other key closes it |
 | `ctrl+o` | Same as `o`, but reaches the handler even while a compose input is focused — the only way to open links in CIRC/C-Mail, since their input is focused for the entire detail view, not just a transient compose sub-mode |
 | `q` / `ctrl+c` | Quit |
 | `ctrl+q` | Same as `q`, but reaches the handler even while a compose input is focused (`ctrl+c` already worked as a hard escape hatch; `ctrl+q` matches the bare-key mnemonic) |

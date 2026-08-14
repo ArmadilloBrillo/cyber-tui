@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/api"
+	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
@@ -2810,6 +2811,90 @@ func TestUpdate_ImageModal_OtherKey_ClosesAndClearsCarousel(t *testing.T) {
 	}
 	if a2.imageCache != nil {
 		t.Error("expected imageCache to be cleared on close")
+	}
+}
+
+// --- Image modal scale: live +/- adjustment (config.Config.ImageScale) ---
+
+func TestUpdate_ImageModal_Plus_IncreasesScaleAndRerenders(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{image.NewRGBA(image.Rect(0, 0, 10, 10))}}}
+
+	m, cmd := a.Update(keyMsg("+"))
+	a2 := m.(App)
+	if !a2.imageModalOpen {
+		t.Error("expected the modal to stay open on a scale-adjust keypress")
+	}
+	if a2.imageScale != 1.0+imageScaleStep {
+		t.Errorf("imageScale = %v, want %v", a2.imageScale, 1.0+imageScaleStep)
+	}
+	if cmd == nil {
+		t.Fatal("expected a re-render cmd for the current modal image")
+	}
+}
+
+func TestUpdate_ImageModal_Minus_DecreasesScale(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{image.NewRGBA(image.Rect(0, 0, 10, 10))}}}
+
+	m, _ := a.Update(keyMsg("-"))
+	a2 := m.(App)
+	if a2.imageScale != 1.0-imageScaleStep {
+		t.Errorf("imageScale = %v, want %v", a2.imageScale, 1.0-imageScaleStep)
+	}
+}
+
+func TestAdjustImageScale_ClampsAtBounds(t *testing.T) {
+	a := loggedInApp()
+	a.imageScale = config.MaxImageScale
+
+	a2, _ := a.adjustImageScale(imageScaleStep)
+	if a2.imageScale != config.MaxImageScale {
+		t.Errorf("expected clamp at MaxImageScale (%v), got %v", config.MaxImageScale, a2.imageScale)
+	}
+
+	a.imageScale = config.MinImageScale
+	a3, _ := a.adjustImageScale(-imageScaleStep)
+	if a3.imageScale != config.MinImageScale {
+		t.Errorf("expected clamp at MinImageScale (%v), got %v", config.MinImageScale, a3.imageScale)
+	}
+}
+
+// TestOpenImageInTerminal_Scale_ChangesComputedBox confirms imageScale
+// actually reaches the encoder: a larger scale should never produce a
+// smaller cols/rows box than a smaller scale, for a source image large
+// enough that the display box (not the image's native size) is the
+// limiting factor — see openImageInTerminal's displayCols/displayRows.
+func TestOpenImageInTerminal_Scale_ChangesComputedBox(t *testing.T) {
+	bigImg := image.NewRGBA(image.Rect(0, 0, 1000, 1000))
+
+	render := func(scale float64) (cols, rows int) {
+		a := loggedInApp()
+		a.graphicsProtocol = imgview.ProtocolKitty
+		a.width, a.height = 100, 50
+		a.imageScale = scale
+		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{bigImg}}}
+		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+		msg := cmd().(imageFetchedMsg)
+		if msg.err != nil {
+			t.Fatalf("unexpected error: %v", msg.err)
+		}
+		return msg.cols, msg.rows
+	}
+
+	smallCols, smallRows := render(0.5)
+	bigCols, bigRows := render(1.5)
+	if bigCols < smallCols || bigRows < smallRows {
+		t.Errorf("expected scale 1.5 to produce a box at least as large as scale 0.5, got %dx%d vs %dx%d", bigCols, bigRows, smallCols, smallRows)
+	}
+	if bigCols == smallCols && bigRows == smallRows {
+		t.Error("expected scale to actually change the computed box for a large source image")
 	}
 }
 

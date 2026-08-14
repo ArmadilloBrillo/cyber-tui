@@ -450,12 +450,22 @@ type App struct {
 	// See canInlineImages for the fully-gated value broadcast to screens.
 	inlineImages bool
 
+	// imageScale multiplies the computed size of the fullscreen image modal.
+	// Starts from config.Config.GetImageScale() and is live-adjustable with
+	// +/- while the modal is open (session-only, not persisted). <= 0 is
+	// treated as the default (1.0) — see openImageInTerminal.
+	imageScale float64
+
 	// imageModal holds the state for the inline image overlay. When imageModalOpen
 	// is true, View composites the encoded image sequence over the base content.
 	imageModalOpen    bool
 	imageModalEncoded string
 	imageModalCols    int
 	imageModalRows    int
+	// imageModalURL is the URL of the currently displayed modal image, kept
+	// so a live +/- scale adjustment can re-run openImageInTerminal for the
+	// same image (a cache hit, so it only re-encodes, not re-fetches).
+	imageModalURL string
 	// imageModalPrevRows/Cols are the modal's interior size as of the
 	// previous frame — 0 means no previous box to worry about (a fresh
 	// open, not a carousel cycle). Used by compositeOverlays to force the
@@ -568,6 +578,7 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
 	a.inlineImages = s.InlineImages
+	a.imageScale = s.GetImageScale()
 	a.layoutName = s.Layout
 	a.layout = layoutFromName(s.Layout)
 	a.customPalette = s.CustomPalette
@@ -674,6 +685,12 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 			case "right":
 				return a.cycleImageCarousel(+1)
 			}
+		}
+		switch km.String() {
+		case "+", "=":
+			return a.adjustImageScale(imageScaleStep)
+		case "-":
+			return a.adjustImageScale(-imageScaleStep)
 		}
 		a.imageModalOpen = false
 		a.chatrooms = a.chatrooms.SetAnimPaused(false)
@@ -3266,14 +3283,51 @@ func openExternalURL(u string) tea.Cmd {
 	}
 }
 
+// imageScaleStep is the amount +/- adjusts App.imageScale by per keypress
+// while the fullscreen image modal is open. Bounds match
+// config.Config.GetImageScale's clamp.
+const imageScaleStep = 0.1
+
+// adjustImageScale nudges the live modal image scale by delta, clamps it,
+// and re-runs openImageInTerminal for the currently open image so the
+// modal re-renders at the new scale immediately.
+func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
+	scale := a.imageScale
+	if scale <= 0 {
+		scale = 1.0
+	}
+	scale += delta
+	if scale < config.MinImageScale {
+		scale = config.MinImageScale
+	}
+	if scale > config.MaxImageScale {
+		scale = config.MaxImageScale
+	}
+	a.imageScale = scale
+	return a.openImageInTerminal(a.imageModalURL)
+}
+
 // openImageInTerminal fetches rawURL, encodes it for the detected graphics
 // protocol, and returns a command that sends an imageFetchedMsg when done.
 // GIF URLs are decoded and encoded frame-by-frame so the modal can animate.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
 	isGIF := urlutil.IsGIFURL(rawURL)
-	displayCols := a.width * 4 / 5
-	displayRows := a.height*4/5 - 2 // reserve 2 rows for the modal border
+	scale := a.imageScale
+	if scale <= 0 {
+		scale = 1.0
+	}
+	displayCols := int(float64(a.width*4/5) * scale)
+	displayRows := int(float64(a.height*4/5-2) * scale) // reserve 2 rows for the modal border
+	if displayCols > a.width {
+		displayCols = a.width
+	}
+	if displayRows > a.height-2 {
+		displayRows = a.height - 2
+	}
+	if displayCols < 1 {
+		displayCols = 1
+	}
 	if displayRows < 1 {
 		displayRows = 1
 	}
@@ -3381,6 +3435,7 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageModalEncoded = m.encoded
 		a.imageModalCols = m.cols
 		a.imageModalRows = m.rows
+		a.imageModalURL = m.rawURL
 		a.imageModalOpen = true
 		a.chatrooms = a.chatrooms.SetAnimPaused(true)
 		a.cmail = a.cmail.SetAnimPaused(true)
