@@ -446,6 +446,14 @@ type App struct {
 	// image URLs always open in the OS browser even if a protocol is detected.
 	imageViewer string
 
+	// graphicsProtocolName is the user's raw override preference from
+	// config.GraphicsProtocol ("" autodetects; "kitty"/"iterm2"/"sixel" forces a
+	// choice). Kept alongside the already-resolved graphicsProtocol so the
+	// settings screen can display/edit it; saving re-resolves graphicsProtocol
+	// (see settingsSavedMsg handling) without re-running the Sixel DA1 probe,
+	// which requires raw terminal access before Bubble Tea takes over stdin.
+	graphicsProtocolName string
+
 	// inlineImages is the user's raw preference from config.InlineImages.
 	// See canInlineImages for the fully-gated value broadcast to screens.
 	inlineImages bool
@@ -577,6 +585,7 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.wanderLust = s.WanderLust
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
+	a.graphicsProtocolName = s.GraphicsProtocol
 	a.inlineImages = s.InlineImages
 	a.imageScale = s.GetImageScale()
 	a.layoutName = s.Layout
@@ -804,7 +813,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -1446,6 +1455,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
+		gp := msg.GraphicsProtocol
 		ii := msg.InlineImages
 		ln := msg.LayoutName
 		return a, func() tea.Msg {
@@ -1459,10 +1469,11 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
+				cfg.GraphicsProtocol = gp
 				cfg.InlineImages = ii
 				cfg.Layout = ln
 			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, inlineImages: ii, layoutName: ln}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -1471,16 +1482,28 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
+		a.graphicsProtocolName = msg.graphicsProtocol
+		if proto, ok := imgview.ProtocolFromName(msg.graphicsProtocol); ok {
+			a.graphicsProtocol = proto
+		} else {
+			// "" (auto): re-resolve via env-var detection only. The Sixel DA1
+			// probe (imgview.ProbeSixel) needs raw terminal access before Bubble
+			// Tea takes over stdin, so it can't safely re-run mid-session — see
+			// its doc comment. Best-effort here; a full restart re-probes Sixel.
+			a.graphicsProtocol = imgview.DetectProtocol()
+		}
 		a.inlineImages = msg.inlineImages
 		a.layoutName = msg.layoutName
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.inlineImages, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
+		var notifyCmd tea.Cmd
+		a, notifyCmd = a.notify(notifyInfo, "settings saved")
 		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
-			var cmds []tea.Cmd
+			cmds := []tea.Cmd{notifyCmd}
 			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < min {
 				cmds = append(cmds, a.loadFeedPageCmd(cursor))
 			}
@@ -1494,11 +1517,9 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 					cmds = append(cmds, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), cursor))
 				}
 			}
-			if len(cmds) > 0 {
-				return a, tea.Batch(cmds...), true
-			}
+			return a, tea.Batch(cmds...), true
 		}
-		return a, nil, true
+		return a, notifyCmd, true
 
 	case wanderTickMsg:
 		if msg.gen != a.sessionGen {
@@ -3857,13 +3878,14 @@ type replyEditedMsg struct {
 }
 type settingsLoadedMsg struct{ settings model.Settings }
 type settingsSavedMsg struct {
-	settings       model.Settings
-	wanderLust     bool
-	maxThreadDepth int
-	timezone       string
-	imageViewer    string
-	inlineImages   bool
-	layoutName     string
+	settings         model.Settings
+	wanderLust       bool
+	maxThreadDepth   int
+	timezone         string
+	imageViewer      string
+	graphicsProtocol string
+	inlineImages     bool
+	layoutName       string
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made

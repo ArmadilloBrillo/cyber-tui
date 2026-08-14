@@ -41,6 +41,15 @@ Set `"graphicsProtocol"` in `~/.cyber-tui.json`:
 `cmd/cyber-tui/main.go` checks the override first; if `ProtocolFromName` recognizes
 the value, detection and the DA1 probe are skipped entirely.
 
+The same override is also editable live from the Settings screen (nested
+under "image viewer", shown only when that's set to `terminal`), as an
+`auto`/`kitty`/`iterm2`/`sixel` enum — `"none"` isn't offered there since it
+disables the feature rather than picking a protocol, and stays config-file-only.
+Choosing `auto` mid-session re-resolves via `imgview.DetectProtocol()` (env
+vars) only; it does not re-run the Sixel DA1 probe, since that requires raw
+terminal access before Bubble Tea takes over stdin (see `ProbeSixel`'s doc
+comment) — a full restart is needed to re-probe Sixel.
+
 ## Diagnosing further protocol issues
 
 `cfg.Debug: true` (already-existing `debug` config key) redirects the standard

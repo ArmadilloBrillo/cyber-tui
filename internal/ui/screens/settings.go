@@ -24,6 +24,8 @@ type settingsItem struct {
 	// Enum items: getEnum reads, cycle advances by delta (wraps).
 	getEnum func(m SettingsModel) string
 	cycle   func(m SettingsModel, delta int) SettingsModel
+	// showIf, when set, hides the item from the flat list unless it returns true.
+	showIf func(m SettingsModel) bool
 }
 
 // settingsGroup is a named section of related rows.
@@ -167,9 +169,37 @@ var settingsGroups = []settingsGroup{
 				},
 			},
 			{
-				label: "inline images (experimental)", kind: "bool",
+				label: "  graphics protocol", kind: "enum",
+				options: []string{"auto", "kitty", "iterm2", "sixel"},
+				getEnum: func(m SettingsModel) string {
+					if m.graphicsProtocol == "" {
+						return "auto"
+					}
+					return m.graphicsProtocol
+				},
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					cur := m.graphicsProtocol
+					if cur == "" {
+						cur = "auto"
+					}
+					next := cycleStringEnum(cur, []string{"auto", "kitty", "iterm2", "sixel"}, delta)
+					if next == "auto" {
+						next = ""
+					}
+					m.graphicsProtocol = next
+					return m
+				},
+				showIf: func(m SettingsModel) bool {
+					return m.imageViewer != "browser"
+				},
+			},
+			{
+				label: "  inline images (experimental)", kind: "bool",
 				getBool: func(m SettingsModel) bool { return m.inlineImages },
 				toggle:  func(m SettingsModel) SettingsModel { m.inlineImages = !m.inlineImages; return m },
+				showIf: func(m SettingsModel) bool {
+					return m.imageViewer != "browser"
+				},
 			},
 		},
 	},
@@ -183,52 +213,30 @@ var settingsGroups = []settingsGroup{
 			},
 		},
 	},
-	{
-		title: "layout",
-		items: []settingsItem{
-			{
-				label: "layout", kind: "enum",
-				options: []string{"tabs", "miller"},
-				getEnum: func(m SettingsModel) string {
-					if m.layoutName == "miller" {
-						return "miller"
-					}
-					return "tabs"
-				},
-				cycle: func(m SettingsModel, delta int) SettingsModel {
-					cur := m.layoutName
-					if cur == "" {
-						cur = "tabs"
-					}
-					m.layoutName = cycleStringEnum(cur, []string{"tabs", "miller"}, delta)
-					return m
-				},
-			},
-		},
-	},
 }
 
 // SettingsModel is the Settings screen.
 type SettingsModel struct {
-	settings               model.Settings // live/edited values
-	original               model.Settings // last saved baseline
-	wanderLust             bool           // live local config value
-	originalWanderLust     bool           // last saved baseline for wanderLust
-	maxThreadDepth         int            // live local config value (1–5)
-	originalMaxThreadDepth int            // last saved baseline
-	timezone               string         // live local config value (UTC offset label)
-	originalTimezone       string         // last saved baseline
-	imageViewer            string         // live local config value ("terminal" or "browser")
-	originalImageViewer    string         // last saved baseline
-	inlineImages           bool           // live local config value
-	originalInlineImages   bool           // last saved baseline
-	layoutName             string         // live local config value ("tabs" or "miller")
-	originalLayoutName     string         // last saved baseline
-	cursor                 int
-	width                  int
-	height                 int
-	saved                  bool
-	err                    error
+	settings                 model.Settings // live/edited values
+	original                 model.Settings // last saved baseline
+	wanderLust               bool           // live local config value
+	originalWanderLust       bool           // last saved baseline for wanderLust
+	maxThreadDepth           int            // live local config value (1–5)
+	originalMaxThreadDepth   int            // last saved baseline
+	timezone                 string         // live local config value (UTC offset label)
+	originalTimezone         string         // last saved baseline
+	imageViewer              string         // live local config value ("terminal" or "browser")
+	originalImageViewer      string         // last saved baseline
+	graphicsProtocol         string         // live local config value ("" auto, or "kitty"/"iterm2"/"sixel")
+	originalGraphicsProtocol string         // last saved baseline
+	inlineImages             bool           // live local config value
+	originalInlineImages     bool           // last saved baseline
+	layoutName               string         // live local config value ("tabs" or "miller")
+	originalLayoutName       string         // last saved baseline
+	cursor                   int
+	width                    int
+	height                   int
+	err                      error
 }
 
 // NewSettingsModel creates a new SettingsModel.
@@ -240,14 +248,12 @@ func NewSettingsModel() SettingsModel {
 func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 	m.settings = s
 	m.original = s
-	m.saved = false
 	m.err = nil
 	return m
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, imageViewer string, inlineImages bool, layoutName string) SettingsModel {
-	m.saved = true
+func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, layoutName string) SettingsModel {
 	m.err = nil
 	m.original = m.settings
 	m.wanderLust = wanderLust
@@ -258,6 +264,8 @@ func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, i
 	m.originalTimezone = timezone
 	m.imageViewer = imageViewer
 	m.originalImageViewer = imageViewer
+	m.graphicsProtocol = graphicsProtocol
+	m.originalGraphicsProtocol = graphicsProtocol
 	m.inlineImages = inlineImages
 	m.originalInlineImages = inlineImages
 	m.layoutName = layoutName
@@ -278,6 +286,7 @@ func (m SettingsModel) IsDirty() bool {
 		m.maxThreadDepth != m.originalMaxThreadDepth ||
 		m.timezone != m.originalTimezone ||
 		m.imageViewer != m.originalImageViewer ||
+		m.graphicsProtocol != m.originalGraphicsProtocol ||
 		m.inlineImages != m.originalInlineImages ||
 		m.layoutName != m.originalLayoutName
 }
@@ -292,11 +301,17 @@ func settingsEqual(a, b model.Settings) bool {
 		a.TimeDisplayFormat == b.TimeDisplayFormat
 }
 
-// flatItems returns the flat ordered list of all items across all groups.
-func flatItems() []settingsItem {
+// flatItems returns the flat ordered list of all items across all groups,
+// skipping any item whose showIf returns false for m.
+func flatItems(m SettingsModel) []settingsItem {
 	var out []settingsItem
 	for _, g := range settingsGroups {
-		out = append(out, g.items...)
+		for _, item := range g.items {
+			if item.showIf != nil && !item.showIf(m) {
+				continue
+			}
+			out = append(out, item)
+		}
 	}
 	return out
 }
@@ -363,6 +378,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			}
 			m.imageViewer = iv
 			m.originalImageViewer = iv
+			m.graphicsProtocol = msg.GraphicsProtocol
+			m.originalGraphicsProtocol = msg.GraphicsProtocol
 			m.inlineImages = msg.InlineImages
 			m.originalInlineImages = msg.InlineImages
 			m.layoutName = msg.LayoutName
@@ -376,7 +393,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		items := flatItems()
+		items := flatItems(m)
 		total := len(items)
 
 		switch msg.String() {
@@ -391,21 +408,20 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		case " ", "enter": // space (bubbletea KeySpace.String() == " ") or enter
 			if m.cursor < total && items[m.cursor].kind == "bool" {
 				m = items[m.cursor].toggle(m)
-				m.saved = false
 			}
 			return m, nil
 
 		case "tab":
 			if m.cursor < total && items[m.cursor].kind == "enum" {
 				m = items[m.cursor].cycle(m, +1)
-				m.saved = false
+				m.cursor = min(m.cursor, len(flatItems(m))-1)
 			}
 			return m, nil
 
 		case "shift+tab":
 			if m.cursor < total && items[m.cursor].kind == "enum" {
 				m = items[m.cursor].cycle(m, -1)
-				m.saved = false
+				m.cursor = min(m.cursor, len(flatItems(m))-1)
 			}
 			return m, nil
 
@@ -416,11 +432,12 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				td := m.maxThreadDepth
 				tz := m.timezone
 				iv := m.imageViewer
+				gp := m.graphicsProtocol
 				ii := m.inlineImages
 				ln := m.layoutName
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, InlineImages: ii, LayoutName: ln, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, LayoutName: ln, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -432,9 +449,9 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.maxThreadDepth = m.originalMaxThreadDepth
 			m.timezone = m.originalTimezone
 			m.imageViewer = m.originalImageViewer
+			m.graphicsProtocol = m.originalGraphicsProtocol
 			m.inlineImages = m.originalInlineImages
 			m.layoutName = m.originalLayoutName
-			m.saved = false
 			m.err = nil
 			return m, nil
 		}
@@ -456,6 +473,9 @@ func (m SettingsModel) View() string {
 		rows = append(rows, theme.Title.Render(g.title))
 
 		for _, item := range g.items {
+			if item.showIf != nil && !item.showIf(m) {
+				continue
+			}
 			selected := m.cursor == flatIdx
 			if selected {
 				cursorRow = len(rows) // track which row the cursor is on
@@ -532,8 +552,6 @@ func (m SettingsModel) View() string {
 	var footer string
 	if m.err != nil {
 		footer = theme.Error.Render("error: " + m.err.Error())
-	} else if m.saved {
-		footer = theme.Highlight.Render("saved!")
 	} else if m.IsDirty() {
 		footer = theme.Subtle.Render("ctrl+s · save   esc · revert")
 	} else {
