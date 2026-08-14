@@ -1012,3 +1012,25 @@ func TestMillerHasFocusedInput_CMailDoesNotTrapNavAtFocusMenu(t *testing.T) {
 		t.Error("expected HasFocusedInput false once focus has moved to the spaces column, even with the conversation still open")
 	}
 }
+
+// --- ModalMaxWidth: keep the centered-on-full-width image modal off Miller's sidebar ---
+
+func TestTabsLayout_ModalMaxWidth_IsFullWidth(t *testing.T) {
+	if got := (TabsLayout{}).ModalMaxWidth(120); got != 120 {
+		t.Errorf("ModalMaxWidth(120) = %d, want 120 (no side chrome)", got)
+	}
+}
+
+func TestMillerLayout_ModalMaxWidth_ReservesTwiceTheSidebar(t *testing.T) {
+	// millerSidebarWidth = 22; centering means avoiding a left-side
+	// obstruction of width r requires reserving 2*r off the total.
+	if got := (MillerLayout{}).ModalMaxWidth(120); got != 120-2*millerSidebarWidth {
+		t.Errorf("ModalMaxWidth(120) = %d, want %d", got, 120-2*millerSidebarWidth)
+	}
+}
+
+func TestMillerLayout_ModalMaxWidth_FloorsAtOne(t *testing.T) {
+	if got := (MillerLayout{}).ModalMaxWidth(10); got != 1 {
+		t.Errorf("ModalMaxWidth(10) = %d, want 1 (terminal narrower than 2x sidebar)", got)
+	}
+}

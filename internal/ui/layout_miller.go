@@ -296,6 +296,14 @@ func (l MillerLayout) HasFocusedInput(a App) bool {
 
 func (l MillerLayout) ContentWidth(termWidth int) int { return termWidth - millerSidebarWidth }
 
+// ModalMaxWidth: modals are centered against the full termWidth (see
+// Layout.ModalMaxWidth's doc comment), so avoiding the sidebar requires
+// reserving 2*millerSidebarWidth, not just millerSidebarWidth — half the
+// reserved space lands as unused margin on the right, which is fine.
+func (l MillerLayout) ModalMaxWidth(termWidth int) int {
+	return max(1, termWidth-2*millerSidebarWidth)
+}
+
 // ContentHeight inflates the height sent to screens so their viewport (which subtracts
 // theme.ChromeHeight = 3) fills the content pane exactly. Miller layout uses 2 chrome rows
 // (column header + status bar), so we add back only 1 of the 2 rows TabsLayout uses.

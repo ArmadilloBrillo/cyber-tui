@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/api"
+	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
@@ -2810,6 +2811,216 @@ func TestUpdate_ImageModal_OtherKey_ClosesAndClearsCarousel(t *testing.T) {
 	}
 	if a2.imageCache != nil {
 		t.Error("expected imageCache to be cleared on close")
+	}
+}
+
+// --- Image modal scale: live +/- adjustment (config.Config.ImageScale) ---
+
+// modalTestImage is a 100x200px image, chosen so its native cell size at the
+// fallback cell pixel default (10x20, since TerminalCellPixelSize returns
+// ok=false in tests) is a clean 10x10 cols/rows — makes expected imageScale
+// values after a guaranteed-1-cell step easy to state exactly.
+func modalTestImage() image.Image {
+	return image.NewRGBA(image.Rect(0, 0, 100, 200))
+}
+
+func TestUpdate_ImageModal_Plus_IncreasesScaleAndRerenders(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{modalTestImage()}}}
+
+	m, cmd := a.Update(keyMsg("+"))
+	a2 := m.(App)
+	if !a2.imageModalOpen {
+		t.Error("expected the modal to stay open on a scale-adjust keypress")
+	}
+	// nativeCols=10, step=max(1, round(10*0.1))=1, currentCols=10 -> targetCols=11 -> scale=1.1.
+	if want := 1.1; a2.imageScale != want {
+		t.Errorf("imageScale = %v, want %v", a2.imageScale, want)
+	}
+	if cmd == nil {
+		t.Fatal("expected a re-render cmd for the current modal image")
+	}
+}
+
+func TestUpdate_ImageModal_Minus_DecreasesScale(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageModalOpen = true
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{modalTestImage()}}}
+
+	m, _ := a.Update(keyMsg("-"))
+	a2 := m.(App)
+	if want := 0.9; a2.imageScale != want {
+		t.Errorf("imageScale = %v, want %v", a2.imageScale, want)
+	}
+}
+
+func TestAdjustImageScale_ClampsAtBounds(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalURL = "https://x.com/a.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{modalTestImage()}}}
+	a.imageScale = config.MaxImageScale
+
+	a2, cmd := a.adjustImageScale(imageScaleStep)
+	if a2.imageScale != config.MaxImageScale {
+		t.Errorf("expected clamp at MaxImageScale (%v), got %v", config.MaxImageScale, a2.imageScale)
+	}
+	if cmd == nil {
+		t.Error("expected a re-render cmd even when already at the max (still a legitimate re-render request)")
+	}
+
+	a.imageScale = config.MinImageScale
+	a3, _ := a.adjustImageScale(-imageScaleStep)
+	if a3.imageScale != config.MinImageScale {
+		t.Errorf("expected clamp at MinImageScale (%v), got %v", config.MinImageScale, a3.imageScale)
+	}
+}
+
+// TestAdjustImageScale_NoCacheIsNoop confirms a scale-adjust keypress before
+// the modal's image has actually landed in the cache (shouldn't normally
+// happen — the cache is populated the instant the modal opens) doesn't
+// panic on the map lookup.
+func TestAdjustImageScale_NoCacheIsNoop(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalURL = "https://x.com/never-cached.jpg"
+	a.imageScale = 1.0
+
+	a2, cmd := a.adjustImageScale(imageScaleStep)
+	if a2.imageScale != 1.0 {
+		t.Errorf("expected imageScale unchanged, got %v", a2.imageScale)
+	}
+	if cmd != nil {
+		t.Error("expected no cmd when there's nothing cached to re-render")
+	}
+}
+
+// TestAdjustImageScale_TinyImage_AlwaysMovesAtLeastOneCell confirms the
+// guaranteed-visible-step design: even for an image whose native size is a
+// single cell (so a flat 10% step would round to nothing), a press still
+// moves the box by at least 1 cell — this is the property that was missing
+// before the fix (see docs/46-image-modal-scale.md): +/- appeared to do
+// nothing for typical images because fitBox's never-upscale cap silently
+// absorbed the old percent-of-terminal-box scale steps.
+func TestAdjustImageScale_TinyImage_AlwaysMovesAtLeastOneCell(t *testing.T) {
+	a := loggedInApp()
+	a.imageModalURL = "https://x.com/tiny.jpg"
+	a.imageCache = map[string]cachedImage{"https://x.com/tiny.jpg": {frames: []image.Image{image.NewRGBA(image.Rect(0, 0, 2, 2))}}}
+	a.imageScale = 1.0 // nativeCols=1 at the fallback cell size, so scale=1.0 -> currentCols=1
+
+	a2, _ := a.adjustImageScale(imageScaleStep)
+	// step=max(1, round(1*0.1))=1 -> targetCols=2 -> scale=2.0 (also happens
+	// to be config.MaxImageScale here, since nativeCols=1 leaves no room
+	// between "native" and "2x native" other than a single whole cell).
+	if a2.imageScale != config.MaxImageScale {
+		t.Errorf("imageScale = %v, want %v (a 1-cell step from a 1-cell native size)", a2.imageScale, config.MaxImageScale)
+	}
+}
+
+// TestOpenImageInTerminal_Scale_ChangesComputedBox confirms imageScale
+// actually reaches the encoder: a larger scale should never produce a
+// smaller cols/rows box than a smaller scale, for a source image large
+// enough that the display box (not the image's native size) is the
+// limiting factor — see openImageInTerminal's displayCols/displayRows.
+func TestOpenImageInTerminal_Scale_ChangesComputedBox(t *testing.T) {
+	bigImg := image.NewRGBA(image.Rect(0, 0, 1000, 1000))
+
+	render := func(scale float64) (cols, rows int) {
+		a := loggedInApp()
+		a.graphicsProtocol = imgview.ProtocolKitty
+		a.width, a.height = 100, 50
+		a.imageScale = scale
+		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{bigImg}}}
+		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+		msg := cmd().(imageFetchedMsg)
+		if msg.err != nil {
+			t.Fatalf("unexpected error: %v", msg.err)
+		}
+		return msg.cols, msg.rows
+	}
+
+	smallCols, smallRows := render(0.5)
+	bigCols, bigRows := render(1.5)
+	if bigCols < smallCols || bigRows < smallRows {
+		t.Errorf("expected scale 1.5 to produce a box at least as large as scale 0.5, got %dx%d vs %dx%d", bigCols, bigRows, smallCols, smallRows)
+	}
+	if bigCols == smallCols && bigRows == smallRows {
+		t.Error("expected scale to actually change the computed box for a large source image")
+	}
+}
+
+// TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap confirms a
+// high-scale image modal never grows wide enough, in Miller layout, for its
+// centered position (compositeOverlays centers against the full terminal
+// width, not the content pane — see Layout.ModalMaxWidth's doc comment) to
+// splice into the nav sidebar. TabsLayout, with no side chrome, is
+// unaffected and still clamps to the full terminal width.
+func TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap(t *testing.T) {
+	bigImg := image.NewRGBA(image.Rect(0, 0, 2000, 2000))
+
+	render := func(layout Layout) int {
+		a := loggedInApp()
+		a.graphicsProtocol = imgview.ProtocolKitty
+		a.layout = layout
+		a.width, a.height = 120, 50
+		a.imageScale = config.MaxImageScale
+		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{bigImg}}}
+		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+		msg := cmd().(imageFetchedMsg)
+		if msg.err != nil {
+			t.Fatalf("unexpected error: %v", msg.err)
+		}
+		return msg.cols
+	}
+
+	tabsCols := render(TabsLayout{})
+	millerCols := render(MillerLayout{})
+
+	if tabsCols > 120 {
+		t.Errorf("TabsLayout: cols=%d, want <= terminal width 120", tabsCols)
+	}
+	if want := (MillerLayout{}).ModalMaxWidth(120); millerCols > want {
+		t.Errorf("MillerLayout: cols=%d, want <= ModalMaxWidth(120)=%d (would splice into the sidebar when centered)", millerCols, want)
+	}
+	if millerCols >= tabsCols {
+		t.Errorf("expected MillerLayout to clamp narrower than TabsLayout for the same terminal width, got miller=%d tabs=%d", millerCols, tabsCols)
+	}
+}
+
+// TestOpenImageInTerminal_NeverExceedsScreenMargin confirms the modal never
+// occupies more than modalScreenMarginFrac (80%) of the terminal in either
+// dimension, on any layout, even at max scale with a huge source image —
+// see modalScreenMarginFrac's doc comment for why this headroom matters
+// beyond just avoiding Miller's sidebar (a documented class of terminal
+// rendering desync around large raw image payloads, reported live as
+// surrounding UI chrome getting visibly corrupted at close to full-screen
+// modal size).
+func TestOpenImageInTerminal_NeverExceedsScreenMargin(t *testing.T) {
+	hugeImg := image.NewRGBA(image.Rect(0, 0, 6000, 6000))
+
+	for _, layout := range []Layout{TabsLayout{}, MillerLayout{}} {
+		a := loggedInApp()
+		a.graphicsProtocol = imgview.ProtocolKitty
+		a.layout = layout
+		a.width, a.height = 300, 100
+		a.imageScale = config.MaxImageScale
+		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{hugeImg}}}
+		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+		msg := cmd().(imageFetchedMsg)
+		if msg.err != nil {
+			t.Fatalf("unexpected error: %v", msg.err)
+		}
+		maxCols := int(float64(a.width) * modalScreenMarginFrac)
+		maxRows := int(float64(a.height) * modalScreenMarginFrac)
+		if msg.cols > maxCols {
+			t.Errorf("%T: cols=%d, want <= %d (80%% of width %d)", layout, msg.cols, maxCols, a.width)
+		}
+		if msg.rows > maxRows {
+			t.Errorf("%T: rows=%d, want <= %d (80%% of height %d)", layout, msg.rows, maxRows, a.height)
+		}
 	}
 }
 

@@ -27,6 +27,15 @@ type Layout interface {
 	// theme.ChromeHeight to get viewport height; layouts that use fewer chrome rows must compensate
 	// so the viewport fills the available content pane exactly.
 	ContentHeight(termHeight int) int
+	// ModalMaxWidth returns the widest a modal can be rendered at without its
+	// left edge dipping into reserved side chrome (e.g. Miller layout's nav
+	// sidebar), given every modal is centered against the *full* termWidth by
+	// compositeOverlays/overlayCenter, not just the content pane. Centering
+	// splits the unused space evenly on both sides, so avoiding a left-side
+	// obstruction of width r requires reserving 2*r off the total, not just
+	// r — see MillerLayout's implementation. Layouts with no side chrome
+	// (TabsLayout) return termWidth unchanged.
+	ModalMaxWidth(termWidth int) int
 	// NeedsCompactAutoFill returns the minimum number of items needed to fill the compact list
 	// column at the given terminal height. Returns 0 if the layout has no compact list column.
 	// App uses this to auto-fetch additional pages after the initial load.

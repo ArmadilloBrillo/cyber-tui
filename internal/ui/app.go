@@ -450,12 +450,22 @@ type App struct {
 	// See canInlineImages for the fully-gated value broadcast to screens.
 	inlineImages bool
 
+	// imageScale multiplies the computed size of the fullscreen image modal.
+	// Starts from config.Config.GetImageScale() and is live-adjustable with
+	// +/- while the modal is open (session-only, not persisted). <= 0 is
+	// treated as the default (1.0) — see openImageInTerminal.
+	imageScale float64
+
 	// imageModal holds the state for the inline image overlay. When imageModalOpen
 	// is true, View composites the encoded image sequence over the base content.
 	imageModalOpen    bool
 	imageModalEncoded string
 	imageModalCols    int
 	imageModalRows    int
+	// imageModalURL is the URL of the currently displayed modal image, kept
+	// so a live +/- scale adjustment can re-run openImageInTerminal for the
+	// same image (a cache hit, so it only re-encodes, not re-fetches).
+	imageModalURL string
 	// imageModalPrevRows/Cols are the modal's interior size as of the
 	// previous frame — 0 means no previous box to worry about (a fresh
 	// open, not a carousel cycle). Used by compositeOverlays to force the
@@ -568,6 +578,7 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
 	a.inlineImages = s.InlineImages
+	a.imageScale = s.GetImageScale()
 	a.layoutName = s.Layout
 	a.layout = layoutFromName(s.Layout)
 	a.customPalette = s.CustomPalette
@@ -674,6 +685,12 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 			case "right":
 				return a.cycleImageCarousel(+1)
 			}
+		}
+		switch km.String() {
+		case "+", "=":
+			return a.adjustImageScale(imageScaleStep)
+		case "-":
+			return a.adjustImageScale(-imageScaleStep)
 		}
 		a.imageModalOpen = false
 		a.chatrooms = a.chatrooms.SetAnimPaused(false)
@@ -3110,11 +3127,11 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, place
 		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 		switch proto {
 		case imgview.ProtocolITerm2:
-			encoded, _, rows, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH)
+			encoded, _, rows, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH, false)
 		case imgview.ProtocolSixel:
-			encoded, _, rows, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH)
+			encoded, _, rows, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH, false)
 		case imgview.ProtocolKitty:
-			encoded, _, rows, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID)
+			encoded, _, rows, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID, false)
 		default:
 			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
 		}
@@ -3266,17 +3283,116 @@ func openExternalURL(u string) tea.Cmd {
 	}
 }
 
+// imageScaleStep is the fraction of the image's own native size that +/-
+// nudges App.imageScale by per keypress while the fullscreen image modal is
+// open — scale is relative to native size (see openImageInTerminal), not
+// the terminal window, so this is normally a visible change. adjustImageScale
+// additionally guarantees at least a 1-cell step regardless of this fraction,
+// for images small enough that 10% of their native size would otherwise
+// round away to nothing. Bounds match config.Config.GetImageScale's clamp.
+const imageScaleStep = 0.1
+
+// modalScreenMarginFrac caps the image modal at 80% of the terminal's
+// width/height on every layout, regardless of scale — the exact fraction
+// the modal was hard-capped to before native-relative scaling and
+// upscaling existed (the original "a.width*4/5" box). Raw Sixel/iTerm2/
+// Kitty image payloads are spliced directly into Bubble Tea's rendered
+// frame via cursor-jump sequences (compositeOverlays, layout.go) and are a
+// documented source of terminal-side rendering desync when they get large
+// — see sixelFullRepaint's and forceRowsDirty's doc comments (layout.go)
+// for the same class of bug fought before scale ever let the modal approach
+// full-screen size. Keeping this headroom is a mitigation, not a fix for
+// that underlying fragility — restores the margin that kept it from
+// surfacing in practice.
+const modalScreenMarginFrac = 0.8
+
+// adjustImageScale nudges the live modal image scale by delta (positive to
+// grow, negative to shrink) and re-runs openImageInTerminal for the
+// currently open image so the modal re-renders at the new scale
+// immediately. Unlike a flat float add, the step is computed in terminal
+// cells against the image's own native size (imgview.NativeCellBox) and
+// floored at 1 cell — so every press changes the rendered size by at least
+// one cell until the true min (config.MinImageScale) or max
+// (config.MaxImageScale) bound is hit, rather than being silently absorbed
+// by rounding (or, before this design, by fitBox's never-upscale native-size
+// cap — see docs/46-image-modal-scale.md for the investigation that found
+// this). No-op if the modal's image isn't cached yet, which shouldn't happen
+// while it's open (the cache is populated the moment it opens) but avoids a
+// lookup panic.
+func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
+	cached, hit := a.imageCache[a.imageModalURL]
+	if !hit || len(cached.frames) == 0 {
+		return a, nil
+	}
+	scale := a.imageScale
+	if scale <= 0 {
+		scale = 1.0
+	}
+	cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
+	b := cached.frames[0].Bounds()
+	nativeCols, _ := imgview.NativeCellBox(b.Dx(), b.Dy(), cellW, cellH)
+
+	currentCols := int(float64(nativeCols)*scale + 0.5)
+	step := int(float64(nativeCols)*imageScaleStep + 0.5)
+	if step < 1 {
+		step = 1
+	}
+	targetCols := currentCols + step
+	if delta < 0 {
+		targetCols = currentCols - step
+	}
+	minCols := int(float64(nativeCols) * config.MinImageScale)
+	if minCols < 1 {
+		minCols = 1
+	}
+	maxCols := int(float64(nativeCols) * config.MaxImageScale)
+	if maxCols < minCols {
+		maxCols = minCols
+	}
+	if targetCols < minCols {
+		targetCols = minCols
+	}
+	if targetCols > maxCols {
+		targetCols = maxCols
+	}
+
+	a.imageScale = float64(targetCols) / float64(nativeCols)
+	return a.openImageInTerminal(a.imageModalURL)
+}
+
 // openImageInTerminal fetches rawURL, encodes it for the detected graphics
 // protocol, and returns a command that sends an imageFetchedMsg when done.
 // GIF URLs are decoded and encoded frame-by-frame so the modal can animate.
+//
+// The target display box is a.imageScale multiplied against the image's own
+// native size in cells (imgview.NativeCellBox), not a fraction of the
+// terminal window — deliberately, so a scale change always has a
+// proportional, visible effect: a box expressed as "80% of the terminal"
+// mostly went unnoticed for typical post images, which are usually much
+// smaller than that box to begin with, so fitBox's never-upscale cap
+// silently absorbed every "+" press and "-" needed many presses before
+// crossing below the image's own native size (see
+// docs/46-image-modal-scale.md). Upscaling past native size is allowed here
+// (encoders called with allowUpscale=true) — unlike inline thumbnails, this
+// is a user-driven zoom the caller explicitly asked for.
+//
+// width is clamped through a.layout.ModalMaxWidth rather than raw a.width:
+// the modal is centered against the full terminal width by
+// compositeOverlays regardless of layout, so in Miller layout a box wide
+// enough to approach a.width would have its left edge splice into the nav
+// sidebar — see ModalMaxWidth's doc comment. Both width and height are then
+// additionally capped at modalScreenMarginFrac of the terminal size — see
+// its doc comment for why the modal must stay well clear of the real screen
+// edges, not just merely within them.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
 	isGIF := urlutil.IsGIFURL(rawURL)
-	displayCols := a.width * 4 / 5
-	displayRows := a.height*4/5 - 2 // reserve 2 rows for the modal border
-	if displayRows < 1 {
-		displayRows = 1
+	scale := a.imageScale
+	if scale <= 0 {
+		scale = 1.0
 	}
+	width := min(a.layout.ModalMaxWidth(a.width), int(float64(a.width)*modalScreenMarginFrac))
+	height := min(a.height-2, int(float64(a.height)*modalScreenMarginFrac)) // reserve 2 rows for the modal border
 	a.imageFetchGen++
 	gen := a.imageFetchGen
 	cached, hit := a.imageCache[rawURL]
@@ -3301,26 +3417,42 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 				delays = nil
 			}
 		}
+		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
+		nativeBounds := frames[0].Bounds()
+		nativeCols, nativeRows := imgview.NativeCellBox(nativeBounds.Dx(), nativeBounds.Dy(), cellW, cellH)
+		displayCols := int(float64(nativeCols) * scale)
+		displayRows := int(float64(nativeRows) * scale)
+		if displayCols > width {
+			displayCols = width
+		}
+		if displayRows > height {
+			displayRows = height
+		}
+		if displayCols < 1 {
+			displayCols = 1
+		}
+		if displayRows < 1 {
+			displayRows = 1
+		}
 		encodedFrames := make([]string, len(frames))
 		var cols, rows int
-		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 		for i, img := range frames {
 			switch proto {
 			case imgview.ProtocolKitty:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, cellW, cellH, kittyModalPlacementID)
+				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, cellW, cellH, kittyModalPlacementID, true)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			case imgview.ProtocolITerm2:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows, cellW, cellH)
+				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows, cellW, cellH, true)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			case imgview.ProtocolSixel:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH)
+				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH, true)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
@@ -3381,6 +3513,7 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.imageModalEncoded = m.encoded
 		a.imageModalCols = m.cols
 		a.imageModalRows = m.rows
+		a.imageModalURL = m.rawURL
 		a.imageModalOpen = true
 		a.chatrooms = a.chatrooms.SetAnimPaused(true)
 		a.cmail = a.cmail.SetAnimPaused(true)

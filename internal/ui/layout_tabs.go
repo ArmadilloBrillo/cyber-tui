@@ -130,6 +130,10 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 func (l TabsLayout) ContentWidth(termWidth int) int   { return termWidth }
 func (l TabsLayout) ContentHeight(termHeight int) int { return termHeight }
 
+// ModalMaxWidth: no side chrome in this layout (the tab bar is a top row,
+// not a side pane), so a modal can use the full terminal width.
+func (l TabsLayout) ModalMaxWidth(termWidth int) int { return termWidth }
+
 func (l TabsLayout) renderTabBar(a App) string {
 	var tabs string
 	for _, t := range visibleTabs() {
