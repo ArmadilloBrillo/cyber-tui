@@ -79,6 +79,32 @@ Two ways to set the scale:
 The resulting box is still clamped to the terminal's actual width/height
 after scaling, so a large scale can't request a box bigger than the screen.
 
+## Miller layout: clamping to the terminal wasn't enough
+
+Every modal (theme picker, help, URL picker, and the image modal) is
+centered against the *full* terminal width by `compositeOverlays`/
+`overlayCenter` (`internal/ui/layout.go`), which splices the modal directly
+into the already-rendered frame — sidebar included for Miller layout
+(`internal/ui/layout_miller.go`, a 22-column nav pane on the left,
+`millerSidebarWidth`). Once upscaling let the image box approach the full
+terminal width, its centered left edge could dip into that sidebar and
+overwrite its text — reported live as the modal "pushing the sidebar all
+the way left."
+
+Clamping to raw terminal width wasn't sufficient: centering splits the
+unused space evenly on both sides, so avoiding a left-side obstruction of
+width `r` requires reserving `2*r` off the total (half the reservation lands
+as unused margin on the right, which is fine). `Layout.ModalMaxWidth(termWidth
+int) int` (`internal/ui/layout.go`) captures this per layout —
+`TabsLayout` returns `termWidth` unchanged (no side chrome, the tab bar is a
+top row); `MillerLayout` returns `termWidth - 2*millerSidebarWidth`, floored
+at 1. `openImageInTerminal` clamps `displayCols` against
+`a.layout.ModalMaxWidth(a.width)` instead of raw `a.width`.
+
+Scoped to the image modal rather than reworking `compositeOverlays` itself —
+the other modals have fixed, narrow content and have never been wide enough
+to trigger this.
+
 ## Non-fix
 
 This does not change the underlying protocol behavior (iTerm2 still

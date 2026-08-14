@@ -3361,6 +3361,12 @@ func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
 // docs/46-image-modal-scale.md). Upscaling past native size is allowed here
 // (encoders called with allowUpscale=true) — unlike inline thumbnails, this
 // is a user-driven zoom the caller explicitly asked for.
+//
+// width is clamped through a.layout.ModalMaxWidth rather than raw a.width:
+// the modal is centered against the full terminal width by
+// compositeOverlays regardless of layout, so in Miller layout a box wide
+// enough to approach a.width would have its left edge splice into the nav
+// sidebar — see ModalMaxWidth's doc comment.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
 	isGIF := urlutil.IsGIFURL(rawURL)
@@ -3368,7 +3374,7 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	if scale <= 0 {
 		scale = 1.0
 	}
-	width, height := a.width, a.height
+	width, height := a.layout.ModalMaxWidth(a.width), a.height
 	a.imageFetchGen++
 	gen := a.imageFetchGen
 	cached, hit := a.imageCache[rawURL]

@@ -2952,6 +2952,44 @@ func TestOpenImageInTerminal_Scale_ChangesComputedBox(t *testing.T) {
 	}
 }
 
+// TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap confirms a
+// high-scale image modal never grows wide enough, in Miller layout, for its
+// centered position (compositeOverlays centers against the full terminal
+// width, not the content pane — see Layout.ModalMaxWidth's doc comment) to
+// splice into the nav sidebar. TabsLayout, with no side chrome, is
+// unaffected and still clamps to the full terminal width.
+func TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap(t *testing.T) {
+	bigImg := image.NewRGBA(image.Rect(0, 0, 2000, 2000))
+
+	render := func(layout Layout) int {
+		a := loggedInApp()
+		a.graphicsProtocol = imgview.ProtocolKitty
+		a.layout = layout
+		a.width, a.height = 120, 50
+		a.imageScale = config.MaxImageScale
+		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{bigImg}}}
+		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+		msg := cmd().(imageFetchedMsg)
+		if msg.err != nil {
+			t.Fatalf("unexpected error: %v", msg.err)
+		}
+		return msg.cols
+	}
+
+	tabsCols := render(TabsLayout{})
+	millerCols := render(MillerLayout{})
+
+	if tabsCols > 120 {
+		t.Errorf("TabsLayout: cols=%d, want <= terminal width 120", tabsCols)
+	}
+	if want := (MillerLayout{}).ModalMaxWidth(120); millerCols > want {
+		t.Errorf("MillerLayout: cols=%d, want <= ModalMaxWidth(120)=%d (would splice into the sidebar when centered)", millerCols, want)
+	}
+	if millerCols >= tabsCols {
+		t.Errorf("expected MillerLayout to clamp narrower than TabsLayout for the same terminal width, got miller=%d tabs=%d", millerCols, tabsCols)
+	}
+}
+
 // --- Image cache: cycling back to an already-viewed image skips the fetch ---
 
 func TestOpenImageInTerminal_CacheHit_SkipsFetch(t *testing.T) {
