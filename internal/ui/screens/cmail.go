@@ -826,6 +826,12 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case InsertIconMsg:
+		if m.mode == cmailModeDetail {
+			m.input = insertAtCursor(m.input, msg.Icon)
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -1086,6 +1092,24 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 					}
 				}
 				return m, nil
+			case "pgup":
+				if m.selectedConv > 0 {
+					m.selectedConv = max(0, m.selectedConv-pageJumpItems)
+					if m.ready {
+						m.listVP.SetContent(m.renderConvCards())
+						m = m.ensureConvVisible()
+					}
+				}
+				return m, nil
+			case "pgdown":
+				if m.selectedConv < len(m.conversations)-1 {
+					m.selectedConv = min(len(m.conversations)-1, m.selectedConv+pageJumpItems)
+					if m.ready {
+						m.listVP.SetContent(m.renderConvCards())
+						m = m.ensureConvVisible()
+					}
+				}
+				return m, nil
 			case "enter":
 				if len(m.conversations) > 0 {
 					m.conversations[m.selectedConv].UnreadCount = 0
@@ -1184,6 +1208,26 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 			case "down":
 				m.viewport.ScrollDown(1)
 				return m, nil
+			case "pgup":
+				var sel []int
+				if m.activeConv != nil {
+					sel = selectableMessageIndices(m.activeConv.Messages, nil)
+				}
+				if len(sel) == 0 {
+					m.viewport.ScrollUp(m.viewport.Height)
+					return m.maybeLoadOlderConvMessages()
+				}
+				m.input.Blur()
+				m.selectedMsgID = m.activeConv.Messages[sel[len(sel)-1]].ID
+				m = m.refreshMessages()
+				m = m.ensureSelectedMessageVisible()
+				if len(sel) == 1 {
+					return m.maybeLoadOlderConvMessages()
+				}
+				return m, nil
+			case "pgdown":
+				m.viewport.ScrollDown(m.viewport.Height)
+				return m, nil
 			}
 		}
 	}
@@ -1267,6 +1311,41 @@ func (m CMailModel) updateCMailBrowsingKey(msg tea.KeyMsg) (CMailModel, tea.Cmd)
 		}
 		newPos, newOffset := millerPageNav(+1, m.viewport.Height, 0,
 			selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), curPos, m.viewport.YOffset)
+		m.selectedMsgID = m.activeConv.Messages[sel[newPos]].ID
+		m.viewport.SetYOffset(newOffset)
+		return m.refreshMessages(), nil
+	case "pgup":
+		if curPos == 0 {
+			return m.maybeLoadOlderConvMessages()
+		}
+		newPos, newOffset := curPos, m.viewport.YOffset
+		for i := 0; i < m.viewport.Height && newPos > 0; i++ {
+			newPos, newOffset = millerPageNav(-1, m.viewport.Height, 0,
+				selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), newPos, newOffset)
+		}
+		if newPos < 0 {
+			newPos = 0
+		}
+		m.selectedMsgID = m.activeConv.Messages[sel[newPos]].ID
+		m.viewport.SetYOffset(newOffset)
+		m = m.refreshMessages()
+		if newPos == 0 {
+			return m.maybeLoadOlderConvMessages()
+		}
+		return m, nil
+	case "pgdown":
+		if curPos >= len(sel)-1 {
+			m.selectedMsgID = ""
+			m.input.Focus()
+			m = m.refreshMessages()
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+		newPos, newOffset := curPos, m.viewport.YOffset
+		for i := 0; i < m.viewport.Height && newPos < len(sel)-1; i++ {
+			newPos, newOffset = millerPageNav(+1, m.viewport.Height, 0,
+				selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), newPos, newOffset)
+		}
 		m.selectedMsgID = m.activeConv.Messages[sel[newPos]].ID
 		m.viewport.SetYOffset(newOffset)
 		return m.refreshMessages(), nil

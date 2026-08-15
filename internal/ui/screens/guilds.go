@@ -364,6 +364,12 @@ func (m GuildsModel) Init() tea.Cmd { return nil }
 // Update handles messages for the guilds screen.
 func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case InsertIconMsg:
+		if m.panel.IsActive() {
+			m.panel = m.panel.InsertText(msg.Icon)
+		}
+		return m, nil
+
 	case SharedConfigMsg:
 		m.relaxed = msg.Relaxed
 		if msg.Loc != nil {
@@ -534,6 +540,79 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			} else { // viewGuildMembers
 				if m.memberIndex < len(m.members)-1 {
 					m.memberIndex++
+					m = m.refreshContent()
+				} else if !m.membersExhausted && !m.loading {
+					slug, cursor := m.activeGuild, m.membersNextCursor
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreGuildMembersMsg{Slug: slug, Cursor: cursor}
+					}
+				}
+			}
+			return m, nil
+
+		case "pgup":
+			if m.view == viewGuildList {
+				if m.guildIndex > 0 {
+					m.guildIndex = max(0, m.guildIndex-pageJumpItems)
+					m = m.refreshContent()
+				}
+			} else if m.view == viewGuildPosts {
+				if m.postIndex > 0 {
+					m.postIndex = max(0, m.postIndex-pageJumpItems)
+					m = m.refreshContent()
+					var detailCmd tea.Cmd
+					m, detailCmd = m.currentDetailCmd()
+					return m, detailCmd
+				} else if !m.loading && !m.refreshing {
+					slug := m.activeGuild
+					m.refreshing = true
+					m = m.refreshContent()
+					return m, func() tea.Msg { return RefreshGuildPostsMsg{Slug: slug} }
+				}
+			} else { // viewGuildMembers
+				if m.memberIndex > 0 {
+					m.memberIndex = max(0, m.memberIndex-pageJumpItems)
+					m = m.refreshContent()
+				}
+			}
+			return m, nil
+
+		case "pgdown":
+			if m.view == viewGuildList {
+				if m.guildIndex < len(m.guilds)-1 {
+					m.guildIndex = min(len(m.guilds)-1, m.guildIndex+pageJumpItems)
+					m = m.refreshContent()
+				} else if !m.guildsExhausted && !m.loading {
+					cursor := m.guildsNextCursor
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreGuildsMsg{Cursor: cursor}
+					}
+				}
+			} else if m.view == viewGuildPosts {
+				if m.postIndex < len(m.visiblePosts())-1 {
+					m.postIndex = min(len(m.visiblePosts())-1, m.postIndex+pageJumpItems)
+					m = m.refreshContent()
+					var detailCmd tea.Cmd
+					m, detailCmd = m.currentDetailCmd()
+					return m, detailCmd
+				} else if !m.exhausted && !m.loading {
+					slug, cursor := m.activeGuild, m.nextCursor
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreGuildPostsMsg{Slug: slug, Cursor: cursor}
+					}
+				}
+			} else { // viewGuildMembers
+				if m.memberIndex < len(m.members)-1 {
+					m.memberIndex = min(len(m.members)-1, m.memberIndex+pageJumpItems)
 					m = m.refreshContent()
 				} else if !m.membersExhausted && !m.loading {
 					slug, cursor := m.activeGuild, m.membersNextCursor

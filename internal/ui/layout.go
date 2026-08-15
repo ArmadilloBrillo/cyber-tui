@@ -65,6 +65,7 @@ type modalRenderer interface {
 	renderPathPrompt(a App) string
 	renderHelpModal(a App) string
 	renderURLPicker(a App) string
+	renderIconPicker(a App) string
 	renderImageModal(a App) string
 	// InlineImageSlots returns the active screen's visible inline-image
 	// slots plus this layout's screen origin (rowOrigin, colOrigin) for
@@ -92,6 +93,8 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
 	case a.urlPickerOpen:
 		return overlayCenter(base, l.renderURLPicker(a), a.width, a.height)
+	case a.iconPickerOpen:
+		return overlayCenter(base, l.renderIconPicker(a), a.width, a.height)
 	}
 	slots, rowOrigin, colOrigin, _ := l.InlineImageSlots(a)
 	if a.imageModalOpen {

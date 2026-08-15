@@ -173,6 +173,11 @@ type App struct {
 	urlPickerItems  []string
 	urlPickerCursor int
 
+	// iconPicker state — open with ctrl+] from any of the 7 chat/compose
+	// text inputs.
+	iconPickerOpen bool
+	iconPicker     screens.IconPickerModel
+
 	// imageCarousel state — populated when an image is opened from a picker
 	// containing more than one image, letting left/right cycle between them
 	// without closing the image modal. Nil imageCarouselItems means a plain
@@ -546,6 +551,7 @@ func NewApp(client api.Client) App {
 		journal:            screens.NewJournalModel(0),
 		search:             screens.NewSearchModel(),
 		pathPrompt:         screens.NewPathPromptModel(),
+		iconPicker:         screens.NewIconPickerModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -881,13 +887,18 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		model, cmd := a.handleURLPickerKey(m)
 		return model.(App), cmd, true
 	}
+	if a.iconPickerOpen {
+		model, cmd := a.handleIconPickerKey(m)
+		return model.(App), cmd, true
+	}
 	// When a screen has a focused text input, let it consume all keys.
 	// ctrl+c is kept as a hard escape hatch; a handful of other global
 	// shortcuts get a ctrl-prefixed twin that reaches through too, since
 	// their bare key is unreachable while chatting (CIRC/C-Mail's compose
 	// input is focused for the entire detail view, not just a transient
 	// sub-mode like Feed's reply box): ctrl+o (open link), ctrl+q (quit),
-	// ctrl+t (theme picker), ctrl+left/right (cycle tabs). ctrl+/ (search)
+	// ctrl+t (theme picker), ctrl+] (icon picker), ctrl+left/right (cycle
+	// tabs). ctrl+/ (search)
 	// was tried and removed — the byte a physical ctrl+/ keystroke sends is
 	// inconsistent across terminals (0x1F on most, a literal NUL on e.g. Git
 	// Bash/MinTTY, indistinguishable there from ctrl+space/ctrl+2/ctrl+@), so
@@ -912,7 +923,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 				(a.active == screenCMail && a.cmail.ComposeEmpty()))
 		switch {
 		case m.String() == "ctrl+o", m.String() == "ctrl+q", m.String() == "ctrl+t",
-			m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
+			m.String() == "ctrl+]", m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
 			// fall through to the global switch below
 		default:
 			return a, nil, false // fall through to delegateUpdate
@@ -953,6 +964,19 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.themePickerOrig = theme.CurrentName()
 			a.themePickerCursor = themeIndex(theme.CurrentName())
 			return a, nil, true
+		}
+	case "ctrl+]":
+		if a.activeScreenHasFocusedInput() {
+			width := int(float64(a.width) * modalScreenMarginFrac)
+			if mw := a.layout.ModalMaxWidth(a.width); width > mw {
+				width = mw
+			}
+			height := int(float64(a.height) * modalScreenMarginFrac)
+			a.iconPickerOpen = true
+			var cmd tea.Cmd
+			a.iconPicker, cmd = a.iconPicker.Open()
+			a.iconPicker = a.iconPicker.SetSize(width, height)
+			return a, cmd, true
 		}
 	case "v":
 		if a.active != screenLogin {
@@ -3696,6 +3720,30 @@ func (a App) handleURLPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.urlPickerItems = nil
 	}
 	return a, nil
+}
+
+// handleIconPickerKey processes keyboard input while the icon picker overlay
+// is open. Esc and enter are handled here directly (mirrors
+// handleURLPickerKey); enter emits an InsertIconMsg that falls through to
+// delegateScreenUpdate and lands on whichever screen is currently active.
+// Every other key (tab/shift+tab/up/down/search typing) is forwarded to
+// IconPickerModel.Update.
+func (a App) handleIconPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.iconPickerOpen = false
+		return a, nil
+	case "enter":
+		glyph, ok := a.iconPicker.Selected()
+		if !ok {
+			return a, nil
+		}
+		a.iconPickerOpen = false
+		return a, func() tea.Msg { return screens.InsertIconMsg{Icon: glyph} }
+	}
+	var cmd tea.Cmd
+	a.iconPicker, cmd = a.iconPicker.Update(msg)
+	return a, cmd
 }
 
 // --- commands ---

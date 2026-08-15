@@ -1081,6 +1081,12 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case InsertIconMsg:
+		if m.mode == chatroomModeDetail {
+			m.input = insertAtCursor(m.input, msg.Icon)
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -1367,6 +1373,24 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 					}
 				}
 				return m, nil
+			case "pgup":
+				if m.selectedRoom > 0 {
+					m.selectedRoom = max(0, m.selectedRoom-pageJumpItems)
+					if m.ready {
+						m.listVP.SetContent(m.renderRoomCards())
+						m = m.ensureRoomVisible()
+					}
+				}
+				return m, nil
+			case "pgdown":
+				if m.selectedRoom < len(m.rooms)-1 {
+					m.selectedRoom = min(len(m.rooms)-1, m.selectedRoom+pageJumpItems)
+					if m.ready {
+						m.listVP.SetContent(m.renderRoomCards())
+						m = m.ensureRoomVisible()
+					}
+				}
+				return m, nil
 			case "enter":
 				if len(m.rooms) > 0 {
 					return m.enterRoomDetail(m.selectedRoom, m.rooms[m.selectedRoom])
@@ -1489,6 +1513,23 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				return m, nil
 			case "down":
 				m.viewport.ScrollDown(1)
+				return m, nil
+			case "pgup":
+				sel := selectableMessageIndices(m.messages, m.mutedUsers())
+				if len(sel) == 0 {
+					m.viewport.ScrollUp(m.viewport.Height)
+					return m.maybeLoadOlderMessages()
+				}
+				m.input.Blur()
+				m.selectedMsgID = m.messages[sel[len(sel)-1]].ID
+				m = m.refreshMessages()
+				m = m.ensureSelectedMessageVisible()
+				if len(sel) == 1 {
+					return m.maybeLoadOlderMessages()
+				}
+				return m, nil
+			case "pgdown":
+				m.viewport.ScrollDown(m.viewport.Height)
 				return m, nil
 			}
 		}
@@ -1854,6 +1895,41 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		}
 		newPos, newOffset := millerPageNav(+1, m.viewport.Height, 0,
 			selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), curPos, m.viewport.YOffset)
+		m.selectedMsgID = m.messages[sel[newPos]].ID
+		m.viewport.SetYOffset(newOffset)
+		return m.refreshMessages(), nil
+	case "pgup":
+		if curPos == 0 {
+			return m.maybeLoadOlderMessages()
+		}
+		newPos, newOffset := curPos, m.viewport.YOffset
+		for i := 0; i < m.viewport.Height && newPos > 0; i++ {
+			newPos, newOffset = millerPageNav(-1, m.viewport.Height, 0,
+				selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), newPos, newOffset)
+		}
+		if newPos < 0 {
+			newPos = 0
+		}
+		m.selectedMsgID = m.messages[sel[newPos]].ID
+		m.viewport.SetYOffset(newOffset)
+		m = m.refreshMessages()
+		if newPos == 0 {
+			return m.maybeLoadOlderMessages()
+		}
+		return m, nil
+	case "pgdown":
+		if curPos >= len(sel)-1 {
+			m.selectedMsgID = ""
+			m.input.Focus()
+			m = m.refreshMessages()
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+		newPos, newOffset := curPos, m.viewport.YOffset
+		for i := 0; i < m.viewport.Height && newPos < len(sel)-1; i++ {
+			newPos, newOffset = millerPageNav(+1, m.viewport.Height, 0,
+				selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), newPos, newOffset)
+		}
 		m.selectedMsgID = m.messages[sel[newPos]].ID
 		m.viewport.SetYOffset(newOffset)
 		return m.refreshMessages(), nil

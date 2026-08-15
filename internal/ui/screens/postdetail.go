@@ -525,6 +525,12 @@ func (m PostDetailModel) Init() tea.Cmd { return nil }
 
 func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case InsertIconMsg:
+		if m.compose.IsActive() {
+			m.compose = m.compose.InsertText(msg.Icon)
+		}
+		return m, nil
+
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
@@ -822,6 +828,30 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		case "down", "j":
 			newReply, newOffset := millerPageNav(+1, m.viewport.Height, m.postHeight,
 				m.replyOffsets, m.replyHeights, m.selectedReply, m.viewport.YOffset)
+			if newReply != m.selectedReply {
+				m.selectedReply = newReply
+				m = m.refreshContent()
+			}
+			m.viewport.SetYOffset(newOffset)
+			return m, nil
+		case "pgup":
+			newReply, newOffset := m.selectedReply, m.viewport.YOffset
+			for i := 0; i < m.viewport.Height && newReply > -1; i++ {
+				newReply, newOffset = millerPageNav(-1, m.viewport.Height, m.postHeight,
+					m.replyOffsets, m.replyHeights, newReply, newOffset)
+			}
+			if newReply != m.selectedReply {
+				m.selectedReply = newReply
+				m = m.refreshContent()
+			}
+			m.viewport.SetYOffset(newOffset)
+			return m, nil
+		case "pgdown":
+			newReply, newOffset := m.selectedReply, m.viewport.YOffset
+			for i := 0; i < m.viewport.Height && newReply < len(m.replyOffsets)-1; i++ {
+				newReply, newOffset = millerPageNav(+1, m.viewport.Height, m.postHeight,
+					m.replyOffsets, m.replyHeights, newReply, newOffset)
+			}
 			if newReply != m.selectedReply {
 				m.selectedReply = newReply
 				m = m.refreshContent()

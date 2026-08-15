@@ -481,6 +481,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		row("x / i", "export / import custom theme (in theme picker)"),
 		row("v", "density"),
 		row("o", "open url"),
+		row("ctrl+]", "icon picker"),
 		row("q", "quit"),
 	)
 	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)
@@ -617,6 +618,10 @@ func (l TabsLayout) renderURLPicker(a App) string {
 	rows := append([]string{title, ""}, items...)
 	rows = append(rows, "", hint)
 	return theme.ActiveBorder.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
+}
+
+func (l TabsLayout) renderIconPicker(a App) string {
+	return a.iconPicker.View()
 }
 
 // renderImageModal returns the bordered text-only shell for the image overlay.
