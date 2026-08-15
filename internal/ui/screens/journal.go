@@ -421,6 +421,28 @@ func (m JournalModel) handleListKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case "pgup":
+		if m.selectedIdx > 0 {
+			m.selectedIdx = max(0, m.selectedIdx-pageJumpItems)
+			m = m.refreshContent()
+			m = m.ensureSelectedVisible()
+		}
+		return m, nil
+
+	case "pgdown":
+		if m.selectedIdx < len(m.notes)-1 {
+			m.selectedIdx = min(len(m.notes)-1, m.selectedIdx+pageJumpItems)
+			m = m.refreshContent()
+			m = m.ensureSelectedVisible()
+		} else if !m.loading && !m.exhausted && m.nextCursor != "" {
+			m.loading = true
+			cursor := m.nextCursor
+			m = m.refreshContent()
+			m.viewport.ScrollDown(1)
+			return m, func() tea.Msg { return LoadMoreJournalMsg{Cursor: cursor} }
+		}
+		return m, nil
+
 	case "enter":
 		if len(m.notes) > 0 && m.selectedIdx < len(m.notes) {
 			return m.openNote(m.notes[m.selectedIdx])
@@ -493,6 +515,34 @@ func (m JournalModel) handleRevisionsKey(msg tea.KeyMsg) (JournalModel, tea.Cmd)
 		}
 		if m.revSelectedIdx > 0 {
 			m.revSelectedIdx--
+			if m.ready {
+				m = m.refreshRevisionsContent()
+			}
+		}
+		return m, nil
+
+	case "pgdown":
+		if m.revPreview != nil {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+		if m.revSelectedIdx < len(m.revisions)-1 {
+			m.revSelectedIdx = min(len(m.revisions)-1, m.revSelectedIdx+pageJumpItems)
+			if m.ready {
+				m = m.refreshRevisionsContent()
+			}
+		}
+		return m, nil
+
+	case "pgup":
+		if m.revPreview != nil {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+		if m.revSelectedIdx > 0 {
+			m.revSelectedIdx = max(0, m.revSelectedIdx-pageJumpItems)
 			if m.ready {
 				m = m.refreshRevisionsContent()
 			}

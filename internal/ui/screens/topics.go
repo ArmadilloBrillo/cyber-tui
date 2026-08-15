@@ -344,6 +344,63 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			}
 			return m, nil
 
+		case "pgup":
+			if m.view == viewTopicList {
+				if m.topicIndex > 0 {
+					m.topicIndex = max(0, m.topicIndex-pageJumpItems)
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+				}
+			} else if m.view == viewTopicPosts {
+				if m.postIndex > 0 {
+					m.postIndex = max(0, m.postIndex-pageJumpItems)
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+					var detailCmd tea.Cmd
+					m, detailCmd = m.currentDetailCmd()
+					return m, detailCmd
+				} else if !m.loading && !m.refreshing {
+					slug := m.activeTopic
+					m.refreshing = true
+					m = m.refreshContent()
+					return m, func() tea.Msg { return RefreshTopicPostsMsg{Slug: slug} }
+				}
+			}
+			return m, nil
+
+		case "pgdown":
+			if m.view == viewTopicList {
+				if m.topicIndex < len(m.topics)-1 {
+					m.topicIndex = min(len(m.topics)-1, m.topicIndex+pageJumpItems)
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+				} else if !m.topicsExhausted && !m.loading {
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreTopicsMsg{Cursor: m.topicsNextCursor}
+					}
+				}
+			} else if m.view == viewTopicPosts {
+				if m.postIndex < len(m.visiblePosts())-1 {
+					m.postIndex = min(len(m.visiblePosts())-1, m.postIndex+pageJumpItems)
+					m = m.refreshContent()
+					m = m.ensureSelectedVisible()
+					var detailCmd tea.Cmd
+					m, detailCmd = m.currentDetailCmd()
+					return m, detailCmd
+				} else if !m.exhausted && !m.loading {
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreTopicPostsMsg{Slug: m.activeTopic, Cursor: m.nextCursor}
+					}
+				}
+			}
+			return m, nil
+
 		case "enter":
 			if m.view == viewTopicList {
 				if len(m.topics) > 0 && m.topicIndex < len(m.topics) {

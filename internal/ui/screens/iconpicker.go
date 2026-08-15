@@ -147,9 +147,26 @@ func (m IconPickerModel) refiltered() IconPickerModel {
 // moveSelection shifts the selection by delta rows, skipping over header
 // rows, and scrolls just enough to keep it visible.
 func (m IconPickerModel) moveSelection(delta int) IconPickerModel {
+	if len(m.rows) == 0 {
+		return m
+	}
+	// Clamp before skipping headers, not after: an overshooting jump (e.g.
+	// PgDown within one page of the end) must land on the last/first
+	// selectable row, not bail out and leave the selection unmoved — that
+	// was the previous behavior, and it broke PgUp/PgDn's "always reach the
+	// end" convention every other screen already follows.
 	next := m.selected + delta
+	if next < 0 {
+		next = 0
+	} else if next >= len(m.rows) {
+		next = len(m.rows) - 1
+	}
+	step := 1
+	if delta < 0 {
+		step = -1
+	}
 	for next >= 0 && next < len(m.rows) && m.rows[next].kind == iconRowHeader {
-		next += delta
+		next += step
 	}
 	if next < 0 || next >= len(m.rows) || m.rows[next].kind == iconRowHeader {
 		return m
@@ -198,6 +215,10 @@ func (m IconPickerModel) Update(msg tea.KeyMsg) (IconPickerModel, tea.Cmd) {
 		return m.moveSelection(-1), nil
 	case "down":
 		return m.moveSelection(1), nil
+	case "pgup":
+		return m.moveSelection(-m.height), nil
+	case "pgdown":
+		return m.moveSelection(m.height), nil
 	}
 	if km, ok := filterAmbiguousKeyMsg(msg); ok {
 		msg = km

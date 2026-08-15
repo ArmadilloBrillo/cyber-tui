@@ -282,6 +282,30 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 				return m, func() tea.Msg { return LoadMoreNotifsMsg{Cursor: cursor} }
 			}
 			return m, nil
+		case "pgup":
+			if m.selectedIndex > 0 {
+				m.selectedIndex = max(0, m.selectedIndex-pageJumpItems)
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+			} else if !m.loading && !m.refreshing {
+				m.refreshing = true
+				m = m.refreshContent()
+				return m, func() tea.Msg { return RefreshNotifsMsg{} }
+			}
+			return m, nil
+		case "pgdown":
+			if m.selectedIndex < len(visible)-1 {
+				m.selectedIndex = min(len(visible)-1, m.selectedIndex+pageJumpItems)
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+			} else if !m.loading && !m.exhausted && m.nextCursor != "" {
+				m.loading = true
+				cursor := m.nextCursor
+				m = m.refreshContent()
+				m.viewport.ScrollDown(1)
+				return m, func() tea.Msg { return LoadMoreNotifsMsg{Cursor: cursor} }
+			}
+			return m, nil
 		case "m":
 			if len(visible) == 0 || m.selectedIndex >= len(visible) {
 				return m, nil

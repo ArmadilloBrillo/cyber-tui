@@ -751,6 +751,40 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case "pgup":
+			if m.selectedIndex > 0 {
+				m.selectedIndex = max(0, m.selectedIndex-pageJumpItems)
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+				var detailCmd tea.Cmd
+				m, detailCmd = m.currentDetailCmd()
+				return m, detailCmd
+			} else if len(m.pendingNew) > 0 && !m.refreshing {
+				m.refreshing = true
+				m = m.refreshContent()
+				return m, tea.Tick(feedMergeAnimDelay, func(time.Time) tea.Msg { return mergePendingTickMsg{} })
+			} else if !m.loading && !m.refreshing {
+				m.refreshing = true
+				m = m.refreshContent()
+				return m, func() tea.Msg { return RefreshFeedMsg{} }
+			}
+			return m, nil
+		case "pgdown":
+			if m.selectedIndex < len(m.visiblePosts())-1 {
+				m.selectedIndex = min(len(m.visiblePosts())-1, m.selectedIndex+pageJumpItems)
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+				var detailCmd tea.Cmd
+				m, detailCmd = m.currentDetailCmd()
+				return m, detailCmd
+			} else {
+				var loadCmd tea.Cmd
+				m, loadCmd = m.triggerLoadMore()
+				if loadCmd != nil {
+					return m, loadCmd
+				}
+			}
+			return m, nil
 		}
 	}
 

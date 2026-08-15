@@ -966,7 +966,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 	case "ctrl+]":
-		if a.active != screenLogin {
+		if a.activeScreenHasFocusedInput() {
 			width := int(float64(a.width) * modalScreenMarginFrac)
 			if mw := a.layout.ModalMaxWidth(a.width); width > mw {
 				width = mw

@@ -10,6 +10,13 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
+// pageJumpItems is how many rows a PgUp/PgDn press moves a card-list cursor
+// (feed, bookmarks, guilds, notifications, topics, journal, chatrooms/cmail
+// list mode) by. Cards vary in rendered height, so this is an approximate
+// "jump ahead a bunch" step rather than an exact one-viewport-height jump —
+// matching how htop/k9s/lazygit-style TUIs page a variable-height list.
+const pageJumpItems = 10
+
 // typographicPunctOK mirrors the whitelist in the markdown package: EAW=A characters
 // that are consistently 1 column in Western terminals and safe to type/display.
 var typographicPunctOK = map[rune]bool{
