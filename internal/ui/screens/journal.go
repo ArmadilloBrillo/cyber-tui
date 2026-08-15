@@ -208,6 +208,15 @@ func (m JournalModel) Init() tea.Cmd { return nil }
 
 func (m JournalModel) Update(msg tea.Msg) (JournalModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case InsertIconMsg:
+		// Topics is a slug-like field (see filterTopicsKeyMsg) an
+		// emoji/kaomoji doesn't belong in — only the free-text note body
+		// accepts an inserted icon.
+		if m.editMode && !m.topicsFocused {
+			m.compose = m.compose.InsertText(msg.Icon)
+		}
+		return m, nil
+
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		if msg.Loc != nil {

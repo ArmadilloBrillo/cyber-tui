@@ -65,6 +65,28 @@ func filterSlugCharsKeyMsg(msg tea.KeyMsg, extraAllowed string) (tea.KeyMsg, boo
 	return msg, true
 }
 
+// insertAtCursor splices s into ti's value at the current cursor position
+// and moves the cursor to just after it. textinput.Model has no public
+// InsertString (unlike textarea.Model), so this does the splice by hand —
+// same shape as chatrooms.go's spliceMention.
+func insertAtCursor(ti textinput.Model, s string) textinput.Model {
+	val, pos := []rune(ti.Value()), ti.Position()
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(val) {
+		pos = len(val)
+	}
+	ins := []rune(s)
+	out := make([]rune, 0, len(val)+len(ins))
+	out = append(out, val[:pos]...)
+	out = append(out, ins...)
+	out = append(out, val[pos:]...)
+	ti.SetValue(string(out))
+	ti.SetCursor(pos + len(ins))
+	return ti
+}
+
 // topicsCount returns the number of non-empty, trimmed comma-separated
 // segments in s — mirrors ParseTopics' counting rule without allocating the
 // slice ParseTopics returns.

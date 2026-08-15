@@ -364,6 +364,12 @@ func (m GuildsModel) Init() tea.Cmd { return nil }
 // Update handles messages for the guilds screen.
 func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case InsertIconMsg:
+		if m.panel.IsActive() {
+			m.panel = m.panel.InsertText(msg.Icon)
+		}
+		return m, nil
+
 	case SharedConfigMsg:
 		m.relaxed = msg.Relaxed
 		if msg.Loc != nil {

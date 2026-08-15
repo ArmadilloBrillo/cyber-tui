@@ -577,6 +577,15 @@ func (m ProfileModel) handleTabEnter() (ProfileModel, tea.Cmd) {
 
 func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case InsertIconMsg:
+		// Only the free-text bio field accepts an inserted icon — the other
+		// edit fields (website URL, lat/long, ...) are structured values an
+		// emoji/kaomoji would just corrupt.
+		if m.editMode && m.focusedField == fieldBio {
+			m.compose = m.compose.InsertText(msg.Icon)
+		}
+		return m, nil
+
 	case SharedConfigMsg:
 		m.width = msg.Width
 		m.height = msg.Height

@@ -826,6 +826,12 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case InsertIconMsg:
+		if m.mode == cmailModeDetail {
+			m.input = insertAtCursor(m.input, msg.Icon)
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height

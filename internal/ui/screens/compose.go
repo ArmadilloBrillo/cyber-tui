@@ -132,6 +132,13 @@ func (m ComposeModel) IsActive() bool { return m.active }
 // Content returns the current textarea value.
 func (m ComposeModel) Content() string { return m.textarea.Value() }
 
+// InsertText inserts s at the textarea's cursor position (e.g. an icon
+// picked from the Ctrl+] icon picker).
+func (m ComposeModel) InsertText(s string) ComposeModel {
+	m.textarea.InsertString(s)
+	return m
+}
+
 // BoxHeight returns the total number of terminal rows this component renders:
 // 2 border rows + 1 context label row + contentLines textarea rows.
 func (m ComposeModel) BoxHeight() int { return m.contentLines + 3 }
@@ -389,6 +396,19 @@ func (m PostComposePanel) Close() PostComposePanel {
 
 func (m PostComposePanel) IsActive() bool     { return m.active }
 func (m PostComposePanel) Content() string    { return m.textarea.Value() }
+
+// InsertText inserts s (e.g. an icon picked from the Ctrl+] icon picker) at
+// the cursor of whichever free-text field currently has focus. No-op for
+// the slug/topics/public/nsfw fields, which aren't free text.
+func (m PostComposePanel) InsertText(s string) PostComposePanel {
+	switch m.focus {
+	case postFieldTitle:
+		m.titleInput = insertAtCursor(m.titleInput, s)
+	case postFieldBody:
+		m.textarea.InsertString(s)
+	}
+	return m
+}
 func (m PostComposePanel) TitleValue() string { return strings.TrimSpace(m.titleInput.Value()) }
 func (m PostComposePanel) SlugValue() string {
 	return strings.ToLower(strings.TrimSpace(m.slugInput.Value()))

@@ -484,6 +484,12 @@ func (m FeedModel) Init() tea.Cmd { return nil }
 
 func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case InsertIconMsg:
+		if m.panel.IsActive() {
+			m.panel = m.panel.InsertText(msg.Icon)
+		}
+		return m, nil
+
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.defaultPublicPost = msg.Settings.DefaultPublicPost

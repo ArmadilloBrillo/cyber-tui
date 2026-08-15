@@ -525,6 +525,12 @@ func (m PostDetailModel) Init() tea.Cmd { return nil }
 
 func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case InsertIconMsg:
+		if m.compose.IsActive() {
+			m.compose = m.compose.InsertText(msg.Icon)
+		}
+		return m, nil
+
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled

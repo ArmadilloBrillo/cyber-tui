@@ -1081,6 +1081,12 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case InsertIconMsg:
+		if m.mode == chatroomModeDetail {
+			m.input = insertAtCursor(m.input, msg.Icon)
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
