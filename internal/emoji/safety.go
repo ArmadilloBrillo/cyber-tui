@@ -58,3 +58,35 @@ func filterSafe(icons []Icon) []Icon {
 	}
 	return out
 }
+
+// requireKnownWide rejects any single-codepoint icon go-runewidth doesn't
+// classify as wide (2 columns). Emoji-only: every glyph in that dataset
+// comes from Unicode's own emoji-test.txt, which only lists codepoints
+// Unicode itself defines as emoji — always wide once assigned — so a narrow
+// result means the codepoint is newer than what the pinned go-runewidth
+// version's table covers, not a genuinely narrow character. Confirmed
+// empirically: go-runewidth v0.0.19's compiled wide-range table
+// (runewidth_table.go) ends at 0x1FAE8, one codepoint short of U+1FAE9
+// ("face with bags under eyes", Emoji 16.0) — every single-codepoint emoji
+// from Emoji 0.6 through 15.1 matched go-runewidth's table with zero
+// mismatches, then a cluster of mismatches starts exactly at 16.0. Terminals
+// vary in how they handle a codepoint their own tables don't recognize
+// either (observed: fine on Ghostty, corrupts the box on Konsole), so rather
+// than chase each newly-reported terminal-specific break, this excludes
+// anything the pinned width library can't yet vouch for. Self-heals on a
+// future go-runewidth upgrade — no manual re-curation needed.
+//
+// Not applied to kaomoji: there's no "must be wide" ground truth for an
+// arbitrary punctuation glyph the way there is for something Unicode itself
+// calls an emoji.
+func requireKnownWide(icons []Icon) []Icon {
+	out := make([]Icon, 0, len(icons))
+	for _, ic := range icons {
+		runes := []rune(ic.Glyph)
+		if len(runes) == 1 && runewidth.RuneWidth(runes[0]) != 2 {
+			continue
+		}
+		out = append(out, ic)
+	}
+	return out
+}
