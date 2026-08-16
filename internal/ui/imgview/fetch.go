@@ -37,8 +37,9 @@ const maxGIFTotalPixels = 64 << 20
 // global mutations to http.DefaultClient.
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
-// fetchBody downloads rawURL, capping the read at maxImageBytes.
-func fetchBody(ctx context.Context, rawURL string) ([]byte, error) {
+// openImageResponse issues the GET request shared by fetchBody and
+// Dimensions. The caller must close the returned response's body.
+func openImageResponse(ctx context.Context, rawURL string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("imgview: %w", err)
@@ -48,10 +49,20 @@ func fetchBody(ctx context.Context, rawURL string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("imgview: %w", err)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return nil, fmt.Errorf("imgview: server returned %s", resp.Status)
 	}
+	return resp, nil
+}
+
+// fetchBody downloads rawURL, capping the read at maxImageBytes.
+func fetchBody(ctx context.Context, rawURL string) ([]byte, error) {
+	resp, err := openImageResponse(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("imgview: read body: %w", err)
@@ -81,6 +92,25 @@ func Fetch(ctx context.Context, rawURL string) (image.Image, error) {
 		return nil, fmt.Errorf("imgview: decode: %w", err)
 	}
 	return img, nil
+}
+
+// Dimensions fetches rawURL and returns its declared width/height. Unlike
+// Fetch, it reads only as far as image.DecodeConfig needs (the format
+// header, typically well under 1KiB) rather than downloading the whole
+// body — used where a caller needs an image's size but not its content
+// (e.g. cyberspace.online's post-attachments API, which requires
+// width/height on the request and does not compute them itself).
+func Dimensions(ctx context.Context, rawURL string) (width, height int, err error) {
+	resp, err := openImageResponse(ctx, rawURL)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	cfg, _, err := image.DecodeConfig(io.LimitReader(resp.Body, maxImageBytes))
+	if err != nil {
+		return 0, 0, fmt.Errorf("imgview: decode: %w", err)
+	}
+	return cfg.Width, cfg.Height, nil
 }
 
 // FetchGIF downloads the GIF at rawURL and decodes all of its frames.

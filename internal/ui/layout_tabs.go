@@ -461,6 +461,11 @@ func (l TabsLayout) renderPathPrompt(a App) string {
 	return a.pathPrompt.View()
 }
 
+// renderAttachURLPrompt renders the attach-image/gif-URL prompt modal.
+func (l TabsLayout) renderAttachURLPrompt(a App) string {
+	return a.attachURLPrompt.View()
+}
+
 func (l TabsLayout) renderHelpModal(a App) string {
 	title := theme.Title.Render("shortcuts")
 	sectionStyle := theme.Subtle.Bold(true)
@@ -482,6 +487,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		row("v", "density"),
 		row("o", "open url"),
 		row("ctrl+]", "icon picker"),
+		row("ctrl+g", "attach image/gif"),
 		row("q", "quit"),
 	)
 	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)

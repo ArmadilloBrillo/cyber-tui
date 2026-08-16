@@ -1038,3 +1038,16 @@ func TestCMailBrowsing_P_NoSelectedMessage_IsNoop(t *testing.T) {
 		t.Error("expected no-op when nothing is selected")
 	}
 }
+
+// TestCMailModel_SetComposeValueMsg_ReplacesInput mirrors the same check in
+// chatrooms_test.go — see its doc comment.
+func TestCMailModel_SetComposeValueMsg_ReplacesInput(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.input.SetValue("some typed text")
+
+	m, _ = m.Update(SetComposeValueMsg{Value: "/gif https://example.com/pic.gif"})
+
+	if got := m.input.Value(); got != "/gif https://example.com/pic.gif" {
+		t.Errorf("input.Value() = %q, want the replaced /gif command", got)
+	}
+}

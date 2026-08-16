@@ -40,6 +40,14 @@ type ComposeSubmitMsg struct{ Content string }
 // ComposeCancelMsg is emitted when the user presses Esc to cancel.
 type ComposeCancelMsg struct{}
 
+// SetComposeValueMsg replaces the entire value of whatever single-line
+// compose input is focused, cursor moved to the end — unlike InsertIconMsg,
+// which inserts at the cursor and is meant to blend into typed text. Used
+// for ctrl+g attaching a GIF to a circ/C-Mail message: `/gif <url>` must be
+// the message's entire content to be recognized as a command, so it
+// replaces rather than merges with whatever was already typed.
+type SetComposeValueMsg struct{ Value string }
+
 // ComposeModel is a reusable expanding multi-line text editor.
 // Embed it in any screen that needs a compose area.
 //   - Enter inserts a paragraph break (\n\n → <p> on the website)
@@ -299,6 +307,21 @@ type PostComposePanel struct {
 	editing     bool // true when editing an existing post rather than creating one
 	width       int
 	bodyLines   int
+
+	// attachmentURL is a pending image/gif URL attachment, set via ctrl+g
+	// (see app.go). attachmentTouched distinguishes "never touched this
+	// session" from "explicitly cleared" so an edit submit can tell whether
+	// to send the attachments field at all (see SubmitPostEditMsg) — an
+	// edit that never touches attachments must not silently wipe an
+	// existing one (e.g. an audio attachment this panel knows nothing about).
+	attachmentURL     string
+	attachmentTouched bool
+	// otherAttachments holds every attachment OpenForEdit found on the post
+	// besides the one it loaded into attachmentURL (e.g. a /song jukebox
+	// track) — carried through untouched so a submit that sends the
+	// attachments field (attachmentTouched) re-includes them instead of
+	// dropping them, since the API replaces the whole array wholesale.
+	otherAttachments []model.Attachment
 }
 
 func NewPostComposePanel(width int) PostComposePanel {
@@ -343,6 +366,9 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.textarea.SetValue("")
 	m.bodyLines = composeMinLines
 	m.textarea.SetHeight(composeMinLines)
+	m.attachmentURL = ""
+	m.attachmentTouched = false
+	m.otherAttachments = nil
 	m.textarea.Blur()
 	m.slugInput.Blur()
 	m.topicsInput.Blur()
@@ -364,6 +390,16 @@ func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cm
 	m.slugError = ""
 	m.topicsInput.SetValue(strings.Join(post.Topics, ", "))
 	m.textarea.SetValue(post.Content)
+	m.attachmentURL = ""
+	m.attachmentTouched = false
+	m.otherAttachments = nil
+	for _, a := range post.Attachments {
+		if m.attachmentURL == "" && (a.Type == "image" || a.Type == "gif") {
+			m.attachmentURL = a.Src
+			continue
+		}
+		m.otherAttachments = append(m.otherAttachments, a)
+	}
 	m.titleInput.Blur()
 	m.slugInput.Blur()
 	m.topicsInput.Blur()
@@ -391,11 +427,30 @@ func (m PostComposePanel) Close() PostComposePanel {
 	m.textarea.SetValue("")
 	m.textarea.Blur()
 	m.topicsInput.Blur()
+	m.attachmentURL = ""
+	m.attachmentTouched = false
+	m.otherAttachments = nil
 	return m
 }
 
 func (m PostComposePanel) IsActive() bool     { return m.active }
 func (m PostComposePanel) Content() string    { return m.textarea.Value() }
+
+// SetAttachmentURL sets (or, given "", clears) the pending image/gif
+// attachment and marks it touched — see the struct's attachmentTouched doc.
+func (m PostComposePanel) SetAttachmentURL(url string) PostComposePanel {
+	m.attachmentURL = url
+	m.attachmentTouched = true
+	return m
+}
+
+func (m PostComposePanel) AttachmentURL() string   { return m.attachmentURL }
+func (m PostComposePanel) AttachmentTouched() bool { return m.attachmentTouched }
+
+// OtherAttachments returns every attachment OpenForEdit found on the post
+// besides the image/gif one tracked by AttachmentURL — see the struct's
+// otherAttachments doc.
+func (m PostComposePanel) OtherAttachments() []model.Attachment { return m.otherAttachments }
 
 // InsertText inserts s (e.g. an icon picked from the Ctrl+] icon picker) at
 // the cursor of whichever free-text field currently has focus. No-op for
@@ -421,10 +476,14 @@ func (m PostComposePanel) IsNSFW() bool      { return m.isNSFW }
 // 2 (border) + 1 (title row) + 1 (slug row) + 1 (sep) + bodyLines + 1 (sep) + 1 (topics row).
 // The slug row is omitted in edit mode (slug is immutable once published).
 func (m PostComposePanel) PanelHeight() int {
+	h := m.bodyLines + 7
 	if m.editing {
-		return m.bodyLines + 6
+		h = m.bodyLines + 6
 	}
-	return m.bodyLines + 7
+	if m.attachmentURL != "" {
+		h++
+	}
+	return h
 }
 
 // SetWidth resizes all inner inputs to fit the new panel width.
@@ -684,6 +743,14 @@ func (m PostComposePanel) View() string {
 		rows = append(rows, slugRow)
 	}
 	rows = append(rows, sep, m.textarea.View(), sep, topicsRow)
+	if m.attachmentURL != "" {
+		const attachLabelW = 7 // "attach " — matches labelW used for title/slug/topics rows
+		url := m.attachmentURL
+		if remaining := innerW - attachLabelW; remaining > 1 {
+			url = ansiTruncate(url, remaining)
+		}
+		rows = append(rows, theme.Subtle.Render("attach ")+theme.Base.Render(url))
+	}
 	inner := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	boxStyle := theme.ActiveBorder
 	if m.width > 2 {

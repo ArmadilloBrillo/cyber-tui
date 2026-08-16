@@ -235,7 +235,11 @@ func (m *MockClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	}, nil
 }
 
-func (m *MockClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
+func (m *MockClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error) {
+	var attachments []model.Attachment
+	if attachment != nil {
+		attachments = []model.Attachment{*attachment}
+	}
 	return model.Post{
 		ID:             "new-1",
 		AuthorID:       mockUsers[0].ID,
@@ -246,6 +250,7 @@ func (m *MockClient) CreatePost(content, title, slug string, topics []string, is
 		Topics:         topics,
 		IsPublic:       isPublic,
 		IsNSFW:         isNSFW,
+		Attachments:    attachments,
 	}, nil
 }
 
@@ -253,7 +258,7 @@ func (m *MockClient) DeletePost(postID string) error {
 	return nil // no-op: in-memory feed is rebuilt on each GetFeed call
 }
 
-func (m *MockClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool) error {
+func (m *MockClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, attachments []model.Attachment, attachmentTouched bool) error {
 	return nil
 }
 

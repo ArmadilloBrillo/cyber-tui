@@ -74,6 +74,25 @@ func TestFetch_RejectsNon200(t *testing.T) {
 	}
 }
 
+func TestDimensions_ReturnsDeclaredSize(t *testing.T) {
+	srv := serve(t, http.StatusOK, pngBytes(t, 7, 5))
+	w, h, err := imgview.Dimensions(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("Dimensions: %v", err)
+	}
+	if w != 7 || h != 5 {
+		t.Errorf("Dimensions() = %dx%d, want 7x5", w, h)
+	}
+}
+
+func TestDimensions_RejectsNon200(t *testing.T) {
+	srv := serve(t, http.StatusNotFound, nil)
+	_, _, err := imgview.Dimensions(context.Background(), srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "404") {
+		t.Errorf("err = %v, want 404 error", err)
+	}
+}
+
 // gifBytes encodes an n-frame, wxh GIF, each frame a solid color from
 // palette[i % len(palette)] so frames are visually distinguishable.
 func gifBytes(t *testing.T, w, h, n int) []byte {

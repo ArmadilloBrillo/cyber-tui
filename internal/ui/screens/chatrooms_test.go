@@ -2032,3 +2032,18 @@ func TestChatrooms_VisibleInlineImages_LastMessageImage_AfterRealRowsKnown(t *te
 		t.Fatalf("expected the last message's image to stay visible after its band shrank, got %d slots: %+v", len(slots), slots)
 	}
 }
+
+// TestChatroomsModel_SetComposeValueMsg_ReplacesInput guards ctrl+g's
+// /gif dispatch (see app.go's applyAttachURL): unlike InsertIconMsg, which
+// inserts at the cursor, SetComposeValueMsg must replace the whole input —
+// a /gif command has to be the message's entire content to be recognized.
+func TestChatroomsModel_SetComposeValueMsg_ReplacesInput(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.input.SetValue("some typed text")
+
+	m, _ = m.Update(SetComposeValueMsg{Value: "/gif https://example.com/pic.gif"})
+
+	if got := m.input.Value(); got != "/gif https://example.com/pic.gif" {
+		t.Errorf("input.Value() = %q, want the replaced /gif command", got)
+	}
+}

@@ -1,9 +1,13 @@
 package ui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"image"
+	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1907,7 +1911,7 @@ func (c *tooSoonPostClient) GetPost(postID string) (model.Post, error) {
 func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testing.T) {
 	a := NewApp(&tooSoonPostClient{MockClient: api.NewMockClient()})
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false)()
+	msg := a.createPostCmd("hello", "", "", nil, true, false, "")()
 	if _, ok := msg.(postConvertedToNoteMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postConvertedToNoteMsg", msg)
 	}
@@ -1916,9 +1920,112 @@ func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testin
 func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
 	a := NewApp(api.NewMockClient())
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false)()
+	msg := a.createPostCmd("hello", "", "", nil, true, false, "")()
 	if _, ok := msg.(postCreatedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
+	}
+}
+
+// --- resolveAttachment: dimension fetch + the API's 640px cap ---
+
+func testPNGServer(t *testing.T, w, h int) *httptest.Server {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Write(buf.Bytes())
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestResolveAttachment_EmptyURL_ReturnsNil(t *testing.T) {
+	attachment, err := resolveAttachment("")
+	if err != nil || attachment != nil {
+		t.Errorf("resolveAttachment(\"\") = %v, %v, want nil, nil", attachment, err)
+	}
+}
+
+func TestResolveAttachment_WithinLimit_SetsTypeAndDimensions(t *testing.T) {
+	srv := testPNGServer(t, 100, 50)
+	attachment, err := resolveAttachment(srv.URL + "/pic.png")
+	if err != nil {
+		t.Fatalf("resolveAttachment: %v", err)
+	}
+	if attachment.Type != "image" || attachment.Width != 100 || attachment.Height != 50 {
+		t.Errorf("attachment = %+v, want type=image width=100 height=50", attachment)
+	}
+}
+
+// TestResolveAttachment_GIFExtension_SetsGIFType guards attachmentTypeForURL's
+// extension-based inference, which the caller (createPostCmd/editPostCmd)
+// relies on since the API distinguishes "image" from "gif" attachments.
+func TestResolveAttachment_GIFExtension_SetsGIFType(t *testing.T) {
+	srv := testPNGServer(t, 10, 10) // content doesn't need to actually be a gif — only the URL suffix is inspected
+	attachment, err := resolveAttachment(srv.URL + "/pic.gif")
+	if err != nil {
+		t.Fatalf("resolveAttachment: %v", err)
+	}
+	if attachment.Type != "gif" {
+		t.Errorf("attachment.Type = %q, want gif", attachment.Type)
+	}
+}
+
+// TestResolveAttachment_ExceedsLimit_ReturnsClearError guards the one thing
+// this app has no way to fix automatically: there's no upload endpoint to
+// host a resized copy, so an oversized image must fail here with a message
+// that explains why, rather than as a raw 400 from the API (confirmed live:
+// POST /v1/posts rejects width/height above 640px).
+func TestResolveAttachment_ExceedsLimit_ReturnsClearError(t *testing.T) {
+	srv := testPNGServer(t, 1200, 480)
+	attachment, err := resolveAttachment(srv.URL + "/pic.png")
+	if attachment != nil {
+		t.Errorf("attachment = %+v, want nil on an oversized image", attachment)
+	}
+	if err == nil || !strings.Contains(err.Error(), "640") {
+		t.Errorf("err = %v, want a message mentioning the 640px limit", err)
+	}
+}
+
+// editPostRecordingClient captures the arguments EditPost was called with,
+// so a test can inspect exactly what editPostCmd sent without a real API.
+type editPostRecordingClient struct {
+	*api.MockClient
+	gotAttachments []model.Attachment
+	gotTouched     bool
+}
+
+func (c *editPostRecordingClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, attachments []model.Attachment, attachmentTouched bool) error {
+	c.gotAttachments = attachments
+	c.gotTouched = attachmentTouched
+	return nil
+}
+
+// TestEditPostCmd_MergesOtherAttachmentsWithResolvedAttachment guards the
+// merge editPostCmd is responsible for: the attachments array it sends must
+// combine otherAttachments (e.g. an audio one the edit panel doesn't manage)
+// with the newly resolved image, in that order — dropping otherAttachments
+// here would silently delete them server-side, since EditPost replaces the
+// whole array.
+func TestEditPostCmd_MergesOtherAttachmentsWithResolvedAttachment(t *testing.T) {
+	srv := testPNGServer(t, 10, 10)
+	client := &editPostRecordingClient{MockClient: api.NewMockClient()}
+	a := NewApp(client)
+	audio := model.Attachment{Type: "audio", Src: "https://youtu.be/old"}
+
+	msg := a.editPostCmd("p1", "content", "title", nil, false, false, srv.URL+"/pic.png", true, []model.Attachment{audio})()
+	if _, ok := msg.(postEditedMsg); !ok {
+		t.Fatalf("editPostCmd() = %T, want postEditedMsg", msg)
+	}
+	if !client.gotTouched {
+		t.Fatal("expected EditPost to be called with attachmentTouched = true")
+	}
+	want := []model.Attachment{audio, {Type: "image", Src: srv.URL + "/pic.png", Width: 10, Height: 10}}
+	if !slices.Equal(client.gotAttachments, want) {
+		t.Errorf("EditPost attachments = %+v, want %+v (other attachment first, then the resolved one)", client.gotAttachments, want)
 	}
 }
 
@@ -2050,6 +2157,277 @@ func TestApp_PostEditPanel_VisibleInFullRender(t *testing.T) {
 	}
 	if !strings.Contains(after, "distinctive body text") {
 		t.Errorf("expected the full App render to contain the pre-filled body content, got:\n%s", after)
+	}
+}
+
+// --- postEditedMsg: local cache must reflect an attachment change ---
+
+func TestPostEditedMsg_AttachmentsTouched_UpdatesFeedCache(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", Content: "body", Attachments: []model.Attachment{{Type: "audio", Src: "https://youtu.be/old"}}},
+	}, "")
+
+	newAttachments := []model.Attachment{
+		{Type: "audio", Src: "https://youtu.be/old"},
+		{Type: "image", Src: "https://example.com/new.png"},
+	}
+	m, _ := a.Update(postEditedMsg{
+		postID: "p1", content: "body", editedAt: time.Now(),
+		attachments: newAttachments, attachmentsTouched: true,
+	})
+	a = m.(App)
+
+	got := a.feed.GetFocusedURLs()
+	if !slices.Contains(got, "https://example.com/new.png") {
+		t.Errorf("GetFocusedURLs() = %v, want it to contain the newly attached image", got)
+	}
+}
+
+func TestPostEditedMsg_AttachmentsNotTouched_LeavesFeedCacheAlone(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", Content: "body", Attachments: []model.Attachment{{Type: "audio", Src: "https://youtu.be/old"}}},
+	}, "")
+
+	m, _ := a.Update(postEditedMsg{
+		postID: "p1", content: "edited body", editedAt: time.Now(),
+		attachmentsTouched: false,
+	})
+	a = m.(App)
+
+	got := a.feed.GetFocusedURLs()
+	if !slices.Contains(got, "https://youtu.be/old") {
+		t.Errorf("GetFocusedURLs() = %v, want the pre-existing attachment preserved when attachmentsTouched is false", got)
+	}
+}
+
+func TestPostEditedMsg_AttachmentsTouched_UpdatesPostDetailCache(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
+
+	m, _ := a.Update(postEditedMsg{
+		postID: "p1", content: "body", editedAt: time.Now(),
+		attachments:        []model.Attachment{{Type: "image", Src: "https://example.com/new.png"}},
+		attachmentsTouched: true,
+	})
+	a = m.(App)
+
+	got := a.postDetail.GetFocusedURLs()
+	if !slices.Contains(got, "https://example.com/new.png") {
+		t.Errorf("GetFocusedURLs() = %v, want it to contain the newly attached image", got)
+	}
+}
+
+// --- applyAttachURL: ctrl+g dispatch (native post attachment vs markdown insert) ---
+
+// TestApplyAttachURL_FeedPanelActive_SetsNativeAttachment covers the branch
+// that must win when the Feed new-post panel is open: a native attachment on
+// the panel, not markdown text inserted into whatever's focused.
+func TestApplyAttachURL_FeedPanelActive_SetsNativeAttachment(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.feed.Update(keyMsg("n"))
+	a.feed = m
+	if !a.feed.PanelActive() {
+		t.Fatal("setup: expected Feed's new-post panel open after 'n'")
+	}
+
+	a, cmd := a.applyAttachURL("https://example.com/pic.png")
+	if cmd != nil {
+		t.Error("expected no cmd for the native-attachment branch")
+	}
+	if got := a.feed.ComposeView(80); !strings.Contains(got, "https://example.com/pic.png") {
+		t.Errorf("ComposeView() = %q, want it to contain the attached URL", got)
+	}
+}
+
+// TestApplyAttachURL_PostDetailEditPanelActive_SetsNativeAttachment mirrors
+// the Feed case for PostDetail's edit panel (opened via 'e', separate from
+// the Feed instance).
+func TestApplyAttachURL_PostDetailEditPanelActive_SetsNativeAttachment(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "op", IsSupporter: true}
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.
+		SetCurrentUsername("op").
+		SetCurrentUserIsSupporter(true).
+		SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "body", CreatedAt: time.Now()})
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a = m.(App)
+	m, _ = a.Update(keyMsg("e"))
+	a = m.(App)
+	if !a.postDetail.EditPanelActive() {
+		t.Fatal("setup: expected PostDetail's edit panel open after 'e'")
+	}
+
+	a, cmd := a.applyAttachURL("https://example.com/pic.png")
+	if cmd != nil {
+		t.Error("expected no cmd for the native-attachment branch")
+	}
+	if got := a.View(); !strings.Contains(got, "https://example.com/pic.png") {
+		t.Errorf("full render doesn't contain the attached URL")
+	}
+}
+
+// TestApplyAttachURL_DefaultBranch_ReturnsInsertIconMsg covers the leftover
+// incidental surfaces (guild threads, journal, bio editing — anything not
+// explicitly special-cased): the URL still goes in as markdown image syntax
+// via the same InsertIconMsg dispatch the icon picker uses, since these were
+// never confirmed to render on the site either way and aren't part of the
+// four surfaces this feature targets.
+func TestApplyAttachURL_DefaultBranch_ReturnsInsertIconMsg(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
+
+	_, cmd := a.applyAttachURL("https://example.com/pic.gif")
+	if cmd == nil {
+		t.Fatal("expected a cmd for the markdown-insert branch")
+	}
+	msg, ok := cmd().(screens.InsertIconMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want screens.InsertIconMsg", msg)
+	}
+	if want := "![](https://example.com/pic.gif)"; msg.Icon != want {
+		t.Errorf("InsertIconMsg.Icon = %q, want %q", msg.Icon, want)
+	}
+}
+
+// TestApplyAttachURL_DefaultBranch_EmptyURL_NoCmd: an empty submission from
+// the prompt (e.g. esc'd out with nothing typed) must not insert an empty
+// markdown link.
+func TestApplyAttachURL_DefaultBranch_EmptyURL_NoCmd(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
+
+	_, cmd := a.applyAttachURL("")
+	if cmd != nil {
+		t.Error("expected no cmd for an empty URL in the markdown-insert branch")
+	}
+}
+
+// --- applyAttachURL: circ/C-Mail only support GIF via /gif (confirmed live
+// this session — markdown-in-content doesn't render on the website, but
+// /gif's dedicated gifUrl field does) ---
+
+func TestApplyAttachURL_ChatroomsGIF_SetsGifCommand(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+
+	_, cmd := a.applyAttachURL("https://example.com/pic.gif")
+	if cmd == nil {
+		t.Fatal("expected a cmd for the /gif branch")
+	}
+	msg, ok := cmd().(screens.SetComposeValueMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want screens.SetComposeValueMsg", msg)
+	}
+	if want := "/gif https://example.com/pic.gif"; msg.Value != want {
+		t.Errorf("SetComposeValueMsg.Value = %q, want %q", msg.Value, want)
+	}
+}
+
+func TestApplyAttachURL_ChatroomsNonGIF_WarnsInsteadOfInserting(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+
+	a2, _ := a.applyAttachURL("https://example.com/pic.png")
+	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
+		t.Errorf("expected a warning notification for a non-GIF URL in chat, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+	}
+}
+
+func TestApplyAttachURL_CMailGIF_SetsGifCommand(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+
+	_, cmd := a.applyAttachURL("https://example.com/pic.gif")
+	if cmd == nil {
+		t.Fatal("expected a cmd for the /gif branch")
+	}
+	if _, ok := cmd().(screens.SetComposeValueMsg); !ok {
+		t.Fatalf("cmd() = %T, want screens.SetComposeValueMsg", cmd())
+	}
+}
+
+func TestApplyAttachURL_CMailNonGIF_WarnsInsteadOfInserting(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+
+	a2, _ := a.applyAttachURL("https://example.com/pic.png")
+	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
+		t.Errorf("expected a warning notification for a non-GIF URL in C-Mail, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+	}
+}
+
+// TestApplyAttachURL_ReplyCompose_WarnsInsteadOfInserting: the reply API has
+// no attachments field at all, so ctrl+g must not silently insert markdown
+// that (per the same live evidence as the chat case) won't render anywhere.
+func TestApplyAttachURL_ReplyCompose_WarnsInsteadOfInserting(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
+	m, _ := a.postDetail.OpenCompose()
+	a.postDetail = m
+	if !a.postDetail.ReplyComposeActive() {
+		t.Fatal("setup: expected the reply compose box open")
+	}
+
+	a2, _ := a.applyAttachURL("https://example.com/pic.png")
+	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
+		t.Errorf("expected a warning notification for a reply attachment, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+	}
+}
+
+// --- ctrl+g / attach-URL prompt ---
+
+func TestHandleKeys_CtrlG_OpensAttachURLPrompt_WhenInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlG})
+	if !consumed {
+		t.Fatal("expected ctrl+g to be consumed while a compose field is focused")
+	}
+	if !a2.attachURLPromptOpen {
+		t.Error("expected attachURLPromptOpen = true after ctrl+g")
+	}
+}
+
+// TestHandleAttachURLPromptKey_RejectsNonHTTPURL_KeepsPromptOpen guards the
+// minimal client-side validation: a bare string with no scheme (most likely
+// a typo, not a URL) must not be accepted as an attachment/markdown target.
+func TestHandleAttachURLPromptKey_RejectsNonHTTPURL_KeepsPromptOpen(t *testing.T) {
+	a := loggedInApp()
+	a.attachURLPromptOpen = true
+	a.attachURLPrompt, _ = a.attachURLPrompt.Open("attach image/gif url", "")
+	for _, r := range "not-a-url" {
+		m, _ := a.handleAttachURLPromptKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		a = m.(App)
+	}
+
+	m, _ := a.handleAttachURLPromptKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a = m.(App)
+	if !a.attachURLPromptOpen {
+		t.Error("expected the prompt to stay open after submitting a non-http(s) string")
+	}
+}
+
+func TestHandleAttachURLPromptKey_AcceptsHTTPURL_ClosesPrompt(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+	a.attachURLPromptOpen = true
+	a.attachURLPrompt, _ = a.attachURLPrompt.Open("attach image/gif url", "")
+	for _, r := range "https://example.com/a.png" {
+		m, _ := a.handleAttachURLPromptKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		a = m.(App)
+	}
+
+	m, _ := a.handleAttachURLPromptKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a = m.(App)
+	if a.attachURLPromptOpen {
+		t.Error("expected the prompt to close after submitting a valid http(s) URL")
 	}
 }
 

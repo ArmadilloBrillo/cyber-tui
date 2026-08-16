@@ -567,13 +567,14 @@ type fakeModalRenderer struct {
 	rowOrigin, colOrigin int
 }
 
-func (f fakeModalRenderer) renderThemePicker(a App) string { return "" }
-func (f fakeModalRenderer) renderThemeEditor(a App) string { return "" }
-func (f fakeModalRenderer) renderPathPrompt(a App) string  { return "" }
-func (f fakeModalRenderer) renderHelpModal(a App) string   { return "" }
-func (f fakeModalRenderer) renderURLPicker(a App) string   { return "" }
-func (f fakeModalRenderer) renderIconPicker(a App) string  { return "" }
-func (f fakeModalRenderer) renderImageModal(a App) string  { return "" }
+func (f fakeModalRenderer) renderThemePicker(a App) string     { return "" }
+func (f fakeModalRenderer) renderThemeEditor(a App) string     { return "" }
+func (f fakeModalRenderer) renderPathPrompt(a App) string      { return "" }
+func (f fakeModalRenderer) renderHelpModal(a App) string       { return "" }
+func (f fakeModalRenderer) renderURLPicker(a App) string       { return "" }
+func (f fakeModalRenderer) renderIconPicker(a App) string      { return "" }
+func (f fakeModalRenderer) renderAttachURLPrompt(a App) string { return "" }
+func (f fakeModalRenderer) renderImageModal(a App) string      { return "" }
 func (f fakeModalRenderer) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int, string) {
 	return f.slots, f.rowOrigin, f.colOrigin, ""
 }

@@ -1087,6 +1087,13 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case SetComposeValueMsg:
+		if m.mode == chatroomModeDetail {
+			m.input.SetValue(msg.Value)
+			m.input.CursorEnd()
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
