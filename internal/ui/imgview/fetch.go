@@ -13,7 +13,15 @@ import (
 	"time"
 
 	_ "golang.org/x/image/webp"
+
+	"github.com/ragnar/cyber-tui/internal/version"
 )
+
+// userAgent identifies cyber-tui to image hosts. Some (Wikimedia's edge,
+// confirmed live) return 403 for Go's default "Go-http-client/1.1" — an
+// identifiable UA with a contact URL is what their bot policy actually asks
+// for, and fixes the block.
+var userAgent = "cyber-tui/" + version.Version + " (+https://github.com/ArmadilloBrillo/cyber-tui)"
 
 // maxImageBytes caps how much of an image response body is read into memory,
 // matching the 10 MiB response cap used by the API and RTDB clients.
@@ -45,6 +53,7 @@ func openImageResponse(ctx context.Context, rawURL string) (*http.Response, erro
 		return nil, fmt.Errorf("imgview: %w", err)
 	}
 	req.Header.Set("Accept", "image/webp,image/png,image/jpeg,image/gif,image/*,*/*;q=0.8")
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("imgview: %w", err)

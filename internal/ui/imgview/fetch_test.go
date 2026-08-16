@@ -74,6 +74,27 @@ func TestFetch_RejectsNon200(t *testing.T) {
 	}
 }
 
+// TestFetch_SendsUserAgent guards against a regression to Go's default
+// "Go-http-client/1.1", which Wikimedia's edge (and presumably other image
+// hosts with a similar bot policy) rejects outright with 403 — confirmed
+// live: the exact same request against a real Wikimedia-hosted GIF failed
+// without this header and succeeded with it.
+func TestFetch_SendsUserAgent(t *testing.T) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.Write(pngBytes(t, 1, 1))
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := imgview.Fetch(context.Background(), srv.URL); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if gotUA == "" || strings.HasPrefix(gotUA, "Go-http-client") {
+		t.Errorf("User-Agent = %q, want a non-empty, non-default value", gotUA)
+	}
+}
+
 func TestDimensions_ReturnsDeclaredSize(t *testing.T) {
 	srv := serve(t, http.StatusOK, pngBytes(t, 7, 5))
 	w, h, err := imgview.Dimensions(context.Background(), srv.URL)
