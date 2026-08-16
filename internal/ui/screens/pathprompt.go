@@ -38,6 +38,12 @@ func (m PathPromptModel) SetWarning(text string) PathPromptModel {
 	return m
 }
 
+// Value returns the current input text. Callers that intercept enter/esc
+// themselves (rather than relying on PathPromptSubmitMsg/PathPromptCancelMsg
+// — e.g. because that message type is already claimed by another open
+// prompt) read the submitted value through here.
+func (m PathPromptModel) Value() string { return m.input.Value() }
+
 func (m PathPromptModel) Update(msg tea.KeyMsg) (PathPromptModel, tea.Cmd) {
 	switch msg.String() {
 	case "enter":

@@ -72,9 +72,26 @@ type URLProvider interface {
 type ShowUserProfileMsg struct{ Username string }
 
 // StartConversationMsg is emitted by any screen when the user presses 'c' on a
-// highlighted post, reply, notification, or profile to open (or create) a C-Mail
-// conversation with that user. App guards against self-DMs.
+// highlighted post, reply, notification, profile, or cIRC message to open (or
+// create) a C-Mail conversation with that user. App guards against self-DMs.
 type StartConversationMsg struct{ Username string }
+
+// MuteUserMsg is emitted by Chatrooms when the user presses 'm' on a
+// selected message, to mute that message's sender for the room without
+// having to type "/mute <username>" by hand. cIRC-only — muting isn't a
+// concept in C-Mail's 1:1 conversations. App sends it as that exact slash
+// command (the only way to mute is server-side, via chat content) and
+// notifies on success, since /mute posts nothing to the room itself.
+type MuteUserMsg struct {
+	RoomID   string
+	Username string
+}
+
+// CopyMessageTextMsg is emitted by Chatrooms or CMail when the user presses
+// 'y' on a selected message, to copy its text to the clipboard — the chat
+// equivalent of CopyLinkMsg (posts have a permalink to copy; messages don't,
+// so this copies the content itself). App notifies on success.
+type CopyMessageTextMsg struct{ Text string }
 
 // OpenRoomMsg is emitted by Notifications when the user presses Enter on a
 // chat_mention notification. RoomSlug identifies the target cIRC room; App

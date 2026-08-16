@@ -312,6 +312,22 @@ func (m PostDetailModel) ComposeActive() bool {
 	return m.compose.IsActive() || m.editPanel.IsActive() || m.flagPrompt.Active() || m.confirming != pdConfirmNone
 }
 
+// EditPanelActive reports whether the post-edit panel specifically (not the
+// reply compose box) is open, for app.go to decide whether ctrl+g should set
+// a native post attachment instead of inserting markdown into the reply box.
+func (m PostDetailModel) EditPanelActive() bool { return m.editPanel.IsActive() }
+
+// ReplyComposeActive reports whether the reply compose box specifically
+// (not the edit panel) is open — see app.go's applyAttachURL, which warns
+// instead of inserting here: the reply API has no attachments field at all.
+func (m PostDetailModel) ReplyComposeActive() bool { return m.compose.IsActive() }
+
+// SetEditPanelAttachment sets the edit panel's pending image/gif attachment URL.
+func (m PostDetailModel) SetEditPanelAttachment(url string) PostDetailModel {
+	m.editPanel = m.editPanel.SetAttachmentURL(url)
+	return m
+}
+
 func (m PostDetailModel) SetError(err error) PostDetailModel {
 	m.err = err
 	m.loading = false
@@ -353,13 +369,19 @@ func (m PostDetailModel) CanEditSelected() bool {
 
 // ApplyPostEdit overwrites the edited fields of the displayed post after a
 // successful PATCH, leaving AuthorID, CreatedAt, RepliesCount, etc. untouched.
-func (m PostDetailModel) ApplyPostEdit(content, title string, topics []string, isPublic, isNSFW bool, editedAt time.Time) PostDetailModel {
+// ApplyPostEdit overwrites the edited fields of the open post after a
+// successful PATCH. Attachments is only applied when attachmentsTouched —
+// see FeedModel.ApplyPostEdit's doc comment for why.
+func (m PostDetailModel) ApplyPostEdit(content, title string, topics []string, isPublic, isNSFW bool, editedAt time.Time, attachments []model.Attachment, attachmentsTouched bool) PostDetailModel {
 	m.post.Content = content
 	m.post.Title = title
 	m.post.Topics = topics
 	m.post.IsPublic = isPublic
 	m.post.IsNSFW = isNSFW
 	m.post.EditedAt = editedAt
+	if attachmentsTouched {
+		m.post.Attachments = attachments
+	}
 	if m.ready {
 		m = m.refreshContent()
 	}
@@ -584,12 +606,15 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			topics := ParseTopics(m.editPanel.TopicsRaw())
 			isPublic := m.editPanel.IsPublic()
 			isNSFW := m.editPanel.IsNSFW()
+			attachmentURL := m.editPanel.AttachmentURL()
+			attachmentTouched := m.editPanel.AttachmentTouched()
+			otherAttachments := m.editPanel.OtherAttachments()
 			m.editPanel = m.editPanel.Close()
 			if m.ready {
 				m.viewport.Height = m.viewportHeight()
 			}
 			return m, func() tea.Msg {
-				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
+				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentURL: attachmentURL, AttachmentTouched: attachmentTouched, OtherAttachments: otherAttachments}
 			}
 		}
 		content := msg.Content

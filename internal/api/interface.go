@@ -27,7 +27,10 @@ type Client interface {
 	// Feed — pass empty cursor for first page; use returned cursor for next page.
 	// Returns empty next-cursor when there are no more pages.
 	GetFeed(cursor string) ([]model.Post, string, error)
-	CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error)
+	// attachment, if non-nil, attaches an image/gif by URL — the caller must
+	// resolve Type/Width/Height itself (the API requires width/height on the
+	// request and does not compute them server-side).
+	CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error)
 	// GetPost fetches a single post by ID (used when jumping from a notification).
 	GetPost(postID string) (model.Post, error)
 	// GetPostBySlug fetches a single post by its author's username and per-author
@@ -186,7 +189,11 @@ type Client interface {
 	// only, within 5 minutes of publishing; returns an *APIError with Status 403
 	// otherwise. The response carries no fields worth returning — the caller
 	// already has the full edited state and merges it locally.
-	EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool) error
+	// attachmentTouched controls whether the attachments field is sent at all:
+	// false leaves any existing attachments untouched; true replaces them
+	// wholesale with attachments (the caller is responsible for including
+	// anything it wants kept, e.g. an unrelated audio attachment).
+	EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, attachments []model.Attachment, attachmentTouched bool) error
 
 	// Replies — deletion.
 	// DeleteReply soft-deletes a reply owned by the authenticated user.

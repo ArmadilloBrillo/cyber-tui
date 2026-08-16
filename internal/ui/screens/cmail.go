@@ -832,6 +832,13 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case SetComposeValueMsg:
+		if m.mode == cmailModeDetail {
+			m.input.SetValue(msg.Value)
+			m.input.CursorEnd()
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -1356,6 +1363,13 @@ func (m CMailModel) updateCMailBrowsingKey(msg tea.KeyMsg) (CMailModel, tea.Cmd)
 		}
 		username := targetMsg.From.Username
 		return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+	case "y":
+		targetMsg, ok := findMessageByID(m.activeConv.Messages, m.selectedMsgID)
+		if !ok {
+			return m, nil
+		}
+		text := messageCopyText(targetMsg)
+		return m, func() tea.Msg { return CopyMessageTextMsg{Text: text} }
 	}
 	return m, nil
 }

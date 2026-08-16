@@ -5,7 +5,32 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ragnar/cyber-tui/internal/model"
 )
+
+// TestMessageCopyText covers 'y's precedence: body text first, then
+// whichever attachment field is set, so copying a caption-less /gif or
+// /song message still copies something useful instead of an empty string.
+func TestMessageCopyText(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  model.Message
+		want string
+	}{
+		{"body wins over attachments", model.Message{Body: "hi", ImageUrl: "https://example.com/a.png"}, "hi"},
+		{"falls back to ImageUrl", model.Message{ImageUrl: "https://example.com/a.png"}, "https://example.com/a.png"},
+		{"falls back to GifUrl", model.Message{GifUrl: "https://example.com/a.gif"}, "https://example.com/a.gif"},
+		{"falls back to AudioAttachment.Src", model.Message{AudioAttachment: &model.Attachment{Src: "https://youtu.be/x"}}, "https://youtu.be/x"},
+		{"empty message copies nothing", model.Message{}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := messageCopyText(c.msg); got != c.want {
+				t.Errorf("messageCopyText() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
 
 func runesMsg(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}

@@ -178,6 +178,13 @@ type App struct {
 	iconPickerOpen bool
 	iconPicker     screens.IconPickerModel
 
+	// attachURLPrompt state — open with ctrl+g from any focused compose
+	// field. Submit either sets a native post attachment (Feed's new-post
+	// panel or PostDetail's edit panel) or inserts markdown image syntax
+	// wherever InsertIconMsg would land — see applyAttachURL.
+	attachURLPromptOpen bool
+	attachURLPrompt     screens.PathPromptModel
+
 	// imageCarousel state — populated when an image is opened from a picker
 	// containing more than one image, letting left/right cycle between them
 	// without closing the image modal. Nil imageCarouselItems means a plain
@@ -552,6 +559,7 @@ func NewApp(client api.Client) App {
 		search:             screens.NewSearchModel(),
 		pathPrompt:         screens.NewPathPromptModel(),
 		iconPicker:         screens.NewIconPickerModel(),
+		attachURLPrompt:    screens.NewPathPromptModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -891,6 +899,10 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		model, cmd := a.handleIconPickerKey(m)
 		return model.(App), cmd, true
 	}
+	if a.attachURLPromptOpen {
+		model, cmd := a.handleAttachURLPromptKey(m)
+		return model.(App), cmd, true
+	}
 	// When a screen has a focused text input, let it consume all keys.
 	// ctrl+c is kept as a hard escape hatch; a handful of other global
 	// shortcuts get a ctrl-prefixed twin that reaches through too, since
@@ -923,7 +935,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 				(a.active == screenCMail && a.cmail.ComposeEmpty()))
 		switch {
 		case m.String() == "ctrl+o", m.String() == "ctrl+q", m.String() == "ctrl+t",
-			m.String() == "ctrl+]", m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
+			m.String() == "ctrl+]", m.String() == "ctrl+g", m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
 			// fall through to the global switch below
 		default:
 			return a, nil, false // fall through to delegateUpdate
@@ -976,6 +988,13 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			var cmd tea.Cmd
 			a.iconPicker, cmd = a.iconPicker.Open()
 			a.iconPicker = a.iconPicker.SetSize(width, height)
+			return a, cmd, true
+		}
+	case "ctrl+g":
+		if a.activeScreenHasFocusedInput() {
+			a.attachURLPromptOpen = true
+			var cmd tea.Cmd
+			a.attachURLPrompt, cmd = a.attachURLPrompt.Open("attach image/gif url", "")
 			return a, cmd, true
 		}
 	case "v":
@@ -1152,22 +1171,22 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentURL), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
 	case postConvertedToNoteMsg:
 		a, notifyCmd := a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
 		return a, tea.Batch(notifyCmd, a.loadFeedCmd()), true
 	case screens.SubmitPostEditMsg:
-		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW), true
+		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentURL, msg.AttachmentTouched, msg.OtherAttachments), true
 	case postEditedMsg:
 		// Both Feed and PostDetail may hold their own local copy of this post;
 		// PostDetail's ApplyPostEdit has no postID param, so guard it here —
 		// otherwise editing from Feed while PostDetail has an unrelated post
 		// open would overwrite that unrelated post's content.
-		a.feed = a.feed.ApplyPostEdit(msg.postID, msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt)
+		a.feed = a.feed.ApplyPostEdit(msg.postID, msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
 		if a.postDetail.PostID() == msg.postID {
-			a.postDetail = a.postDetail.ApplyPostEdit(msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt)
+			a.postDetail = a.postDetail.ApplyPostEdit(msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
 		}
 		return a, nil, true
 	case screens.SubmitReplyMsg:
@@ -1251,6 +1270,17 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, tea.Batch(markReadCmd, activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
+	case screens.MuteUserMsg:
+		return a, a.muteUserCmd(msg.RoomID, msg.Username), true
+	case userMutedMsg:
+		// Muting is enforced client-side off Settings.MutedUsersByRoom (see
+		// ChatroomsModel's SharedConfigMsg handler), which /mute updates
+		// server-side but never pushes to us — same reload roomCommandReplyMsg
+		// already does after a command completes. Without it the room keeps
+		// showing the just-muted user's messages until something else happens
+		// to reload settings.
+		a, notifyCmd := a.notify(notifyInfo, "muted "+msg.username)
+		return a, tea.Batch(notifyCmd, a.loadSettingsCmd()), true
 	case screens.FlagMessageMsg:
 		return a, a.flagRoomMessageCmd(msg.RoomID, msg.MessageID, msg.Reason), true
 	case screens.DeleteRoomMessageMsg:
@@ -1717,6 +1747,19 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		termenv.Copy(urlutil.PostPermalink(msg.Post.AuthorUsername, msg.Post.Slug))
 		a, cmd := a.notify(notifyInfo, "Copied link to clipboard")
+		return a, cmd, true
+	case screens.CopyMessageTextMsg:
+		// Same SSH gate as CopyLinkMsg — see its comment.
+		if a.ephemeral {
+			a, cmd := a.notify(notifyInfo, "Copying is disabled in SSH sessions")
+			return a, cmd, true
+		}
+		if msg.Text == "" {
+			a, cmd := a.notify(notifyInfo, "nothing to copy")
+			return a, cmd, true
+		}
+		termenv.Copy(msg.Text)
+		a, cmd := a.notify(notifyInfo, "Copied message to clipboard")
 		return a, cmd, true
 	case screens.BookmarkPostMsg:
 		if msg.ReplyID != "" {
@@ -3746,6 +3789,66 @@ func (a App) handleIconPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
+// handleAttachURLPromptKey processes keyboard input while the attach-image-URL
+// prompt is open. Enter/esc are handled directly here (mirrors
+// handleIconPickerKey) rather than routed through
+// PathPromptSubmitMsg/PathPromptCancelMsg — those are already claimed by the
+// theme export/import prompt's handlePathPrompt, which switches purely on
+// message type, so reusing them here would misroute into the export/import
+// logic. Every other key (typing, cursor movement) is forwarded to
+// PathPromptModel.Update.
+func (a App) handleAttachURLPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.attachURLPromptOpen = false
+		return a, nil
+	case "enter":
+		url := strings.TrimSpace(a.attachURLPrompt.Value())
+		if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			a.attachURLPrompt = a.attachURLPrompt.SetWarning("must be an http(s) URL")
+			return a, nil
+		}
+		a.attachURLPromptOpen = false
+		return a.applyAttachURL(url)
+	}
+	var cmd tea.Cmd
+	a.attachURLPrompt, cmd = a.attachURLPrompt.Update(msg)
+	return a, cmd
+}
+
+// applyAttachURL dispatches a submitted attach-URL prompt result, per what
+// was confirmed live this session: posts get a native attachment (routed
+// through the create/edit request); circ/C-Mail can only embed an animated
+// GIF, via the server's own /gif command — visually confirmed on the
+// website, whereas markdown in a message's content does not render there;
+// and replies have no attachment mechanism at all (no attachments field in
+// the reply API). Where nothing can actually render, this warns instead of
+// silently inserting text that looks like it worked but won't show up
+// anywhere but cyber-tui's own inline-image view.
+func (a App) applyAttachURL(url string) (App, tea.Cmd) {
+	switch {
+	case a.active == screenFeed && a.feed.PanelActive():
+		a.feed = a.feed.SetPanelAttachment(url)
+		return a, nil
+	case a.active == screenPostDetail && a.postDetail.EditPanelActive():
+		a.postDetail = a.postDetail.SetEditPanelAttachment(url)
+		return a, nil
+	}
+	if url == "" {
+		return a, nil
+	}
+	switch {
+	case a.active == screenChatrooms, a.active == screenCMail:
+		if !urlutil.IsGIFURL(url) {
+			return a.notify(notifyWarn, "cyberspace.online can only embed a GIF in chat (via /gif) — a static image needs a file upload the API doesn't support")
+		}
+		return a, func() tea.Msg { return screens.SetComposeValueMsg{Value: "/gif " + url} }
+	case a.active == screenPostDetail && a.postDetail.ReplyComposeActive():
+		return a.notify(notifyWarn, "replies don't support image attachments — there's no attachments field in the reply API")
+	}
+	return a, func() tea.Msg { return screens.InsertIconMsg{Icon: "![](" + url + ")"} }
+}
+
 // --- commands ---
 
 // loginSuccessMsg carries the authenticated session back to the update loop so
@@ -3901,6 +4004,11 @@ type roomCommandReplyMsg struct {
 	reply  string
 }
 type roomMessageDeletedMsg struct{ messageID string }
+
+// userMutedMsg confirms a successful /mute send — needed because, per the
+// server ("/mute ... posts nothing"), a successful mute has no visible
+// effect in the room to tell the user it worked; see muteUserCmd.
+type userMutedMsg struct{ username string }
 type cmailCommandReplyMsg struct {
 	convID string
 	reply  string
@@ -3944,6 +4052,12 @@ type postEditedMsg struct {
 	topics           []string
 	isPublic, isNSFW bool
 	editedAt         time.Time
+	// attachments/attachmentsTouched mirror EditPost's own pair: Feed/
+	// PostDetail's local copy only overwrites its cached Attachments when
+	// attachmentsTouched — otherwise the edit didn't touch them server-side
+	// either, so the stale local copy is already correct.
+	attachments        []model.Attachment
+	attachmentsTouched bool
 }
 
 type replyEditedMsg struct {
@@ -4461,6 +4575,20 @@ func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	}
 }
 
+// muteUserCmd sends "/mute <username>" as a normal room message — the only
+// way to mute is server-side, via the same slash command a user would type
+// by hand (see docs/00-latest-api-reference.md's Commands section). Unlike
+// sendRoomMessageCmd, success always reports back (userMutedMsg) since the
+// command posts nothing to the room for the user to see otherwise.
+func (a *App) muteUserCmd(roomID, username string) tea.Cmd {
+	return func() tea.Msg {
+		if _, err := a.client.SendRoomMessage(roomID, "/mute "+username); err != nil {
+			return actionErrMsg{err}
+		}
+		return userMutedMsg{username: username}
+	}
+}
+
 func (a *App) markRoomReadCmd(roomID string) tea.Cmd {
 	return func() tea.Msg {
 		_ = a.client.MarkRoomRead(roomID) // fire-and-forget
@@ -4548,9 +4676,56 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	}
 }
 
-func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool) tea.Cmd {
+// maxAttachmentDim is the width/height cap cyberspace.online enforces on a
+// post's native image/gif attachment — confirmed live (POST /v1/posts 400s
+// above it: "Image width must be an integer between 1 and 640px"). The API
+// requires the client to supply both dimensions and does not compute or
+// resize the image itself.
+const maxAttachmentDim = 640
+
+// attachmentTypeForURL infers a wireAttachment's "type" from the URL's path
+// extension (via urlutil.IsGIFURL, already used the same way for graphics-
+// protocol detection in openImageInTerminal — ignores query string/fragment,
+// unlike a raw suffix check, so a signed CDN link like ".gif?token=..."
+// still resolves correctly).
+func attachmentTypeForURL(rawURL string) string {
+	if urlutil.IsGIFURL(rawURL) {
+		return "gif"
+	}
+	return "image"
+}
+
+// resolveAttachment fetches attachmentURL's declared dimensions and builds
+// the model.Attachment CreatePost/EditPost send. Returns nil, nil for an
+// empty URL (no attachment). Returns an error — surfaced to the user like any
+// other actionErrMsg/editErrorMsg — when the image can't be fetched or
+// exceeds maxAttachmentDim; this app has no way to resize it (no upload
+// endpoint to host the result), so the accurate move is to fail clearly here
+// rather than let the server reject a request the user already spent an
+// interaction composing.
+func resolveAttachment(attachmentURL string) (*model.Attachment, error) {
+	if attachmentURL == "" {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	width, height, err := imgview.Dimensions(ctx, attachmentURL)
+	if err != nil {
+		return nil, fmt.Errorf("attach image: %w", err)
+	}
+	if width > maxAttachmentDim || height > maxAttachmentDim {
+		return nil, fmt.Errorf("attach image: %dx%d exceeds the site's %dx%d limit for post attachments — try a smaller image, or paste the link in the body text instead", width, height, maxAttachmentDim, maxAttachmentDim)
+	}
+	return &model.Attachment{Type: attachmentTypeForURL(attachmentURL), Src: attachmentURL, Width: width, Height: height}, nil
+}
+
+func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool, attachmentURL string) tea.Cmd {
 	return func() tea.Msg {
-		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW)
+		attachment, err := resolveAttachment(attachmentURL)
+		if err != nil {
+			return actionErrMsg{err}
+		}
+		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, attachment)
 		if err != nil {
 			return actionErrMsg{err}
 		}
@@ -5178,14 +5353,30 @@ func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 	}
 }
 
-func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool) tea.Cmd {
+// editPostCmd sends a post edit. otherAttachments are attachments the edit
+// panel found on the post but doesn't manage (e.g. an audio one) — when
+// attachmentTouched, they're resent alongside the resolved attachmentURL
+// since EditPost replaces the whole attachments array wholesale.
+func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool, attachmentURL string, attachmentTouched bool, otherAttachments []model.Attachment) tea.Cmd {
 	return func() tea.Msg {
-		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW); err != nil {
+		var attachments []model.Attachment
+		if attachmentTouched {
+			attachment, err := resolveAttachment(attachmentURL)
+			if err != nil {
+				return editErrorMsg(err)
+			}
+			attachments = append(attachments, otherAttachments...)
+			if attachment != nil {
+				attachments = append(attachments, *attachment)
+			}
+		}
+		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW, attachments, attachmentTouched); err != nil {
 			return editErrorMsg(err)
 		}
 		return postEditedMsg{
 			postID: postID, content: content, title: title, topics: topics,
 			isPublic: isPublic, isNSFW: isNSFW, editedAt: time.Now(),
+			attachments: attachments, attachmentsTouched: attachmentTouched,
 		}
 	}
 }
@@ -5288,7 +5479,7 @@ func (a *App) deleteRoomMessageCmd(roomID, messageID string) tea.Cmd {
 // Published notes have no title, are private, and not marked NSFW.
 func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, "", "", topics, false, false)
+		_, err := a.client.CreatePost(content, "", "", topics, false, false, nil)
 		if err != nil {
 			return actionErrMsg{err}
 		}
