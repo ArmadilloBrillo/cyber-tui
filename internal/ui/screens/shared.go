@@ -248,6 +248,26 @@ func messageURLs(msg model.Message) []string {
 	return urls
 }
 
+// messageCopyText returns the text 'y' should copy for msg: its body, or —
+// for an attachment-only message with no body (an /gif or /song posted with
+// no caption) — the attachment's URL, so copying still does something
+// useful rather than copying an empty string.
+func messageCopyText(msg model.Message) string {
+	if msg.Body != "" {
+		return msg.Body
+	}
+	if msg.ImageUrl != "" {
+		return msg.ImageUrl
+	}
+	if msg.GifUrl != "" {
+		return msg.GifUrl
+	}
+	if msg.AudioAttachment != nil {
+		return msg.AudioAttachment.Src
+	}
+	return ""
+}
+
 // messageDisplayBody returns "" when Body merely duplicates ImageUrl or
 // GifUrl (an attachment-only message posted with no text), so callers can
 // skip printing a redundant line of URL text next to the attachment badge

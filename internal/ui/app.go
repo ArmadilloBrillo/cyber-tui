@@ -1270,6 +1270,17 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, tea.Batch(markReadCmd, activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
+	case screens.MuteUserMsg:
+		return a, a.muteUserCmd(msg.RoomID, msg.Username), true
+	case userMutedMsg:
+		// Muting is enforced client-side off Settings.MutedUsersByRoom (see
+		// ChatroomsModel's SharedConfigMsg handler), which /mute updates
+		// server-side but never pushes to us — same reload roomCommandReplyMsg
+		// already does after a command completes. Without it the room keeps
+		// showing the just-muted user's messages until something else happens
+		// to reload settings.
+		a, notifyCmd := a.notify(notifyInfo, "muted "+msg.username)
+		return a, tea.Batch(notifyCmd, a.loadSettingsCmd()), true
 	case screens.FlagMessageMsg:
 		return a, a.flagRoomMessageCmd(msg.RoomID, msg.MessageID, msg.Reason), true
 	case screens.DeleteRoomMessageMsg:
@@ -1736,6 +1747,19 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		termenv.Copy(urlutil.PostPermalink(msg.Post.AuthorUsername, msg.Post.Slug))
 		a, cmd := a.notify(notifyInfo, "Copied link to clipboard")
+		return a, cmd, true
+	case screens.CopyMessageTextMsg:
+		// Same SSH gate as CopyLinkMsg — see its comment.
+		if a.ephemeral {
+			a, cmd := a.notify(notifyInfo, "Copying is disabled in SSH sessions")
+			return a, cmd, true
+		}
+		if msg.Text == "" {
+			a, cmd := a.notify(notifyInfo, "nothing to copy")
+			return a, cmd, true
+		}
+		termenv.Copy(msg.Text)
+		a, cmd := a.notify(notifyInfo, "Copied message to clipboard")
 		return a, cmd, true
 	case screens.BookmarkPostMsg:
 		if msg.ReplyID != "" {
@@ -3980,6 +4004,11 @@ type roomCommandReplyMsg struct {
 	reply  string
 }
 type roomMessageDeletedMsg struct{ messageID string }
+
+// userMutedMsg confirms a successful /mute send — needed because, per the
+// server ("/mute ... posts nothing"), a successful mute has no visible
+// effect in the room to tell the user it worked; see muteUserCmd.
+type userMutedMsg struct{ username string }
 type cmailCommandReplyMsg struct {
 	convID string
 	reply  string
@@ -4543,6 +4572,20 @@ func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 			return roomCommandReplyMsg{roomID: roomID, reply: reply}
 		}
 		return nil
+	}
+}
+
+// muteUserCmd sends "/mute <username>" as a normal room message — the only
+// way to mute is server-side, via the same slash command a user would type
+// by hand (see docs/00-latest-api-reference.md's Commands section). Unlike
+// sendRoomMessageCmd, success always reports back (userMutedMsg) since the
+// command posts nothing to the room for the user to see otherwise.
+func (a *App) muteUserCmd(roomID, username string) tea.Cmd {
+	return func() tea.Msg {
+		if _, err := a.client.SendRoomMessage(roomID, "/mute "+username); err != nil {
+			return actionErrMsg{err}
+		}
+		return userMutedMsg{username: username}
 	}
 }
 

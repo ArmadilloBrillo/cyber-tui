@@ -1039,6 +1039,41 @@ func TestCMailBrowsing_P_NoSelectedMessage_IsNoop(t *testing.T) {
 	}
 }
 
+// --- copy message text (see updateCMailBrowsingKey's "y" case) ---
+
+func TestCMailBrowsing_Y_EmitsCopyMessageTextMsg(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversationMessages("c1", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, Body: "hi there", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	cp, ok := cmd().(CopyMessageTextMsg)
+	if !ok {
+		t.Fatalf("expected CopyMessageTextMsg, got %T", cmd())
+	}
+	if cp.Text != "hi there" {
+		t.Errorf("Text = %q, want %q", cp.Text, "hi there")
+	}
+}
+
+func TestCMailBrowsing_Y_NoSelectedMessage_IsNoop(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversationMessages("c1", nil)
+
+	_, cmd := m.updateCMailBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd != nil {
+		t.Error("expected no-op when nothing is selected")
+	}
+}
+
 // TestCMailModel_SetComposeValueMsg_ReplacesInput mirrors the same check in
 // chatrooms_test.go — see its doc comment.
 func TestCMailModel_SetComposeValueMsg_ReplacesInput(t *testing.T) {

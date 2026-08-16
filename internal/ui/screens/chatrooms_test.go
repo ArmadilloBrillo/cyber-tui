@@ -24,7 +24,7 @@ func TestSortRoomUsers_AdminsFirstThenAlphabetical(t *testing.T) {
 		{UserID: "3", Username: "alice"},
 		{UserID: "4", Username: "bob", IsChatAdmin: true},
 	}
-	out := sortRoomUsers(in)
+	out := sortRoomUsers(in, 0)
 
 	want := []string{"bob", "Molly", "alice", "zeb"}
 	if len(out) != len(want) {
@@ -42,9 +42,59 @@ func TestSortRoomUsers_AdminsFirstThenAlphabetical(t *testing.T) {
 
 func TestSortRoomUsers_DoesNotMutateInput(t *testing.T) {
 	in := []model.RoomUser{{UserID: "1", Username: "zeb"}, {UserID: "2", Username: "alice"}}
-	_ = sortRoomUsers(in)
+	_ = sortRoomUsers(in, 0)
 	if in[0].Username != "zeb" {
 		t.Errorf("input slice was mutated: %+v", in)
+	}
+}
+
+// TestSortRoomUsers_ActiveBeforeIdle_AdminFirstWithinEachBlock covers the
+// full four-block order: active admins, active others, idle admins, idle
+// others, alphabetical within each.
+func TestSortRoomUsers_ActiveBeforeIdle_AdminFirstWithinEachBlock(t *testing.T) {
+	const idleAfterMs = 60_000
+	longAgo := time.Now().Add(-time.Hour)
+	justNow := time.Now()
+
+	in := []model.RoomUser{
+		{UserID: "1", Username: "zeb", LastActivity: &longAgo},                      // idle, non-admin
+		{UserID: "2", Username: "molly", IsChatAdmin: true, LastActivity: &longAgo}, // idle, admin
+		{UserID: "3", Username: "trinity", LastActivity: &justNow},                  // active, non-admin
+		{UserID: "4", Username: "alice", IsChatAdmin: true, LastActivity: &justNow}, // active, admin
+		{UserID: "5", Username: "bob", LastActivity: &justNow},                      // active, non-admin
+		{UserID: "6", Username: "dozer", IsChatAdmin: true, LastActivity: &longAgo}, // idle, admin
+	}
+	out := sortRoomUsers(in, idleAfterMs)
+
+	want := []string{
+		"alice",   // active, admin
+		"bob",     // active, others (alphabetical)
+		"trinity", // active, others (alphabetical)
+		"dozer",   // idle, admin (alphabetical)
+		"molly",   // idle, admin (alphabetical)
+		"zeb",     // idle, others
+	}
+	got := make([]string, len(out))
+	for i, u := range out {
+		got[i] = u.Username
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+// TestSortRoomUsers_NilLastActivity_NeverIdle guards the documented
+// contract on RoomUser.LastActivity: a nil value always sorts as active,
+// even with a real idleAfterMs threshold in effect.
+func TestSortRoomUsers_NilLastActivity_NeverIdle(t *testing.T) {
+	longAgo := time.Now().Add(-time.Hour)
+	in := []model.RoomUser{
+		{UserID: "1", Username: "zeb", LastActivity: &longAgo}, // idle
+		{UserID: "2", Username: "alice"},                       // no LastActivity reported — active
+	}
+	out := sortRoomUsers(in, 60_000)
+	if out[0].Username != "alice" {
+		t.Errorf("out[0].Username = %q, want alice (nil LastActivity sorts as active)", out[0].Username)
 	}
 }
 
@@ -1469,6 +1519,128 @@ func TestBrowsing_P_NoSelectedMessage_IsNoop(t *testing.T) {
 	m = m.SetMessages("zion", nil)
 
 	_, cmd := m.updateBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd != nil {
+		t.Error("expected no-op when nothing is selected")
+	}
+}
+
+// --- start C-Mail conversation (see updateBrowsingKey's "c" case) ---
+
+func TestBrowsing_C_EmitsStartConversationMsg(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	sc, ok := cmd().(StartConversationMsg)
+	if !ok {
+		t.Fatalf("expected StartConversationMsg, got %T", cmd())
+	}
+	if sc.Username != "molly" {
+		t.Errorf("Username = %q, want molly", sc.Username)
+	}
+}
+
+func TestBrowsing_C_NoSelectedMessage_IsNoop(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", nil)
+
+	_, cmd := m.updateBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd != nil {
+		t.Error("expected no-op when nothing is selected")
+	}
+}
+
+// --- mute user (see updateBrowsingKey's "m" case) ---
+
+func TestBrowsing_M_EmitsMuteUserMsg(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	mu, ok := cmd().(MuteUserMsg)
+	if !ok {
+		t.Fatalf("expected MuteUserMsg, got %T", cmd())
+	}
+	if mu.RoomID != "zion" || mu.Username != "molly" {
+		t.Errorf("MuteUserMsg = %+v, want RoomID=zion Username=molly", mu)
+	}
+}
+
+func TestBrowsing_M_OwnMessage_IsNoop(t *testing.T) {
+	// chatroomsInRoom sets the current user to "neo" — see its doc comment.
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "neo"}, Body: "hi", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.updateBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if cmd != nil {
+		t.Error("expected no-op when trying to mute yourself")
+	}
+}
+
+func TestBrowsing_M_NoSelectedMessage_IsNoop(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", nil)
+
+	_, cmd := m.updateBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if cmd != nil {
+		t.Error("expected no-op when nothing is selected")
+	}
+}
+
+// --- copy message text (see updateBrowsingKey's "y" case) ---
+
+func TestBrowsing_Y_EmitsCopyMessageTextMsg(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi there", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	cp, ok := cmd().(CopyMessageTextMsg)
+	if !ok {
+		t.Fatalf("expected CopyMessageTextMsg, got %T", cmd())
+	}
+	if cp.Text != "hi there" {
+		t.Errorf("Text = %q, want %q", cp.Text, "hi there")
+	}
+}
+
+func TestBrowsing_Y_NoSelectedMessage_IsNoop(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", nil)
+
+	_, cmd := m.updateBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	if cmd != nil {
 		t.Error("expected no-op when nothing is selected")
 	}

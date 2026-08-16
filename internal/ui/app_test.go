@@ -2029,6 +2029,131 @@ func TestEditPostCmd_MergesOtherAttachmentsWithResolvedAttachment(t *testing.T) 
 	}
 }
 
+// --- muteUserCmd / MuteUserMsg / userMutedMsg ---
+
+// sendRoomMessageRecordingClient captures the arguments SendRoomMessage was
+// called with, so a test can inspect exactly what got sent without a real API.
+type sendRoomMessageRecordingClient struct {
+	*api.MockClient
+	gotRoomID, gotBody string
+}
+
+func (c *sendRoomMessageRecordingClient) SendRoomMessage(roomID, body string) (string, error) {
+	c.gotRoomID, c.gotBody = roomID, body
+	return "", nil
+}
+
+// TestMuteUserCmd_SendsMuteSlashCommand guards the only way to mute:
+// sending "/mute <username>" as an ordinary room message, exactly as if the
+// user had typed it — there's no dedicated mute endpoint.
+func TestMuteUserCmd_SendsMuteSlashCommand(t *testing.T) {
+	client := &sendRoomMessageRecordingClient{MockClient: api.NewMockClient()}
+	a := NewApp(client)
+
+	msg := a.muteUserCmd("zion", "molly")()
+	if client.gotRoomID != "zion" || client.gotBody != "/mute molly" {
+		t.Errorf("SendRoomMessage(%q, %q), want (\"zion\", \"/mute molly\")", client.gotRoomID, client.gotBody)
+	}
+	um, ok := msg.(userMutedMsg)
+	if !ok {
+		t.Fatalf("muteUserCmd() = %T, want userMutedMsg", msg)
+	}
+	if um.username != "molly" {
+		t.Errorf("username = %q, want molly", um.username)
+	}
+}
+
+// mutedFailClient simulates the send itself failing (e.g. rate limit).
+type mutedFailClient struct{ *api.MockClient }
+
+func (c *mutedFailClient) SendRoomMessage(roomID, body string) (string, error) {
+	return "", &api.APIError{Code: "RATE_LIMITED", Status: 429, Message: "too many requests"}
+}
+
+func TestMuteUserCmd_SendFails_ReturnsActionErrMsg(t *testing.T) {
+	a := NewApp(&mutedFailClient{MockClient: api.NewMockClient()})
+
+	msg := a.muteUserCmd("zion", "molly")()
+	if _, ok := msg.(actionErrMsg); !ok {
+		t.Fatalf("muteUserCmd() = %T, want actionErrMsg", msg)
+	}
+}
+
+// TestApp_UserMutedMsg_ShowsNotification covers the reason userMutedMsg
+// exists at all: "/mute" posts nothing to the room, so without this the
+// user pressing 'm' would have no way to tell it worked.
+func TestApp_UserMutedMsg_ShowsNotification(t *testing.T) {
+	a := loggedInApp()
+
+	m, _ := a.Update(userMutedMsg{username: "molly"})
+	a = m.(App)
+
+	if a.notifyLevel != notifyInfo || a.notifyText != "muted molly" {
+		t.Errorf("notify = level=%v text=%q, want level=%v text=%q", a.notifyLevel, a.notifyText, notifyInfo, "muted molly")
+	}
+}
+
+// TestApp_UserMutedMsg_ReloadsSettings guards the fix for a real reported
+// bug: muting a user sent the /mute command fine but the room never
+// filtered their messages out, because ChatroomsModel's mute list only
+// updates from Settings.MutedUsersByRoom via SharedConfigMsg (see its
+// SharedConfigMsg handler), and /mute changes that server-side without ever
+// pushing the new value to us. batch[0] is the notify tick — not invoked
+// here since tea.Tick blocks for notifyTTL; only the settings-reload
+// command (batch[1], by construction — see the userMutedMsg case) is safe
+// to run synchronously.
+func TestApp_UserMutedMsg_ReloadsSettings(t *testing.T) {
+	a := loggedInApp()
+
+	_, cmd := a.Update(userMutedMsg{username: "molly"})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("cmd() = %T (len %d), want a 2-command tea.BatchMsg (notify + settings reload)", cmd(), len(batch))
+	}
+	if _, ok := batch[1]().(settingsLoadedMsg); !ok {
+		t.Errorf("batch[1]() = %T, want settingsLoadedMsg — the mute list refresh", batch[1]())
+	}
+}
+
+// --- CopyMessageTextMsg ---
+
+func TestApp_CopyMessageTextMsg_ShowsNotification(t *testing.T) {
+	a := loggedInApp()
+
+	m, _ := a.Update(screens.CopyMessageTextMsg{Text: "hi there"})
+	a = m.(App)
+
+	if a.notifyLevel != notifyInfo || a.notifyText != "Copied message to clipboard" {
+		t.Errorf("notify = level=%v text=%q, want level=%v text=%q", a.notifyLevel, a.notifyText, notifyInfo, "Copied message to clipboard")
+	}
+}
+
+func TestApp_CopyMessageTextMsg_EmptyText_NotifiesNothingToCopy(t *testing.T) {
+	a := loggedInApp()
+
+	m, _ := a.Update(screens.CopyMessageTextMsg{Text: ""})
+	a = m.(App)
+
+	if a.notifyLevel != notifyInfo || a.notifyText != "nothing to copy" {
+		t.Errorf("notify = level=%v text=%q, want level=%v text=%q", a.notifyLevel, a.notifyText, notifyInfo, "nothing to copy")
+	}
+}
+
+func TestApp_CopyMessageTextMsg_Ephemeral_DisabledInSSH(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+
+	m, _ := a.Update(screens.CopyMessageTextMsg{Text: "hi there"})
+	a = m.(App)
+
+	if a.notifyText != "Copying is disabled in SSH sessions" {
+		t.Errorf("notifyText = %q, want the SSH-disabled banner", a.notifyText)
+	}
+}
+
 // flagErrorMsg softens the documented self-report 403 into a friendly banner;
 // anything else falls through to the normal actionErrMsg handling.
 func TestFlagErrorMsg_403IsSoftened(t *testing.T) {

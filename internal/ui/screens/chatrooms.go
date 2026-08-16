@@ -894,8 +894,9 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 	return m
 }
 
-// SetRoomUsers replaces the presence panel's content, sorted admins-first
-// then alphabetical within each block. Recomputes the message viewport width
+// SetRoomUsers replaces the presence panel's content, sorted active before
+// idle, admins-first, then alphabetical within each block (see
+// sortRoomUsers). Recomputes the message viewport width
 // since the panel's presence affects it (panelWidths collapses to zero width
 // until the first snapshot arrives). The live presence stream fires this on
 // every change and on its own 5s re-evaluation timer, so — same as
@@ -903,7 +904,7 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 // re-home to the bottom if it was already there, or every presence tick
 // silently drifts the scroll position out from under the user.
 func (m ChatroomsModel) SetRoomUsers(users []model.RoomUser) ChatroomsModel {
-	m.roomUsers = sortRoomUsers(users)
+	m.roomUsers = sortRoomUsers(users, m.idleAfterMs)
 	if m.ready {
 		msgW, _ := m.panelWidths()
 		if msgW != m.viewport.Width {
@@ -1975,6 +1976,27 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		}
 		username := targetMsg.From.Username
 		return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+	case "c":
+		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
+		if !ok {
+			return m, nil
+		}
+		username := targetMsg.From.Username
+		return m, func() tea.Msg { return StartConversationMsg{Username: username} }
+	case "m":
+		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
+		if !ok || targetMsg.From.Username == m.currentUser || m.activeRoom == nil {
+			return m, nil
+		}
+		roomID, username := m.activeRoom.Slug, targetMsg.From.Username
+		return m, func() tea.Msg { return MuteUserMsg{RoomID: roomID, Username: username} }
+	case "y":
+		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
+		if !ok {
+			return m, nil
+		}
+		text := messageCopyText(targetMsg)
+		return m, func() tea.Msg { return CopyMessageTextMsg{Text: text} }
 	}
 	return m, nil
 }
@@ -2163,11 +2185,25 @@ func (m ChatroomsModel) mentionGhostText() string {
 	return string(top[len(q):])
 }
 
-// sortRoomUsers returns a copy of users ordered admins-first, then
-// alphabetically (case-insensitive) within each block.
-func sortRoomUsers(users []model.RoomUser) []model.RoomUser {
+// roomUserIsIdle reports whether u should be treated as idle given the
+// server's idleAfterMs threshold — shared by sortRoomUsers (idle users sort
+// after active ones) and renderRoomUsersPanel (💤 badge) so the two can
+// never disagree about who's idle. A nil LastActivity always means active
+// (the client never reported one), and idleAfterMs <= 0 (not yet known from
+// the server) means nobody is flagged.
+func roomUserIsIdle(u model.RoomUser, idleAfterMs int) bool {
+	return idleAfterMs > 0 && u.LastActivity != nil && time.Since(*u.LastActivity) > time.Duration(idleAfterMs)*time.Millisecond
+}
+
+// sortRoomUsers returns a copy of users ordered into four blocks — active
+// admins, active others, idle admins, idle others — alphabetical
+// (case-insensitive) within each.
+func sortRoomUsers(users []model.RoomUser, idleAfterMs int) []model.RoomUser {
 	out := append([]model.RoomUser(nil), users...)
 	sort.Slice(out, func(i, j int) bool {
+		if idleI, idleJ := roomUserIsIdle(out[i], idleAfterMs), roomUserIsIdle(out[j], idleAfterMs); idleI != idleJ {
+			return !idleI // active sorts before idle
+		}
 		if out[i].IsChatAdmin != out[j].IsChatAdmin {
 			return out[i].IsChatAdmin
 		}
@@ -2199,7 +2235,7 @@ func renderRoomUsersPanel(users []model.RoomUser, currentUser string, idleAfterM
 		case u.IsChatAdmin:
 			name = theme.Highlight.Render(name)
 		}
-		idle := idleAfterMs > 0 && u.LastActivity != nil && time.Since(*u.LastActivity) > time.Duration(idleAfterMs)*time.Millisecond
+		idle := roomUserIsIdle(u, idleAfterMs)
 		if idle {
 			name = theme.Subtle.Render("💤 ") + name
 		}
