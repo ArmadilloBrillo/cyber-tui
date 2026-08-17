@@ -878,9 +878,8 @@ func TestNotifs_ActiveTypeFilter_Default_ReturnsNil(t *testing.T) {
 
 func TestNotifs_ActiveTypeFilter_CategorySelected_ReturnsItsTypes(t *testing.T) {
 	m := initNotifs(nil)
-	m2, _ := runKey(m, "f")
-	m3, _ := runKey(m2, "down") // cursor -> notifCategories[0] ("mentions")
-	got := m3.ActiveTypeFilter()
+	m.filterCategoryIndex = 1 // "mentions", applied directly (bypassing the debounce)
+	got := m.ActiveTypeFilter()
 	want := notifCategories[0].types
 	if len(got) != len(want) {
 		t.Fatalf("expected %d types, got %d: %v", len(want), len(got), got)
@@ -901,62 +900,135 @@ func TestNotifs_FilterSummary_EmptyForAll(t *testing.T) {
 
 func TestNotifs_FilterSummary_ShowsActiveLabel(t *testing.T) {
 	m := initNotifs(nil)
-	m2, _ := runKey(m, "f")
-	m3, _ := runKey(m2, "down") // cursor -> "mentions"
-	if got := m3.FilterSummary(); got != "mentions" {
+	m.filterCategoryIndex = 1 // "mentions"
+	if got := m.FilterSummary(); got != "mentions" {
 		t.Errorf("expected %q, got %q", "mentions", got)
 	}
 }
 
-func TestNotifs_FilterPanel_Move_AppliesLiveAndEmitsRefresh(t *testing.T) {
+// pressNoExec sends a key without resolving the returned cmd — used for the
+// filter panel's movement keys, whose cmd is a real tea.Tick that would
+// block the test for notifFilterDebounceDelay if actually invoked.
+func pressNoExec(m NotificationsModel, key string) (NotificationsModel, tea.Cmd) {
+	return m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+}
+
+func TestNotifs_FilterPanel_Move_SchedulesDebounce_DoesNotApplyYet(t *testing.T) {
 	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
 	m := initNotifs(notifs)
 	m2, _ := runKey(m, "f")
-	m3, msg := runKey(m2, "down")
-	if _, ok := msg.(RefreshNotifsMsg); !ok {
-		t.Fatalf("expected RefreshNotifsMsg on cursor move, got %T", msg)
+	m3, cmd := pressNoExec(m2, "down")
+	if cmd == nil {
+		t.Fatal("expected a debounce cmd to be scheduled on move")
 	}
-	if m3.filterCategoryIndex != 1 {
-		t.Errorf("expected filterCategoryIndex 1 after one down, got %d", m3.filterCategoryIndex)
+	if m3.filterCursor != 1 {
+		t.Errorf("expected filterCursor 1 after one down, got %d", m3.filterCursor)
 	}
-	if len(m3.notifs) != 0 {
-		t.Errorf("expected notifs cleared, got %d", len(m3.notifs))
+	if m3.filterCategoryIndex != 0 {
+		t.Errorf("expected filterCategoryIndex still 0 (not yet applied) right after a move, got %d", m3.filterCategoryIndex)
 	}
-	if m3.nextCursor != "" || m3.exhausted {
-		t.Error("expected pagination state reset")
-	}
-	if !m3.fetching {
-		t.Error("expected fetching true after a live filter move")
-	}
-	if !m3.filterOpen {
-		t.Error("expected the panel to stay open after a move (only enter/esc close it)")
+	if len(m3.notifs) != 1 {
+		t.Errorf("expected notifs untouched until the debounce fires, got %d", len(m3.notifs))
 	}
 }
 
-func TestNotifs_FilterPanel_Enter_ClosesWithoutRefetch(t *testing.T) {
+func TestNotifs_FilterPanel_DebounceMsg_AppliesAfterElapsed(t *testing.T) {
 	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
 	m := initNotifs(notifs)
 	m2, _ := runKey(m, "f")
-	m3, _ := runKey(m2, "down") // move + apply (already tested above)
+	m3, _ := pressNoExec(m2, "down")
+	m3.filterMoveAt = time.Now().Add(-notifFilterDebounceDelay) // simulate the pause elapsing
+	m4, cmd := m3.Update(notifFilterDebounceMsg{})
+	if cmd == nil {
+		t.Fatal("expected a cmd once the debounce elapses")
+	}
+	if _, ok := cmd().(RefreshNotifsMsg); !ok {
+		t.Fatalf("expected RefreshNotifsMsg once the debounce elapses")
+	}
+	if m4.filterCategoryIndex != 1 {
+		t.Errorf("expected filterCategoryIndex applied to 1, got %d", m4.filterCategoryIndex)
+	}
+	if len(m4.notifs) != 0 {
+		t.Errorf("expected notifs cleared once applied, got %d", len(m4.notifs))
+	}
+	if !m4.filterOpen {
+		t.Error("expected the panel to stay open — the debounce firing doesn't close it")
+	}
+}
+
+func TestNotifs_FilterPanel_DebounceMsg_IgnoredIfNotElapsedYet(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	m2, _ := runKey(m, "f")
+	m3, _ := pressNoExec(m2, "down") // filterMoveAt is "just now"
+	m4, cmd := m3.Update(notifFilterDebounceMsg{})
+	if cmd != nil {
+		t.Error("expected no cmd when the debounce fires before the pause elapses")
+	}
+	if m4.filterCategoryIndex != 0 {
+		t.Errorf("expected filterCategoryIndex untouched, got %d", m4.filterCategoryIndex)
+	}
+	if len(m4.notifs) != 1 {
+		t.Errorf("expected notifs untouched, got %d", len(m4.notifs))
+	}
+}
+
+func TestNotifs_FilterPanel_DebounceMsg_IgnoredWhenPanelClosed(t *testing.T) {
+	m := initNotifs(nil)
+	m2, _ := runKey(m, "f")
+	m3, _ := pressNoExec(m2, "down")
+	m3.filterMoveAt = time.Now().Add(-notifFilterDebounceDelay)
+	m4, _ := runKey(m3, "esc") // closes the panel without ever applying the move
+	m5, cmd := m4.Update(notifFilterDebounceMsg{})
+	if cmd != nil {
+		t.Error("expected a stale debounce tick to be ignored once the panel is closed")
+	}
+	if m5.filterCategoryIndex != m4.filterCategoryIndex {
+		t.Errorf("expected filterCategoryIndex untouched by the stale tick, got %d want %d", m5.filterCategoryIndex, m4.filterCategoryIndex)
+	}
+}
+
+func TestNotifs_FilterPanel_Enter_AppliesImmediatelyBypassingDebounce(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	m2, _ := runKey(m, "f")
+	m3, _ := pressNoExec(m2, "down") // not yet applied — debounce still pending
 	m4, msg := runKey(m3, "enter")
-	if msg != nil {
-		t.Errorf("expected no cmd on enter (already applied), got %T", msg)
+	if _, ok := msg.(RefreshNotifsMsg); !ok {
+		t.Fatalf("expected RefreshNotifsMsg — enter should apply immediately, got %T", msg)
 	}
 	if m4.filterOpen {
 		t.Error("expected filterOpen false after enter")
 	}
-	if m4.filterCategoryIndex != m3.filterCategoryIndex {
-		t.Errorf("expected filterCategoryIndex unchanged by enter, got %d want %d", m4.filterCategoryIndex, m3.filterCategoryIndex)
+	if m4.filterCategoryIndex != 1 {
+		t.Errorf("expected filterCategoryIndex applied to 1 by enter, got %d", m4.filterCategoryIndex)
+	}
+}
+
+func TestNotifs_FilterPanel_Enter_NoMove_NoRefetch(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	m2, _ := runKey(m, "f")
+	m3, msg := runKey(m2, "enter") // no move made
+	if msg != nil {
+		t.Errorf("expected no cmd when enter with no move, got %T", msg)
+	}
+	if m3.filterOpen {
+		t.Error("expected filterOpen false after enter")
+	}
+	if len(m3.notifs) != 1 {
+		t.Errorf("expected notifs untouched, got %d", len(m3.notifs))
 	}
 }
 
 func TestNotifs_FilterPanel_Esc_RevertsAndRefetches(t *testing.T) {
 	m := initNotifs(nil)
 	m2, _ := runKey(m, "f")
-	m3, _ := runKey(m2, "down")
-	m4, _ := runKey(m3, "down")
-	if m4.filterCategoryIndex != 2 {
-		t.Fatalf("expected filterCategoryIndex 2 before esc, got %d", m4.filterCategoryIndex)
+	m3, _ := pressNoExec(m2, "down")
+	m3.filterMoveAt = time.Now().Add(-notifFilterDebounceDelay)
+	m4, _ := m3.Update(notifFilterDebounceMsg{}) // apply the move for real
+	if m4.filterCategoryIndex != 1 {
+		t.Fatalf("expected filterCategoryIndex 1 before esc, got %d", m4.filterCategoryIndex)
 	}
 	m5, msg := runKey(m4, "esc")
 	if _, ok := msg.(RefreshNotifsMsg); !ok {
@@ -989,31 +1061,35 @@ func TestNotifs_FilterPanel_Esc_NoChange_NoRefetch(t *testing.T) {
 	}
 }
 
-func TestNotifs_FilterPanel_CursorClampsAtBounds_NoSpuriousRefetch(t *testing.T) {
-	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
-	m := initNotifs(notifs)
+func TestNotifs_FilterPanel_CursorWrapsUpFromTop(t *testing.T) {
+	m := initNotifs(nil)
 	m2, _ := runKey(m, "f") // cursor starts at 0 ("all")
-	m3, msg := runKey(m2, "up")
-	if msg != nil {
-		t.Errorf("expected no cmd when up at top bound, got %T", msg)
+	m3, cmd := pressNoExec(m2, "up")
+	if cmd == nil {
+		t.Fatal("expected a debounce cmd to be scheduled on wrap-move")
 	}
-	if len(m3.notifs) != 1 {
-		t.Errorf("expected notifs untouched at top bound, got %d", len(m3.notifs))
+	want := notifFilterOptionCount() - 1
+	if m3.filterCursor != want {
+		t.Errorf("expected cursor to wrap to the last option (%d), got %d", want, m3.filterCursor)
 	}
+}
 
-	last := m3
+func TestNotifs_FilterPanel_CursorWrapsDownFromBottom(t *testing.T) {
+	m := initNotifs(nil)
+	m2, _ := runKey(m, "f")
+	last := m2
 	for i := 0; i < notifFilterOptionCount()-1; i++ {
-		last, _ = runKey(last, "down")
+		last, _ = pressNoExec(last, "down")
 	}
 	if last.filterCursor != notifFilterOptionCount()-1 {
 		t.Fatalf("expected cursor at last option, got %d", last.filterCursor)
 	}
-	final, msg := runKey(last, "down")
-	if msg != nil {
-		t.Errorf("expected no cmd when down at bottom bound, got %T", msg)
+	final, cmd := pressNoExec(last, "down")
+	if cmd == nil {
+		t.Fatal("expected a debounce cmd to be scheduled on wrap-move")
 	}
-	if final.filterCursor != notifFilterOptionCount()-1 {
-		t.Errorf("expected cursor to stay clamped at bottom bound, got %d", final.filterCursor)
+	if final.filterCursor != 0 {
+		t.Errorf("expected cursor to wrap to the first option (0), got %d", final.filterCursor)
 	}
 }
 

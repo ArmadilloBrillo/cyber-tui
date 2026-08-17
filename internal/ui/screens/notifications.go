@@ -38,6 +38,24 @@ type ShowNotificationPostMsg struct {
 	AuthorUsername string
 }
 
+// notifFilterDebounceDelay is how long the filter panel cursor must sit still
+// on a row before it's actually applied (fetched). Without this, quickly
+// scrolling through categories fires a fetch per keypress, which can arrive
+// out of order and briefly flash a stale category's results.
+const notifFilterDebounceDelay = 1 * time.Second
+
+// notifFilterDebounceMsg fires notifFilterDebounceDelay after a filter panel
+// cursor move. Update only applies it if the cursor hasn't moved again since
+// (checked via filterMoveAt) — a newer move's own scheduled tick will apply
+// instead, so at most one fetch happens per pause.
+type notifFilterDebounceMsg struct{}
+
+func scheduleNotifFilterDebounceCmd() tea.Cmd {
+	return tea.Tick(notifFilterDebounceDelay, func(time.Time) tea.Msg {
+		return notifFilterDebounceMsg{}
+	})
+}
+
 // notifCategory groups related notification types under one filterable label.
 // Kept as an ordered slice (not a map) so the filter panel and header summary
 // render in a stable, deterministic order.
@@ -90,10 +108,11 @@ type NotificationsModel struct {
 	err                 error
 	relaxed             bool
 	loc                 *time.Location
-	filterCategoryIndex int // 0 = all (no filter); 1..len(notifCategories) map to notifCategories[i-1]
+	filterCategoryIndex int // 0 = all (no filter); 1..len(notifCategories) map to notifCategories[i-1]; the last APPLIED (fetched) selection
 	filterOpen          bool
-	filterCursor        int // highlighted row in the panel; kept in sync with filterCategoryIndex since selection is live
-	filterOrigIndex     int // filterCategoryIndex snapshot taken when the panel opened, for esc revert
+	filterCursor        int       // row currently highlighted in the panel; may lag filterCategoryIndex while debouncing
+	filterOrigIndex     int       // filterCategoryIndex snapshot taken when the panel opened, for esc revert
+	filterMoveAt        time.Time // time of the most recent cursor move, for debouncing the fetch
 }
 
 func NewNotificationsModel() NotificationsModel {
@@ -315,6 +334,15 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case notifFilterDebounceMsg:
+		if !m.filterOpen || time.Since(m.filterMoveAt) < notifFilterDebounceDelay {
+			return m, nil // panel closed, or a newer move already reset the timer
+		}
+		if m.filterCursor == m.filterCategoryIndex {
+			return m, nil // cursor settled back on the already-applied category
+		}
+		return m.applyCategoryFilter(m.filterCursor)
+
 	case tea.KeyMsg:
 		if m.filterOpen {
 			return m.handleFilterPanelKey(msg)
@@ -471,17 +499,16 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 // whichever category was active when the panel opened; enter just closes,
 // since the current cursor position is already applied.
 func (m NotificationsModel) handleFilterPanelKey(msg tea.KeyMsg) (NotificationsModel, tea.Cmd) {
+	n := notifFilterOptionCount()
 	switch msg.String() {
 	case "up", "k":
-		if m.filterCursor > 0 {
-			m.filterCursor--
-			return m.applyCategoryFilter(m.filterCursor)
-		}
+		m.filterCursor = (m.filterCursor - 1 + n) % n
+		m.filterMoveAt = time.Now()
+		return m, scheduleNotifFilterDebounceCmd()
 	case "down", "j":
-		if m.filterCursor < notifFilterOptionCount()-1 {
-			m.filterCursor++
-			return m.applyCategoryFilter(m.filterCursor)
-		}
+		m.filterCursor = (m.filterCursor + 1) % n
+		m.filterMoveAt = time.Now()
+		return m, scheduleNotifFilterDebounceCmd()
 	case "esc":
 		m.filterOpen = false
 		if m.filterCategoryIndex != m.filterOrigIndex {
@@ -489,6 +516,11 @@ func (m NotificationsModel) handleFilterPanelKey(msg tea.KeyMsg) (NotificationsM
 		}
 	case "enter":
 		m.filterOpen = false
+		if m.filterCursor != m.filterCategoryIndex {
+			// Apply the highlighted-but-not-yet-debounced selection
+			// immediately rather than making the user wait it out.
+			return m.applyCategoryFilter(m.filterCursor)
+		}
 	}
 	return m, nil
 }
