@@ -426,7 +426,7 @@ Notification feed (replies, new followers, pokes, bookmarks, thread replies).
 - `enter` emits `ShowNotificationPostMsg` → App navigates to PostDetail (includes ReplyID for scroll-to) for post/reply notifications; `OpenRoomMsg` (jump to the cIRC room) for `chat_mention`; `StartConversationMsg` (open/create the C-Mail conversation with the sender) for `dm_message`
 - `m` emits `MarkNotifReadMsg`; `M` emits `MarkAllNotifsReadMsg`
 - `u` toggles unread-only filter
-- `f` opens a category filter panel (mentions/social/threads/c-mail/account-system, multi-select, not persisted across sessions) — filters server-side via `GetNotifications`'s `types` param; see `docs/15-notifications.md`
+- `f` opens a category filter panel (all/mentions/social/threads/c-mail/account-system, single-select, live-apply on cursor move, `esc` reverts, not persisted across sessions) — filters server-side via `GetNotifications`'s `types` param; see `docs/15-notifications.md`
 - `chat_mention` and `post_mention`/`reply_mention` notifications show an inline `"> …"` preview of the mentioning content (`MessageContent`/`PostContent`/`ReplyContent`)
 - `chat_mention` notifications for the cIRC room currently open in Chatrooms detail view are auto-suppressed (marked read, no badge bump) — see `docs/15-notifications.md`
 
@@ -917,7 +917,7 @@ fields.
 | `m` | Mark selected as read |
 | `M` | Mark all as read |
 | `u` | Toggle unread-only filter |
-| `f` | Open category filter panel |
+| `f` | Open category filter panel (single-select, live-apply) |
 | `c` | Start C-Mail conversation with notification actor |
 
 ### C-Mail

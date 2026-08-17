@@ -869,221 +869,151 @@ func TestNotifCategories_CoverAllKnownTypesExactlyOnce(t *testing.T) {
 	}
 }
 
-func TestNotifs_ActiveTypeFilter_AllActive_ReturnsNil(t *testing.T) {
+func TestNotifs_ActiveTypeFilter_Default_ReturnsNil(t *testing.T) {
 	m := NewNotificationsModel()
 	if got := m.ActiveTypeFilter(); got != nil {
-		t.Errorf("expected nil filter when all categories active, got %v", got)
+		t.Errorf("expected nil filter by default (all), got %v", got)
 	}
 }
 
-func TestNotifs_ActiveTypeFilter_PartialSelection_FlattensTypes(t *testing.T) {
-	m := NewNotificationsModel()
-	m.activeCategories[0] = false // deselect "mentions"
-	got := m.ActiveTypeFilter()
-	want := map[string]bool{}
-	for i, cat := range notifCategories {
-		if i == 0 {
-			continue
-		}
-		for _, typ := range cat.types {
-			want[typ] = true
-		}
-	}
+func TestNotifs_ActiveTypeFilter_CategorySelected_ReturnsItsTypes(t *testing.T) {
+	m := initNotifs(nil)
+	m2, _ := runKey(m, "f")
+	m3, _ := runKey(m2, "down") // cursor -> notifCategories[0] ("mentions")
+	got := m3.ActiveTypeFilter()
+	want := notifCategories[0].types
 	if len(got) != len(want) {
 		t.Fatalf("expected %d types, got %d: %v", len(want), len(got), got)
 	}
-	for _, typ := range got {
-		if !want[typ] {
-			t.Errorf("unexpected type %q in filter", typ)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("type[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
 }
 
-func TestNotifs_FilterSummary_EmptyWhenAllActive(t *testing.T) {
+func TestNotifs_FilterSummary_EmptyForAll(t *testing.T) {
 	m := NewNotificationsModel()
 	if got := m.FilterSummary(); got != "" {
-		t.Errorf("expected empty summary when all active, got %q", got)
+		t.Errorf("expected empty summary for 'all', got %q", got)
 	}
 }
 
-func TestNotifs_FilterSummary_ListsActiveCategories(t *testing.T) {
-	m := NewNotificationsModel()
-	for i := range m.activeCategories {
-		m.activeCategories[i] = false
-	}
-	m.activeCategories[0] = true // mentions
-	if got := m.FilterSummary(); got != "mentions" {
+func TestNotifs_FilterSummary_ShowsActiveLabel(t *testing.T) {
+	m := initNotifs(nil)
+	m2, _ := runKey(m, "f")
+	m3, _ := runKey(m2, "down") // cursor -> "mentions"
+	if got := m3.FilterSummary(); got != "mentions" {
 		t.Errorf("expected %q, got %q", "mentions", got)
 	}
 }
 
-func TestNotifs_FilterPanel_OpenKey_SeedsPending(t *testing.T) {
-	m := initNotifs(nil)
-	m.activeCategories[1] = false
-	m2, _ := runKey(m, "f")
-	if !m2.filterOpen {
-		t.Fatal("expected filterOpen true after 'f'")
-	}
-	if !equalBoolSlices(m2.pendingCategories, m2.activeCategories) {
-		t.Errorf("expected pendingCategories to seed from activeCategories")
-	}
-}
-
-func TestNotifs_FilterPanel_Esc_DiscardsChanges(t *testing.T) {
-	m := initNotifs(nil)
-	orig := append([]bool(nil), m.activeCategories...)
-	m2, _ := runKey(m, "f")
-	m3, _ := runKey(m2, " ") // toggle first category in the panel
-	m4, _ := runKey(m3, "esc")
-	if m4.filterOpen {
-		t.Error("expected filterOpen false after esc")
-	}
-	if !equalBoolSlices(m4.activeCategories, orig) {
-		t.Errorf("expected activeCategories unchanged after esc, got %v want %v", m4.activeCategories, orig)
-	}
-}
-
-func TestNotifs_FilterPanel_Enter_Changed_EmitsRefreshAndResets(t *testing.T) {
+func TestNotifs_FilterPanel_Move_AppliesLiveAndEmitsRefresh(t *testing.T) {
 	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
 	m := initNotifs(notifs)
-	m.selectedIndex = 0
 	m2, _ := runKey(m, "f")
-	// Deselect "account/system" (the 16-type category) rather than the
-	// first one — deselecting a small category would leave the remaining
-	// selection (mentions+social+threads+account/system = 29 types) over
-	// the API's 20-type cap and get blocked by the new guard.
-	m3 := m2
-	for i := 0; i < len(notifCategories)-1; i++ {
-		m3, _ = runKey(m3, "down")
-	}
-	m3, _ = runKey(m3, " ")
-	m4, msg := runKey(m3, "enter")
+	m3, msg := runKey(m2, "down")
 	if _, ok := msg.(RefreshNotifsMsg); !ok {
-		t.Fatalf("expected RefreshNotifsMsg, got %T", msg)
+		t.Fatalf("expected RefreshNotifsMsg on cursor move, got %T", msg)
 	}
-	if m4.filterOpen {
-		t.Error("expected filterOpen false after enter")
+	if m3.filterCategoryIndex != 1 {
+		t.Errorf("expected filterCategoryIndex 1 after one down, got %d", m3.filterCategoryIndex)
 	}
-	if len(m4.notifs) != 0 {
-		t.Errorf("expected notifs cleared, got %d", len(m4.notifs))
+	if len(m3.notifs) != 0 {
+		t.Errorf("expected notifs cleared, got %d", len(m3.notifs))
 	}
-	if m4.nextCursor != "" || m4.exhausted {
+	if m3.nextCursor != "" || m3.exhausted {
 		t.Error("expected pagination state reset")
 	}
-	if !m4.fetching {
-		t.Error("expected fetching true after filter change")
+	if !m3.fetching {
+		t.Error("expected fetching true after a live filter move")
 	}
-	if m4.activeCategories[len(notifCategories)-1] {
-		t.Error("expected last category (account/system) to be false after commit")
+	if !m3.filterOpen {
+		t.Error("expected the panel to stay open after a move (only enter/esc close it)")
 	}
 }
 
-func TestNotifs_FilterPanel_Enter_Unchanged_NoRefetch(t *testing.T) {
+func TestNotifs_FilterPanel_Enter_ClosesWithoutRefetch(t *testing.T) {
 	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
 	m := initNotifs(notifs)
 	m2, _ := runKey(m, "f")
-	m3, msg := runKey(m2, "enter") // no changes made
+	m3, _ := runKey(m2, "down") // move + apply (already tested above)
+	m4, msg := runKey(m3, "enter")
 	if msg != nil {
-		t.Errorf("expected no cmd when filter unchanged, got %T", msg)
+		t.Errorf("expected no cmd on enter (already applied), got %T", msg)
+	}
+	if m4.filterOpen {
+		t.Error("expected filterOpen false after enter")
+	}
+	if m4.filterCategoryIndex != m3.filterCategoryIndex {
+		t.Errorf("expected filterCategoryIndex unchanged by enter, got %d want %d", m4.filterCategoryIndex, m3.filterCategoryIndex)
+	}
+}
+
+func TestNotifs_FilterPanel_Esc_RevertsAndRefetches(t *testing.T) {
+	m := initNotifs(nil)
+	m2, _ := runKey(m, "f")
+	m3, _ := runKey(m2, "down")
+	m4, _ := runKey(m3, "down")
+	if m4.filterCategoryIndex != 2 {
+		t.Fatalf("expected filterCategoryIndex 2 before esc, got %d", m4.filterCategoryIndex)
+	}
+	m5, msg := runKey(m4, "esc")
+	if _, ok := msg.(RefreshNotifsMsg); !ok {
+		t.Fatalf("expected RefreshNotifsMsg on esc revert, got %T", msg)
+	}
+	if m5.filterOpen {
+		t.Error("expected filterOpen false after esc")
+	}
+	if m5.filterCategoryIndex != 0 {
+		t.Errorf("expected filterCategoryIndex reverted to 0 (all), got %d", m5.filterCategoryIndex)
+	}
+}
+
+func TestNotifs_FilterPanel_Esc_NoChange_NoRefetch(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	m2, _ := runKey(m, "f")
+	m3, msg := runKey(m2, "esc") // no move made
+	if msg != nil {
+		t.Errorf("expected no cmd when esc with no change, got %T", msg)
 	}
 	if m3.filterOpen {
-		t.Error("expected filterOpen false after enter")
+		t.Error("expected filterOpen false after esc")
+	}
+	if m3.filterCategoryIndex != 0 {
+		t.Errorf("expected filterCategoryIndex unchanged (0), got %d", m3.filterCategoryIndex)
 	}
 	if len(m3.notifs) != 1 {
 		t.Errorf("expected notifs untouched, got %d", len(m3.notifs))
 	}
 }
 
-func TestNotifs_FilterPanel_Enter_AllOff_Blocked(t *testing.T) {
-	m := initNotifs(nil)
-	m2, _ := runKey(m, "f")
-	m3 := m2
-	for range notifCategories {
-		// toggle every category off via space + down
-		m3, _ = runKey(m3, " ")
-		m3, _ = runKey(m3, "j")
-	}
-	m4, msg := runKey(m3, "enter")
+func TestNotifs_FilterPanel_CursorClampsAtBounds_NoSpuriousRefetch(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	m2, _ := runKey(m, "f") // cursor starts at 0 ("all")
+	m3, msg := runKey(m2, "up")
 	if msg != nil {
-		t.Errorf("expected all-off enter to be blocked, got %T", msg)
+		t.Errorf("expected no cmd when up at top bound, got %T", msg)
 	}
-	if !m4.filterOpen {
-		t.Error("expected filter panel to remain open when all categories deselected")
+	if len(m3.notifs) != 1 {
+		t.Errorf("expected notifs untouched at top bound, got %d", len(m3.notifs))
 	}
-	if !allCategoriesOn(m4.activeCategories) {
-		t.Error("expected activeCategories unchanged (still all on) when commit blocked")
-	}
-	if m4.filterWarn == "" {
-		t.Error("expected filterWarn to be set when all-off commit is blocked")
-	}
-}
 
-func TestNotifs_FilterPanel_Enter_TooManyTypes_Blocked(t *testing.T) {
-	m := initNotifs(nil)
-	m2, _ := runKey(m, "f")
-	// Deselect everything except threads(5) + account/system(16) = 21, over
-	// the API's 20-type cap.
-	m3, _ := runKey(m2, " ") // mentions off (cursor at 0)
-	m3, _ = runKey(m3, "down")
-	m3, _ = runKey(m3, " ") // social off
-	m3, _ = runKey(m3, "down")
-	m3, _ = runKey(m3, "down")
-	m3, _ = runKey(m3, " ") // c-mail off
-	m3, _ = runKey(m3, "down")
-	m4, msg := runKey(m3, "enter")
+	last := m3
+	for i := 0; i < notifFilterOptionCount()-1; i++ {
+		last, _ = runKey(last, "down")
+	}
+	if last.filterCursor != notifFilterOptionCount()-1 {
+		t.Fatalf("expected cursor at last option, got %d", last.filterCursor)
+	}
+	final, msg := runKey(last, "down")
 	if msg != nil {
-		t.Errorf("expected too-many-types enter to be blocked, got %T", msg)
+		t.Errorf("expected no cmd when down at bottom bound, got %T", msg)
 	}
-	if !m4.filterOpen {
-		t.Error("expected filter panel to remain open when selection exceeds the type cap")
-	}
-	if !allCategoriesOn(m4.activeCategories) {
-		t.Error("expected activeCategories unchanged when commit blocked")
-	}
-	if m4.filterWarn == "" {
-		t.Error("expected filterWarn to be set when selection exceeds the type cap")
-	}
-}
-
-func TestNotifs_FilterPanel_Enter_ExactlyTwentyTypes_Allowed(t *testing.T) {
-	m := initNotifs(nil)
-	m2, _ := runKey(m, "f")
-	// Keep only mentions(4) + account/system(16) = exactly 20 — the
-	// documented cap is inclusive ("1-20 values"), so this must succeed.
-	m3, _ := runKey(m2, "down") // cursor -> social
-	m3, _ = runKey(m3, " ")     // social off
-	m3, _ = runKey(m3, "down")  // cursor -> threads
-	m3, _ = runKey(m3, " ")     // threads off
-	m3, _ = runKey(m3, "down")  // cursor -> c-mail
-	m3, _ = runKey(m3, " ")     // c-mail off
-	m4, msg := runKey(m3, "enter")
-	if _, ok := msg.(RefreshNotifsMsg); !ok {
-		t.Fatalf("expected RefreshNotifsMsg for an exactly-20-type selection, got %T", msg)
-	}
-	if m4.filterOpen {
-		t.Error("expected filterOpen false after a successful commit")
-	}
-	if m4.filterWarn != "" {
-		t.Errorf("expected filterWarn cleared after a successful commit, got %q", m4.filterWarn)
-	}
-}
-
-func TestNotifs_FilterPanel_OpenKey_ClearsWarn(t *testing.T) {
-	m := initNotifs(nil)
-	m.filterWarn = "stale warning"
-	m2, _ := runKey(m, "f")
-	if m2.filterWarn != "" {
-		t.Errorf("expected filterWarn cleared on open, got %q", m2.filterWarn)
-	}
-}
-
-func TestNotifs_FilterPanel_Toggle_ClearsWarn(t *testing.T) {
-	m := initNotifs(nil)
-	m2, _ := runKey(m, "f")
-	m2.filterWarn = "stale warning"
-	m3, _ := runKey(m2, " ")
-	if m3.filterWarn != "" {
-		t.Errorf("expected filterWarn cleared on toggle, got %q", m3.filterWarn)
+	if final.filterCursor != notifFilterOptionCount()-1 {
+		t.Errorf("expected cursor to stay clamped at bottom bound, got %d", final.filterCursor)
 	}
 }
 

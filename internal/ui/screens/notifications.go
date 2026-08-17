@@ -1,7 +1,6 @@
 package screens
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -61,47 +60,44 @@ var notifCategories = []notifCategory{
 	}},
 }
 
-// maxNotifTypeFilter matches the API's documented cap on the type query
-// param (docs/00-latest-api-reference.md: "comma-separated list of
-// notification types (1-20 values)"). A selection spanning more types than
-// this is blocked client-side rather than sent and rejected with a 400.
-const maxNotifTypeFilter = 20
+// notifFilterOptionCount returns the number of rows in the filter panel: the
+// synthetic "all" option (index 0) plus one per category.
+func notifFilterOptionCount() int { return len(notifCategories) + 1 }
 
-func allCategoriesActive() []bool {
-	b := make([]bool, len(notifCategories))
-	for i := range b {
-		b[i] = true
+// notifFilterOptionLabel returns the display label for filter panel row i.
+func notifFilterOptionLabel(i int) string {
+	if i == 0 {
+		return "all"
 	}
-	return b
+	return notifCategories[i-1].label
 }
 
 type NotificationsModel struct {
-	notifs            []model.Notification
-	notifOffsets      []int // start line of each notification within the viewport content
-	viewport          viewport.Model
-	width             int
-	height            int
-	selectedIndex     int
-	ready             bool
-	loading           bool
-	fetching          bool // true while the initial (or tab-switch) load is in flight
-	refreshing        bool
-	exhausted         bool
-	nextCursor        string
-	hasPaginated      bool
-	showUnreadOnly    bool
-	err               error
-	relaxed           bool
-	loc               *time.Location
-	activeCategories  []bool // index-aligned with notifCategories; default all true (no filter)
-	filterOpen        bool
-	pendingCategories []bool // scratch copy edited while filterOpen; committed on enter, discarded on esc
-	filterCursor      int
-	filterWarn        string // validation message shown in the panel; cleared on open or on any selection change
+	notifs              []model.Notification
+	notifOffsets        []int // start line of each notification within the viewport content
+	viewport            viewport.Model
+	width               int
+	height              int
+	selectedIndex       int
+	ready               bool
+	loading             bool
+	fetching            bool // true while the initial (or tab-switch) load is in flight
+	refreshing          bool
+	exhausted           bool
+	nextCursor          string
+	hasPaginated        bool
+	showUnreadOnly      bool
+	err                 error
+	relaxed             bool
+	loc                 *time.Location
+	filterCategoryIndex int // 0 = all (no filter); 1..len(notifCategories) map to notifCategories[i-1]
+	filterOpen          bool
+	filterCursor        int // highlighted row in the panel; kept in sync with filterCategoryIndex since selection is live
+	filterOrigIndex     int // filterCategoryIndex snapshot taken when the panel opened, for esc revert
 }
 
 func NewNotificationsModel() NotificationsModel {
-	return NotificationsModel{showUnreadOnly: true, activeCategories: allCategoriesActive()}
+	return NotificationsModel{showUnreadOnly: true}
 }
 
 // IsReady reports whether the viewport has been initialised.
@@ -180,54 +176,25 @@ func (m NotificationsModel) SetLocation(loc *time.Location) NotificationsModel {
 // ShowUnreadOnly reports whether the screen is currently filtering to unread-only.
 func (m NotificationsModel) ShowUnreadOnly() bool { return m.showUnreadOnly }
 
-// ActiveTypeFilter flattens the selected categories into the []string the API
-// expects for GetNotifications' types param. Returns nil (not an empty slice)
-// when every category is active, matching the "no filter" query shape/behavior
-// the client used before this feature existed.
+// ActiveTypeFilter returns the []string the API expects for GetNotifications'
+// types param for the currently selected category. Returns nil when "all" is
+// selected, matching the "no filter" query shape/behavior the client used
+// before this feature existed. notifCategories is never mutated, so the
+// underlying slice is returned directly rather than copied.
 func (m NotificationsModel) ActiveTypeFilter() []string {
-	if allCategoriesOn(m.activeCategories) {
+	if m.filterCategoryIndex == 0 {
 		return nil
 	}
-	var out []string
-	for i, cat := range notifCategories {
-		if i < len(m.activeCategories) && m.activeCategories[i] {
-			out = append(out, cat.types...)
-		}
-	}
-	return out
+	return notifCategories[m.filterCategoryIndex-1].types
 }
 
-// FilterSummary returns a short label like "mentions, social" for the
-// currently active categories, or "" when no filter is applied (all active).
+// FilterSummary returns the active category's label, or "" when "all" is
+// selected (no filter applied).
 func (m NotificationsModel) FilterSummary() string {
-	if allCategoriesOn(m.activeCategories) {
+	if m.filterCategoryIndex == 0 {
 		return ""
 	}
-	var labels []string
-	for i, cat := range notifCategories {
-		if i < len(m.activeCategories) && m.activeCategories[i] {
-			labels = append(labels, cat.label)
-		}
-	}
-	return strings.Join(labels, ", ")
-}
-
-func allCategoriesOn(cats []bool) bool {
-	for _, on := range cats {
-		if !on {
-			return false
-		}
-	}
-	return true
-}
-
-func anyCategoryOn(cats []bool) bool {
-	for _, on := range cats {
-		if on {
-			return true
-		}
-	}
-	return false
+	return notifCategories[m.filterCategoryIndex-1].label
 }
 
 // HasPaginated reports whether the user has loaded pages beyond the first.
@@ -423,9 +390,8 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 			return m, func() tea.Msg { return RefreshNotifsMsg{} }
 		case "f":
 			m.filterOpen = true
-			m.pendingCategories = append([]bool(nil), m.activeCategories...)
-			m.filterCursor = 0
-			m.filterWarn = ""
+			m.filterOrigIndex = m.filterCategoryIndex
+			m.filterCursor = m.filterCategoryIndex
 			return m, nil
 		case "enter":
 			if len(visible) == 0 || m.selectedIndex >= len(visible) {
@@ -499,89 +465,46 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 }
 
 // handleFilterPanelKey handles key input while the category filter panel is
-// open. It mirrors the 'u' unread-only toggle's reset-and-refetch shape when
-// the selection is committed with a real change.
+// open. Selection is live: every cursor move immediately applies and
+// refetches (mirrors the theme picker's live-preview-on-cursor-move
+// pattern in internal/ui/app.go's handleThemePickerKey). Esc reverts to
+// whichever category was active when the panel opened; enter just closes,
+// since the current cursor position is already applied.
 func (m NotificationsModel) handleFilterPanelKey(msg tea.KeyMsg) (NotificationsModel, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
 		if m.filterCursor > 0 {
 			m.filterCursor--
+			return m.applyCategoryFilter(m.filterCursor)
 		}
 	case "down", "j":
-		if m.filterCursor < len(notifCategories)-1 {
+		if m.filterCursor < notifFilterOptionCount()-1 {
 			m.filterCursor++
+			return m.applyCategoryFilter(m.filterCursor)
 		}
-	case " ":
-		m.pendingCategories[m.filterCursor] = !m.pendingCategories[m.filterCursor]
-		m.filterWarn = ""
-	case "a":
-		on := !allCategoriesOn(m.pendingCategories)
-		for i := range m.pendingCategories {
-			m.pendingCategories[i] = on
-		}
-		m.filterWarn = ""
 	case "esc":
 		m.filterOpen = false
+		if m.filterCategoryIndex != m.filterOrigIndex {
+			return m.applyCategoryFilter(m.filterOrigIndex)
+		}
 	case "enter":
-		if !anyCategoryOn(m.pendingCategories) {
-			// Refuse an empty selection — it's ambiguous versus "no filter",
-			// since the server treats a nil/empty types param as unfiltered.
-			m.filterWarn = "select at least one category"
-			return m, nil
-		}
-		// The API caps the type query param at 20 comma-separated values
-		// (docs/00-latest-api-reference.md). A selection that isn't "every
-		// category" (which correctly sends no type param at all) can still
-		// flatten to more than that — account/system alone is 16 of the 30
-		// known types — so block it here rather than sending a request the
-		// server will 400 on.
-		if !allCategoriesOn(m.pendingCategories) {
-			if count := pendingTypeCount(m.pendingCategories); count > maxNotifTypeFilter {
-				m.filterWarn = fmt.Sprintf("too many types selected (%d, max %d) — deselect a category", count, maxNotifTypeFilter)
-				return m, nil
-			}
-		}
-		changed := !equalBoolSlices(m.pendingCategories, m.activeCategories)
 		m.filterOpen = false
-		m.filterWarn = ""
-		if !changed {
-			return m, nil
-		}
-		m.activeCategories = m.pendingCategories
-		m.selectedIndex = 0
-		m.notifs = nil
-		m.nextCursor = ""
-		m.exhausted = false
-		m.fetching = true
-		m = m.refreshContent()
-		return m, func() tea.Msg { return RefreshNotifsMsg{} }
 	}
 	return m, nil
 }
 
-// pendingTypeCount sums the type counts of the selected categories without
-// allocating the flattened slice — used to validate a selection against
-// maxNotifTypeFilter before it's committed.
-func pendingTypeCount(cats []bool) int {
-	n := 0
-	for i, on := range cats {
-		if on {
-			n += len(notifCategories[i].types)
-		}
-	}
-	return n
-}
-
-func equalBoolSlices(a, b []bool) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+// applyCategoryFilter sets the active filter category, resets pagination
+// state, and refetches — the same reset shape as the existing 'u' unread-only
+// toggle. Shared by cursor movement and the esc-revert path.
+func (m NotificationsModel) applyCategoryFilter(index int) (NotificationsModel, tea.Cmd) {
+	m.filterCategoryIndex = index
+	m.selectedIndex = 0
+	m.notifs = nil
+	m.nextCursor = ""
+	m.exhausted = false
+	m.fetching = true
+	m = m.refreshContent()
+	return m, func() tea.Msg { return RefreshNotifsMsg{} }
 }
 
 func (m NotificationsModel) viewportHeight() int {
@@ -905,12 +828,8 @@ func (m NotificationsModel) View() string {
 func (m NotificationsModel) renderFilterPanel() string {
 	title := theme.Title.Render("Filter Notifications")
 	var lines []string
-	for i, cat := range notifCategories {
-		mark := "[ ]"
-		if m.pendingCategories[i] {
-			mark = "[x]"
-		}
-		line := mark + " " + cat.label
+	for i := 0; i < notifFilterOptionCount(); i++ {
+		line := notifFilterOptionLabel(i)
 		if i == m.filterCursor {
 			line = theme.Highlight.Render("▸ " + line)
 		} else {
@@ -918,18 +837,15 @@ func (m NotificationsModel) renderFilterPanel() string {
 		}
 		lines = append(lines, line)
 	}
-	hint := theme.Subtle.Render("↑↓ select   space toggle   a all/none   enter apply   esc cancel")
-	parts := []string{
+	hint := theme.Subtle.Render("↑↓ select   enter confirm   esc cancel")
+	body := lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		"",
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 		"",
-	}
-	if m.filterWarn != "" {
-		parts = append(parts, theme.Error.Render(m.filterWarn), "")
-	}
-	parts = append(parts, hint)
-	return theme.ActiveBorder.Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
+		hint,
+	)
+	return theme.ActiveBorder.Render(body)
 }
 
 // overlayCenter splices fg, centered, on top of bg — used to keep the

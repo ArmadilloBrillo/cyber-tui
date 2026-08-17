@@ -197,27 +197,26 @@ The notifications screen opens in unread-only mode by default. Press `u` to togg
 
 ## Category Filter
 
-Press `f` to open a panel that filters the list down to specific notification categories, useful when there are too many notifications and only some kinds are relevant right now:
+Press `f` to open a panel that filters the list down to one notification category at a time, useful when there are too many notifications and only some kinds are relevant right now:
 
 | Category | Types |
 |---|---|
+| `all` | (no filter — every type) |
 | `mentions` | `reply_mention`, `post_mention`, `chat_mention`, `graffiti_mention` |
 | `social` | `new_follower`, `unfollowed`, `poke`, `bookmark` |
 | `threads` | `reply`, `thread_reply`, `guild_new_thread`, `new_post_friend`, `new_post_following` |
 | `c-mail` | `dm_message` |
 | `account/system` | `supporter_granted`/`removed`, `hacker_granted`/`removed`, `image_permission_granted`/`removed`, `attachment_permission_granted`/`removed`, `system_ban`, `system_ban_lifted`, `moderator_granted`/`removed`, `api_access_granted`/`removed`, `post_cooldown`, `rate_limit_warning` |
 
-Panel controls: `↑`/`↓` (or `j`/`k`) move the cursor, `space` toggles the highlighted category, `a` toggles all categories on/off at once, `enter` applies the selection, `esc` cancels and discards any changes made while the panel was open.
+The panel is **single-select and live**: `↑`/`↓` (or `j`/`k`) move the cursor, and every move immediately applies that category and re-fetches the list behind the panel — there's no separate "apply" step. `enter` just confirms and closes (the cursor position is already applied). `esc` reverts to whichever category was active when the panel was opened (re-fetching back to it) and closes, mirroring the theme picker's live-preview-with-revert pattern (`internal/ui/app.go`'s `handleThemePickerKey`) rather than a checkbox-and-commit flow.
 
-Applying a changed selection resets and re-fetches the list from the server (same "reset pagination state, refetch" pattern as the `u` unread-only toggle) — filtering is server-side via `GET /v1/notifications?type=...`, so pagination stays correct against the filtered set. Deselecting every category is blocked (the panel stays open, with an inline "select at least one category" message) since an empty type list is indistinguishable from "no filter" to the API.
+Filtering is server-side via `GET /v1/notifications?type=...` (single category's types, or no `type` param at all for `all`), so pagination stays correct against the filtered set — same "reset pagination state, refetch" shape as the `u` unread-only toggle.
 
-### 20-type API cap
+Only one category's types are ever sent to the server at once. The API caps `type` at 1-20 comma-separated values (`docs/00-latest-api-reference.md`); the largest category, `account/system`, is 16 types, safely under that cap — so, unlike an earlier multi-select design that could combine categories past the limit, this cap is not user-reachable and needs no client-side guard.
 
-The API documents `type` as capped at 1-20 comma-separated values (`docs/00-latest-api-reference.md`). The 5 categories span 30 known types total, and `account/system` alone is 16 of them — so a partial selection can flatten to more than 20 (e.g. `account/system` + `threads` = 16 + 5 = 21). Applying such a selection is blocked client-side with an inline "too many types selected (N, max 20) — deselect a category" message rather than being sent to the server and rejected with a `400 VALIDATION_ERROR`. Selecting **all** categories is always safe regardless of this cap, since that path sends no `type` param at all (equivalent to "no filter"). There is no way to combine every category except one or two small ones and stay under the cap when `account/system` is involved — this is an inherent limit of a 30-type universe against a 20-item inclusion list, not a client bug.
+A `filter: <category>  (press 'f' to change)` line appears above the list whenever a filter is active, so a short list doesn't read as broken.
 
-A `filter: <categories>  (press 'f' to change)` line appears above the list whenever a filter is active, so a short list doesn't read as broken.
-
-**Not persisted across sessions** — the filter always resets to "all categories" (no filter) on every app launch, same as `showUnreadOnly`. This is deliberate: the tab badge (`polledUnreadCount`) always shows the true global unread count regardless of any active filter, so a persisted filter would leave the badge and the visible list silently mismatched every time the app opens.
+**Not persisted across sessions** — the filter always resets to `all` (no filter) on every app launch, same as `showUnreadOnly`. This is deliberate: the tab badge (`polledUnreadCount`) always shows the true global unread count regardless of any active filter, so a persisted filter would leave the badge and the visible list silently mismatched every time the app opens.
 
 ---
 
