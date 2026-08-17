@@ -172,3 +172,48 @@ func TestFetchGIF_RejectsExcessiveDimensions(t *testing.T) {
 		t.Errorf("err = %v, want dimensions error", err)
 	}
 }
+
+// TestFetchAny_DetectsGIFFromExtensionlessURL guards the actual bug this
+// fixes: /gif <url> in circ/C-Mail forwards an arbitrary user-typed URL
+// (Tenor share links, CDN links with no ".gif" suffix, etc.) with no
+// extension to key off, so FetchAny must decide GIF-vs-static from the
+// downloaded bytes' own GIF87a/GIF89a header, not the URL's path.
+func TestFetchAny_DetectsGIFFromExtensionlessURL(t *testing.T) {
+	srv := serve(t, http.StatusOK, gifBytes(t, 4, 3, 3))
+	url := srv.URL + "/no-extension-here"
+	frames, delays, err := imgview.FetchAny(context.Background(), url)
+	if err != nil {
+		t.Fatalf("FetchAny: %v", err)
+	}
+	if len(frames) != 3 {
+		t.Errorf("frame count = %d, want 3", len(frames))
+	}
+	if len(delays) != 3 {
+		t.Errorf("delay count = %d, want 3", len(delays))
+	}
+}
+
+func TestFetchAny_StaticImageReturnsOneFrameNoDelays(t *testing.T) {
+	srv := serve(t, http.StatusOK, pngBytes(t, 4, 3))
+	frames, delays, err := imgview.FetchAny(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("FetchAny: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Errorf("frame count = %d, want 1", len(frames))
+	}
+	if delays != nil {
+		t.Errorf("delays = %v, want nil", delays)
+	}
+	if b := frames[0].Bounds(); b.Dx() != 4 || b.Dy() != 3 {
+		t.Errorf("bounds = %v, want 4x3", b)
+	}
+}
+
+func TestFetchAny_RejectsUndecodableContent(t *testing.T) {
+	srv := serve(t, http.StatusOK, []byte("<html>not an image</html>"))
+	_, _, err := imgview.FetchAny(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("FetchAny: want error for non-image content, got nil")
+	}
+}

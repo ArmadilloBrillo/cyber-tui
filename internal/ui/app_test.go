@@ -1411,6 +1411,49 @@ func TestRouteURL_RelativeURL_ExternalOpen(t *testing.T) {
 	}
 }
 
+// TestRouteURL_ExtensionlessURL_ProbesInlineViewer guards the /gif <url>
+// bug: circ/C-Mail's gif attachments forward whatever URL the user typed,
+// which often has no ".gif" suffix (Tenor share links, extensionless CDN
+// URLs) — canRenderImageInline's extension check alone would reject these
+// and send them straight to the browser. With a graphics protocol
+// available, routeURL must still attempt the inline viewer (via
+// canProbeImageInline) and let the real fetch+decode in imgview.FetchAny
+// decide, rather than trusting the URL's extension. openImageInTerminal
+// bumps imageFetchGen, so that's used here as a proxy for "took the inline
+// path" without needing to inspect the opaque tea.Cmd closure.
+func TestRouteURL_ExtensionlessURL_ProbesInlineViewer(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageViewer = "terminal"
+	genBefore := a.imageFetchGen
+
+	a2, cmd := a.routeURL("https://example.com/no-extension-gif")
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	if a2.imageFetchGen == genBefore {
+		t.Error("expected routeURL to probe the inline viewer for an extensionless URL when a graphics protocol is detected")
+	}
+}
+
+// TestRouteURL_ExtensionlessURL_NoProtocol_OpensExternal confirms the probe
+// added for extensionless URLs still respects the same gates as
+// canRenderImageInline — no graphics protocol means straight to the
+// browser, same as today, no wasted fetch attempt.
+func TestRouteURL_ExtensionlessURL_NoProtocol_OpensExternal(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolNone
+	genBefore := a.imageFetchGen
+
+	a2, cmd := a.routeURL("https://example.com/no-extension-gif")
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	if a2.imageFetchGen != genBefore {
+		t.Error("expected no inline-viewer attempt without a detected graphics protocol")
+	}
+}
+
 func TestRouteURL_ReservedWord_NotTreatedAsUsername(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
