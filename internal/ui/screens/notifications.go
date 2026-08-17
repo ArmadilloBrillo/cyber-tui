@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
@@ -37,28 +38,62 @@ type ShowNotificationPostMsg struct {
 	AuthorUsername string
 }
 
+// notifCategory groups related notification types under one filterable label.
+// Kept as an ordered slice (not a map) so the filter panel and header summary
+// render in a stable, deterministic order.
+type notifCategory struct {
+	label string
+	types []string
+}
+
+var notifCategories = []notifCategory{
+	{label: "mentions", types: []string{"reply_mention", "post_mention", "chat_mention", "graffiti_mention"}},
+	{label: "social", types: []string{"new_follower", "unfollowed", "poke", "bookmark"}},
+	{label: "threads", types: []string{"reply", "thread_reply", "guild_new_thread", "new_post_friend", "new_post_following"}},
+	{label: "c-mail", types: []string{"dm_message"}},
+	{label: "account/system", types: []string{
+		"supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed",
+		"image_permission_granted", "image_permission_removed",
+		"attachment_permission_granted", "attachment_permission_removed",
+		"system_ban", "system_ban_lifted", "moderator_granted", "moderator_removed",
+		"api_access_granted", "api_access_removed", "post_cooldown", "rate_limit_warning",
+	}},
+}
+
+func allCategoriesActive() []bool {
+	b := make([]bool, len(notifCategories))
+	for i := range b {
+		b[i] = true
+	}
+	return b
+}
+
 type NotificationsModel struct {
-	notifs         []model.Notification
-	notifOffsets   []int // start line of each notification within the viewport content
-	viewport       viewport.Model
-	width          int
-	height         int
-	selectedIndex  int
-	ready          bool
-	loading        bool
-	fetching       bool // true while the initial (or tab-switch) load is in flight
-	refreshing     bool
-	exhausted      bool
-	nextCursor     string
-	hasPaginated   bool
-	showUnreadOnly bool
-	err            error
-	relaxed        bool
-	loc            *time.Location
+	notifs            []model.Notification
+	notifOffsets      []int // start line of each notification within the viewport content
+	viewport          viewport.Model
+	width             int
+	height            int
+	selectedIndex     int
+	ready             bool
+	loading           bool
+	fetching          bool // true while the initial (or tab-switch) load is in flight
+	refreshing        bool
+	exhausted         bool
+	nextCursor        string
+	hasPaginated      bool
+	showUnreadOnly    bool
+	err               error
+	relaxed           bool
+	loc               *time.Location
+	activeCategories  []bool // index-aligned with notifCategories; default all true (no filter)
+	filterOpen        bool
+	pendingCategories []bool // scratch copy edited while filterOpen; committed on enter, discarded on esc
+	filterCursor      int
 }
 
 func NewNotificationsModel() NotificationsModel {
-	return NotificationsModel{showUnreadOnly: true}
+	return NotificationsModel{showUnreadOnly: true, activeCategories: allCategoriesActive()}
 }
 
 // IsReady reports whether the viewport has been initialised.
@@ -136,6 +171,56 @@ func (m NotificationsModel) SetLocation(loc *time.Location) NotificationsModel {
 
 // ShowUnreadOnly reports whether the screen is currently filtering to unread-only.
 func (m NotificationsModel) ShowUnreadOnly() bool { return m.showUnreadOnly }
+
+// ActiveTypeFilter flattens the selected categories into the []string the API
+// expects for GetNotifications' types param. Returns nil (not an empty slice)
+// when every category is active, matching the "no filter" query shape/behavior
+// the client used before this feature existed.
+func (m NotificationsModel) ActiveTypeFilter() []string {
+	if allCategoriesOn(m.activeCategories) {
+		return nil
+	}
+	var out []string
+	for i, cat := range notifCategories {
+		if i < len(m.activeCategories) && m.activeCategories[i] {
+			out = append(out, cat.types...)
+		}
+	}
+	return out
+}
+
+// FilterSummary returns a short label like "mentions, social" for the
+// currently active categories, or "" when no filter is applied (all active).
+func (m NotificationsModel) FilterSummary() string {
+	if allCategoriesOn(m.activeCategories) {
+		return ""
+	}
+	var labels []string
+	for i, cat := range notifCategories {
+		if i < len(m.activeCategories) && m.activeCategories[i] {
+			labels = append(labels, cat.label)
+		}
+	}
+	return strings.Join(labels, ", ")
+}
+
+func allCategoriesOn(cats []bool) bool {
+	for _, on := range cats {
+		if !on {
+			return false
+		}
+	}
+	return true
+}
+
+func anyCategoryOn(cats []bool) bool {
+	for _, on := range cats {
+		if on {
+			return true
+		}
+	}
+	return false
+}
 
 // HasPaginated reports whether the user has loaded pages beyond the first.
 func (m NotificationsModel) HasPaginated() bool { return m.hasPaginated }
@@ -256,6 +341,9 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.filterOpen {
+			return m.handleFilterPanelKey(msg)
+		}
 		visible := m.visibleNotifs()
 		switch msg.String() {
 		case "up", "k":
@@ -325,6 +413,11 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 			m.fetching = true
 			m = m.refreshContent()
 			return m, func() tea.Msg { return RefreshNotifsMsg{} }
+		case "f":
+			m.filterOpen = true
+			m.pendingCategories = append([]bool(nil), m.activeCategories...)
+			m.filterCursor = 0
+			return m, nil
 		case "enter":
 			if len(visible) == 0 || m.selectedIndex >= len(visible) {
 				return m, nil
@@ -396,6 +489,63 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 	return m, cmd
 }
 
+// handleFilterPanelKey handles key input while the category filter panel is
+// open. It mirrors the 'u' unread-only toggle's reset-and-refetch shape when
+// the selection is committed with a real change.
+func (m NotificationsModel) handleFilterPanelKey(msg tea.KeyMsg) (NotificationsModel, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if m.filterCursor > 0 {
+			m.filterCursor--
+		}
+	case "down", "j":
+		if m.filterCursor < len(notifCategories)-1 {
+			m.filterCursor++
+		}
+	case " ":
+		m.pendingCategories[m.filterCursor] = !m.pendingCategories[m.filterCursor]
+	case "a":
+		on := !allCategoriesOn(m.pendingCategories)
+		for i := range m.pendingCategories {
+			m.pendingCategories[i] = on
+		}
+	case "esc":
+		m.filterOpen = false
+	case "enter":
+		if !anyCategoryOn(m.pendingCategories) {
+			// Refuse an empty selection — it's ambiguous versus "no filter",
+			// since the server treats a nil/empty types param as unfiltered.
+			return m, nil
+		}
+		changed := !equalBoolSlices(m.pendingCategories, m.activeCategories)
+		m.filterOpen = false
+		if !changed {
+			return m, nil
+		}
+		m.activeCategories = m.pendingCategories
+		m.selectedIndex = 0
+		m.notifs = nil
+		m.nextCursor = ""
+		m.exhausted = false
+		m.fetching = true
+		m = m.refreshContent()
+		return m, func() tea.Msg { return RefreshNotifsMsg{} }
+	}
+	return m, nil
+}
+
+func equalBoolSlices(a, b []bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (m NotificationsModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight
 	if h < 1 {
@@ -412,9 +562,13 @@ func (m NotificationsModel) buildContent() (string, []int) {
 
 	var prefix string
 	startLine := 0
+	if summary := m.FilterSummary(); summary != "" {
+		prefix += theme.Subtle.Render("  filter: "+summary+"  (press 'f' to change)") + "\n"
+		startLine++
+	}
 	if m.refreshing {
-		prefix = theme.Subtle.Render("  fetching notifications...") + "\n"
-		startLine = 1
+		prefix += theme.Subtle.Render("  fetching notifications...") + "\n"
+		startLine++
 	}
 
 	if len(visible) == 0 {
@@ -704,5 +858,74 @@ func (m NotificationsModel) View() string {
 	if !m.ready {
 		return theme.Subtle.Render("loading notifications...")
 	}
+	if m.filterOpen {
+		return overlayCenter(m.viewport.View(), m.renderFilterPanel(), m.width, m.viewportHeight())
+	}
 	return m.viewport.View()
+}
+
+func (m NotificationsModel) renderFilterPanel() string {
+	title := theme.Title.Render("Filter Notifications")
+	var lines []string
+	for i, cat := range notifCategories {
+		mark := "[ ]"
+		if m.pendingCategories[i] {
+			mark = "[x]"
+		}
+		line := mark + " " + cat.label
+		if i == m.filterCursor {
+			line = theme.Highlight.Render("▸ " + line)
+		} else {
+			line = theme.Subtle.Render("  " + line)
+		}
+		lines = append(lines, line)
+	}
+	hint := theme.Subtle.Render("↑↓ select   space toggle   a all/none   enter apply   esc cancel")
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		lipgloss.JoinVertical(lipgloss.Left, lines...),
+		"",
+		hint,
+	)
+	return theme.ActiveBorder.Render(body)
+}
+
+// overlayCenter splices fg, centered, on top of bg — used to keep the
+// notification list visible behind the filter panel rather than blanking it,
+// matching how the app's other modals (icon picker, theme picker, etc.)
+// overlay on top of the screen behind them instead of replacing it.
+func overlayCenter(bg, fg string, bgW, bgH int) string {
+	fgW := lipgloss.Width(fg)
+	fgLines := strings.Split(fg, "\n")
+	bgLines := strings.Split(bg, "\n")
+
+	xOff := (bgW - fgW) / 2
+	yOff := (bgH - len(fgLines)) / 2
+	if xOff < 0 {
+		xOff = 0
+	}
+	if yOff < 0 {
+		yOff = 0
+	}
+
+	result := make([]string, len(bgLines))
+	copy(result, bgLines)
+
+	for i, fgLine := range fgLines {
+		bi := yOff + i
+		if bi < 0 || bi >= len(result) {
+			continue
+		}
+		bgLine := result[bi]
+		bgLineW := ansi.StringWidth(bgLine)
+		needed := xOff + fgW
+		if bgLineW < needed {
+			bgLine += strings.Repeat(" ", needed-bgLineW)
+		}
+		left := ansi.Truncate(bgLine, xOff, "")
+		right := ansi.TruncateLeft(bgLine, xOff+fgW, "")
+		result[bi] = left + fgLine + right
+	}
+	return strings.Join(result, "\n")
 }

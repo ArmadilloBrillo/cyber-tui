@@ -359,7 +359,7 @@ func (l TabsLayout) screenHints(a App) []hint {
 		}
 		return []hint{{"↑↓", "navigate"}, {"e", "edit"}, {"tab", "cycle"}, more}
 	case screenNotifications:
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, {"c", "message"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, {"f", "filter"}, {"c", "message"}, more}
 	case screenJournal:
 		if a.journal.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"Ctrl+s", "save"}, {"Ctrl+p", "publish"}, {"Esc", "cancel"}}

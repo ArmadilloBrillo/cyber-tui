@@ -840,6 +840,173 @@ func TestNotifs_UnreadFilter_AllRead_EmptyState(t *testing.T) {
 	}
 }
 
+// --- category filter ---
+
+var allKnownNotifTypes = []string{
+	"new_post_friend", "new_post_following", "bookmark", "new_follower", "unfollowed",
+	"reply", "reply_mention", "post_mention", "chat_mention", "dm_message", "thread_reply",
+	"guild_new_thread", "poke", "supporter_granted", "supporter_removed", "hacker_granted",
+	"hacker_removed", "image_permission_granted", "image_permission_removed",
+	"attachment_permission_granted", "attachment_permission_removed", "system_ban",
+	"system_ban_lifted", "graffiti_mention", "moderator_granted", "moderator_removed",
+	"api_access_granted", "api_access_removed", "post_cooldown", "rate_limit_warning",
+}
+
+func TestNotifCategories_CoverAllKnownTypesExactlyOnce(t *testing.T) {
+	seen := map[string]int{}
+	for _, cat := range notifCategories {
+		for _, typ := range cat.types {
+			seen[typ]++
+		}
+	}
+	for _, typ := range allKnownNotifTypes {
+		if seen[typ] != 1 {
+			t.Errorf("type %q covered %d times by notifCategories, want exactly 1", typ, seen[typ])
+		}
+	}
+	if len(seen) != len(allKnownNotifTypes) {
+		t.Errorf("notifCategories covers %d distinct types, want %d", len(seen), len(allKnownNotifTypes))
+	}
+}
+
+func TestNotifs_ActiveTypeFilter_AllActive_ReturnsNil(t *testing.T) {
+	m := NewNotificationsModel()
+	if got := m.ActiveTypeFilter(); got != nil {
+		t.Errorf("expected nil filter when all categories active, got %v", got)
+	}
+}
+
+func TestNotifs_ActiveTypeFilter_PartialSelection_FlattensTypes(t *testing.T) {
+	m := NewNotificationsModel()
+	m.activeCategories[0] = false // deselect "mentions"
+	got := m.ActiveTypeFilter()
+	want := map[string]bool{}
+	for i, cat := range notifCategories {
+		if i == 0 {
+			continue
+		}
+		for _, typ := range cat.types {
+			want[typ] = true
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d types, got %d: %v", len(want), len(got), got)
+	}
+	for _, typ := range got {
+		if !want[typ] {
+			t.Errorf("unexpected type %q in filter", typ)
+		}
+	}
+}
+
+func TestNotifs_FilterSummary_EmptyWhenAllActive(t *testing.T) {
+	m := NewNotificationsModel()
+	if got := m.FilterSummary(); got != "" {
+		t.Errorf("expected empty summary when all active, got %q", got)
+	}
+}
+
+func TestNotifs_FilterSummary_ListsActiveCategories(t *testing.T) {
+	m := NewNotificationsModel()
+	for i := range m.activeCategories {
+		m.activeCategories[i] = false
+	}
+	m.activeCategories[0] = true // mentions
+	if got := m.FilterSummary(); got != "mentions" {
+		t.Errorf("expected %q, got %q", "mentions", got)
+	}
+}
+
+func TestNotifs_FilterPanel_OpenKey_SeedsPending(t *testing.T) {
+	m := initNotifs(nil)
+	m.activeCategories[1] = false
+	m2, _ := runKey(m, "f")
+	if !m2.filterOpen {
+		t.Fatal("expected filterOpen true after 'f'")
+	}
+	if !equalBoolSlices(m2.pendingCategories, m2.activeCategories) {
+		t.Errorf("expected pendingCategories to seed from activeCategories")
+	}
+}
+
+func TestNotifs_FilterPanel_Esc_DiscardsChanges(t *testing.T) {
+	m := initNotifs(nil)
+	orig := append([]bool(nil), m.activeCategories...)
+	m2, _ := runKey(m, "f")
+	m3, _ := runKey(m2, " ") // toggle first category in the panel
+	m4, _ := runKey(m3, "esc")
+	if m4.filterOpen {
+		t.Error("expected filterOpen false after esc")
+	}
+	if !equalBoolSlices(m4.activeCategories, orig) {
+		t.Errorf("expected activeCategories unchanged after esc, got %v want %v", m4.activeCategories, orig)
+	}
+}
+
+func TestNotifs_FilterPanel_Enter_Changed_EmitsRefreshAndResets(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	m.selectedIndex = 0
+	m2, _ := runKey(m, "f")
+	m3, _ := runKey(m2, " ") // toggle first category off
+	m4, msg := runKey(m3, "enter")
+	if _, ok := msg.(RefreshNotifsMsg); !ok {
+		t.Fatalf("expected RefreshNotifsMsg, got %T", msg)
+	}
+	if m4.filterOpen {
+		t.Error("expected filterOpen false after enter")
+	}
+	if len(m4.notifs) != 0 {
+		t.Errorf("expected notifs cleared, got %d", len(m4.notifs))
+	}
+	if m4.nextCursor != "" || m4.exhausted {
+		t.Error("expected pagination state reset")
+	}
+	if !m4.fetching {
+		t.Error("expected fetching true after filter change")
+	}
+	if m4.activeCategories[0] {
+		t.Error("expected activeCategories[0] to be false after commit")
+	}
+}
+
+func TestNotifs_FilterPanel_Enter_Unchanged_NoRefetch(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+	m2, _ := runKey(m, "f")
+	m3, msg := runKey(m2, "enter") // no changes made
+	if msg != nil {
+		t.Errorf("expected no cmd when filter unchanged, got %T", msg)
+	}
+	if m3.filterOpen {
+		t.Error("expected filterOpen false after enter")
+	}
+	if len(m3.notifs) != 1 {
+		t.Errorf("expected notifs untouched, got %d", len(m3.notifs))
+	}
+}
+
+func TestNotifs_FilterPanel_Enter_AllOff_Blocked(t *testing.T) {
+	m := initNotifs(nil)
+	m2, _ := runKey(m, "f")
+	m3 := m2
+	for range notifCategories {
+		// toggle every category off via space + down
+		m3, _ = runKey(m3, " ")
+		m3, _ = runKey(m3, "j")
+	}
+	m4, msg := runKey(m3, "enter")
+	if msg != nil {
+		t.Errorf("expected all-off enter to be blocked, got %T", msg)
+	}
+	if !m4.filterOpen {
+		t.Error("expected filter panel to remain open when all categories deselected")
+	}
+	if !allCategoriesOn(m4.activeCategories) {
+		t.Error("expected activeCategories unchanged (still all on) when commit blocked")
+	}
+}
+
 // --- relative timestamps ---
 
 func TestFormatRelativeTime_JustNow(t *testing.T) {
