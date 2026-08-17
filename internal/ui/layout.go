@@ -697,6 +697,7 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 	// resume branch, never the close one.
 	if prev == screenPostDetail && s == a.postDetailReturn {
 		a.postDetail = a.postDetail.Close()
+		a.postDetailStack = nil
 	} else if prev != screenPostDetail && s == a.postDetailReturn && a.postDetail.HasPost() {
 		a.active = screenPostDetail
 		return a, nil

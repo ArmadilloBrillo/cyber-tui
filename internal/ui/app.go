@@ -413,6 +413,15 @@ type App struct {
 	// postDetailReturn is the screen to go back to when ESC is pressed in PostDetail.
 	postDetailReturn screen
 
+	// postDetailStack holds prior PostDetail snapshots pushed when an in-post
+	// link (routeURL/urlPostLoadedMsg) is opened while already viewing a
+	// post — Post A -> link -> Post B pushes A here so Esc from B restores it
+	// (post, replies, selection, scroll) before falling back to
+	// postDetailReturn once the stack is empty. Note: a stacked snapshot's
+	// viewport keeps whatever width it had when pushed — a resize while
+	// nested doesn't reach it until it's popped back and re-renders.
+	postDetailStack []screens.PostDetailModel
+
 	// profileReturn is the screen to go back to when ESC is pressed in a read-only profile.
 	profileReturn screen
 
@@ -1140,6 +1149,7 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 		} else {
 			// Deleted from post detail: navigate to feed and reload.
 			a.active = screenFeed
+			a.postDetailStack = nil
 			return a, a.loadFeedCmd(), true
 		}
 		return a, nil, true
@@ -1211,6 +1221,11 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.pendingReplyID = msg.replyID
 		return a, a.loadRepliesCmd(msg.postID), true
 	case screens.BackToFeedMsg:
+		if n := len(a.postDetailStack); n > 0 {
+			a.postDetail = a.postDetailStack[n-1]
+			a.postDetailStack = a.postDetailStack[:n-1]
+			return a, nil, true
+		}
 		a.active = a.postDetailReturn
 		a.postDetail = a.postDetail.Close()
 		return a, nil, true
@@ -4844,7 +4859,15 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		a, cmd := a.notify(notifyError, msg.err.Error())
 		return a, cmd, true
 	case urlPostLoadedMsg:
-		a.postDetailReturn = msg.origin
+		if a.active == screenPostDetail {
+			// Already viewing a post and the link opened another one:
+			// push the current post so Esc returns to it instead of
+			// clobbering postDetailReturn with screenPostDetail itself.
+			a.postDetailStack = append(a.postDetailStack, a.postDetail)
+		} else {
+			a.postDetailReturn = msg.origin
+			a.postDetailStack = nil
+		}
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.post)
 		return a, a.loadRepliesCmd(msg.post.ID), true
