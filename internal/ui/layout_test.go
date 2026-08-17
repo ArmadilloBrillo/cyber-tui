@@ -593,7 +593,7 @@ func TestCompositeOverlays_KittyCleanupFallsThroughToInlineImages(t *testing.T) 
 		graphicsProtocol:  imgview.ProtocolKitty,
 		imageNeedsCleanup: true,
 		imageModalRows:    3,
-		inlineImageCache:  map[string]string{inlineImageCacheKey(slot, imgview.ProtocolKitty): "\x1b_Gfake\x1b\\"},
+		inlineImageCache:  map[string]string{inlineImageCacheKey(slot, imgview.ProtocolKitty, nil): "\x1b_Gfake\x1b\\"},
 	}
 	l := fakeModalRenderer{slots: []screens.InlineImageSlot{slot}, rowOrigin: 5, colOrigin: 7}
 	out := compositeOverlays(l, a, strings.Repeat("x\n", 9)+"x")
@@ -622,7 +622,7 @@ func TestCompositeOverlays_ImageModalOpen_StillDrawsInlineImagesBehindIt(t *test
 		width: 40, height: 10,
 		graphicsProtocol: imgview.ProtocolKitty,
 		imageModalOpen:   true,
-		inlineImageCache: map[string]string{inlineImageCacheKey(slot, imgview.ProtocolKitty): "\x1b_Gfake\x1b\\"},
+		inlineImageCache: map[string]string{inlineImageCacheKey(slot, imgview.ProtocolKitty, nil): "\x1b_Gfake\x1b\\"},
 	}
 	l := fakeModalRenderer{slots: []screens.InlineImageSlot{slot}, rowOrigin: 5, colOrigin: 7}
 	out := compositeOverlays(l, a, strings.Repeat("x\n", 9)+"x")
@@ -741,7 +741,7 @@ func TestCompositeOverlays_ImageModalCycle_SixelGetsFullRepaint(t *testing.T) {
 // imageRepaintGen was extended to cover both protocols.
 func TestInjectInlineImages_ITerm2RepaintGenAlwaysDiffersOnChange(t *testing.T) {
 	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
-	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolITerm2): "\x1b]1337;fake\x07"}
+	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolITerm2, nil): "\x1b]1337;fake\x07"}
 	slots := []screens.InlineImageSlot{slot}
 
 	a1 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolITerm2, inlineImageCache: cache, imageRepaintGen: 1}
@@ -764,7 +764,7 @@ func TestInjectInlineImages_ITerm2RepaintGenAlwaysDiffersOnChange(t *testing.T) 
 // and the Sixel protocol path through injectInlineImages too.
 func TestInjectInlineImages_SixelRepaintGenAlwaysDiffersOnChange(t *testing.T) {
 	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
-	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolSixel): "\x1bPq...fake\x1b\\"}
+	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolSixel, nil): "\x1bPq...fake\x1b\\"}
 	slots := []screens.InlineImageSlot{slot}
 
 	a1 := App{width: 40, height: 10, graphicsProtocol: imgview.ProtocolSixel, inlineImageCache: cache, imageRepaintGen: 1}
@@ -887,7 +887,7 @@ func TestInjectInlineImages_ForcesStaleRowsDirty(t *testing.T) {
 // must still happen immediately regardless.
 func TestInjectInlineImages_HoldsBackDrawsWithinSwitchSettleDelay(t *testing.T) {
 	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
-	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolITerm2): "\x1b]1337;fake\x07"}
+	cache := map[string]string{inlineImageCacheKey(slot, imgview.ProtocolITerm2, nil): "\x1b]1337;fake\x07"}
 	slots := []screens.InlineImageSlot{slot}
 
 	withinDelay := App{
@@ -924,7 +924,7 @@ func TestTabsLayoutView_InjectsInlineImages(t *testing.T) {
 	if len(slots) != 1 {
 		t.Fatalf("setup: expected 1 slot from the feed, got %d: %+v", len(slots), slots)
 	}
-	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol): "\x1b_Gfake\x1b\\"}
+	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol, nil): "\x1b_Gfake\x1b\\"}
 
 	out := (TabsLayout{}).View(a)
 	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
@@ -953,7 +953,7 @@ func TestMillerLayoutView_InjectsInlineImages(t *testing.T) {
 	if len(slots) != 1 {
 		t.Fatalf("setup: expected 1 slot from Miller's Feed detail pane, got %d: %+v", len(slots), slots)
 	}
-	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol): "\x1b_Gfake\x1b\\"}
+	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol, nil): "\x1b_Gfake\x1b\\"}
 
 	out := (MillerLayout{}).View(a)
 	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {

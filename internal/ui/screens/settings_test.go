@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -250,7 +251,7 @@ func TestSettings_Esc_ClearsError(t *testing.T) {
 func TestSettings_SetSaved_ClearsError(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetError(testErr)
-	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, "tabs")
+	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.err != nil {
 		t.Error("SetSaved should clear error")
 	}
@@ -262,9 +263,93 @@ func TestSettings_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty after change")
 	}
-	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, "tabs")
+	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.IsDirty() {
 		t.Error("after SetSaved, should not be dirty")
+	}
+}
+
+// --- Dithering Tests ---
+
+// hasItemLabelled reports whether any of m's currently visible (showIf-passing)
+// items has a label containing sub — the same set flatItems/View iterate over,
+// checked directly rather than through View's height-limited scroll viewport.
+func hasItemLabelled(m SettingsModel, sub string) bool {
+	for _, item := range flatItems(m) {
+		if strings.Contains(item.label, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSettings_Dithering_ShowIf_HiddenWhenBrowser(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.imageViewer = "terminal"
+	if !hasItemLabelled(m, "dithering") {
+		t.Error("dithering item should be visible when imageViewer != browser")
+	}
+	m.imageViewer = "browser"
+	if hasItemLabelled(m, "dithering") {
+		t.Error("dithering item should be hidden when imageViewer == browser")
+	}
+}
+
+func TestSettings_Sharpness_ShowIf_HiddenUntilDitheringOn(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.imageViewer = "terminal"
+	m.dithering = false
+	if hasItemLabelled(m, "sharpness") {
+		t.Error("sharpness item should be hidden while dithering is off")
+	}
+	m.dithering = true
+	if !hasItemLabelled(m, "sharpness") {
+		t.Error("sharpness item should be visible once dithering is on")
+	}
+	m.imageViewer = "browser"
+	if hasItemLabelled(m, "sharpness") {
+		t.Error("sharpness item should stay hidden when imageViewer == browser, even with dithering on")
+	}
+}
+
+func TestSettings_Dithering_SaveMsg(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.dithering = true
+	m.originalDithering = false // make it dirty
+	m.ditherSharpness = "rough"
+	m.originalDitherSharpness = "medium"
+	var got tea.Msg
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd != nil {
+		got = cmd()
+	}
+	save, ok := got.(SaveSettingsMsg)
+	if !ok {
+		t.Fatal("ctrl+s should emit SaveSettingsMsg")
+	}
+	if !save.Dithering {
+		t.Error("SaveSettingsMsg.Dithering should reflect current dithering value")
+	}
+	if save.DitherSharpness != "rough" {
+		t.Errorf("SaveSettingsMsg.DitherSharpness = %q, want %q", save.DitherSharpness, "rough")
+	}
+}
+
+func TestSettings_Dithering_SetSaved_AdvancesBaseline(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.dithering = true
+	m.originalDithering = false
+	m.ditherSharpness = "sharp"
+	m.originalDitherSharpness = "medium"
+	if !m.IsDirty() {
+		t.Error("should be dirty before SetSaved")
+	}
+	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, true, "sharp", "tabs")
+	if m.originalDithering != true || m.originalDitherSharpness != "sharp" {
+		t.Error("SetSaved should update originalDithering/originalDitherSharpness to the saved values")
+	}
+	if m.IsDirty() {
+		t.Error("should not be dirty after SetSaved")
 	}
 }
 
@@ -387,7 +472,7 @@ func TestSettings_View_DirtyFooterHint(t *testing.T) {
 
 func TestSettings_View_SavedMessage(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, "tabs")
+	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	view := m.View()
 	if !containsSubstring(view, "saved!") {
 		t.Error("View should show 'saved!' when saved=true")
@@ -416,7 +501,7 @@ func TestSettings_WanderGroup_Visible(t *testing.T) {
 func TestSettings_WanderToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
-	m.cursor = 13 // wander mode item
+	m.cursor = 14 // wander mode item (shifted by the new dithering toggle above it)
 	m, _ = m.Update(keyMsg("enter"))
 	if m.wanderLust {
 		t.Error("toggling wander mode should flip wanderLust to false")
@@ -458,7 +543,7 @@ func TestSettings_WanderSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
 	m.originalWanderLust = false // dirty
-	m = m.SetSaved(true, 3, "UTC", "terminal", "", false, "tabs")
+	m = m.SetSaved(true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.originalWanderLust != true {
 		t.Error("SetSaved should update originalWanderLust to the saved value")
 	}

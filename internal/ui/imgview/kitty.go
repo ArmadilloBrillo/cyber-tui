@@ -42,15 +42,21 @@ import (
 // true, lets the image be scaled up past its natural pixel size to fill
 // maxCols/maxRows (used only by the fullscreen modal's user-driven zoom —
 // see imgview.NativeCellBox); false (inline thumbnails) never upscales.
-func EncodeKitty(img image.Image, maxCols, maxRows, cellPxW, cellPxH, placementID int, allowUpscale bool) (encoded string, cols, rows int, err error) {
+// dither, when non-nil, applies the RasterImage-style duotone dither effect
+// (see Dither) to the image before encoding.
+func EncodeKitty(img image.Image, maxCols, maxRows, cellPxW, cellPxH, placementID int, allowUpscale bool, dither *DitherOptions) (encoded string, cols, rows int, err error) {
 	cellPxW, cellPxH = EffectiveCellPx(cellPxW, cellPxH)
 	bounds := img.Bounds()
 	w := bounds.Max.X - bounds.Min.X
 	h := bounds.Max.Y - bounds.Min.Y
 	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH, allowUpscale)
 
+	src := downscaleToBox(img, cols, rows, cellPxW, cellPxH, allowUpscale)
+	if dither != nil {
+		src = Dither(src, *dither)
+	}
 	var buf bytes.Buffer
-	if encErr := png.Encode(&buf, downscaleToBox(img, cols, rows, cellPxW, cellPxH, allowUpscale)); encErr != nil {
+	if encErr := png.Encode(&buf, src); encErr != nil {
 		return "", 0, 0, fmt.Errorf("imgview: png encode: %w", encErr)
 	}
 	payload := base64.StdEncoding.EncodeToString(buf.Bytes())

@@ -21,8 +21,10 @@ import (
 // past its natural pixel size to fill maxCols/maxRows (used only by the
 // fullscreen modal's user-driven zoom — see imgview.NativeCellBox); false
 // (inline thumbnails) never upscales. Returns the DCS escape sequence and
-// the computed display size in terminal columns and rows.
-func EncodeSixel(img image.Image, maxCols, maxRows, cellPxW, cellPxH int, allowUpscale bool) (encoded string, cols, rows int, err error) {
+// the computed display size in terminal columns and rows. dither, when
+// non-nil, applies the RasterImage-style duotone dither effect (see Dither)
+// to the image before encoding.
+func EncodeSixel(img image.Image, maxCols, maxRows, cellPxW, cellPxH int, allowUpscale bool, dither *DitherOptions) (encoded string, cols, rows int, err error) {
 	cellPxW, cellPxH = EffectiveCellPx(cellPxW, cellPxH)
 	bounds := img.Bounds()
 	w := bounds.Dx()
@@ -30,6 +32,9 @@ func EncodeSixel(img image.Image, maxCols, maxRows, cellPxW, cellPxH int, allowU
 
 	cols, rows = fitBox(w, h, maxCols, maxRows, cellPxW, cellPxH, allowUpscale)
 	src := downscaleToBox(img, cols, rows, cellPxW, cellPxH, allowUpscale)
+	if dither != nil {
+		src = Dither(src, *dither)
+	}
 
 	var buf bytes.Buffer
 	enc := sixel.NewEncoder(&buf)

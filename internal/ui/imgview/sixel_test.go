@@ -12,7 +12,7 @@ import (
 func TestEncodeSixel_ContainsDCS(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.Set(0, 0, color.RGBA{R: 255, A: 255})
-	seq, cols, rows, err := imgview.EncodeSixel(img, 40, 20, 0, 0, false)
+	seq, cols, rows, err := imgview.EncodeSixel(img, 40, 20, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeSixel: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestEncodeSixel_ContainsDCS(t *testing.T) {
 func TestEncodeSixel_CapsRows(t *testing.T) {
 	// Tall portrait image: without a row cap this would need 50 rows at 10 cols.
 	img := image.NewRGBA(image.Rect(0, 0, 100, 1000))
-	_, cols, rows, err := imgview.EncodeSixel(img, 40, 20, 0, 0, false)
+	_, cols, rows, err := imgview.EncodeSixel(img, 40, 20, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeSixel: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestEncodeSixel_NeverUpscales(t *testing.T) {
 	// A tiny image with generous bounds should stay tiny, not get blown up,
 	// when allowUpscale is false (the inline-thumbnail case).
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	_, cols, rows, err := imgview.EncodeSixel(img, 200, 100, 0, 0, false)
+	_, cols, rows, err := imgview.EncodeSixel(img, 200, 100, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeSixel: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestEncodeSixel_NeverUpscales(t *testing.T) {
 // requested box instead of being left at its native 1x1-cell size.
 func TestEncodeSixel_AllowUpscaleFillsBox(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	_, cols, rows, err := imgview.EncodeSixel(img, 20, 10, 0, 0, true)
+	_, cols, rows, err := imgview.EncodeSixel(img, 20, 10, 0, 0, true, nil)
 	if err != nil {
 		t.Fatalf("EncodeSixel: %v", err)
 	}
@@ -85,11 +85,11 @@ func TestEncodeSixel_UsesRealCellSize(t *testing.T) {
 	// cell size (as Konsole or similar can report) — confirms cellPxW/cellPxH
 	// actually drives the sizing math instead of being ignored.
 	img := image.NewRGBA(image.Rect(0, 0, 400, 400))
-	_, defaultCols, defaultRows, err := imgview.EncodeSixel(img, 200, 200, 0, 0, false)
+	_, defaultCols, defaultRows, err := imgview.EncodeSixel(img, 200, 200, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeSixel (default cell size): %v", err)
 	}
-	_, largeCellCols, largeCellRows, err := imgview.EncodeSixel(img, 200, 200, 40, 80, false)
+	_, largeCellCols, largeCellRows, err := imgview.EncodeSixel(img, 200, 200, 40, 80, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeSixel (large cell size): %v", err)
 	}
@@ -98,5 +98,35 @@ func TestEncodeSixel_UsesRealCellSize(t *testing.T) {
 	}
 	if largeCellRows >= defaultRows {
 		t.Errorf("EncodeSixel: rows with a 4x larger cell size = %d, want < default rows = %d", largeCellRows, defaultRows)
+	}
+}
+
+// TestEncodeSixel_AppliesDither confirms a non-nil DitherOptions changes the
+// encoded output. Unlike Kitty/iTerm2, Sixel's DCS payload isn't a
+// self-contained decodable image format in this codebase (no Sixel decoder
+// is available), so this checks the byte-level effect rather than decoding
+// pixels back out — see imgview.Dither's own tests for the pixel-level
+// invariants.
+func TestEncodeSixel_AppliesDither(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x * 30), G: uint8(y * 30), B: 128, A: 255})
+		}
+	}
+	plain, _, _, err := imgview.EncodeSixel(img, 40, 20, 0, 0, false, nil)
+	if err != nil {
+		t.Fatalf("EncodeSixel (no dither): %v", err)
+	}
+	dithered, _, _, err := imgview.EncodeSixel(img, 40, 20, 0, 0, false, &imgview.DitherOptions{
+		PixelSize: 1,
+		FgColor:   color.RGBA{R: 0, G: 255, B: 65, A: 255},
+		BgColor:   color.RGBA{R: 13, G: 13, B: 13, A: 255},
+	})
+	if err != nil {
+		t.Fatalf("EncodeSixel (dithered): %v", err)
+	}
+	if dithered == plain {
+		t.Fatal("EncodeSixel: dithered output identical to undithered output")
 	}
 }

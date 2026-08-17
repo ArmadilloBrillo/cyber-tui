@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
@@ -4476,20 +4477,59 @@ func TestSyncInlineImageErasures(t *testing.T) {
 // encodes rather than reuse a wrongly-sized/wrongly-encoded one.
 func TestInlineImageCacheKey_VariesByColsAndProtocol(t *testing.T) {
 	slot := screens.InlineImageSlot{URL: "https://example.com/a.png", MaxCols: 76}
-	key1 := inlineImageCacheKey(slot, imgview.ProtocolSixel)
-	key2 := inlineImageCacheKey(slot, imgview.ProtocolSixel)
+	key1 := inlineImageCacheKey(slot, imgview.ProtocolSixel, nil)
+	key2 := inlineImageCacheKey(slot, imgview.ProtocolSixel, nil)
 	if key1 != key2 {
 		t.Error("expected the same slot+protocol to produce the same key")
 	}
 
 	wider := slot
 	wider.MaxCols = 100
-	if inlineImageCacheKey(wider, imgview.ProtocolSixel) == key1 {
+	if inlineImageCacheKey(wider, imgview.ProtocolSixel, nil) == key1 {
 		t.Error("expected a different MaxCols to produce a different key")
 	}
 
-	if inlineImageCacheKey(slot, imgview.ProtocolITerm2) == key1 {
+	if inlineImageCacheKey(slot, imgview.ProtocolITerm2, nil) == key1 {
 		t.Error("expected a different protocol to produce a different key")
+	}
+}
+
+// TestInlineImageCacheKey_VariesByDitherState is a regression test: toggling
+// dithering, changing sharpness, or switching themes (which changes the
+// duotone colors) must invalidate an already-cached encode — otherwise a
+// cached image keeps showing whatever dither state produced it until the
+// cache entry is evicted or the app restarts (see inlineImageCacheKey's doc
+// comment).
+func TestInlineImageCacheKey_VariesByDitherState(t *testing.T) {
+	slot := screens.InlineImageSlot{URL: "https://example.com/a.png", MaxCols: 76}
+	proto := imgview.ProtocolKitty
+
+	noDither := inlineImageCacheKey(slot, proto, nil)
+	dithered := inlineImageCacheKey(slot, proto, &imgview.DitherOptions{
+		PixelSize: 2,
+		FgColor:   color.RGBA{R: 0, G: 255, B: 65, A: 255},
+		BgColor:   color.RGBA{R: 13, G: 13, B: 13, A: 255},
+	})
+	if noDither == dithered {
+		t.Error("expected turning dithering on to produce a different key")
+	}
+
+	sharp := inlineImageCacheKey(slot, proto, &imgview.DitherOptions{
+		PixelSize: 1, // "crisp" instead of "medium"
+		FgColor:   color.RGBA{R: 0, G: 255, B: 65, A: 255},
+		BgColor:   color.RGBA{R: 13, G: 13, B: 13, A: 255},
+	})
+	if sharp == dithered {
+		t.Error("expected a different sharpness (PixelSize) to produce a different key")
+	}
+
+	otherTheme := inlineImageCacheKey(slot, proto, &imgview.DitherOptions{
+		PixelSize: 2,
+		FgColor:   color.RGBA{R: 255, G: 176, B: 0, A: 255}, // amber, e.g. vt320 theme
+		BgColor:   color.RGBA{R: 13, G: 13, B: 13, A: 255},
+	})
+	if otherTheme == dithered {
+		t.Error("expected a different theme's FgColor to produce a different key")
 	}
 }
 
@@ -4579,7 +4619,7 @@ func feedAppWithOneImage(t *testing.T) (a App, key string) {
 	if len(slots) != 1 {
 		t.Fatalf("setup: expected 1 visible slot, got %d", len(slots))
 	}
-	return a, inlineImageCacheKey(slots[0], a.graphicsProtocol)
+	return a, inlineImageCacheKey(slots[0], a.graphicsProtocol, nil)
 }
 
 // TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses is a
@@ -4612,6 +4652,40 @@ func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T
 	a, _ = a.syncInlineImages()
 	if !a.inlineImageFetching[key] {
 		t.Error("expected syncInlineImages to retry once the cooldown has lapsed")
+	}
+}
+
+// TestSyncInlineImages_DitherToggleInvalidatesCache is a regression test:
+// before inlineImageCacheKey included dither state, an image already cached
+// (fetched and encoded before dithering was turned on) kept being served
+// as-is by syncInlineImages/injectInlineImages, since its cache key never
+// changed — dithering appeared to require a restart to take visible effect.
+func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
+	a, key := feedAppWithOneImage(t)
+
+	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
+	if _, cached := a.inlineImageCache[key]; !cached {
+		t.Fatal("setup: expected the encode to be cached under the no-dither key")
+	}
+
+	a, cmd := a.syncInlineImages()
+	if cmd != nil {
+		t.Fatal("setup: expected a cache hit (no fetch) before enabling dithering")
+	}
+
+	a.dithering = true
+	a.ditherSharpness = "sharp"
+
+	a, cmd = a.syncInlineImages()
+	if cmd == nil {
+		t.Fatal("expected enabling dithering to invalidate the cached key and schedule a fresh fetch")
+	}
+	newKey := inlineImageCacheKey(a.feed.VisibleInlineImages()[0], a.graphicsProtocol, a.ditherOptions())
+	if newKey == key {
+		t.Fatal("setup: expected the dither-enabled key to differ from the no-dither key")
+	}
+	if !a.inlineImageFetching[newKey] {
+		t.Errorf("expected a fetch scheduled under the new dither-enabled key %q, fetching=%v", newKey, a.inlineImageFetching)
 	}
 }
 
@@ -5071,5 +5145,70 @@ func TestHandleGuilds_UserGuildsLoaded_GuardsOnUsernameMatch(t *testing.T) {
 	}
 	if len(a3.profile.Apprenticeships()) != 1 {
 		t.Errorf("expected apprenticeships applied for matching username, got %+v", a3.profile.Apprenticeships())
+	}
+}
+
+// TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol is a
+// regression test: a.graphicsProtocol can be ProtocolSixel here only because
+// the startup DA1 probe (imgview.ProbeSixel) found it — that probe can't
+// safely re-run mid-session (it needs raw terminal access before Bubble Tea
+// takes over stdin). Saving any setting whose graphics-protocol override
+// (graphicsProtocolName) hasn't changed must leave a.graphicsProtocol alone;
+// re-resolving it via imgview.DetectProtocol()'s env-var-only detection on
+// every save would silently downgrade a DA1-probed Sixel session to
+// ProtocolNone, breaking inline images and the image viewer until a full
+// restart re-probes Sixel.
+func TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolSixel
+	a.graphicsProtocolName = "" // auto — the only way DetectProtocol() ever gets consulted
+
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+		GraphicsProtocol: "", // unchanged
+		Dithering:        true,
+		ImageViewer:      "terminal",
+	})
+	if !ok || cmd == nil {
+		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
+	}
+	msg := cmd()
+	saved, ok := msg.(settingsSavedMsg)
+	if !ok {
+		t.Fatalf("expected settingsSavedMsg, got %T", msg)
+	}
+
+	a2, _, ok := a.handleSettings(saved)
+	if !ok {
+		t.Fatal("expected handleSettings to handle settingsSavedMsg")
+	}
+	if a2.graphicsProtocol != imgview.ProtocolSixel {
+		t.Errorf("graphicsProtocol = %v after saving an unrelated setting, want unchanged ProtocolSixel", a2.graphicsProtocol)
+	}
+}
+
+// TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves confirms the
+// override still takes effect when the user actually changes it — the fix
+// for the regression above only skips re-resolution when the override is
+// unchanged.
+func TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolSixel
+	a.graphicsProtocolName = ""
+
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+		GraphicsProtocol: "kitty", // changed
+		ImageViewer:      "terminal",
+	})
+	if !ok || cmd == nil {
+		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
+	}
+	saved := cmd().(settingsSavedMsg)
+
+	a2, _, ok := a.handleSettings(saved)
+	if !ok {
+		t.Fatal("expected handleSettings to handle settingsSavedMsg")
+	}
+	if a2.graphicsProtocol != imgview.ProtocolKitty {
+		t.Errorf("graphicsProtocol = %v after changing the override to kitty, want ProtocolKitty", a2.graphicsProtocol)
 	}
 }
