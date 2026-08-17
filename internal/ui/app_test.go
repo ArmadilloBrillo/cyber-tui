@@ -1466,6 +1466,81 @@ func TestRouteURL_PostPermalink_BlogForm(t *testing.T) {
 	}
 }
 
+// TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack is the
+// regression test for the "Esc does nothing after following an in-post link"
+// bug: opening a post-permalink link while already viewing a post used to
+// clobber postDetailReturn with screenPostDetail itself, leaving Esc unable
+// to leave. It should instead push the current post onto postDetailStack and
+// restore it (not refetch it) on the first Esc, falling back to the real
+// origin only once the stack is empty.
+func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) {
+	a := loggedInApp()
+	a = openPostFrom(a, screenFeed)
+	a.postDetail = a.postDetail.SetReplies([]model.Reply{{ID: "r1", PostID: "p1"}})
+
+	m, _, ok := a.handleNotifications(urlPostLoadedMsg{post: model.Post{ID: "p2"}, origin: screenBookmarks})
+	if !ok {
+		t.Fatal("expected urlPostLoadedMsg to be handled")
+	}
+	a = m
+
+	if a.postDetail.PostID() != "p2" {
+		t.Fatalf("expected p2 open, got %q", a.postDetail.PostID())
+	}
+	if len(a.postDetailStack) != 1 {
+		t.Fatalf("expected postDetailStack to have 1 entry, got %d", len(a.postDetailStack))
+	}
+	if a.postDetailReturn != screenFeed {
+		t.Errorf("postDetailReturn should stay screenFeed (the real origin), got %v", a.postDetailReturn)
+	}
+
+	// First Esc: pop back to p1, fully restored, without refetching.
+	m, _, ok = a.handlePostDetail(screens.BackToFeedMsg{})
+	if !ok {
+		t.Fatal("expected BackToFeedMsg to be handled")
+	}
+	a = m
+	if a.active != screenPostDetail {
+		t.Errorf("active = %v, want screenPostDetail (still nested)", a.active)
+	}
+	if a.postDetail.PostID() != "p1" {
+		t.Fatalf("expected p1 restored, got %q", a.postDetail.PostID())
+	}
+	if a.postDetail.Loading() {
+		t.Error("expected p1's already-loaded replies to be restored, not refetched (Loading() should be false)")
+	}
+	if len(a.postDetailStack) != 0 {
+		t.Errorf("expected postDetailStack empty after popping, got %d", len(a.postDetailStack))
+	}
+
+	// Second Esc: stack is empty, fall back to the real origin.
+	m, _, ok = a.handlePostDetail(screens.BackToFeedMsg{})
+	if !ok {
+		t.Fatal("expected BackToFeedMsg to be handled")
+	}
+	a = m
+	if a.active != screenFeed {
+		t.Errorf("active = %v, want screenFeed", a.active)
+	}
+	if a.postDetail.HasPost() {
+		t.Error("expected postDetail closed (no post) after returning to origin")
+	}
+}
+
+// TestActivateScreen_EscapeHatch_ClearsNestedStack ensures pressing the
+// origin tab's own key while nested (rather than pressing Esc) also clears
+// postDetailStack, so a stale stack can't leak into a later PostDetail
+// session opened fresh from that tab.
+func TestActivateScreen_EscapeHatch_ClearsNestedStack(t *testing.T) {
+	a := openPostFrom(loggedInApp(), screenBookmarks)
+	a.postDetailStack = []screens.PostDetailModel{a.postDetail}
+
+	a2, _ := activateScreen(a, screenBookmarks)
+	if len(a2.postDetailStack) != 0 {
+		t.Errorf("expected postDetailStack cleared by escape hatch, got %d entries", len(a2.postDetailStack))
+	}
+}
+
 func TestRouteURL_TopicPath_OpensTopic(t *testing.T) {
 	a := loggedInApp()
 	a2, cmd := a.routeURL("https://cyberspace.online/topics/diy")

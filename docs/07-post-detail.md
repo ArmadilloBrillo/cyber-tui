@@ -48,6 +48,21 @@ and re-renders the viewport.
 replies fetch fails while `screenPostDetail` is active, `SetError` is called
 and the view shows the error string.
 
+### Nested post navigation (post-to-post links)
+A post's content can link to another post on cyberspace.online (`routeURL` in
+`app.go` recognizes `/{user}/{slug}` and `/{user}/blog/{slug}`). Opening such
+a link while already viewing a post pushes the currently open
+`PostDetailModel` onto `App.postDetailStack` before loading the linked post,
+instead of overwriting `postDetailReturn` (which would otherwise point back
+at `screenPostDetail` itself and leave Esc unable to do anything — see
+`docs/00-api-backlog.md`/git history for the bug this fixed). Esc pops the
+stack — restoring the previous post, its already-loaded replies, and scroll
+position without refetching — until the stack is empty, then falls back to
+`postDetailReturn` (the original tab: Feed, Bookmarks, Profile, etc.) as
+before. Re-pressing the origin tab's own key while nested (the existing
+"escape hatch" in `activateScreen`) closes out completely and clears the
+stack, same as a fresh single-post visit always did.
+
 ## UX
 
 | Key | Action |
