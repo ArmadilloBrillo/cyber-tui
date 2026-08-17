@@ -7,132 +7,132 @@ var kaomojiIcons = []Icon{
 	// happy / cheerful
 	{Glyph: "(^_^)", Name: "happy"},
 	{Glyph: "(^o^)", Name: "cheerful"},
-	{Glyph: "(*^▽^*)", Name: "happy smile"},
+	{Glyph: "(*^v^*)", Name: "happy smile"},
 	{Glyph: "(*^ω^*)", Name: "content"},
 	{Glyph: "＼(^o^)／", Name: "hooray"},
-	{Glyph: "(≧▽≦)", Name: "very happy"},
-	{Glyph: "(*≧∀≦*)", Name: "excited happy"},
-	{Glyph: "(^▽^)", Name: "grin"},
-	{Glyph: "(´∀｀)", Name: "warm smile"},
-	{Glyph: "(*'▽')", Name: "cheery"},
+	{Glyph: "(>v<)", Name: "very happy"},
+	{Glyph: "(*>Ɐ<*)", Name: "excited happy"},
+	{Glyph: "(^v^)", Name: "grin"},
+	{Glyph: "('Ɐ｀)", Name: "warm smile"},
+	{Glyph: "(*'v')", Name: "cheery"},
 	{Glyph: "٩(◕‿◕)۶", Name: "delighted"},
-	{Glyph: "(*≧ω≦*)", Name: "beaming"},
+	{Glyph: "(*>ω<*)", Name: "beaming"},
 	{Glyph: "\\(^ω^)/", Name: "yay"},
-	{Glyph: "(⌒▽⌒)☆", Name: "sparkling smile"},
-	{Glyph: "ヽ(・∀・)ﾉ", Name: "pleased"},
+	{Glyph: "(~v~)*", Name: "sparkling smile"},
+	{Glyph: "ヽ(・Ɐ・)ﾉ", Name: "pleased"},
 
 	// love / affection
-	{Glyph: "(´,,•ω•,,)♡", Name: "love affection"},
-	{Glyph: "(♡μ_μ)", Name: "in love"},
-	{Glyph: "(´ ω `♡)", Name: "sweet love"},
-	{Glyph: "(｡♥‿♥｡)", Name: "heart eyes"},
-	{Glyph: "♡(˃͈ દ ˂͈ ༶ )", Name: "shy love"},
+	{Glyph: "(',,.ω.,,)ღ", Name: "love affection"},
+	{Glyph: "(ღμ_μ)", Name: "in love"},
+	{Glyph: "(' ω `ღ)", Name: "sweet love"},
+	{Glyph: "(｡ღ‿ღ｡)", Name: "heart eyes"},
+	{Glyph: "ღ(>͈ દ <͈ ༶ )", Name: "shy love"},
 	{Glyph: "(*¯︶¯*)", Name: "adoring"},
-	{Glyph: "(´▽`ʃ♡ƪ)", Name: "loving"},
-	{Glyph: "(◕‿◕)♡", Name: "affectionate"},
+	{Glyph: "('v`ʃღƪ)", Name: "loving"},
+	{Glyph: "(◕‿◕)ღ", Name: "affectionate"},
 	{Glyph: "❤(ӦｖӦ｡)", Name: "heart struck"},
 
 	// laughing
-	{Glyph: "(≧∇≦)ﾉ", Name: "laughing wave"},
-	{Glyph: "(*≧m≦*)", Name: "giggling"},
+	{Glyph: "(>v<)ﾉ", Name: "laughing wave"},
+	{Glyph: "(*>m<*)", Name: "giggling"},
 	{Glyph: "www", Name: "lol"},
-	{Glyph: "(＾▽＾)", Name: "laughing"},
-	{Glyph: "(≧ロ≦)", Name: "cracking up"},
+	{Glyph: "(＾v＾)", Name: "laughing"},
+	{Glyph: "(>ロ<)", Name: "cracking up"},
 	{Glyph: "(*^艸^*)", Name: "snickering"},
 
 	// blush / shy
 	{Glyph: "(/ω\\)", Name: "shy"},
 	{Glyph: "(/////)", Name: "blushing"},
 	{Glyph: "(*/ω＼*)", Name: "bashful"},
-	{Glyph: "(⁄ ⁄•⁄ω⁄•⁄ ⁄)", Name: "flustered blush"},
+	{Glyph: "(⁄ ⁄.⁄ω⁄.⁄ ⁄)", Name: "flustered blush"},
 	{Glyph: "(*ﾉωﾉ)", Name: "embarrassed"},
 	{Glyph: "(〃￣ω￣〃)", Name: "coy"},
 
 	// sad / crying
-	{Glyph: "(´；ω；｀)", Name: "sad"},
-	{Glyph: "(╥﹏╥)", Name: "crying"},
+	{Glyph: "('；ω；｀)", Name: "sad"},
+	{Glyph: "(T﹏T)", Name: "crying"},
 	{Glyph: "(;_;)", Name: "tearful"},
 	{Glyph: "(T_T)", Name: "sobbing"},
 	{Glyph: "(ノ_<)", Name: "whimpering"},
-	{Glyph: "。゜(´Ｔωｔ｀)゜。", Name: "bawling"},
-	{Glyph: "(｡•́︿•̀｡)", Name: "disappointed"},
+	{Glyph: "。゜('Ｔωｔ｀)゜。", Name: "bawling"},
+	{Glyph: "(｡.︿.｡)", Name: "disappointed"},
 	{Glyph: "(つ_<)", Name: "downcast"},
-	{Glyph: "(´；д；`)", Name: "distressed"},
+	{Glyph: "('；д；`)", Name: "distressed"},
 
 	// angry / annoyed
-	{Glyph: "(╬ ಠ益ಠ)", Name: "furious"},
-	{Glyph: "٩(╬ಠ益ಠ)۶", Name: "angry"},
-	{Glyph: "(＃`Д´)", Name: "mad"},
-	{Glyph: "ヽ(`Д´)ﾉ", Name: "annoyed"},
+	{Glyph: "(# ಠ益ಠ)", Name: "furious"},
+	{Glyph: "٩(#ಠ益ಠ)۶", Name: "angry"},
+	{Glyph: "(＃`Д')", Name: "mad"},
+	{Glyph: "ヽ(`Д')ﾉ", Name: "annoyed"},
 	{Glyph: "(-_-#)", Name: "irritated"},
-	{Glyph: "(｀ε´)", Name: "pouting"},
+	{Glyph: "(｀ε')", Name: "pouting"},
 	{Glyph: "＼(-o-)／", Name: "exasperated"},
-	{Glyph: "（＃´ω`）", Name: "grumpy"},
+	{Glyph: "（＃'ω`）", Name: "grumpy"},
 
 	// table flip / frustration
-	{Glyph: "(╯°□°）╯︵ ┻━┻", Name: "table flip"},
-	{Glyph: "┬─┬ ノ( ゜-゜ノ)", Name: "put table back"},
-	{Glyph: "(ノಠ益ಠ)ノ彡┻━┻", Name: "angry table flip"},
-	{Glyph: "(╯'□')╯ ︵ ┻━┻", Name: "flip in frustration"},
+	{Glyph: "(ノo口o）ノ︵ ===", Name: "table flip"},
+	{Glyph: "=== ノ( ゜-゜ノ)", Name: "put table back"},
+	{Glyph: "(ノಠ益ಠ)ノ彡===", Name: "angry table flip"},
+	{Glyph: "(ノ'口')ノ ︵ ===", Name: "flip in frustration"},
 
 	// shrug / indifference
 	{Glyph: "¯\\_(ツ)_/¯", Name: "shrug"},
-	{Glyph: "┐(´～｀)┌", Name: "meh shrug"},
-	{Glyph: "┐(￣ヘ￣)┌", Name: "indifferent"},
+	{Glyph: "\\('～｀)/", Name: "meh shrug"},
+	{Glyph: "\\(￣ヘ￣)/", Name: "indifferent"},
 	{Glyph: "(・_・)", Name: "unimpressed"},
-	{Glyph: "( ˘ ,_ゝ˘)", Name: "whatever"},
+	{Glyph: "( - ,_ゝ-)", Name: "whatever"},
 
 	// surprised / shocked
-	{Glyph: "(⊙_⊙)", Name: "surprised"},
-	{Glyph: "(°o°)", Name: "shocked"},
-	{Glyph: "Σ(°△°|||)", Name: "startled"},
+	{Glyph: "(o_o)", Name: "surprised"},
+	{Glyph: "(ooo)", Name: "shocked"},
+	{Glyph: "Σ(o^o|||)", Name: "startled"},
 	{Glyph: "(；ﾟДﾟ)", Name: "stunned"},
 	{Glyph: "(ﾟｰﾟ)", Name: "wide eyed"},
 	{Glyph: "( ゚д゚)", Name: "wtf"},
-	{Glyph: "(´△｀)", Name: "flustered surprise"},
+	{Glyph: "('^｀)", Name: "flustered surprise"},
 
 	// confused
 	{Glyph: "(・・？)", Name: "confused"},
 	{Glyph: "(￣～￣;)", Name: "puzzled"},
-	{Glyph: "(・∀・)？", Name: "questioning"},
+	{Glyph: "(・Ɐ・)？", Name: "questioning"},
 	{Glyph: "( ᴥ )？", Name: "huh"},
-	{Glyph: "(°ロ°) !", Name: "baffled"},
+	{Glyph: "(oロo) !", Name: "baffled"},
 
 	// thinking
 	{Glyph: "(－‸ლ)", Name: "skeptical"},
 	{Glyph: "(¬_¬)", Name: "side eye"},
 	{Glyph: "(￢‿￢ )", Name: "smug"},
-	{Glyph: "( ˘ω˘ )", Name: "pondering"},
-	{Glyph: "(・□・;)", Name: "worried thinking"},
+	{Glyph: "( -ω- )", Name: "pondering"},
+	{Glyph: "(・口・;)", Name: "worried thinking"},
 
 	// sleepy
 	{Glyph: "(－ω－) zzZ", Name: "sleepy"},
 	{Glyph: "(－_－) zzZ", Name: "dozing"},
-	{Glyph: "(ᴗ˳ᴗ)", Name: "drowsy"},
+	{Glyph: "(ᴗ.ᴗ)", Name: "drowsy"},
 	{Glyph: "(-.-)Zzz...", Name: "asleep"},
 
 	// waving / greeting
-	{Glyph: "(°▽°)/", Name: "wave"},
-	{Glyph: "(￣▽￣)ノ", Name: "waving hello"},
+	{Glyph: "(ovo)/", Name: "wave"},
+	{Glyph: "(￣v￣)ノ", Name: "waving hello"},
 	{Glyph: "ヾ(＾-＾)ノ", Name: "cheerful wave"},
-	{Glyph: "( ´ ▽ ` )ﾉ", Name: "friendly wave"},
+	{Glyph: "( ' v ` )ﾉ", Name: "friendly wave"},
 	{Glyph: "(=^-ω-^=)", Name: "cat wave"},
 
 	// running
 	{Glyph: "ᕕ( ᐛ )ᕗ", Name: "running"},
-	{Glyph: "εぐ(ノ°д°)ノ", Name: "running away"},
-	{Glyph: "(╯°□°）╯", Name: "dashing off"},
+	{Glyph: "εぐ(ノoдo)ノ", Name: "running away"},
+	{Glyph: "(ノo口o）ノ", Name: "dashing off"},
 
 	// dance
 	{Glyph: "٩(^‿^)۶", Name: "dance joy"},
-	{Glyph: "ヽ(´▽`)/", Name: "dancing"},
-	{Glyph: "♪┏(・o･)┛♪", Name: "dance music"},
+	{Glyph: "ヽ('v`)/", Name: "dancing"},
+	{Glyph: "d/(・o･)\\d", Name: "dance music"},
 	{Glyph: "\\(^o^)/", Name: "celebrate"},
 
 	// cat
 	{Glyph: "(=^･ω･^=)", Name: "cat face"},
 	{Glyph: "(=ↀωↀ=)", Name: "curious cat"},
-	{Glyph: "ฅ(^•ω•^)ฅ", Name: "cat paws"},
+	{Glyph: "ฅ(^.ω.^)ฅ", Name: "cat paws"},
 	{Glyph: "(=„ᆽ„=)", Name: "sleepy cat"},
 
 	// disapproval / disbelief
@@ -142,26 +142,26 @@ var kaomojiIcons = []Icon{
 	{Glyph: "(ーー;)", Name: "disbelief"},
 
 	// begging / pleading
-	{Glyph: "(๑•̀ㅁ•́๑)", Name: "determined plea"},
+	{Glyph: "(๑.ㅁ.๑)", Name: "determined plea"},
 	{Glyph: "(￣ε￣＠)", Name: "pouty plea"},
 	{Glyph: "(⋟﹏⋞)", Name: "pleading"},
 
 	// cute
 	{Glyph: "(｡◕‿◕｡)", Name: "cute"},
-	{Glyph: "(◍•ᴗ•◍)", Name: "adorable"},
-	{Glyph: "(๑˃ᴗ˂)ﻭ", Name: "cute cheer"},
-	{Glyph: "(灬ºωº灬)", Name: "cute blush"},
+	{Glyph: "(◍.ᴗ.◍)", Name: "adorable"},
+	{Glyph: "(๑>ᴗ<)ﻭ", Name: "cute cheer"},
+	{Glyph: "(灬oωo灬)", Name: "cute blush"},
 
 	// sly / smug
 	{Glyph: "(￣ω￣)", Name: "sly look"},
-	{Glyph: "( ͡° ͜ʖ ͡°)", Name: "lenny face"},
+	{Glyph: "( ͡o ͜ʖ ͡o)", Name: "lenny face"},
 	{Glyph: "(¬‿¬)", Name: "sneaky"},
 	{Glyph: "( ¬ω¬)", Name: "smirking"},
 
 	// flirty
 	{Glyph: "( ﾟ∀ﾟ)", Name: "cheeky"},
-	{Glyph: "(๑´ㅂ`๑)", Name: "flirty"},
-	{Glyph: "(⁎˃ᴗ˂⁎)", Name: "playful"},
+	{Glyph: "(๑'ㅂ`๑)", Name: "flirty"},
+	{Glyph: "(⁎>ᴗ<⁎)", Name: "playful"},
 
 	// peace / victory
 	{Glyph: "(￣ー￣)ｖ", Name: "peace sign"},
@@ -171,36 +171,36 @@ var kaomojiIcons = []Icon{
 	// apology / worry
 	{Glyph: "m(_ _)m", Name: "apologize"},
 	{Glyph: "(シ. .)シ", Name: "worried"},
-	{Glyph: "(￣□￣;)", Name: "oh no"},
-	{Glyph: "(๑•́ - •̀๑)", Name: "sorry"},
+	{Glyph: "(￣口￣;)", Name: "oh no"},
+	{Glyph: "(๑. - .๑)", Name: "sorry"},
 
 	// eating / drinking
-	{Glyph: "(っ˘ڡ˘ς)", Name: "yummy"},
-	{Glyph: "(*￣▽￣)b", Name: "delicious"},
-	{Glyph: "_(:3」∠)_", Name: "give up flop"},
+	{Glyph: "(っ-ڡ-ς)", Name: "yummy"},
+	{Glyph: "(*￣v￣)b", Name: "delicious"},
+	{Glyph: "_(:3」/)_", Name: "give up flop"},
 
 	// coffee / offering
-	{Glyph: "( ˘ ³˘)♨", Name: "coffee"},
-	{Glyph: "(っ˘ω˘)っ ☕", Name: "offering coffee"},
+	{Glyph: "( - 3-)", Name: "coffee"},
+	{Glyph: "(っ-ω-)っ ☕", Name: "offering coffee"},
 
 	// fighting / determination
-	{Glyph: "ᕦ(ò_óˇ)ᕤ", Name: "flexing"},
-	{Glyph: "(๑•̀ㅂ•́)ง✧", Name: "determined"},
-	{Glyph: "(ง'̀-'́)ง", Name: "fight"},
+	{Glyph: "ᕦ(ò_óv)ᕤ", Name: "flexing"},
+	{Glyph: "(๑.ㅂ.)ง✧", Name: "determined"},
+	{Glyph: "(ง'-')ง", Name: "fight"},
 
 	// music
-	{Glyph: "♪(´ε｀ )", Name: "humming"},
-	{Glyph: "(  ⌒ω⌒)ﾉ♪", Name: "singing"},
+	{Glyph: "d('ε｀ )", Name: "humming"},
+	{Glyph: "(  ~ω~)ﾉd", Name: "singing"},
 
 	// wizard / magic
-	{Glyph: "(ノ°∀°)ノ⌒☆.•*.", Name: "wizard"},
+	{Glyph: "(ノoⱯo)ノ~*..*.", Name: "wizard"},
 	{Glyph: "(∩｀-´)⊃━☆ﾟ.*", Name: "casting spell"},
 
 	// eepy / cold
-	{Glyph: "⊂((・▽・))⊃", Name: "hug"},
-	{Glyph: "(っ´ω`c)", Name: "gentle hug"},
-	{Glyph: "( ˘_˘)", Name: "tired"},
-	{Glyph: "( ˇ_ˇ )", Name: "exhausted"},
+	{Glyph: "(((・v・)))", Name: "hug"},
+	{Glyph: "(っ'ω`c)", Name: "gentle hug"},
+	{Glyph: "( -_-)", Name: "tired"},
+	{Glyph: "( v_v )", Name: "exhausted"},
 }
 
 // kaomojiCommonNames is a curated subset shown as "Common Kaomoji".
