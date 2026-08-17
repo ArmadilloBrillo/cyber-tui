@@ -4943,8 +4943,9 @@ func (a App) suppressActiveRoomMentions(notifs []model.Notification) (App, tea.C
 
 func (a *App) loadNotifsCmd() tea.Cmd {
 	unreadOnly := a.notifications.ShowUnreadOnly()
+	types := a.notifications.ActiveTypeFilter()
 	return func() tea.Msg {
-		notifs, cursor, err := a.client.GetNotifications("", unreadOnly, nil)
+		notifs, cursor, err := a.client.GetNotifications("", unreadOnly, types)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -4954,8 +4955,9 @@ func (a *App) loadNotifsCmd() tea.Cmd {
 
 func (a *App) loadNotifsPageCmd(cursor string) tea.Cmd {
 	unreadOnly := a.notifications.ShowUnreadOnly()
+	types := a.notifications.ActiveTypeFilter()
 	return func() tea.Msg {
-		notifs, nextCursor, err := a.client.GetNotifications(cursor, unreadOnly, nil)
+		notifs, nextCursor, err := a.client.GetNotifications(cursor, unreadOnly, types)
 		if err != nil {
 			return errMsg{err}
 		}
