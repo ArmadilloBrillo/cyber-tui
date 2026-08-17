@@ -209,7 +209,11 @@ Press `f` to open a panel that filters the list down to specific notification ca
 
 Panel controls: `↑`/`↓` (or `j`/`k`) move the cursor, `space` toggles the highlighted category, `a` toggles all categories on/off at once, `enter` applies the selection, `esc` cancels and discards any changes made while the panel was open.
 
-Applying a changed selection resets and re-fetches the list from the server (same "reset pagination state, refetch" pattern as the `u` unread-only toggle) — filtering is server-side via `GET /v1/notifications?type=...`, so pagination stays correct against the filtered set. Deselecting every category is blocked (the panel stays open) since an empty type list is indistinguishable from "no filter" to the API.
+Applying a changed selection resets and re-fetches the list from the server (same "reset pagination state, refetch" pattern as the `u` unread-only toggle) — filtering is server-side via `GET /v1/notifications?type=...`, so pagination stays correct against the filtered set. Deselecting every category is blocked (the panel stays open, with an inline "select at least one category" message) since an empty type list is indistinguishable from "no filter" to the API.
+
+### 20-type API cap
+
+The API documents `type` as capped at 1-20 comma-separated values (`docs/00-latest-api-reference.md`). The 5 categories span 30 known types total, and `account/system` alone is 16 of them — so a partial selection can flatten to more than 20 (e.g. `account/system` + `threads` = 16 + 5 = 21). Applying such a selection is blocked client-side with an inline "too many types selected (N, max 20) — deselect a category" message rather than being sent to the server and rejected with a `400 VALIDATION_ERROR`. Selecting **all** categories is always safe regardless of this cap, since that path sends no `type` param at all (equivalent to "no filter"). There is no way to combine every category except one or two small ones and stay under the cap when `account/system` is involved — this is an inherent limit of a 30-type universe against a 20-item inclusion list, not a client bug.
 
 A `filter: <categories>  (press 'f' to change)` line appears above the list whenever a filter is active, so a short list doesn't read as broken.
 

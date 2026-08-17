@@ -948,7 +948,15 @@ func TestNotifs_FilterPanel_Enter_Changed_EmitsRefreshAndResets(t *testing.T) {
 	m := initNotifs(notifs)
 	m.selectedIndex = 0
 	m2, _ := runKey(m, "f")
-	m3, _ := runKey(m2, " ") // toggle first category off
+	// Deselect "account/system" (the 16-type category) rather than the
+	// first one — deselecting a small category would leave the remaining
+	// selection (mentions+social+threads+account/system = 29 types) over
+	// the API's 20-type cap and get blocked by the new guard.
+	m3 := m2
+	for i := 0; i < len(notifCategories)-1; i++ {
+		m3, _ = runKey(m3, "down")
+	}
+	m3, _ = runKey(m3, " ")
 	m4, msg := runKey(m3, "enter")
 	if _, ok := msg.(RefreshNotifsMsg); !ok {
 		t.Fatalf("expected RefreshNotifsMsg, got %T", msg)
@@ -965,8 +973,8 @@ func TestNotifs_FilterPanel_Enter_Changed_EmitsRefreshAndResets(t *testing.T) {
 	if !m4.fetching {
 		t.Error("expected fetching true after filter change")
 	}
-	if m4.activeCategories[0] {
-		t.Error("expected activeCategories[0] to be false after commit")
+	if m4.activeCategories[len(notifCategories)-1] {
+		t.Error("expected last category (account/system) to be false after commit")
 	}
 }
 
@@ -1004,6 +1012,78 @@ func TestNotifs_FilterPanel_Enter_AllOff_Blocked(t *testing.T) {
 	}
 	if !allCategoriesOn(m4.activeCategories) {
 		t.Error("expected activeCategories unchanged (still all on) when commit blocked")
+	}
+	if m4.filterWarn == "" {
+		t.Error("expected filterWarn to be set when all-off commit is blocked")
+	}
+}
+
+func TestNotifs_FilterPanel_Enter_TooManyTypes_Blocked(t *testing.T) {
+	m := initNotifs(nil)
+	m2, _ := runKey(m, "f")
+	// Deselect everything except threads(5) + account/system(16) = 21, over
+	// the API's 20-type cap.
+	m3, _ := runKey(m2, " ") // mentions off (cursor at 0)
+	m3, _ = runKey(m3, "down")
+	m3, _ = runKey(m3, " ") // social off
+	m3, _ = runKey(m3, "down")
+	m3, _ = runKey(m3, "down")
+	m3, _ = runKey(m3, " ") // c-mail off
+	m3, _ = runKey(m3, "down")
+	m4, msg := runKey(m3, "enter")
+	if msg != nil {
+		t.Errorf("expected too-many-types enter to be blocked, got %T", msg)
+	}
+	if !m4.filterOpen {
+		t.Error("expected filter panel to remain open when selection exceeds the type cap")
+	}
+	if !allCategoriesOn(m4.activeCategories) {
+		t.Error("expected activeCategories unchanged when commit blocked")
+	}
+	if m4.filterWarn == "" {
+		t.Error("expected filterWarn to be set when selection exceeds the type cap")
+	}
+}
+
+func TestNotifs_FilterPanel_Enter_ExactlyTwentyTypes_Allowed(t *testing.T) {
+	m := initNotifs(nil)
+	m2, _ := runKey(m, "f")
+	// Keep only mentions(4) + account/system(16) = exactly 20 — the
+	// documented cap is inclusive ("1-20 values"), so this must succeed.
+	m3, _ := runKey(m2, "down") // cursor -> social
+	m3, _ = runKey(m3, " ")     // social off
+	m3, _ = runKey(m3, "down")  // cursor -> threads
+	m3, _ = runKey(m3, " ")     // threads off
+	m3, _ = runKey(m3, "down")  // cursor -> c-mail
+	m3, _ = runKey(m3, " ")     // c-mail off
+	m4, msg := runKey(m3, "enter")
+	if _, ok := msg.(RefreshNotifsMsg); !ok {
+		t.Fatalf("expected RefreshNotifsMsg for an exactly-20-type selection, got %T", msg)
+	}
+	if m4.filterOpen {
+		t.Error("expected filterOpen false after a successful commit")
+	}
+	if m4.filterWarn != "" {
+		t.Errorf("expected filterWarn cleared after a successful commit, got %q", m4.filterWarn)
+	}
+}
+
+func TestNotifs_FilterPanel_OpenKey_ClearsWarn(t *testing.T) {
+	m := initNotifs(nil)
+	m.filterWarn = "stale warning"
+	m2, _ := runKey(m, "f")
+	if m2.filterWarn != "" {
+		t.Errorf("expected filterWarn cleared on open, got %q", m2.filterWarn)
+	}
+}
+
+func TestNotifs_FilterPanel_Toggle_ClearsWarn(t *testing.T) {
+	m := initNotifs(nil)
+	m2, _ := runKey(m, "f")
+	m2.filterWarn = "stale warning"
+	m3, _ := runKey(m2, " ")
+	if m3.filterWarn != "" {
+		t.Errorf("expected filterWarn cleared on toggle, got %q", m3.filterWarn)
 	}
 }
 

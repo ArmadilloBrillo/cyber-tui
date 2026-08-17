@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -60,6 +61,12 @@ var notifCategories = []notifCategory{
 	}},
 }
 
+// maxNotifTypeFilter matches the API's documented cap on the type query
+// param (docs/00-latest-api-reference.md: "comma-separated list of
+// notification types (1-20 values)"). A selection spanning more types than
+// this is blocked client-side rather than sent and rejected with a 400.
+const maxNotifTypeFilter = 20
+
 func allCategoriesActive() []bool {
 	b := make([]bool, len(notifCategories))
 	for i := range b {
@@ -90,6 +97,7 @@ type NotificationsModel struct {
 	filterOpen        bool
 	pendingCategories []bool // scratch copy edited while filterOpen; committed on enter, discarded on esc
 	filterCursor      int
+	filterWarn        string // validation message shown in the panel; cleared on open or on any selection change
 }
 
 func NewNotificationsModel() NotificationsModel {
@@ -417,6 +425,7 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 			m.filterOpen = true
 			m.pendingCategories = append([]bool(nil), m.activeCategories...)
 			m.filterCursor = 0
+			m.filterWarn = ""
 			return m, nil
 		case "enter":
 			if len(visible) == 0 || m.selectedIndex >= len(visible) {
@@ -504,21 +513,37 @@ func (m NotificationsModel) handleFilterPanelKey(msg tea.KeyMsg) (NotificationsM
 		}
 	case " ":
 		m.pendingCategories[m.filterCursor] = !m.pendingCategories[m.filterCursor]
+		m.filterWarn = ""
 	case "a":
 		on := !allCategoriesOn(m.pendingCategories)
 		for i := range m.pendingCategories {
 			m.pendingCategories[i] = on
 		}
+		m.filterWarn = ""
 	case "esc":
 		m.filterOpen = false
 	case "enter":
 		if !anyCategoryOn(m.pendingCategories) {
 			// Refuse an empty selection — it's ambiguous versus "no filter",
 			// since the server treats a nil/empty types param as unfiltered.
+			m.filterWarn = "select at least one category"
 			return m, nil
+		}
+		// The API caps the type query param at 20 comma-separated values
+		// (docs/00-latest-api-reference.md). A selection that isn't "every
+		// category" (which correctly sends no type param at all) can still
+		// flatten to more than that — account/system alone is 16 of the 30
+		// known types — so block it here rather than sending a request the
+		// server will 400 on.
+		if !allCategoriesOn(m.pendingCategories) {
+			if count := pendingTypeCount(m.pendingCategories); count > maxNotifTypeFilter {
+				m.filterWarn = fmt.Sprintf("too many types selected (%d, max %d) — deselect a category", count, maxNotifTypeFilter)
+				return m, nil
+			}
 		}
 		changed := !equalBoolSlices(m.pendingCategories, m.activeCategories)
 		m.filterOpen = false
+		m.filterWarn = ""
 		if !changed {
 			return m, nil
 		}
@@ -532,6 +557,19 @@ func (m NotificationsModel) handleFilterPanelKey(msg tea.KeyMsg) (NotificationsM
 		return m, func() tea.Msg { return RefreshNotifsMsg{} }
 	}
 	return m, nil
+}
+
+// pendingTypeCount sums the type counts of the selected categories without
+// allocating the flattened slice — used to validate a selection against
+// maxNotifTypeFilter before it's committed.
+func pendingTypeCount(cats []bool) int {
+	n := 0
+	for i, on := range cats {
+		if on {
+			n += len(notifCategories[i].types)
+		}
+	}
+	return n
 }
 
 func equalBoolSlices(a, b []bool) bool {
@@ -881,14 +919,17 @@ func (m NotificationsModel) renderFilterPanel() string {
 		lines = append(lines, line)
 	}
 	hint := theme.Subtle.Render("↑↓ select   space toggle   a all/none   enter apply   esc cancel")
-	body := lipgloss.JoinVertical(lipgloss.Left,
+	parts := []string{
 		title,
 		"",
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 		"",
-		hint,
-	)
-	return theme.ActiveBorder.Render(body)
+	}
+	if m.filterWarn != "" {
+		parts = append(parts, theme.Error.Render(m.filterWarn), "")
+	}
+	parts = append(parts, hint)
+	return theme.ActiveBorder.Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
 }
 
 // overlayCenter splices fg, centered, on top of bg — used to keep the
