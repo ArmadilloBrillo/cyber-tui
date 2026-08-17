@@ -2780,7 +2780,7 @@ func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 	if a.ephemeral {
 		return a.notify(notifyInfo, "Opening links is disabled in SSH sessions")
 	}
-	if a.canRenderImageInline(rawURL) {
+	if a.canRenderImageInline(rawURL) || a.canProbeImageInline() {
 		return a.openImageInTerminal(rawURL)
 	}
 	return a, openExternalURL(rawURL)
@@ -2795,6 +2795,23 @@ func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 func (a App) canRenderImageInline(u string) bool {
 	return !a.ephemeral &&
 		urlutil.IsImageURL(u) &&
+		a.graphicsProtocol != imgview.ProtocolNone &&
+		a.imageViewer != "browser"
+}
+
+// canProbeImageInline reports whether u is worth an inline-open attempt even
+// though its extension doesn't look like an image: /gif <url> in circ/C-Mail
+// forwards whatever URL the user typed verbatim (chatrooms.go's slash-command
+// handling does no URL validation), and real gif links routinely lack a
+// literal ".gif" suffix (Tenor share pages, extensionless CDN links). Rather
+// than guess further from the URL text, this defers to openImageInTerminal's
+// real fetch+decode (via imgview.FetchAny, which sniffs the downloaded
+// bytes) as the source of truth, falling back to the browser via
+// handleImageViewer's existing error path when the content genuinely isn't a
+// decodable image. Same gates as canRenderImageInline minus the extension
+// check.
+func (a App) canProbeImageInline() bool {
+	return !a.ephemeral &&
 		a.graphicsProtocol != imgview.ProtocolNone &&
 		a.imageViewer != "browser"
 }
@@ -3531,7 +3548,6 @@ func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
 // edges, not just merely within them.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
-	isGIF := urlutil.IsGIFURL(rawURL)
 	scale := a.imageScale
 	if scale <= 0 {
 		scale = 1.0
@@ -3547,19 +3563,10 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 		if !hit {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			if isGIF {
-				g, err := imgview.FetchGIF(ctx, rawURL)
-				if err != nil {
-					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
-				}
-				frames, delays = imgview.GIFFrames(g)
-			} else {
-				img, err := imgview.Fetch(ctx, rawURL)
-				if err != nil {
-					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
-				}
-				frames = []image.Image{img}
-				delays = nil
+			var err error
+			frames, delays, err = imgview.FetchAny(ctx, rawURL)
+			if err != nil {
+				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 			}
 		}
 		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
@@ -4699,10 +4706,13 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 const maxAttachmentDim = 640
 
 // attachmentTypeForURL infers a wireAttachment's "type" from the URL's path
-// extension (via urlutil.IsGIFURL, already used the same way for graphics-
-// protocol detection in openImageInTerminal — ignores query string/fragment,
-// unlike a raw suffix check, so a signed CDN link like ".gif?token=..."
-// still resolves correctly).
+// extension (via urlutil.IsGIFURL — ignores query string/fragment, unlike a
+// raw suffix check, so a signed CDN link like ".gif?token=..." still
+// resolves correctly). This only covers native post/reply attachments,
+// which are always this client's own upload URLs with a known extension;
+// circ/C-Mail's /gif <url> accepts arbitrary user-typed URLs instead, so
+// openImageInTerminal no longer relies on extension sniffing — see
+// imgview.FetchAny.
 func attachmentTypeForURL(rawURL string) string {
 	if urlutil.IsGIFURL(rawURL) {
 		return "gif"

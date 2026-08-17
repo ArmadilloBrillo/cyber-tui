@@ -128,6 +128,10 @@ func FetchGIF(ctx context.Context, rawURL string) (*gif.GIF, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decodeGIF(body)
+}
+
+func decodeGIF(body []byte) (*gif.GIF, error) {
 	cfg, err := gif.DecodeConfig(bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("imgview: decode: %w", err)
@@ -146,4 +150,38 @@ func FetchGIF(ctx context.Context, rawURL string) (*gif.GIF, error) {
 		return nil, fmt.Errorf("imgview: gif frames×dimensions %d exceed %d pixel budget", total, maxGIFTotalPixels)
 	}
 	return g, nil
+}
+
+// FetchAny downloads the resource at rawURL and decodes it as an animated
+// GIF (all frames) or a static image (single frame), deciding which from the
+// downloaded bytes' own GIF87a/GIF89a magic header rather than rawURL's file
+// extension — /gif <url> in circ/C-Mail accepts any user-supplied URL, and
+// plenty of real gif links (Tenor share pages, extensionless CDN links)
+// don't end in literal ".gif", so extension sniffing false-negatives on
+// them. Returns one frame with a nil delay slice for a non-GIF image.
+func FetchAny(ctx context.Context, rawURL string) (frames []image.Image, delays []time.Duration, err error) {
+	body, err := fetchBody(ctx, rawURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(body) >= 6 && (string(body[:6]) == "GIF87a" || string(body[:6]) == "GIF89a") {
+		g, err := decodeGIF(body)
+		if err != nil {
+			return nil, nil, err
+		}
+		frames, delays = GIFFrames(g)
+		return frames, delays, nil
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("imgview: decode: %w", err)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width*cfg.Height > maxImagePixels {
+		return nil, nil, fmt.Errorf("imgview: image dimensions %dx%d exceed limit", cfg.Width, cfg.Height)
+	}
+	img, _, err := image.Decode(bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("imgview: decode: %w", err)
+	}
+	return []image.Image{img}, nil, nil
 }
