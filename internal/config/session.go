@@ -95,6 +95,16 @@ type Config struct {
 	// supports Sixel but doesn't reliably answer the DA1 probe query.
 	GraphicsProtocol string `json:"graphicsProtocol,omitempty"`
 
+	// Dithering enables Bayer-ordered dithering and duotone recoloring for
+	// terminal-rendered images — a port of cyberspace.online webui's
+	// RasterImage shader effect. Only applies when ImageViewer != "browser".
+	Dithering bool `json:"dithering,omitempty"`
+
+	// DitherSharpness controls the dithering pixelation block size: "rough"
+	// (chunkiest), "medium" (default), "sharp", or "crisp" (no pixelation).
+	// Only meaningful when Dithering is on. See GetDitherSharpness.
+	DitherSharpness string `json:"ditherSharpness,omitempty"`
+
 	// ImageScale multiplies the fullscreen image modal's display size,
 	// relative to the image's own native (1:1 pixel) size — 1.0 shows it at
 	// native size (clamped to fit the terminal), not a fraction of the
@@ -131,6 +141,17 @@ func (c Config) GetImageScale() float64 {
 		s = MaxImageScale
 	}
 	return s
+}
+
+// GetDitherSharpness returns DitherSharpness, substituting the default
+// ("medium") for an empty or unrecognized value.
+func (c Config) GetDitherSharpness() string {
+	switch c.DitherSharpness {
+	case "rough", "sharp", "crisp":
+		return c.DitherSharpness
+	default:
+		return "medium"
+	}
 }
 
 // GetMaxThreadDepth returns MaxThreadDepth, substituting the default (3) when

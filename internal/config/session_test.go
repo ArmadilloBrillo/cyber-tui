@@ -243,3 +243,26 @@ func TestGetImageScale(t *testing.T) {
 		})
 	}
 }
+
+func TestGetDitherSharpness(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty defaults to medium", "", "medium"},
+		{"rough passes through", "rough", "rough"},
+		{"medium passes through", "medium", "medium"},
+		{"sharp passes through", "sharp", "sharp"},
+		{"crisp passes through", "crisp", "crisp"},
+		{"unrecognized defaults to medium", "garbage", "medium"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := config.Config{DitherSharpness: c.in}.GetDitherSharpness()
+			if got != c.want {
+				t.Errorf("GetDitherSharpness(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}

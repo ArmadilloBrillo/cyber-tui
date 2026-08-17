@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"image"
 	"image/color"
+	"image/png"
 	"math/rand"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ import (
 func TestEncodeKitty_ContainsAPC(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.Set(0, 0, color.RGBA{R: 255, A: 255})
-	seq, cols, rows, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false)
+	seq, cols, rows, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -36,7 +37,7 @@ func TestEncodeKitty_ContainsAPC(t *testing.T) {
 func TestEncodeKitty_CapsRows(t *testing.T) {
 	// Tall portrait image: without a row cap this would need 50 rows at 10 cols.
 	img := image.NewRGBA(image.Rect(0, 0, 100, 1000))
-	_, cols, rows, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false)
+	_, cols, rows, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -55,7 +56,7 @@ func TestEncodeKitty_PrependsDeleteAllPlacements(t *testing.T) {
 	// close-cleanup frame never reached the terminal (e.g. dropped behind a
 	// slow flush of a large prior image).
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false)
+	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestEncodeKitty_PrependsDeleteAllPlacements(t *testing.T) {
 
 	// Back-to-back calls (as would happen opening several images in a row)
 	// must each still lead with the delete-all command.
-	seq2, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false)
+	seq2, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestEncodeKitty_PrependsDeleteAllPlacements(t *testing.T) {
 // target it precisely later.
 func TestEncodeKitty_NamedPlacement_NeverBluntDeletes(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 7, false)
+	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 7, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestEncodeKitty_NamedPlacement_NeverBluntDeletes(t *testing.T) {
 func TestEncodeKitty_SuppressesTerminalResponse(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 
-	seqAnon, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false)
+	seqAnon, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestEncodeKitty_SuppressesTerminalResponse(t *testing.T) {
 		t.Errorf("anonymous-mode EncodeKitty must set q=2, got %q", seqAnon)
 	}
 
-	seqNamed, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 7, false)
+	seqNamed, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 7, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestEncodeKitty_SuppressesTerminalResponse(t *testing.T) {
 func TestEncodeKitty_UsesPNGFormat(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
 	img.Set(1, 1, color.RGBA{B: 255, A: 255})
-	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false)
+	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -151,6 +152,62 @@ func TestEncodeKitty_UsesPNGFormat(t *testing.T) {
 	if len(raw) < 8 || !bytes.HasPrefix(raw, []byte("\x89PNG\r\n\x1a\n")) {
 		t.Errorf("expected the payload to be a PNG (magic bytes), got %d bytes starting %x", len(raw), raw[:min(len(raw), 8)])
 	}
+}
+
+// TestEncodeKitty_AppliesDither confirms a non-nil DitherOptions actually
+// reaches the encoded image: the decoded PNG payload differs from the
+// undithered encoding, and every pixel is limited to the two supplied
+// colors (see imgview.Dither's own tests for the blend invariant details).
+func TestEncodeKitty_AppliesDither(t *testing.T) {
+	img := noisyImage(8, 8)
+	plain, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false, nil)
+	if err != nil {
+		t.Fatalf("EncodeKitty (no dither): %v", err)
+	}
+	fg := color.RGBA{R: 0, G: 255, B: 65, A: 255}
+	bg := color.RGBA{R: 13, G: 13, B: 13, A: 255}
+	dithered, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 0, false, &imgview.DitherOptions{PixelSize: 1, FgColor: fg, BgColor: bg})
+	if err != nil {
+		t.Fatalf("EncodeKitty (dithered): %v", err)
+	}
+	if dithered == plain {
+		t.Fatal("EncodeKitty: dithered output identical to undithered output")
+	}
+	decoded := decodeKittyPNGPayload(t, dithered)
+	bounds := decoded.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			r, g, b, a := decoded.At(x, y).RGBA()
+			c := color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+			if !channelBetween(c.R, fg.R, bg.R) || !channelBetween(c.G, fg.G, bg.G) || !channelBetween(c.B, fg.B, bg.B) {
+				t.Fatalf("pixel (%d,%d) = %+v, want a blend between fg %+v and bg %+v", x, y, c, fg, bg)
+			}
+		}
+	}
+}
+
+func channelBetween(v, a, b uint8) bool {
+	if a > b {
+		a, b = b, a
+	}
+	return v >= a && v <= b
+}
+
+// decodeKittyPNGPayload extracts and decodes the PNG payload from a Kitty
+// APC escape sequence produced by EncodeKitty.
+func decodeKittyPNGPayload(t *testing.T, seq string) image.Image {
+	t.Helper()
+	semi := strings.LastIndex(seq, ";")
+	payload := strings.TrimSuffix(seq[semi+1:], "\x1b\\")
+	raw, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("payload did not decode as base64: %v", err)
+	}
+	img, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("payload did not decode as PNG: %v", err)
+	}
+	return img
 }
 
 // noisyImage returns a deterministic pseudo-random RGBA image — PNG
@@ -179,7 +236,7 @@ func noisyImage(w, h int) *image.RGBA {
 // and continuation chunks must carry no control keys besides m/q.
 func TestEncodeKitty_ChunksLargePayloads(t *testing.T) {
 	img := noisyImage(200, 200)
-	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 7, false)
+	seq, _, _, err := imgview.EncodeKitty(img, 40, 20, 0, 0, 7, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty: %v", err)
 	}
@@ -220,11 +277,11 @@ func TestEncodeKitty_ChunksLargePayloads(t *testing.T) {
 // for a target box close to its own size.
 func TestEncodeITerm2_DownscalesLargeSourceToTargetBox(t *testing.T) {
 	img := noisyImage(400, 400)
-	small, _, _, err := imgview.EncodeITerm2(img, 4, 2, 10, 20, false)
+	small, _, _, err := imgview.EncodeITerm2(img, 4, 2, 10, 20, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeITerm2 (small box): %v", err)
 	}
-	large, _, _, err := imgview.EncodeITerm2(img, 200, 200, 10, 20, false)
+	large, _, _, err := imgview.EncodeITerm2(img, 200, 200, 10, 20, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeITerm2 (large box): %v", err)
 	}
@@ -235,11 +292,11 @@ func TestEncodeITerm2_DownscalesLargeSourceToTargetBox(t *testing.T) {
 
 func TestEncodeKitty_DownscalesLargeSourceToTargetBox(t *testing.T) {
 	img := noisyImage(400, 400)
-	small, _, _, err := imgview.EncodeKitty(img, 4, 2, 10, 20, 0, false)
+	small, _, _, err := imgview.EncodeKitty(img, 4, 2, 10, 20, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty (small box): %v", err)
 	}
-	large, _, _, err := imgview.EncodeKitty(img, 200, 200, 10, 20, 0, false)
+	large, _, _, err := imgview.EncodeKitty(img, 200, 200, 10, 20, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty (large box): %v", err)
 	}
@@ -264,7 +321,7 @@ func TestDeleteKittyPlacement_TargetsExactIDPair(t *testing.T) {
 func TestEncodeITerm2_ContainsOSC(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	img.Set(0, 0, color.RGBA{G: 255, A: 255})
-	seq, cols, rows, err := imgview.EncodeITerm2(img, 80, 40, 0, 0, false)
+	seq, cols, rows, err := imgview.EncodeITerm2(img, 80, 40, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeITerm2: %v", err)
 	}
@@ -282,6 +339,44 @@ func TestEncodeITerm2_ContainsOSC(t *testing.T) {
 	}
 }
 
+// TestEncodeITerm2_AppliesDither mirrors TestEncodeKitty_AppliesDither.
+func TestEncodeITerm2_AppliesDither(t *testing.T) {
+	img := noisyImage(8, 8)
+	plain, _, _, err := imgview.EncodeITerm2(img, 80, 40, 0, 0, false, nil)
+	if err != nil {
+		t.Fatalf("EncodeITerm2 (no dither): %v", err)
+	}
+	fg := color.RGBA{R: 0, G: 255, B: 65, A: 255}
+	bg := color.RGBA{R: 13, G: 13, B: 13, A: 255}
+	dithered, _, _, err := imgview.EncodeITerm2(img, 80, 40, 0, 0, false, &imgview.DitherOptions{PixelSize: 1, FgColor: fg, BgColor: bg})
+	if err != nil {
+		t.Fatalf("EncodeITerm2 (dithered): %v", err)
+	}
+	if dithered == plain {
+		t.Fatal("EncodeITerm2: dithered output identical to undithered output")
+	}
+	colon := strings.LastIndex(dithered, ":")
+	payload := strings.TrimSuffix(dithered[colon+1:], "\x07")
+	raw, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("payload did not decode as base64: %v", err)
+	}
+	decoded, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("payload did not decode as PNG: %v", err)
+	}
+	bounds := decoded.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			r, g, b, _ := decoded.At(x, y).RGBA()
+			c := color.RGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8)}
+			if !channelBetween(c.R, fg.R, bg.R) || !channelBetween(c.G, fg.G, bg.G) || !channelBetween(c.B, fg.B, bg.B) {
+				t.Fatalf("pixel (%d,%d) = %+v, want a blend between fg %+v and bg %+v", x, y, c, fg, bg)
+			}
+		}
+	}
+}
+
 // TestEncodeITerm2_SetsDoNotMoveCursor is a regression test: without
 // doNotMoveCursor=1, WezTerm scrolls its whole screen once an inline image's
 // footprint reaches the terminal's last line (wezterm/wezterm#3266), which
@@ -290,7 +385,7 @@ func TestEncodeITerm2_ContainsOSC(t *testing.T) {
 // advance, so this is safe to always send.
 func TestEncodeITerm2_SetsDoNotMoveCursor(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	seq, _, _, err := imgview.EncodeITerm2(img, 80, 40, 0, 0, false)
+	seq, _, _, err := imgview.EncodeITerm2(img, 80, 40, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeITerm2: %v", err)
 	}
@@ -306,11 +401,11 @@ func TestEncodeITerm2_SetsDoNotMoveCursor(t *testing.T) {
 // preserveAspectRatio letterboxing leaves — see EncodeITerm2's doc comment).
 func TestEncodeITerm2_UsesRealCellSize(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 400, 400))
-	_, defaultCols, defaultRows, err := imgview.EncodeITerm2(img, 200, 200, 0, 0, false)
+	_, defaultCols, defaultRows, err := imgview.EncodeITerm2(img, 200, 200, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeITerm2 (default cell size): %v", err)
 	}
-	_, largeCellCols, largeCellRows, err := imgview.EncodeITerm2(img, 200, 200, 40, 80, false)
+	_, largeCellCols, largeCellRows, err := imgview.EncodeITerm2(img, 200, 200, 40, 80, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeITerm2 (large cell size): %v", err)
 	}
@@ -325,11 +420,11 @@ func TestEncodeITerm2_UsesRealCellSize(t *testing.T) {
 // TestEncodeKitty_UsesRealCellSize mirrors TestEncodeSixel_UsesRealCellSize.
 func TestEncodeKitty_UsesRealCellSize(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 400, 400))
-	_, defaultCols, defaultRows, err := imgview.EncodeKitty(img, 200, 200, 0, 0, 0, false)
+	_, defaultCols, defaultRows, err := imgview.EncodeKitty(img, 200, 200, 0, 0, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty (default cell size): %v", err)
 	}
-	_, largeCellCols, largeCellRows, err := imgview.EncodeKitty(img, 200, 200, 40, 80, 0, false)
+	_, largeCellCols, largeCellRows, err := imgview.EncodeKitty(img, 200, 200, 40, 80, 0, false, nil)
 	if err != nil {
 		t.Fatalf("EncodeKitty (large cell size): %v", err)
 	}

@@ -478,6 +478,16 @@ type App struct {
 	// See canInlineImages for the fully-gated value broadcast to screens.
 	inlineImages bool
 
+	// dithering is the user's preference from config.Dithering. See
+	// ditheringEnabled for the gated value used when encoding images.
+	dithering bool
+
+	// ditherSharpness is the user's preference from config.GetDitherSharpness
+	// ("rough"/"medium"/"sharp"), controlling the dithering pixelation block
+	// size via imgview.PixelSizeForSharpness. Only meaningful when dithering
+	// is on.
+	ditherSharpness string
+
 	// imageScale multiplies the computed size of the fullscreen image modal.
 	// Starts from config.Config.GetImageScale() and is live-adjustable with
 	// +/- while the modal is open (session-only, not persisted). <= 0 is
@@ -609,6 +619,8 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.imageViewer = s.ImageViewer
 	a.graphicsProtocolName = s.GraphicsProtocol
 	a.inlineImages = s.InlineImages
+	a.dithering = s.Dithering
+	a.ditherSharpness = s.GetDitherSharpness()
 	a.imageScale = s.GetImageScale()
 	a.layoutName = s.Layout
 	a.layout = layoutFromName(s.Layout)
@@ -835,7 +847,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -1524,6 +1536,8 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		iv := msg.ImageViewer
 		gp := msg.GraphicsProtocol
 		ii := msg.InlineImages
+		dt := msg.Dithering
+		ds := msg.DitherSharpness
 		ln := msg.LayoutName
 		return a, func() tea.Msg {
 			if msg.RemoteChanged {
@@ -1538,9 +1552,11 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.ImageViewer = iv
 				cfg.GraphicsProtocol = gp
 				cfg.InlineImages = ii
+				cfg.Dithering = dt
+				cfg.DitherSharpness = ds
 				cfg.Layout = ln
 			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, layoutName: ln}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -1549,22 +1565,33 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
-		a.graphicsProtocolName = msg.graphicsProtocol
-		if proto, ok := imgview.ProtocolFromName(msg.graphicsProtocol); ok {
-			a.graphicsProtocol = proto
-		} else {
-			// "" (auto): re-resolve via env-var detection only. The Sixel DA1
-			// probe (imgview.ProbeSixel) needs raw terminal access before Bubble
-			// Tea takes over stdin, so it can't safely re-run mid-session — see
-			// its doc comment. Best-effort here; a full restart re-probes Sixel.
-			a.graphicsProtocol = imgview.DetectProtocol()
+		if msg.graphicsProtocol != a.graphicsProtocolName {
+			// Only re-resolve when the override actually changed — saving an
+			// unrelated setting (dithering, wander mode, etc.) must not touch
+			// this. "" (auto) can only be re-resolved via env-var detection
+			// here: the Sixel DA1 probe (imgview.ProbeSixel) needs raw
+			// terminal access before Bubble Tea takes over stdin, so it can't
+			// safely re-run mid-session — see its doc comment. Without this
+			// guard, any settings save on a DA1-probed Sixel terminal would
+			// silently downgrade a.graphicsProtocol to whatever env-var
+			// detection alone finds (often ProtocolNone), breaking inline
+			// images and the image viewer until a full restart re-probes
+			// Sixel.
+			if proto, ok := imgview.ProtocolFromName(msg.graphicsProtocol); ok {
+				a.graphicsProtocol = proto
+			} else {
+				a.graphicsProtocol = imgview.DetectProtocol()
+			}
 		}
+		a.graphicsProtocolName = msg.graphicsProtocol
 		a.inlineImages = msg.inlineImages
+		a.dithering = msg.dithering
+		a.ditherSharpness = msg.ditherSharpness
 		a.layoutName = msg.layoutName
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
@@ -2828,6 +2855,36 @@ func (a App) canInlineImages() bool {
 		a.imageViewer != "browser"
 }
 
+// ditheringEnabled reports whether images encoded for the terminal should
+// have the RasterImage-style duotone dither effect applied (see Dither):
+// the user's Dithering preference is on, gated by the same imageViewer
+// check as graphicsProtocol/inlineImages — dithering is meaningless when
+// images open in the OS browser instead.
+func (a App) ditheringEnabled() bool {
+	return a.dithering && a.imageViewer != "browser"
+}
+
+// ditherOptions builds the imgview.DitherOptions to pass to Encode* when
+// ditheringEnabled is true, resolving the current theme's colors. Returns
+// nil when dithering is off.
+func (a App) ditherOptions() *imgview.DitherOptions {
+	if !a.ditheringEnabled() {
+		return nil
+	}
+	fg, _ := imgview.ParseHexColor(theme.CurrentPalette().Foreground)
+	bg, ok := imgview.ParseHexColor(theme.CurrentPalette().Background)
+	if !ok {
+		// Palette.Background is reserved/usually empty (see theme.go's Palette
+		// doc comment) — fall back to the theme's actual rendered background.
+		bg, _ = imgview.ParseHexColor(string(theme.ColorBackground))
+	}
+	return &imgview.DitherOptions{
+		PixelSize: imgview.PixelSizeForSharpness(a.ditherSharpness),
+		FgColor:   fg,
+		BgColor:   bg,
+	}
+}
+
 // activeInlineImageSlots returns the active screen's currently visible
 // inline image slots, or nil for screens that don't support inline images.
 // Used by TabsLayout.InlineImageSlots; MillerLayout has its own equivalent
@@ -2974,13 +3031,32 @@ func syncInlineImageErasures(slots []screens.InlineImageSlot, rowOrigin, colOrig
 }
 
 // inlineImageCacheKey identifies one encoded rendering of a slot's image —
-// slot key, URL, column budget, and protocol. Keying by slot (not just URL)
-// matters for Kitty, whose encoded bytes embed a placement id specific to
-// one on-screen instance (see imgview.EncodeKitty) — two slots showing the
-// same URL must never share an encode. Also matches how a resize (which
-// changes MaxCols) or a protocol change naturally invalidates old entries.
-func inlineImageCacheKey(slot screens.InlineImageSlot, proto imgview.GraphicsProtocol) string {
-	return fmt.Sprintf("%s|%s|%d|%d", slot.Key, slot.URL, slot.MaxCols, proto)
+// slot key, URL, column budget, protocol, and dithering state. Keying by
+// slot (not just URL) matters for Kitty, whose encoded bytes embed a
+// placement id specific to one on-screen instance (see imgview.EncodeKitty)
+// — two slots showing the same URL must never share an encode. Also matches
+// how a resize (which changes MaxCols) or a protocol change naturally
+// invalidates old entries — and, via ditherKeyFragment, how toggling
+// dithering, changing sharpness, or switching themes must too: without the
+// dither component, an already-cached encode from before such a change
+// would keep being served as-is (see syncInlineImages/fetchInlineImageCmd),
+// making the change appear to require a restart to take effect.
+func inlineImageCacheKey(slot screens.InlineImageSlot, proto imgview.GraphicsProtocol, dither *imgview.DitherOptions) string {
+	return fmt.Sprintf("%s|%s|%d|%d|%s", slot.Key, slot.URL, slot.MaxCols, proto, ditherKeyFragment(dither))
+}
+
+// ditherKeyFragment returns a compact, deterministic string identifying
+// dither's effect on the encoded output, for use as an inlineImageCacheKey
+// component — "-" when dithering is off, otherwise a value that changes
+// whenever the resulting pixels would: sharpness (PixelSize) or the active
+// theme's colors (FgColor/BgColor).
+func ditherKeyFragment(dither *imgview.DitherOptions) string {
+	if dither == nil {
+		return "-"
+	}
+	return fmt.Sprintf("d%d,%02x%02x%02x,%02x%02x%02x", dither.PixelSize,
+		dither.FgColor.R, dither.FgColor.G, dither.FgColor.B,
+		dither.BgColor.R, dither.BgColor.G, dither.BgColor.B)
 }
 
 // kittyModalPlacementID is a fixed, reserved Kitty placement/image id used
@@ -3210,8 +3286,9 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 	if a.inlineImageFetching == nil {
 		a.inlineImageFetching = make(map[string]bool)
 	}
+	ditherOpts := a.ditherOptions()
 	for _, slot := range slots {
-		key := inlineImageCacheKey(slot, a.graphicsProtocol)
+		key := inlineImageCacheKey(slot, a.graphicsProtocol, ditherOpts)
 		if _, cached := a.inlineImageCache[key]; cached {
 			a.touchInlineImageCache(key)
 			continue
@@ -3227,7 +3304,7 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		if isKitty {
 			placementID = placementIDs[slot.Key]
 		}
-		cmds = append(cmds, a.fetchInlineImageCmd(slot, key, placementID))
+		cmds = append(cmds, a.fetchInlineImageCmd(slot, key, placementID, ditherOpts))
 	}
 	if len(cmds) == 0 {
 		return a, nil
@@ -3252,11 +3329,14 @@ type inlineImageFetchedMsg struct {
 
 // fetchInlineImageCmd fetches and encodes slot's image for the currently
 // detected protocol. placementID is only used for Kitty (see
-// imgview.EncodeKitty); callers pass 0 for Sixel/iTerm2. Unlike the
-// fullscreen modal, there's no user-visible loading state to manage: a miss
-// this frame just means the reserved blank band stays blank until the
-// result lands.
-func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, placementID int) tea.Cmd {
+// imgview.EncodeKitty); callers pass 0 for Sixel/iTerm2. ditherOpts is
+// passed in (rather than recomputed via a.ditherOptions()) so it always
+// matches exactly what the caller used to compute key via
+// inlineImageCacheKey — a mismatch there would cache the encode under one
+// dither state while the bytes reflect another. Unlike the fullscreen
+// modal, there's no user-visible loading state to manage: a miss this frame
+// just means the reserved blank band stays blank until the result lands.
+func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, placementID int, ditherOpts *imgview.DitherOptions) tea.Cmd {
 	proto := a.graphicsProtocol
 	maxCols, maxRows := slot.MaxCols, slot.MaxRows
 	url := slot.URL
@@ -3273,11 +3353,11 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, place
 		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 		switch proto {
 		case imgview.ProtocolITerm2:
-			encoded, _, rows, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH, false)
+			encoded, _, rows, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH, false, ditherOpts)
 		case imgview.ProtocolSixel:
-			encoded, _, rows, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH, false)
+			encoded, _, rows, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH, false, ditherOpts)
 		case imgview.ProtocolKitty:
-			encoded, _, rows, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID, false)
+			encoded, _, rows, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID, false, ditherOpts)
 		default:
 			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
 		}
@@ -3548,6 +3628,7 @@ func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
 // edges, not just merely within them.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
+	ditherOpts := a.ditherOptions()
 	scale := a.imageScale
 	if scale <= 0 {
 		scale = 1.0
@@ -3592,19 +3673,19 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 			switch proto {
 			case imgview.ProtocolKitty:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, cellW, cellH, kittyModalPlacementID, true)
+				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, cellW, cellH, kittyModalPlacementID, true, ditherOpts)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			case imgview.ProtocolITerm2:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows, cellW, cellH, true)
+				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows, cellW, cellH, true, ditherOpts)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			case imgview.ProtocolSixel:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH, true)
+				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH, true, ditherOpts)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
@@ -4095,6 +4176,8 @@ type settingsSavedMsg struct {
 	imageViewer      string
 	graphicsProtocol string
 	inlineImages     bool
+	dithering        bool
+	ditherSharpness  string
 	layoutName       string
 }
 type wanderTickMsg struct{ gen int }

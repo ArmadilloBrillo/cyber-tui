@@ -56,8 +56,15 @@ type SharedConfigMsg struct {
 	// session isn't ephemeral (SSH-hosted). Feed and PostDetail should check
 	// only this field; they never need to know about the individual gates.
 	InlineImagesEnabled bool
-	OwnGuildSlug        string
-	LayoutName          string // "tabs" or "miller"; used by settings screen to show current value
+	// Dithering is the user's raw preference (config.Config.Dithering), used
+	// by the settings screen to display/edit the toggle.
+	Dithering bool
+	// DitherSharpness is the user's raw preference
+	// (config.Config.DitherSharpness): "rough"/"medium"/"sharp". Used by the
+	// settings screen to display/edit the enum.
+	DitherSharpness string
+	OwnGuildSlug    string
+	LayoutName      string // "tabs" or "miller"; used by settings screen to show current value
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -129,6 +136,8 @@ type SaveSettingsMsg struct {
 	ImageViewer      string
 	GraphicsProtocol string
 	InlineImages     bool
+	Dithering        bool
+	DitherSharpness  string
 	LayoutName       string // "tabs" or "miller"
 	RemoteChanged    bool   // true when API-managed fields differ from the last saved baseline
 }

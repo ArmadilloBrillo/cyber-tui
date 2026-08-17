@@ -378,8 +378,9 @@ func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, row
 	// syncInlineImages keeps re-running on every subsequent Update either
 	// way, ticks included.
 	if time.Since(a.screenSwitchedAt) >= inlineImageSwitchSettleDelay {
+		ditherOpts := a.ditherOptions()
 		for _, slot := range slots {
-			encoded, ok := a.inlineImageCache[inlineImageCacheKey(slot, a.graphicsProtocol)]
+			encoded, ok := a.inlineImageCache[inlineImageCacheKey(slot, a.graphicsProtocol, ditherOpts)]
 			if !ok {
 				continue
 			}
