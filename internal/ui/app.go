@@ -2242,7 +2242,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "✓ "+verb+" #"+msg.name)
-		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
+		return a, tea.Batch(notifyCmd, a.loadGuildsCmd(""), a.loadUserGuildsCmd(a.currentUser.Username)), true
 
 	case guildLeftMsg:
 		a.guilds = a.guilds.BackToGuildList()
@@ -2255,7 +2255,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "✓ Left #"+msg.name)
-		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
+		return a, tea.Batch(notifyCmd, a.loadGuildsCmd(""), a.loadUserGuildsCmd(a.currentUser.Username)), true
 
 	case guildPromotedMsg:
 		detail := a.guilds.GuildDetail()
@@ -2268,7 +2268,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.guilds = a.guilds.SetOwnGuildSlug(msg.slug)
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "✓ #"+msg.name+" is now your guild badge")
-		return a, tea.Batch(notifyCmd, a.loadGuildsCmd("")), true
+		return a, tea.Batch(notifyCmd, a.loadGuildsCmd(""), a.loadUserGuildsCmd(a.currentUser.Username)), true
 	}
 	return a, nil, false
 }

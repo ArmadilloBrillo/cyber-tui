@@ -5274,6 +5274,68 @@ func TestHandleGuilds_OwnGuildInjectMsg_AddsGuildToList(t *testing.T) {
 	}
 }
 
+// userGuildsStubClient overrides GetUserGuilds to simulate the server already
+// reflecting a just-joined apprenticeship, for testing that the Guilds tab
+// refreshes ownApprenticeSlugs after a join/leave/promote instead of relying
+// on the stale list loaded at login.
+type userGuildsStubClient struct {
+	*api.MockClient
+	guilds []model.GuildMembership
+}
+
+func (c *userGuildsStubClient) GetUserGuilds(username string) ([]model.GuildMembership, error) {
+	return c.guilds, nil
+}
+
+// TestHandleGuilds_GuildJoinedAsApprentice_RefreshesOwnApprenticeSlugs is the
+// regression test for a real bug: apprenticing to a guild mid-session never
+// refreshed a.ownApprenticeSlugs (only login and profile edits did, via
+// loadUserGuildsCmd), so the Guilds tab kept sorting/badging by the stale
+// apprenticeship list from login and the new apprenticeship never appeared.
+func TestHandleGuilds_GuildJoinedAsApprentice_RefreshesOwnApprenticeSlugs(t *testing.T) {
+	client := &userGuildsStubClient{
+		MockClient: api.NewMockClient(),
+		guilds: []model.GuildMembership{
+			{Slug: "night-owls", Role: "member"},
+			{Slug: "deep-divers", Role: "apprentice"},
+		},
+	}
+	a := NewApp(client)
+	a.active = screenGuilds
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls"}
+	a.guilds = a.guilds.SetGuildDetail(model.Guild{ID: "g2", Slug: "deep-divers", Name: "Deep Divers"})
+
+	a2, cmd, handled := a.handleGuilds(guildJoinedMsg{slug: "deep-divers", name: "Deep Divers", role: "apprentice"})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildJoinedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected guildJoinedMsg to trigger a cmd batch")
+	}
+
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected guildJoinedMsg to dispatch a tea.Batch, got %T", cmd())
+	}
+	var refreshMsg *userGuildsLoadedMsg
+	for _, c := range batch {
+		if msg, ok := c().(userGuildsLoadedMsg); ok {
+			refreshMsg = &msg
+		}
+	}
+	if refreshMsg == nil {
+		t.Fatal("expected guildJoinedMsg's cmd batch to include a userGuilds refresh")
+	}
+
+	a3, _, handled := a2.handleProfile(*refreshMsg)
+	if !handled {
+		t.Fatal("expected userGuildsLoadedMsg to be handled")
+	}
+	if !slices.Contains(a3.ownApprenticeSlugs, "deep-divers") {
+		t.Errorf("ownApprenticeSlugs = %v, want it to contain the just-joined deep-divers", a3.ownApprenticeSlugs)
+	}
+}
+
 // TestHandleProfile_OwnProfileLoad_FetchesApprenticeships is the regression
 // test for a real bug: navigating to your own profile via the tab bar goes
 // through loadProfileCmd/profileLoadedMsg (activateScreen in layout.go), a
