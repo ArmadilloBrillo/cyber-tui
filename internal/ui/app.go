@@ -545,6 +545,15 @@ type App struct {
 	notifyLevel notifyLevel
 	notifyGen   int
 
+	// settingsSaveSeq is bumped on every SaveSettingsMsg dispatch. Its value
+	// is stamped onto the resulting settingsSavedMsg so an out-of-order
+	// completion — e.g. an earlier save still waiting on the UpdateSettings
+	// network round-trip while a later save (dispatched from a second ctrl+s
+	// before the first returned) finishes and persists first — is dropped
+	// instead of clobbering the newer values, in memory and on disk, with
+	// its own stale snapshot.
+	settingsSaveSeq int
+
 	// sessionGen is bumped in handleUnauthorized on session expiry, so the
 	// self-rescheduling poll/wander/logo-idle tea.Tick chains started by
 	// afterLoginCmd (each stamped with the gen they were scheduled under)
@@ -1558,27 +1567,28 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		dt := msg.Dithering
 		ds := msg.DitherSharpness
 		ln := msg.LayoutName
+		a.settingsSaveSeq++
+		seq := a.settingsSaveSeq
 		return a, func() tea.Msg {
 			if msg.RemoteChanged {
 				if err := a.client.UpdateSettings(s); err != nil {
 					return actionErrMsg{err}
 				}
 			}
-			a.saveConfig(func(cfg *config.Config) {
-				cfg.WanderLust = wl
-				cfg.MaxThreadDepth = td
-				cfg.Timezone = tz
-				cfg.ImageViewer = iv
-				cfg.GraphicsProtocol = gp
-				cfg.InlineImages = ii
-				cfg.Dithering = dt
-				cfg.DitherSharpness = ds
-				cfg.Layout = ln
-			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
+		// A second ctrl+s can be dispatched (and land) before an earlier
+		// save's UpdateSettings network round-trip finishes. If that earlier
+		// save were still allowed to persist once it does complete, it would
+		// silently overwrite the newer values — in memory and in
+		// ~/.cyber-tui.json — with its own stale snapshot. Only the
+		// most-recently-dispatched save (the current seq) is applied; any
+		// other completion is dropped.
+		if msg.seq != a.settingsSaveSeq {
+			return a, nil, true
+		}
 		a.settings = msg.settings
 		a.wanderLust = msg.wanderLust
 		a.maxThreadDepth = msg.maxThreadDepth
@@ -1615,8 +1625,23 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "settings saved")
+		wl, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
+		saveCmd := func() tea.Msg {
+			a.saveConfig(func(cfg *config.Config) {
+				cfg.WanderLust = wl
+				cfg.MaxThreadDepth = td
+				cfg.Timezone = tz
+				cfg.ImageViewer = iv
+				cfg.GraphicsProtocol = gp
+				cfg.InlineImages = ii
+				cfg.Dithering = dt
+				cfg.DitherSharpness = ds
+				cfg.Layout = ln
+			})
+			return nil
+		}
 		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
-			cmds := []tea.Cmd{notifyCmd}
+			cmds := []tea.Cmd{notifyCmd, saveCmd}
 			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < min {
 				cmds = append(cmds, a.loadFeedPageCmd(cursor))
 			}
@@ -1632,7 +1657,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 			}
 			return a, tea.Batch(cmds...), true
 		}
-		return a, notifyCmd, true
+		return a, tea.Batch(notifyCmd, saveCmd), true
 
 	case wanderTickMsg:
 		if msg.gen != a.sessionGen {
@@ -4188,6 +4213,7 @@ type replyEditedMsg struct {
 }
 type settingsLoadedMsg struct{ settings model.Settings }
 type settingsSavedMsg struct {
+	seq              int
 	settings         model.Settings
 	wanderLust       bool
 	maxThreadDepth   int
