@@ -1409,7 +1409,7 @@ func TestBrowsing_Enter_TogglesSpoilerReveal(t *testing.T) {
 	}
 	renderedWithReveal := func(m ChatroomsModel) string {
 		content, _, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
-			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil)
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil, nil)
 		return content
 	}
 	if strings.Contains(renderedWithReveal(m), "the ending is a twist") {
@@ -1462,7 +1462,7 @@ func TestBrowsing_Enter_TogglesL33tReveal(t *testing.T) {
 
 	renderedWithReveal := func(m ChatroomsModel) string {
 		content, _, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
-			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil)
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil, nil)
 		return content
 	}
 	if !strings.Contains(renderedWithReveal(m), "3l173") {
@@ -1720,6 +1720,52 @@ func TestPrependMessages_NotSubjectToByteCap(t *testing.T) {
 	}
 }
 
+// TestTrimMessageBuffer_EvictsStaleBodyCache guards against chatBodyCache
+// outliving the messages it was rendered from — an entry for a message
+// that's been evicted from m.messages by the byte cap must be dropped too,
+// or it sits in memory forever keyed by an ID nothing will ever look up
+// again.
+func TestTrimMessageBuffer_EvictsStaleBodyCache(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	big := chatMessageBufferMaxBytes
+	m.messages = []model.Message{bigMessage("old1", big), bigMessage("old2", big)}
+	m.chatBodyCache = map[string]chatBodyCacheEntry{
+		"old1": {rendered: "stale"},
+		"old2": {rendered: "kept"},
+	}
+
+	m = m.trimMessageBuffer()
+
+	if _, ok := m.chatBodyCache["old1"]; ok {
+		t.Error("expected chatBodyCache entry for the evicted message to be removed")
+	}
+	if _, ok := m.chatBodyCache["old2"]; !ok {
+		t.Error("expected chatBodyCache entry for the surviving message to remain")
+	}
+}
+
+// TestSetMessages_EvictsStaleBodyCache mirrors the Feed screen's
+// TestFeedSetPosts_EvictsStaleBodyCache — SetMessages wholesale-replacing
+// m.messages (room open/switch, or a fresh history load) is the other point
+// a message can permanently drop out of the loaded history, so it needs the
+// same cache cleanup as trimMessageBuffer.
+func TestSetMessages_EvictsStaleBodyCache(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.chatBodyCache = map[string]chatBodyCacheEntry{
+		"gone": {rendered: "stale"},
+		"kept": {rendered: "fresh"},
+	}
+
+	m = m.SetMessages("zion", []model.Message{{ID: "kept", From: model.User{Username: "trinity"}, CreatedAt: time.Now()}})
+
+	if _, ok := m.chatBodyCache["gone"]; ok {
+		t.Error("expected chatBodyCache entry for a message no longer in m.messages to be evicted")
+	}
+	if _, ok := m.chatBodyCache["kept"]; !ok {
+		t.Error("expected chatBodyCache entry for a message still in m.messages to survive")
+	}
+}
+
 func TestAppendMessage_EvictionResetsHistoryExhausted(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	big := chatMessageBufferMaxBytes / 2
@@ -1783,13 +1829,13 @@ func TestChatrooms_InlineImages_SuppressesRedundantTextOnceEnabled(t *testing.T)
 	}
 
 	disabled, _, _, _ := renderCircMessagesWithSelection(msgs, m.location(), m.timeDisplayFormat,
-		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, false, nil)
+		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, false, nil, nil)
 	if !strings.Contains(disabled, "https://example.com/attach.png") || !strings.Contains(disabled, "https://example.com/pic.png") {
 		t.Fatalf("setup: expected both URLs visible while disabled, got: %q", disabled)
 	}
 
 	enabled, _, _, _ := renderCircMessagesWithSelection(msgs, m.location(), m.timeDisplayFormat,
-		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, true, nil)
+		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, true, nil, nil)
 	if strings.Contains(enabled, "https://example.com/attach.png") {
 		t.Errorf("expected the attachment URL suppressed once enabled, got: %q", enabled)
 	}

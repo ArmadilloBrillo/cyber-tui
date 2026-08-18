@@ -713,7 +713,7 @@ func TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned(t *testi
 	msgs := []model.Message{muted, visible}
 
 	content, offsets, heights, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "", "", nil, 0,
-		map[string]bool{"alice": true}, false, nil)
+		map[string]bool{"alice": true}, false, nil, nil)
 
 	if len(offsets) != len(msgs) || len(heights) != len(msgs) {
 		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
@@ -874,8 +874,8 @@ func TestRenderCircMessagesWithSelection_HighlightsImageBandWhenSelected(t *test
 	msg.ImageUrl = "https://example.com/a.png"
 	msgs := []model.Message{msg}
 
-	unselected, _, unselHeights, unselSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, true, nil)
-	selected, _, selHeights, selSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "m1", nil, 0, nil, true, nil)
+	unselected, _, unselHeights, unselSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, true, nil, nil)
+	selected, _, selHeights, selSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "m1", nil, 0, nil, true, nil, nil)
 
 	if unselHeights[0] != selHeights[0] {
 		t.Errorf("heights differ between selected/unselected: %d vs %d, want equal", unselHeights[0], selHeights[0])
@@ -895,6 +895,102 @@ func TestRenderCircMessagesWithSelection_HighlightsImageBandWhenSelected(t *test
 	}
 	if !strings.Contains(selLines[bandStart], "\x1b[") {
 		t.Errorf("expected the selected message's image band to carry the SelectedRow background escape, got plain %q", selLines[bandStart])
+	}
+}
+
+// --- chatBodyCache ---
+
+// TestRenderCircMessagesWithSelection_UsesCachedBodyOnHit guards the whole
+// point of chatBodyCache: a matching entry must be served as-is instead of
+// re-rendered, since refreshMessages() calls this on every 150ms animation
+// tick and re-parsing/re-styling every held message on every tick is what
+// makes a long-lived room CPU-bound on weak hardware. Seeds a cache entry
+// with a sentinel body distinct from what a real render would ever produce,
+// so a passing test proves the cached value was actually served.
+func TestRenderCircMessagesWithSelection_UsesCachedBodyOnHit(t *testing.T) {
+	const width = 60
+	msg := circMsg("bob", "hi from bob")
+	msg.ID = "m1"
+	msgs := []model.Message{msg}
+
+	cache := map[string]chatBodyCacheEntry{
+		"m1": {
+			rendered:          "CACHED-SENTINEL\n",
+			width:             width,
+			currentUser:       "alice",
+			timeDisplayFormat: "datetime",
+			body:              msg.Body,
+			themeName:         theme.CurrentName(),
+		},
+	}
+
+	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, nil, cache)
+
+	if !strings.Contains(content, "CACHED-SENTINEL") {
+		t.Errorf("expected the matching cache entry to be reused, got: %q", content)
+	}
+}
+
+// TestRenderCircMessagesWithSelection_StaleCacheEntryIsRecomputed guards the
+// invalidation side of the same mechanism: a cache entry whose body no
+// longer matches the message (e.g. after an edit or delete-tombstone) must
+// not be served.
+func TestRenderCircMessagesWithSelection_StaleCacheEntryIsRecomputed(t *testing.T) {
+	const width = 60
+	msg := circMsg("bob", "hi from bob")
+	msg.ID = "m1"
+	msgs := []model.Message{msg}
+
+	cache := map[string]chatBodyCacheEntry{
+		"m1": {
+			rendered:          "CACHED-SENTINEL\n",
+			width:             width,
+			currentUser:       "alice",
+			timeDisplayFormat: "datetime",
+			body:              "a different body than msg.Body",
+			themeName:         theme.CurrentName(),
+		},
+	}
+
+	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, nil, cache)
+
+	if strings.Contains(content, "CACHED-SENTINEL") {
+		t.Errorf("expected a stale cache entry (body mismatch) to be recomputed, not reused, got: %q", content)
+	}
+	if !strings.Contains(content, "hi from bob") {
+		t.Errorf("expected the message's real body in freshly rendered output, got: %q", content)
+	}
+}
+
+// TestRenderCircMessagesWithSelection_AnimatedMessageNeverCached guards
+// against the animation-skips-the-cache rule silently regressing — an
+// animated-style message must never be served from (or written to) the
+// cache, since its rendered output legitimately changes every frame.
+func TestRenderCircMessagesWithSelection_AnimatedMessageNeverCached(t *testing.T) {
+	const width = 60
+	msg := circMsg("bob", "hi from bob")
+	msg.ID = "m1"
+	msg.Style = []string{styleBlink}
+	msgs := []model.Message{msg}
+
+	cache := map[string]chatBodyCacheEntry{
+		"m1": {
+			rendered:          "CACHED-SENTINEL\n",
+			width:             width,
+			currentUser:       "alice",
+			timeDisplayFormat: "datetime",
+			body:              msg.Body,
+			themeName:         theme.CurrentName(),
+		},
+	}
+
+	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, nil, cache)
+
+	if strings.Contains(content, "CACHED-SENTINEL") {
+		t.Errorf("expected an animated-style message to bypass the cache entirely, got: %q", content)
+	}
+	if e, hit := cache["m1"]; !hit || e.rendered != "CACHED-SENTINEL\n" {
+		t.Errorf("expected the pre-existing cache entry to be left untouched, not overwritten, for an animated message")
 	}
 }
 
@@ -949,7 +1045,7 @@ func BenchmarkRenderCircMessagesWithSelection(b *testing.B) {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, false, nil)
+				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, false, nil, nil)
 			}
 		})
 	}
