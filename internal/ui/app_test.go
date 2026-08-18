@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,22 @@ import (
 
 func keyMsg(key string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+}
+
+// runCmd executes cmd the way the real bubbletea runtime would: a
+// tea.BatchMsg result is a bundle of not-yet-run cmds, not an executed one,
+// so it must be recursed into rather than just called once.
+func runCmd(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			runCmd(t, c)
+		}
+	}
 }
 
 func newTestApp() App {
@@ -5099,6 +5116,226 @@ func TestHandleGuilds_GuildPromoted_SwapsBadge(t *testing.T) {
 	}
 }
 
+// guildFetchingClient returns a canned per-slug guild from GetGuild, or a
+// fixed error if err is set — simulates the off-first-page fetch in
+// loadOwnGuildIntoListCmd.
+type guildFetchingClient struct {
+	*api.MockClient
+	guilds map[string]model.Guild
+	err    error
+}
+
+func (c *guildFetchingClient) GetGuild(slug string) (model.Guild, error) {
+	if c.err != nil {
+		return model.Guild{}, c.err
+	}
+	return c.guilds[slug], nil
+}
+
+func TestHandleGuilds_GuildsLoaded_BadgeGuildMissing_FetchesIt(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls"}
+	a.client = &guildFetchingClient{
+		MockClient: api.NewMockClient(),
+		guilds:     map[string]model.Guild{"night-owls": {Slug: "night-owls", Name: "Night Owls"}},
+	}
+
+	_, cmd, handled := a.handleGuilds(guildsLoadedMsg{guilds: []model.Guild{{Slug: "deep-divers", Name: "Deep Divers"}}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildsLoadedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected a fetch cmd for the missing badge guild")
+	}
+	msgs := resolveMsgs(cmd)
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 resolved msg, got %d", len(msgs))
+	}
+	inj, ok := msgs[0].(ownGuildInjectMsg)
+	if !ok {
+		t.Fatalf("expected ownGuildInjectMsg, got %T", msgs[0])
+	}
+	if inj.guild.Slug != "night-owls" {
+		t.Errorf("injected slug = %q, want night-owls", inj.guild.Slug)
+	}
+}
+
+func TestHandleGuilds_GuildsLoaded_ApprenticeGuildMissing_FetchesIt(t *testing.T) {
+	a := loggedInApp()
+	a.ownApprenticeSlugs = []string{"deep-divers"}
+	a.client = &guildFetchingClient{
+		MockClient: api.NewMockClient(),
+		guilds:     map[string]model.Guild{"deep-divers": {Slug: "deep-divers", Name: "Deep Divers"}},
+	}
+
+	_, cmd, handled := a.handleGuilds(guildsLoadedMsg{guilds: []model.Guild{{Slug: "night-owls", Name: "Night Owls"}}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildsLoadedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected a fetch cmd for the missing apprentice guild")
+	}
+	msgs := resolveMsgs(cmd)
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 resolved msg, got %d", len(msgs))
+	}
+	inj, ok := msgs[0].(ownGuildInjectMsg)
+	if !ok {
+		t.Fatalf("expected ownGuildInjectMsg, got %T", msgs[0])
+	}
+	if inj.guild.Slug != "deep-divers" {
+		t.Errorf("injected slug = %q, want deep-divers", inj.guild.Slug)
+	}
+}
+
+func TestHandleGuilds_GuildsLoaded_BadgeAndApprenticesMissing_FetchesAll(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls"}
+	a.ownApprenticeSlugs = []string{"deep-divers", "sprawl-runners"}
+	a.client = &guildFetchingClient{
+		MockClient: api.NewMockClient(),
+		guilds: map[string]model.Guild{
+			"night-owls":     {Slug: "night-owls", Name: "Night Owls"},
+			"deep-divers":    {Slug: "deep-divers", Name: "Deep Divers"},
+			"sprawl-runners": {Slug: "sprawl-runners", Name: "Sprawl Runners"},
+		},
+	}
+
+	_, cmd, handled := a.handleGuilds(guildsLoadedMsg{guilds: []model.Guild{{Slug: "chiba-city", Name: "Chiba City"}}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildsLoadedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected fetch cmds for the three missing guilds")
+	}
+	msgs := resolveMsgs(cmd)
+	if len(msgs) != 3 {
+		t.Fatalf("expected exactly 3 resolved msgs, got %d", len(msgs))
+	}
+	got := map[string]bool{}
+	for _, m := range msgs {
+		inj, ok := m.(ownGuildInjectMsg)
+		if !ok {
+			t.Fatalf("expected ownGuildInjectMsg, got %T", m)
+		}
+		got[inj.guild.Slug] = true
+	}
+	for _, want := range []string{"night-owls", "deep-divers", "sprawl-runners"} {
+		if !got[want] {
+			t.Errorf("expected an injection for %q, got %v", want, got)
+		}
+	}
+}
+
+func TestHandleGuilds_GuildsLoaded_AllPresent_NoFetch(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls"}
+	a.ownApprenticeSlugs = []string{"deep-divers"}
+
+	_, cmd, handled := a.handleGuilds(guildsLoadedMsg{guilds: []model.Guild{
+		{Slug: "night-owls", Name: "Night Owls"},
+		{Slug: "deep-divers", Name: "Deep Divers"},
+	}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildsLoadedMsg")
+	}
+	if cmd != nil {
+		t.Error("expected no fetch cmd when badge and apprentice guilds are already present")
+	}
+}
+
+func TestHandleGuilds_GuildsLoaded_FetchFails_Silent(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls"}
+	a.client = &guildFetchingClient{MockClient: api.NewMockClient(), err: errors.New("boom")}
+
+	_, cmd, handled := a.handleGuilds(guildsLoadedMsg{guilds: []model.Guild{{Slug: "deep-divers", Name: "Deep Divers"}}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildsLoadedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected a fetch cmd even though it will fail")
+	}
+	msgs := resolveMsgs(cmd)
+	if len(msgs) != 1 || msgs[0] != nil {
+		t.Errorf("expected a single nil msg on fetch failure, got %v", msgs)
+	}
+}
+
+func TestHandleGuilds_OwnGuildInjectMsg_AddsGuildToList(t *testing.T) {
+	a := loggedInApp()
+
+	a2, _, handled := a.handleGuilds(ownGuildInjectMsg{guild: model.Guild{Slug: "deep-divers", Name: "Deep Divers"}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle ownGuildInjectMsg")
+	}
+	if !a2.guilds.HasGuild("deep-divers") {
+		t.Error("expected deep-divers to be present in the guild list after injection")
+	}
+}
+
+// userGuildsStubClient overrides GetUserGuilds to simulate the server already
+// reflecting a just-joined apprenticeship, for testing that the Guilds tab
+// refreshes ownApprenticeSlugs after a join/leave/promote instead of relying
+// on the stale list loaded at login.
+type userGuildsStubClient struct {
+	*api.MockClient
+	guilds []model.GuildMembership
+}
+
+func (c *userGuildsStubClient) GetUserGuilds(username string) ([]model.GuildMembership, error) {
+	return c.guilds, nil
+}
+
+// TestHandleGuilds_GuildJoinedAsApprentice_RefreshesOwnApprenticeSlugs is the
+// regression test for a real bug: apprenticing to a guild mid-session never
+// refreshed a.ownApprenticeSlugs (only login and profile edits did, via
+// loadUserGuildsCmd), so the Guilds tab kept sorting/badging by the stale
+// apprenticeship list from login and the new apprenticeship never appeared.
+func TestHandleGuilds_GuildJoinedAsApprentice_RefreshesOwnApprenticeSlugs(t *testing.T) {
+	client := &userGuildsStubClient{
+		MockClient: api.NewMockClient(),
+		guilds: []model.GuildMembership{
+			{Slug: "night-owls", Role: "member"},
+			{Slug: "deep-divers", Role: "apprentice"},
+		},
+	}
+	a := NewApp(client)
+	a.active = screenGuilds
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls"}
+	a.guilds = a.guilds.SetGuildDetail(model.Guild{ID: "g2", Slug: "deep-divers", Name: "Deep Divers"})
+
+	a2, cmd, handled := a.handleGuilds(guildJoinedMsg{slug: "deep-divers", name: "Deep Divers", role: "apprentice"})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildJoinedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected guildJoinedMsg to trigger a cmd batch")
+	}
+
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected guildJoinedMsg to dispatch a tea.Batch, got %T", cmd())
+	}
+	var refreshMsg *userGuildsLoadedMsg
+	for _, c := range batch {
+		if msg, ok := c().(userGuildsLoadedMsg); ok {
+			refreshMsg = &msg
+		}
+	}
+	if refreshMsg == nil {
+		t.Fatal("expected guildJoinedMsg's cmd batch to include a userGuilds refresh")
+	}
+
+	a3, _, handled := a2.handleProfile(*refreshMsg)
+	if !handled {
+		t.Fatal("expected userGuildsLoadedMsg to be handled")
+	}
+	if !slices.Contains(a3.ownApprenticeSlugs, "deep-divers") {
+		t.Errorf("ownApprenticeSlugs = %v, want it to contain the just-joined deep-divers", a3.ownApprenticeSlugs)
+	}
+}
+
 // TestHandleProfile_OwnProfileLoad_FetchesApprenticeships is the regression
 // test for a real bug: navigating to your own profile via the tab bar goes
 // through loadProfileCmd/profileLoadedMsg (activateScreen in layout.go), a
@@ -5187,7 +5424,7 @@ func TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol(t *testing
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = "" // auto — the only way DetectProtocol() ever gets consulted
 
-	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		GraphicsProtocol: "", // unchanged
 		Dithering:        true,
 		ImageViewer:      "terminal",
@@ -5210,6 +5447,160 @@ func TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol(t *testing
 	}
 }
 
+// TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer reproduces a real
+// corruption: ctrl+s dispatches a save whose cmd may call the (network) API
+// before persisting to disk. Pressing ctrl+s again before that first save's
+// cmd returns dispatches a second save; if the two ever complete out of
+// order, the first (now-stale) one landing last must not overwrite the
+// second (newer) one's values in memory or in ~/.cyber-tui.json — this is
+// exactly how wander mode, timezone, thread depth, dithering, and the
+// graphics protocol override (observed flipping a deliberately-set "sixel"
+// back to an earlier "kitty") were seen reverting to their pre-edit values
+// after a restart.
+func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.graphicsProtocolName = "kitty"
+
+	var cmd1 tea.Cmd
+	var ok bool
+	a, cmd1, ok = a.handleSettings(screens.SaveSettingsMsg{
+		WanderLust:       true,
+		Timezone:         "UTC+2",
+		ImageViewer:      "terminal",
+		GraphicsProtocol: "kitty", // unchanged from the pre-save value
+	})
+	if !ok || cmd1 == nil {
+		t.Fatal("expected first SaveSettingsMsg to be handled")
+	}
+
+	var cmd2 tea.Cmd
+	a, cmd2, ok = a.handleSettings(screens.SaveSettingsMsg{
+		WanderLust:       true,
+		Timezone:         "UTC+5:30",
+		MaxThreadDepth:   7,
+		ImageViewer:      "terminal",
+		GraphicsProtocol: "sixel", // the user's real, later edit
+	})
+	if !ok || cmd2 == nil {
+		t.Fatal("expected second SaveSettingsMsg to be handled")
+	}
+
+	// Second (newer) save completes first.
+	saved2 := cmd2().(settingsSavedMsg)
+	var diskCmd2 tea.Cmd
+	a, diskCmd2, ok = a.handleSettings(saved2)
+	if !ok {
+		t.Fatal("expected settingsSavedMsg to be handled")
+	}
+	if diskCmd2 == nil {
+		t.Fatal("expected the newer settingsSavedMsg to dispatch a disk-write cmd")
+	}
+	runCmd(t, diskCmd2)
+
+	// First (now-stale) save completes afterward.
+	saved1 := cmd1().(settingsSavedMsg)
+	a, cmd, ok := a.handleSettings(saved1)
+	if !ok {
+		t.Fatal("expected stale settingsSavedMsg to still report handled=true")
+	}
+	if cmd != nil {
+		t.Error("stale settingsSavedMsg must not dispatch a disk-write cmd")
+	}
+	if a.timezone != "UTC+5:30" {
+		t.Errorf("timezone = %q after stale save applied, want UTC+5:30 (the newer value) to survive", a.timezone)
+	}
+	if a.maxThreadDepth != 7 {
+		t.Errorf("maxThreadDepth = %d after stale save applied, want 7 (the newer value) to survive", a.maxThreadDepth)
+	}
+	if a.graphicsProtocolName != "sixel" {
+		t.Errorf("graphicsProtocolName = %q after stale save applied, want sixel (the newer value) to survive", a.graphicsProtocolName)
+	}
+	if a.graphicsProtocol != imgview.ProtocolSixel {
+		t.Errorf("graphicsProtocol = %v after stale save applied, want ProtocolSixel", a.graphicsProtocol)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if cfg.Timezone != "UTC+5:30" {
+		t.Errorf("saved config timezone = %q, want UTC+5:30 — the stale first save must not overwrite the newer value on disk", cfg.Timezone)
+	}
+	if cfg.MaxThreadDepth != 7 {
+		t.Errorf("saved config maxThreadDepth = %d, want 7", cfg.MaxThreadDepth)
+	}
+	if cfg.GraphicsProtocol != "sixel" {
+		t.Errorf("saved config graphicsProtocol = %q, want sixel", cfg.GraphicsProtocol)
+	}
+}
+
+// TestSaveConfig_ConcurrentCallsDoNotClobberEachOther reproduces the general
+// lost-update race saveConfig is exposed to: unlike the ctrl+s-vs-ctrl+s case
+// above, this races saveConfig itself (as called from unrelated triggers like
+// the density toggle, theme save, and login) directly against each other.
+// Each call does its own load-mutate-write of the whole config file with no
+// synchronization beyond saveConfigMu; if that lock were missing, whichever
+// goroutine's write lands last would silently discard the other's field.
+func TestSaveConfig_ConcurrentCallsDoNotClobberEachOther(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	a := loggedInApp()
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			a.saveConfig(func(cfg *config.Config) {
+				cfg.Density = fmt.Sprintf("density-%d", i)
+			})
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		a.saveConfig(func(cfg *config.Config) {
+			cfg.Theme = "custom"
+			cfg.CustomPalette = &theme.Palette{Accent: "#ff00ff"}
+		})
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		a.saveConfig(func(cfg *config.Config) {
+			cfg.Timezone = "UTC+5:30"
+		})
+	}()
+	close(start)
+	wg.Wait()
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if cfg.Theme != "custom" || cfg.CustomPalette == nil || cfg.CustomPalette.Accent != "#ff00ff" {
+		t.Errorf("theme save was clobbered by a concurrent save: Theme=%q CustomPalette=%v", cfg.Theme, cfg.CustomPalette)
+	}
+	if cfg.Timezone != "UTC+5:30" {
+		t.Errorf("timezone save was clobbered by a concurrent save: Timezone=%q", cfg.Timezone)
+	}
+	if !strings.HasPrefix(cfg.Density, "density-") {
+		t.Errorf("density save was clobbered by a concurrent save: Density=%q", cfg.Density)
+	}
+}
+
 // TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves confirms the
 // override still takes effect when the user actually changes it — the fix
 // for the regression above only skips re-resolution when the override is
@@ -5219,7 +5610,7 @@ func TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves(t *testing.T)
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = ""
 
-	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		GraphicsProtocol: "kitty", // changed
 		ImageViewer:      "terminal",
 	})

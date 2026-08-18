@@ -18,7 +18,7 @@ feed | notifications | journal | bookmarks | guilds | topics | profile | setting
 
 ### Guild list (default view)
 
-Displays all guilds that have at least one member, in the order the API returns them (member count, most populated first), except the logged-in user's own guilds are floated to the top: their badge guild first, then any guilds they're apprenticed to (ordered by member count), then the rest of the list unchanged. Each row shows:
+Displays all guilds that have at least one member, in the order the API returns them (member count, most populated first), except the logged-in user's own guilds are floated to the top: their badge guild first, then any guilds they're apprenticed to (ordered by member count), then the rest of the list unchanged. If the badge guild or an apprenticed guild isn't present on the first page returned by the API, it's fetched individually (`GET /v1/guilds/:slug`) and injected into the list so it still floats to the top instead of waiting for pagination to reach it. Each row shows:
 
 - Guild icon (emoji; plain-text icon names from the API fall back to `◆`, or to `★`/`☆` for the user's badge guild / an apprenticed guild)
 - Guild name (highlighted when selected)
@@ -102,7 +102,7 @@ After a successful post the thread list reloads.
 - `internal/api/client.go` — wire types and HTTP implementations
 - `internal/ui/screens/guilds.go` — `GuildsModel` (three-view screen + embedded `PostComposePanel`); `sortGuildsForDisplay` floats the user's badge guild then apprenticeships (by member count) to the top of the list; `SetOwnGuildSlug`/`SetOwnApprenticeSlugs` re-sort on membership changes
 - `internal/ui/screens/profile.go` — apprenticeships row on the Info tab (`SetApprenticeships`)
-- `internal/ui/app.go` — `screenGuilds` enum, `handleGuilds`, load/create/promote commands, menu wiring; `ownApprenticeSlugs` (from the logged-in user's own `GetUserGuilds`, distinct from whichever profile `ProfileModel` currently has apprenticeships loaded for) feeds the Guilds tab ordering via `SharedConfigMsg.OwnApprenticeSlugs`
+- `internal/ui/app.go` — `screenGuilds` enum, `handleGuilds`, load/create/promote commands, menu wiring; `ownApprenticeSlugs` (from the logged-in user's own `GetUserGuilds`, distinct from whichever profile `ProfileModel` currently has apprenticeships loaded for) feeds the Guilds tab ordering via `SharedConfigMsg.OwnApprenticeSlugs`. On `guildsLoadedMsg`, any of the badge guild or apprentice slugs missing from the freshly loaded page is fetched individually via `loadOwnGuildIntoListCmd`/`ownGuildInjectMsg` (batched with `tea.Batch`, one fetch per missing slug) and injected into `GuildsModel` with `InjectGuild`/`HasGuild`.
 
 ## Known limitations / out of scope
 
