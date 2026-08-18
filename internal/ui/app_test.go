@@ -5212,3 +5212,32 @@ func TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves(t *testing.T)
 		t.Errorf("graphicsProtocol = %v after changing the override to kitty, want ProtocolKitty", a2.graphicsProtocol)
 	}
 }
+
+// TestWithSavedPreferences_LoadsWithoutRefreshToken guards against a
+// regression where display preferences (graphics protocol, dithering,
+// thread depth, timezone) were only loaded via WithSavedSession, which
+// requires a refresh token. A normal token-expiry relogin clears the token
+// on disk but leaves the rest of the saved config intact; preferences must
+// still load on the WithAutoLogin/WithSavedEmail paths too.
+func TestWithSavedPreferences_LoadsWithoutRefreshToken(t *testing.T) {
+	cfg := config.Config{
+		GraphicsProtocol: "sixel",
+		Dithering:        true,
+		MaxThreadDepth:   20,
+		Timezone:         "UTC+2",
+	}
+
+	a := newTestApp().WithAutoLogin("user@example.com", "pw").WithSavedPreferences(cfg)
+	if a.graphicsProtocolName != "sixel" {
+		t.Errorf("graphicsProtocolName = %q, want sixel", a.graphicsProtocolName)
+	}
+	if !a.dithering {
+		t.Error("dithering = false, want true")
+	}
+	if a.maxThreadDepth != 20 {
+		t.Errorf("maxThreadDepth = %d, want 20", a.maxThreadDepth)
+	}
+	if a.timezone != "UTC+2" {
+		t.Errorf("timezone = %q, want UTC+2", a.timezone)
+	}
+}
