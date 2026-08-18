@@ -94,6 +94,12 @@ func main() {
 		} else {
 			defer logFile.Close()
 		}
+		// Dump the preference fields exactly as loaded from ~/.cyber-tui.json,
+		// before WithSavedPreferences applies them to the App — the earliest
+		// point that can distinguish a bad config file from a bug in applying
+		// an otherwise-good one.
+		log.Printf("config: loaded wanderLust=%v maxThreadDepth=%d inlineImages=%v dithering=%v graphicsProtocol=%q timezone=%q",
+			cfg.WanderLust, cfg.MaxThreadDepth, cfg.InlineImages, cfg.Dithering, cfg.GraphicsProtocol, cfg.Timezone)
 	}
 
 	// Local TUI mode
