@@ -5099,6 +5099,164 @@ func TestHandleGuilds_GuildPromoted_SwapsBadge(t *testing.T) {
 	}
 }
 
+// guildFetchingClient returns a canned per-slug guild from GetGuild, or a
+// fixed error if err is set — simulates the off-first-page fetch in
+// loadOwnGuildIntoListCmd.
+type guildFetchingClient struct {
+	*api.MockClient
+	guilds map[string]model.Guild
+	err    error
+}
+
+func (c *guildFetchingClient) GetGuild(slug string) (model.Guild, error) {
+	if c.err != nil {
+		return model.Guild{}, c.err
+	}
+	return c.guilds[slug], nil
+}
+
+func TestHandleGuilds_GuildsLoaded_BadgeGuildMissing_FetchesIt(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls"}
+	a.client = &guildFetchingClient{
+		MockClient: api.NewMockClient(),
+		guilds:     map[string]model.Guild{"night-owls": {Slug: "night-owls", Name: "Night Owls"}},
+	}
+
+	_, cmd, handled := a.handleGuilds(guildsLoadedMsg{guilds: []model.Guild{{Slug: "deep-divers", Name: "Deep Divers"}}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildsLoadedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected a fetch cmd for the missing badge guild")
+	}
+	msgs := resolveMsgs(cmd)
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 resolved msg, got %d", len(msgs))
+	}
+	inj, ok := msgs[0].(ownGuildInjectMsg)
+	if !ok {
+		t.Fatalf("expected ownGuildInjectMsg, got %T", msgs[0])
+	}
+	if inj.guild.Slug != "night-owls" {
+		t.Errorf("injected slug = %q, want night-owls", inj.guild.Slug)
+	}
+}
+
+func TestHandleGuilds_GuildsLoaded_ApprenticeGuildMissing_FetchesIt(t *testing.T) {
+	a := loggedInApp()
+	a.ownApprenticeSlugs = []string{"deep-divers"}
+	a.client = &guildFetchingClient{
+		MockClient: api.NewMockClient(),
+		guilds:     map[string]model.Guild{"deep-divers": {Slug: "deep-divers", Name: "Deep Divers"}},
+	}
+
+	_, cmd, handled := a.handleGuilds(guildsLoadedMsg{guilds: []model.Guild{{Slug: "night-owls", Name: "Night Owls"}}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildsLoadedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected a fetch cmd for the missing apprentice guild")
+	}
+	msgs := resolveMsgs(cmd)
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 resolved msg, got %d", len(msgs))
+	}
+	inj, ok := msgs[0].(ownGuildInjectMsg)
+	if !ok {
+		t.Fatalf("expected ownGuildInjectMsg, got %T", msgs[0])
+	}
+	if inj.guild.Slug != "deep-divers" {
+		t.Errorf("injected slug = %q, want deep-divers", inj.guild.Slug)
+	}
+}
+
+func TestHandleGuilds_GuildsLoaded_BadgeAndApprenticesMissing_FetchesAll(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls"}
+	a.ownApprenticeSlugs = []string{"deep-divers", "sprawl-runners"}
+	a.client = &guildFetchingClient{
+		MockClient: api.NewMockClient(),
+		guilds: map[string]model.Guild{
+			"night-owls":     {Slug: "night-owls", Name: "Night Owls"},
+			"deep-divers":    {Slug: "deep-divers", Name: "Deep Divers"},
+			"sprawl-runners": {Slug: "sprawl-runners", Name: "Sprawl Runners"},
+		},
+	}
+
+	_, cmd, handled := a.handleGuilds(guildsLoadedMsg{guilds: []model.Guild{{Slug: "chiba-city", Name: "Chiba City"}}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildsLoadedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected fetch cmds for the three missing guilds")
+	}
+	msgs := resolveMsgs(cmd)
+	if len(msgs) != 3 {
+		t.Fatalf("expected exactly 3 resolved msgs, got %d", len(msgs))
+	}
+	got := map[string]bool{}
+	for _, m := range msgs {
+		inj, ok := m.(ownGuildInjectMsg)
+		if !ok {
+			t.Fatalf("expected ownGuildInjectMsg, got %T", m)
+		}
+		got[inj.guild.Slug] = true
+	}
+	for _, want := range []string{"night-owls", "deep-divers", "sprawl-runners"} {
+		if !got[want] {
+			t.Errorf("expected an injection for %q, got %v", want, got)
+		}
+	}
+}
+
+func TestHandleGuilds_GuildsLoaded_AllPresent_NoFetch(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls"}
+	a.ownApprenticeSlugs = []string{"deep-divers"}
+
+	_, cmd, handled := a.handleGuilds(guildsLoadedMsg{guilds: []model.Guild{
+		{Slug: "night-owls", Name: "Night Owls"},
+		{Slug: "deep-divers", Name: "Deep Divers"},
+	}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildsLoadedMsg")
+	}
+	if cmd != nil {
+		t.Error("expected no fetch cmd when badge and apprentice guilds are already present")
+	}
+}
+
+func TestHandleGuilds_GuildsLoaded_FetchFails_Silent(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case", GuildSlug: "night-owls"}
+	a.client = &guildFetchingClient{MockClient: api.NewMockClient(), err: errors.New("boom")}
+
+	_, cmd, handled := a.handleGuilds(guildsLoadedMsg{guilds: []model.Guild{{Slug: "deep-divers", Name: "Deep Divers"}}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle guildsLoadedMsg")
+	}
+	if cmd == nil {
+		t.Fatal("expected a fetch cmd even though it will fail")
+	}
+	msgs := resolveMsgs(cmd)
+	if len(msgs) != 1 || msgs[0] != nil {
+		t.Errorf("expected a single nil msg on fetch failure, got %v", msgs)
+	}
+}
+
+func TestHandleGuilds_OwnGuildInjectMsg_AddsGuildToList(t *testing.T) {
+	a := loggedInApp()
+
+	a2, _, handled := a.handleGuilds(ownGuildInjectMsg{guild: model.Guild{Slug: "deep-divers", Name: "Deep Divers"}})
+	if !handled {
+		t.Fatal("expected handleGuilds to handle ownGuildInjectMsg")
+	}
+	if !a2.guilds.HasGuild("deep-divers") {
+		t.Error("expected deep-divers to be present in the guild list after injection")
+	}
+}
+
 // TestHandleProfile_OwnProfileLoad_FetchesApprenticeships is the regression
 // test for a real bug: navigating to your own profile via the tab bar goes
 // through loadProfileCmd/profileLoadedMsg (activateScreen in layout.go), a

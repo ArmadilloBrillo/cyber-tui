@@ -387,6 +387,31 @@ func sortGuildsForDisplay(guilds []model.Guild, ownSlug string, apprenticeSlugs 
 	return sorted
 }
 
+// HasGuild reports whether slug is present in the currently loaded guild list.
+func (m GuildsModel) HasGuild(slug string) bool {
+	for _, g := range m.guilds {
+		if g.Slug == slug {
+			return true
+		}
+	}
+	return false
+}
+
+// InjectGuild adds a guild fetched out-of-band (e.g. the user's own guild,
+// which the paginated, most-populated-first list may not reach for a while)
+// so sortGuildsForDisplay can float it to the top even though normal
+// pagination hasn't loaded it yet. No-op if already present.
+func (m GuildsModel) InjectGuild(g model.Guild) GuildsModel {
+	if m.HasGuild(g.Slug) {
+		return m
+	}
+	m.guilds = sortGuildsForDisplay(append(m.guilds, g), m.ownGuildSlug, m.ownApprenticeSlugs)
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
 // isOwnGuild reports whether slug is the logged-in user's badge guild.
 func (m GuildsModel) isOwnGuild(slug string) bool {
 	return m.ownGuildSlug != "" && slug == m.ownGuildSlug

@@ -146,6 +146,52 @@ func TestGuildsModel_SetGuilds_ApprenticesOrderedByMemberCount(t *testing.T) {
 	}
 }
 
+func TestGuildsModel_HasGuild_TrueForLoadedSlug(t *testing.T) {
+	m := screens.NewGuildsModel().SetGuilds(sampleGuilds(), "")
+	if !m.HasGuild("alpha") {
+		t.Error("expected HasGuild(\"alpha\") to be true after SetGuilds")
+	}
+}
+
+func TestGuildsModel_HasGuild_FalseForMissingSlug(t *testing.T) {
+	m := screens.NewGuildsModel().SetGuilds(sampleGuilds(), "")
+	if m.HasGuild("zzz") {
+		t.Error("expected HasGuild(\"zzz\") to be false")
+	}
+}
+
+func TestGuildsModel_InjectGuild_FloatsToTop(t *testing.T) {
+	t.Helper()
+	m := guildViewWithSize(screens.NewGuildsModel())
+	m = m.SetOwnGuildSlug("epsilon")
+	m = m.SetGuilds(orderedGuilds(), "") // epsilon is not present on this page
+
+	m = m.InjectGuild(model.Guild{ID: "g5", Name: "Epsilon", Slug: "epsilon", MemberCount: 20})
+
+	view := m.View()
+	epsilonPos := strings.Index(view, "Epsilon")
+	alphaPos := strings.Index(view, "Alpha")
+	if epsilonPos == -1 || alphaPos == -1 {
+		t.Fatal("expected both Epsilon and Alpha present in view")
+	}
+	if epsilonPos > alphaPos {
+		t.Errorf("Epsilon (own guild, injected) should render before Alpha")
+	}
+}
+
+func TestGuildsModel_InjectGuild_NoopIfAlreadyPresent(t *testing.T) {
+	t.Helper()
+	m := guildViewWithSize(screens.NewGuildsModel())
+	m = m.SetGuilds(sampleGuilds(), "") // already contains slug "beta" / name "Beta"
+
+	m = m.InjectGuild(model.Guild{ID: "g99", Name: "Beta-duplicate", Slug: "beta"})
+
+	view := m.View()
+	if strings.Contains(view, "Beta-duplicate") {
+		t.Error("expected InjectGuild to no-op when the slug is already present, not add a duplicate row")
+	}
+}
+
 func TestGuildsModel_RenderGuildItem_ShowsMembershipIcons(t *testing.T) {
 	t.Helper()
 	m := guildViewWithSize(screens.NewGuildsModel())
