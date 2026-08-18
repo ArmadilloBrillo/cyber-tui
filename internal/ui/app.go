@@ -104,6 +104,11 @@ type App struct {
 	client      api.Client
 	tokens      model.Tokens
 	currentUser model.User
+	// ownApprenticeSlugs are the logged-in user's apprenticed guild slugs
+	// (from GetUserGuilds on their own username), used to order the Guilds
+	// tab — separate from ProfileModel's apprenticeships, which get
+	// overwritten when viewing another user's profile.
+	ownApprenticeSlugs []string
 	active      screen
 	focus       focusTarget
 	width       int
@@ -857,7 +862,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -1432,6 +1437,10 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadUserGuildsCmd(msg.user.Username), true
 
 	case userGuildsLoadedMsg:
+		if msg.username == a.currentUser.Username {
+			a.ownApprenticeSlugs = apprenticeSlugsFrom(msg.guilds)
+			a.guilds = a.guilds.SetOwnApprenticeSlugs(a.ownApprenticeSlugs)
+		}
 		if msg.username != a.profile.Username() {
 			return a, nil, true // stale response from a since-abandoned profile switch
 		}
@@ -4567,6 +4576,18 @@ func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 type userGuildsLoadedMsg struct {
 	username string
 	guilds   []model.GuildMembership
+}
+
+// apprenticeSlugsFrom extracts the apprentice-role guild slugs from a user's
+// GetUserGuilds result, used to order the Guilds tab.
+func apprenticeSlugsFrom(memberships []model.GuildMembership) []string {
+	var slugs []string
+	for _, gm := range memberships {
+		if gm.Role == "apprentice" {
+			slugs = append(slugs, gm.Slug)
+		}
+	}
+	return slugs
 }
 
 func (a *App) loadUserGuildsCmd(username string) tea.Cmd {

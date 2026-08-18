@@ -5148,6 +5148,30 @@ func TestHandleGuilds_UserGuildsLoaded_GuardsOnUsernameMatch(t *testing.T) {
 	}
 }
 
+// TestHandleProfile_OwnGuildsLoaded_FeedsApprenticeSlugsToGuildsScreen is the
+// regression test for a real bug: this app.go wiring (ownApprenticeSlugs
+// field, its broadcastConfig plumbing, and apprenticeSlugsFrom) was dropped
+// entirely during an unrelated branch cleanup, leaving guilds.go's sort/icon
+// logic wired up but never fed real data — apprentice guilds silently never
+// floated to the top or got the ☆ icon, with no build failure to catch it.
+func TestHandleProfile_OwnGuildsLoaded_FeedsApprenticeSlugsToGuildsScreen(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "case"}
+	a.profile = a.profile.SetUser(model.User{Username: "case"})
+	memberships := []model.GuildMembership{
+		{Slug: "deep-divers", Role: "apprentice"},
+		{Slug: "chrome-syndicate", Role: "member"},
+	}
+
+	a2, _, handled := a.handleProfile(userGuildsLoadedMsg{username: "case", guilds: memberships})
+	if !handled {
+		t.Fatal("expected handleProfile to handle userGuildsLoadedMsg")
+	}
+	if got := a2.ownApprenticeSlugs; len(got) != 1 || got[0] != "deep-divers" {
+		t.Errorf("ownApprenticeSlugs = %v, want [deep-divers]", got)
+	}
+}
+
 // TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol is a
 // regression test: a.graphicsProtocol can be ProtocolSixel here only because
 // the startup DA1 probe (imgview.ProbeSixel) found it — that probe can't
