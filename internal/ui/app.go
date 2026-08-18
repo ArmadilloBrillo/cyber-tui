@@ -2106,6 +2106,26 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case guildsLoadedMsg:
 		a.guilds = a.guilds.SetGuilds(msg.guilds, msg.cursor)
+		var missing []string
+		if slug := a.currentUser.GuildSlug; slug != "" && !a.guilds.HasGuild(slug) {
+			missing = append(missing, slug)
+		}
+		for _, slug := range a.ownApprenticeSlugs {
+			if slug != "" && !a.guilds.HasGuild(slug) {
+				missing = append(missing, slug)
+			}
+		}
+		if len(missing) == 0 {
+			return a, nil, true
+		}
+		cmds := make([]tea.Cmd, len(missing))
+		for i, slug := range missing {
+			cmds[i] = a.loadOwnGuildIntoListCmd(slug)
+		}
+		return a, tea.Batch(cmds...), true
+
+	case ownGuildInjectMsg:
+		a.guilds = a.guilds.InjectGuild(msg.guild)
 		return a, nil, true
 
 	case screens.LoadMoreGuildsMsg:
@@ -4454,6 +4474,7 @@ type guildsLoadedMsg struct {
 	guilds []model.Guild
 	cursor string
 }
+type ownGuildInjectMsg struct{ guild model.Guild }
 type guildsPageMsg struct {
 	guilds []model.Guild
 	cursor string
@@ -5432,6 +5453,22 @@ func (a *App) loadGuildDetailCmd(slug string) tea.Cmd {
 			return actionErrMsg{err}
 		}
 		return guildDetailLoadedMsg{guild: g}
+	}
+}
+
+// loadOwnGuildIntoListCmd fetches a single guild (the user's badge guild or
+// one of their apprenticeships) directly when the paginated,
+// most-populated-first guild list didn't include it on the first page —
+// otherwise sortGuildsForDisplay has nothing to float to the top. Failure is
+// silent: the list still works, it just won't show that guild pinned until
+// pagination reaches it.
+func (a *App) loadOwnGuildIntoListCmd(slug string) tea.Cmd {
+	return func() tea.Msg {
+		g, err := a.client.GetGuild(slug)
+		if err != nil {
+			return nil
+		}
+		return ownGuildInjectMsg{guild: g}
 	}
 }
 
