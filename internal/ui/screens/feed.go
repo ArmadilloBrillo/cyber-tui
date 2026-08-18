@@ -204,6 +204,7 @@ func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
 	m.posts = posts
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
+	m = m.evictStaleBodyCache()
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
@@ -932,6 +933,24 @@ type feedBodyCacheEntry struct {
 	editedAt            time.Time
 	inlineImagesEnabled bool
 	themeName           string
+}
+
+// evictStaleBodyCache drops bodyCache entries for posts no longer present in
+// m.posts. Called from SetPosts, whose wholesale replace of m.posts is the
+// only point where a post can permanently drop out of the loaded list —
+// without this, bodyCache grows for the life of the session since it's keyed
+// by post ID and otherwise only ever gains entries in renderPost.
+func (m FeedModel) evictStaleBodyCache() FeedModel {
+	live := make(map[string]bool, len(m.posts))
+	for _, p := range m.posts {
+		live[p.ID] = true
+	}
+	for id := range m.bodyCache {
+		if !live[id] {
+			delete(m.bodyCache, id)
+		}
+	}
+	return m
 }
 
 func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageSlot) {

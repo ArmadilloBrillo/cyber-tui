@@ -652,6 +652,7 @@ func (m CMailModel) SetActiveConversation(conv model.Conversation) CMailModel {
 	m.err = nil
 	m.input.Focus()
 	m.selectedMsgID = ""
+	m.imageRealRows = nil
 	if m.ready {
 		m = m.refreshMessages()
 		m.viewport.GotoBottom()
@@ -1645,6 +1646,7 @@ func (m CMailModel) AppendMessage(msg model.Message) CMailModel {
 	conv := *m.activeConv
 	conv.Messages = append(conv.Messages, msg)
 	m.activeConv = &conv
+	m = m.trimMessageBuffer()
 	m.err = nil
 	if m.ready {
 		wasAtBottom := m.viewport.AtBottom()
@@ -1696,6 +1698,42 @@ func (m CMailModel) PrependMessages(convID string, msgs []model.Message) CMailMo
 		newLines := lipgloss.Height(m.renderMessages())
 		m = m.refreshMessages()
 		m.viewport.SetYOffset(oldOffset + newLines - oldLines)
+	}
+	return m
+}
+
+// trimMessageBuffer evicts oldest messages from the active conversation's
+// history while the estimated total size exceeds chatMessageBufferMaxBytes,
+// always keeping at least the most recent message. Mirrors
+// ChatroomsModel.trimMessageBuffer — same const and estimatedMessageSize
+// helper, just operating on m.activeConv.Messages. Clears m.selectedMsgID if
+// the evicted range contained the current selection, and resets
+// m.historyExhausted so a later scroll-to-top re-fetches the evicted range
+// from the server instead of treating it as permanently gone — the
+// pagination cursor is activeConv.Messages[0] (see
+// maybeLoadOlderConvMessages), so this is always safe to re-trigger.
+func (m CMailModel) trimMessageBuffer() CMailModel {
+	if m.activeConv == nil {
+		return m
+	}
+	msgs := m.activeConv.Messages
+	total := 0
+	for _, msg := range msgs {
+		total += estimatedMessageSize(msg)
+	}
+	i := 0
+	for total > chatMessageBufferMaxBytes && i < len(msgs)-1 {
+		if msgs[i].ID != "" && msgs[i].ID == m.selectedMsgID {
+			m.selectedMsgID = ""
+		}
+		total -= estimatedMessageSize(msgs[i])
+		i++
+	}
+	if i > 0 {
+		conv := *m.activeConv
+		conv.Messages = msgs[i:]
+		m.activeConv = &conv
+		m.historyExhausted = false
 	}
 	return m
 }

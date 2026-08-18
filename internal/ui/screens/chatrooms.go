@@ -275,6 +275,12 @@ type ChatroomsModel struct {
 	// its reserved band can shrink from the fallback-max placeholder down
 	// to its real size once known — see SetImageRealRows.
 	imageRealRows map[string]int
+	// chatBodyCache memoizes renderCircMessagesStyled's per-message output,
+	// keyed by message ID, so refreshMessages() doesn't re-parse/re-style
+	// every held message on every call — critical since styleAnimTickMsg
+	// calls refreshMessages() ~6.7x/sec for as long as any animated-style
+	// message is visible. See chatBodyCacheEntry's doc comment.
+	chatBodyCache map[string]chatBodyCacheEntry
 	flagPrompt          FlagPrompt
 	flagTargetMsgID     string // message ID being flagged, set right before flagPrompt.Open()
 	confirmingDeleteMsg bool   // true while the y/n delete-confirm overlay for the selected message is showing
@@ -374,11 +380,12 @@ func NewChatroomsModel(currentUser string, client api.Client) ChatroomsModel {
 	inp := textinput.New()
 	inp.Placeholder = "type a message..."
 	return ChatroomsModel{
-		input:       inp,
-		currentUser: currentUser,
-		client:      client,
-		mode:        chatroomModeList,
-		flagPrompt:  NewFlagPrompt(),
+		input:         inp,
+		currentUser:   currentUser,
+		client:        client,
+		mode:          chatroomModeList,
+		flagPrompt:    NewFlagPrompt(),
+		chatBodyCache: make(map[string]chatBodyCacheEntry),
 	}
 }
 
@@ -838,6 +845,9 @@ func (m ChatroomsModel) trimMessageBuffer() ChatroomsModel {
 		i++
 	}
 	if i > 0 {
+		for j := 0; j < i; j++ {
+			delete(m.chatBodyCache, m.messages[j].ID)
+		}
 		m.messages = m.messages[i:]
 		m.historyExhausted = false
 	}
@@ -880,6 +890,26 @@ func (m ChatroomsModel) AppendSystemMessage(roomID, text string) ChatroomsModel 
 	})
 }
 
+// evictStaleBodyCache drops chatBodyCache entries for messages no longer
+// present in m.messages. Called from SetMessages, whose wholesale replace of
+// m.messages (room open/switch) is the point a message can permanently drop
+// out of the loaded history — without this, chatBodyCache would keep every
+// entry from every room ever opened this session. trimMessageBuffer handles
+// the other eviction point (rolling history cap) directly, since it already
+// knows exactly which messages it's dropping.
+func (m ChatroomsModel) evictStaleBodyCache() ChatroomsModel {
+	live := make(map[string]bool, len(m.messages))
+	for _, msg := range m.messages {
+		live[msg.ID] = true
+	}
+	for id := range m.chatBodyCache {
+		if !live[id] {
+			delete(m.chatBodyCache, id)
+		}
+	}
+	return m
+}
+
 // SetMessages replaces the message history for the active room.
 func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) ChatroomsModel {
 	if m.activeRoom == nil || m.activeRoom.Slug != roomID {
@@ -887,6 +917,7 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 	}
 	m.messages = msgs
 	m.err = nil
+	m = m.evictStaleBodyCache()
 	if m.ready {
 		m = m.refreshMessages()
 		m.viewport.GotoBottom()
@@ -1650,7 +1681,7 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 	}
 	content, offsets, heights, imgSlots := renderCircMessagesWithSelection(
 		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID,
-		m.revealed, m.styleAnimFrame, m.mutedUsers(), m.inlineImagesEnabled, m.imageRealRows)
+		m.revealed, m.styleAnimFrame, m.mutedUsers(), m.inlineImagesEnabled, m.imageRealRows, m.chatBodyCache)
 	m.viewport.SetContent(content)
 	m.msgOffsets, m.msgHeights = offsets, heights
 	m.msgImages = imgSlots

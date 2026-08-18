@@ -938,6 +938,90 @@ func TestCMail_TotalUnread_NoIncrementWhileFocusedAndAtBottom(t *testing.T) {
 	}
 }
 
+// --- message buffer cap ---
+// Mirrors TestAppendMessage_TrimsOldestWhenOverByteCap /
+// TestAppendMessage_ClearsSelectionOnEviction /
+// TestPrependMessages_NotSubjectToByteCap in chatrooms_test.go — CMail's
+// AppendMessage is meant to behave identically, just scoped to
+// m.activeConv.Messages instead of m.messages.
+
+func TestCMailAppendMessage_TrimsOldestWhenOverByteCap(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	big := chatMessageBufferMaxBytes / 3
+	m = m.SetConversationMessages("c1", []model.Message{
+		bigMessage("old1", big),
+		bigMessage("old2", big),
+	})
+
+	m = m.AppendMessage(bigMessage("new1", big))
+	m = m.AppendMessage(bigMessage("new2", big))
+
+	msgs := m.activeConv.Messages
+	if len(msgs) == 0 {
+		t.Fatal("expected at least one message to remain")
+	}
+	if msgs[len(msgs)-1].ID != "new2" {
+		t.Errorf("expected newest message to survive, got last ID %q", msgs[len(msgs)-1].ID)
+	}
+	for _, msg := range msgs {
+		if msg.ID == "old1" {
+			t.Error("expected oldest message to be evicted, found old1 still present")
+		}
+	}
+	total := 0
+	for _, msg := range msgs {
+		total += estimatedMessageSize(msg)
+	}
+	if total > chatMessageBufferMaxBytes {
+		t.Errorf("total estimated size = %d, want <= %d", total, chatMessageBufferMaxBytes)
+	}
+}
+
+func TestCMailAppendMessage_ClearsSelectionOnEviction(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	big := chatMessageBufferMaxBytes / 2
+	m = m.SetConversationMessages("c1", []model.Message{bigMessage("old1", big)})
+	m.selectedMsgID = "old1"
+
+	m = m.AppendMessage(bigMessage("new1", big))
+	m = m.AppendMessage(bigMessage("new2", big))
+
+	if m.selectedMsgID != "" {
+		t.Errorf("expected selectedMsgID cleared after its message was evicted, got %q", m.selectedMsgID)
+	}
+}
+
+func TestCMailPrependMessages_NotSubjectToByteCap(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	big := chatMessageBufferMaxBytes
+	m = m.SetConversationMessages("c1", []model.Message{bigMessage("recent", 10)})
+
+	m = m.PrependMessages("c1", []model.Message{bigMessage("history", big)})
+
+	msgs := m.activeConv.Messages
+	if len(msgs) != 2 {
+		t.Fatalf("expected prepend to keep both messages regardless of byte cap, got %d messages", len(msgs))
+	}
+	if msgs[0].ID != "history" {
+		t.Errorf("expected prepended message first, got %q", msgs[0].ID)
+	}
+}
+
+// TestCMailSetActiveConversation_ClearsImageRealRows guards against
+// imageRealRows (keyed per image-bearing message) accumulating one entry per
+// image ever viewed across every conversation opened in a session — it must
+// reset when switching conversations, same as selectedMsgID does.
+func TestCMailSetActiveConversation_ClearsImageRealRows(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.imageRealRows = map[string]int{"c1:msg1:0": 3}
+
+	m = m.SetActiveConversation(model.Conversation{ID: "c2", Participants: []model.User{{Username: "neo"}, {Username: "morpheus"}}})
+
+	if len(m.imageRealRows) != 0 {
+		t.Errorf("expected imageRealRows cleared on conversation switch, got %v", m.imageRealRows)
+	}
+}
+
 // TestCMail_TotalUnread_ClearsWhenScrolledBackToBottom confirms the badge
 // clears once the user scrolls back down themselves.
 func TestCMail_TotalUnread_ClearsWhenScrolledBackToBottom(t *testing.T) {
