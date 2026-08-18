@@ -606,11 +606,12 @@ func (a App) WithAutoLogin(email, password string) App {
 	return a
 }
 
-// WithSavedSession attaches a persisted session loaded from ~/.cyber-tui.json.
-// When set, Init attempts to resume the session via token refresh instead of
-// showing the login screen.
-func (a App) WithSavedSession(s config.Config) App {
-	a.savedSession = &s
+// WithSavedPreferences loads display/behavior preferences from a persisted
+// config. Unlike WithSavedSession, this does not require a refresh token, so
+// it must be applied on every launch regardless of login method — otherwise
+// a token-expiry relogin silently resets these to zero values in memory,
+// and a later Settings save clobbers the real values on disk.
+func (a App) WithSavedPreferences(s config.Config) App {
 	a.relaxed = s.Density == "relaxed"
 	a.timezone = s.Timezone
 	a.loc = s.GetLocation()
@@ -625,6 +626,15 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.layoutName = s.Layout
 	a.layout = layoutFromName(s.Layout)
 	a.customPalette = s.CustomPalette
+	return a
+}
+
+// WithSavedSession attaches a persisted session loaded from ~/.cyber-tui.json.
+// When set, Init attempts to resume the session via token refresh instead of
+// showing the login screen.
+func (a App) WithSavedSession(s config.Config) App {
+	a.savedSession = &s
+	a = a.WithSavedPreferences(s)
 	return a
 }
 
