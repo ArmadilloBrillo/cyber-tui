@@ -18,9 +18,9 @@ feed | notifications | journal | bookmarks | guilds | topics | profile | setting
 
 ### Guild list (default view)
 
-Displays all guilds that have at least one member, sorted by member count (most populated first). Each row shows:
+Displays all guilds that have at least one member, in the order the API returns them (member count, most populated first), except the logged-in user's own guilds are floated to the top: their badge guild first, then any guilds they're apprenticed to (ordered by member count), then the rest of the list unchanged. Each row shows:
 
-- Guild icon (emoji; plain-text icon names from the API fall back to `◆`)
+- Guild icon (emoji; plain-text icon names from the API fall back to `◆`, or to `★`/`☆` for the user's badge guild / an apprenticed guild)
 - Guild name (highlighted when selected)
 - Member count (right-aligned)
 - Bio (second line, truncated to stay clear of the member count; omitted when empty)
@@ -100,9 +100,9 @@ After a successful post the thread list reloads.
 - `internal/model/types.go` — `Guild` struct (`IsMember`, `Role`, `ApprenticeCount`); `GuildMember` struct; `GuildMembership` struct (per-user guilds list)
 - `internal/api/interface.go` — `GetGuilds`, `GetGuild`, `GetGuildPosts`, `CreateGuildPost`, `GetGuildMembers`, `GetUserGuilds`, `JoinGuild`, `LeaveGuild`, `PromoteGuild`
 - `internal/api/client.go` — wire types and HTTP implementations
-- `internal/ui/screens/guilds.go` — `GuildsModel` (three-view screen + embedded `PostComposePanel`)
+- `internal/ui/screens/guilds.go` — `GuildsModel` (three-view screen + embedded `PostComposePanel`); `sortGuildsForDisplay` floats the user's badge guild then apprenticeships (by member count) to the top of the list; `SetOwnGuildSlug`/`SetOwnApprenticeSlugs` re-sort on membership changes
 - `internal/ui/screens/profile.go` — apprenticeships row on the Info tab (`SetApprenticeships`)
-- `internal/ui/app.go` — `screenGuilds` enum, `handleGuilds`, load/create/promote commands, menu wiring
+- `internal/ui/app.go` — `screenGuilds` enum, `handleGuilds`, load/create/promote commands, menu wiring; `ownApprenticeSlugs` (from the logged-in user's own `GetUserGuilds`, distinct from whichever profile `ProfileModel` currently has apprenticeships loaded for) feeds the Guilds tab ordering via `SharedConfigMsg.OwnApprenticeSlugs`
 
 ## Known limitations / out of scope
 

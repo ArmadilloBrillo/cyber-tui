@@ -64,7 +64,11 @@ type SharedConfigMsg struct {
 	// settings screen to display/edit the enum.
 	DitherSharpness string
 	OwnGuildSlug    string
-	LayoutName      string // "tabs" or "miller"; used by settings screen to show current value
+	// OwnApprenticeSlugs are the logged-in user's apprenticed guild slugs
+	// (from GET /v1/users/:username/guilds, Role == "apprentice"), used by
+	// the Guilds screen to float those guilds toward the top of the list.
+	OwnApprenticeSlugs []string
+	LayoutName         string // "tabs" or "miller"; used by settings screen to show current value
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
