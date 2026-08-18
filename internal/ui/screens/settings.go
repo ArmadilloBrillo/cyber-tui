@@ -267,6 +267,7 @@ type SettingsModel struct {
 	originalDitherSharpness  string         // last saved baseline
 	layoutName               string         // live local config value ("tabs" or "miller")
 	originalLayoutName       string         // last saved baseline
+	prefsSeeded              bool           // whether the SharedConfigMsg preference fields above have been seeded once
 	cursor                   int
 	width                    int
 	height                   int
@@ -398,10 +399,18 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 	case SharedConfigMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Populate from shared config only on first load (when original is zero).
-		// Subsequent broadcasts preserve any unsaved edits.
+		// Populate settings from shared config only on first load (when original
+		// is zero). Subsequent broadcasts preserve any unsaved edits.
 		if m.original.TimeDisplayFormat == "" && (m.original.Notifications == model.NotificationPrefs{}) {
 			m = m.SetSettings(msg.Settings)
+		}
+		// prefsSeeded gates the preference fields below independently of the
+		// m.original guard above — SetSettings can run before this handler
+		// ever sees a SharedConfigMsg (see settingsLoadedMsg in app.go), which
+		// would otherwise trip a shared guard and skip seeding these fields,
+		// leaving them at zero values that later get saved back to disk.
+		if !m.prefsSeeded {
+			m.prefsSeeded = true
 			m.wanderLust = msg.WanderLust
 			m.originalWanderLust = msg.WanderLust
 			m.maxThreadDepth = msg.MaxThreadDepth
