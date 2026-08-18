@@ -29,6 +29,22 @@ func keyMsg(key string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 }
 
+// runCmd executes cmd the way the real bubbletea runtime would: a
+// tea.BatchMsg result is a bundle of not-yet-run cmds, not an executed one,
+// so it must be recursed into rather than just called once.
+func runCmd(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			runCmd(t, c)
+		}
+	}
+}
+
 func newTestApp() App {
 	return NewApp(api.NewMockClient())
 }
@@ -5187,7 +5203,7 @@ func TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol(t *testing
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = "" // auto — the only way DetectProtocol() ever gets consulted
 
-	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		GraphicsProtocol: "", // unchanged
 		Dithering:        true,
 		ImageViewer:      "terminal",
@@ -5210,6 +5226,98 @@ func TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol(t *testing
 	}
 }
 
+// TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer reproduces a real
+// corruption: ctrl+s dispatches a save whose cmd may call the (network) API
+// before persisting to disk. Pressing ctrl+s again before that first save's
+// cmd returns dispatches a second save; if the two ever complete out of
+// order, the first (now-stale) one landing last must not overwrite the
+// second (newer) one's values in memory or in ~/.cyber-tui.json — this is
+// exactly how wander mode, timezone, thread depth, dithering, and the
+// graphics protocol override (observed flipping a deliberately-set "sixel"
+// back to an earlier "kitty") were seen reverting to their pre-edit values
+// after a restart.
+func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.graphicsProtocolName = "kitty"
+
+	var cmd1 tea.Cmd
+	var ok bool
+	a, cmd1, ok = a.handleSettings(screens.SaveSettingsMsg{
+		WanderLust:       true,
+		Timezone:         "UTC+2",
+		ImageViewer:      "terminal",
+		GraphicsProtocol: "kitty", // unchanged from the pre-save value
+	})
+	if !ok || cmd1 == nil {
+		t.Fatal("expected first SaveSettingsMsg to be handled")
+	}
+
+	var cmd2 tea.Cmd
+	a, cmd2, ok = a.handleSettings(screens.SaveSettingsMsg{
+		WanderLust:       true,
+		Timezone:         "UTC+5:30",
+		MaxThreadDepth:   7,
+		ImageViewer:      "terminal",
+		GraphicsProtocol: "sixel", // the user's real, later edit
+	})
+	if !ok || cmd2 == nil {
+		t.Fatal("expected second SaveSettingsMsg to be handled")
+	}
+
+	// Second (newer) save completes first.
+	saved2 := cmd2().(settingsSavedMsg)
+	var diskCmd2 tea.Cmd
+	a, diskCmd2, ok = a.handleSettings(saved2)
+	if !ok {
+		t.Fatal("expected settingsSavedMsg to be handled")
+	}
+	if diskCmd2 == nil {
+		t.Fatal("expected the newer settingsSavedMsg to dispatch a disk-write cmd")
+	}
+	runCmd(t, diskCmd2)
+
+	// First (now-stale) save completes afterward.
+	saved1 := cmd1().(settingsSavedMsg)
+	a, cmd, ok := a.handleSettings(saved1)
+	if !ok {
+		t.Fatal("expected stale settingsSavedMsg to still report handled=true")
+	}
+	if cmd != nil {
+		t.Error("stale settingsSavedMsg must not dispatch a disk-write cmd")
+	}
+	if a.timezone != "UTC+5:30" {
+		t.Errorf("timezone = %q after stale save applied, want UTC+5:30 (the newer value) to survive", a.timezone)
+	}
+	if a.maxThreadDepth != 7 {
+		t.Errorf("maxThreadDepth = %d after stale save applied, want 7 (the newer value) to survive", a.maxThreadDepth)
+	}
+	if a.graphicsProtocolName != "sixel" {
+		t.Errorf("graphicsProtocolName = %q after stale save applied, want sixel (the newer value) to survive", a.graphicsProtocolName)
+	}
+	if a.graphicsProtocol != imgview.ProtocolSixel {
+		t.Errorf("graphicsProtocol = %v after stale save applied, want ProtocolSixel", a.graphicsProtocol)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if cfg.Timezone != "UTC+5:30" {
+		t.Errorf("saved config timezone = %q, want UTC+5:30 — the stale first save must not overwrite the newer value on disk", cfg.Timezone)
+	}
+	if cfg.MaxThreadDepth != 7 {
+		t.Errorf("saved config maxThreadDepth = %d, want 7", cfg.MaxThreadDepth)
+	}
+	if cfg.GraphicsProtocol != "sixel" {
+		t.Errorf("saved config graphicsProtocol = %q, want sixel", cfg.GraphicsProtocol)
+	}
+}
+
 // TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves confirms the
 // override still takes effect when the user actually changes it — the fix
 // for the regression above only skips re-resolution when the override is
@@ -5219,7 +5327,7 @@ func TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves(t *testing.T)
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = ""
 
-	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		GraphicsProtocol: "kitty", // changed
 		ImageViewer:      "terminal",
 	})
