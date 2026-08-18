@@ -746,7 +746,7 @@ func (m SearchModel) refreshContent() SearchModel {
 // if no row is selected or the selected row isn't a post — used by App to
 // detect a selection-only move (see FeedModel.SelectedPostID's doc comment).
 func (m SearchModel) SelectedPostID() string {
-	if m.selected < 0 || m.selected >= len(m.rows) {
+	if m.view == searchViewQuery || m.selected < 0 || m.selected >= len(m.rows) {
 		return ""
 	}
 	row := m.rows[m.selected]
@@ -760,7 +760,7 @@ func (m SearchModel) SelectedPostID() string {
 // the viewport, top to bottom, across every visible post hit — see
 // PostDetailModel.VisibleInlineImages for the full contract.
 func (m SearchModel) VisibleInlineImages() []InlineImageSlot {
-	if !m.ready || !m.inlineImagesEnabled {
+	if !m.ready || !m.inlineImagesEnabled || m.view == searchViewQuery {
 		return nil
 	}
 	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
