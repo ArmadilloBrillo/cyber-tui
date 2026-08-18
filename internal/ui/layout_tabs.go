@@ -359,7 +359,7 @@ func (l TabsLayout) screenHints(a App) []hint {
 		}
 		return []hint{{"↑↓", "navigate"}, {"e", "edit"}, {"tab", "cycle"}, more}
 	case screenNotifications:
-		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, {"c", "message"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, {"f", "filter"}, {"c", "message"}, more}
 	case screenJournal:
 		if a.journal.ComposeActive() {
 			return []hint{{"tab", "cycle"}, {"Ctrl+s", "save"}, {"Ctrl+p", "publish"}, {"Esc", "cancel"}}
@@ -461,6 +461,11 @@ func (l TabsLayout) renderPathPrompt(a App) string {
 	return a.pathPrompt.View()
 }
 
+// renderAttachURLPrompt renders the attach-image/gif-URL prompt modal.
+func (l TabsLayout) renderAttachURLPrompt(a App) string {
+	return a.attachURLPrompt.View()
+}
+
 func (l TabsLayout) renderHelpModal(a App) string {
 	title := theme.Title.Render("shortcuts")
 	sectionStyle := theme.Subtle.Bold(true)
@@ -481,6 +486,8 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		row("x / i", "export / import custom theme (in theme picker)"),
 		row("v", "density"),
 		row("o", "open url"),
+		row("ctrl+]", "icon picker"),
+		row("ctrl+g", "attach image/gif"),
 		row("q", "quit"),
 	)
 	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)
@@ -617,6 +624,10 @@ func (l TabsLayout) renderURLPicker(a App) string {
 	rows := append([]string{title, ""}, items...)
 	rows = append(rows, "", hint)
 	return theme.ActiveBorder.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
+}
+
+func (l TabsLayout) renderIconPicker(a App) string {
+	return a.iconPicker.View()
 }
 
 // renderImageModal returns the bordered text-only shell for the image overlay.

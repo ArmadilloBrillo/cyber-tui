@@ -173,6 +173,18 @@ type App struct {
 	urlPickerItems  []string
 	urlPickerCursor int
 
+	// iconPicker state — open with ctrl+] from any of the 7 chat/compose
+	// text inputs.
+	iconPickerOpen bool
+	iconPicker     screens.IconPickerModel
+
+	// attachURLPrompt state — open with ctrl+g from any focused compose
+	// field. Submit either sets a native post attachment (Feed's new-post
+	// panel or PostDetail's edit panel) or inserts markdown image syntax
+	// wherever InsertIconMsg would land — see applyAttachURL.
+	attachURLPromptOpen bool
+	attachURLPrompt     screens.PathPromptModel
+
 	// imageCarousel state — populated when an image is opened from a picker
 	// containing more than one image, letting left/right cycle between them
 	// without closing the image modal. Nil imageCarouselItems means a plain
@@ -401,6 +413,15 @@ type App struct {
 	// postDetailReturn is the screen to go back to when ESC is pressed in PostDetail.
 	postDetailReturn screen
 
+	// postDetailStack holds prior PostDetail snapshots pushed when an in-post
+	// link (routeURL/urlPostLoadedMsg) is opened while already viewing a
+	// post — Post A -> link -> Post B pushes A here so Esc from B restores it
+	// (post, replies, selection, scroll) before falling back to
+	// postDetailReturn once the stack is empty. Note: a stacked snapshot's
+	// viewport keeps whatever width it had when pushed — a resize while
+	// nested doesn't reach it until it's popped back and re-renders.
+	postDetailStack []screens.PostDetailModel
+
 	// profileReturn is the screen to go back to when ESC is pressed in a read-only profile.
 	profileReturn screen
 
@@ -456,6 +477,16 @@ type App struct {
 	// inlineImages is the user's raw preference from config.InlineImages.
 	// See canInlineImages for the fully-gated value broadcast to screens.
 	inlineImages bool
+
+	// dithering is the user's preference from config.Dithering. See
+	// ditheringEnabled for the gated value used when encoding images.
+	dithering bool
+
+	// ditherSharpness is the user's preference from config.GetDitherSharpness
+	// ("rough"/"medium"/"sharp"), controlling the dithering pixelation block
+	// size via imgview.PixelSizeForSharpness. Only meaningful when dithering
+	// is on.
+	ditherSharpness string
 
 	// imageScale multiplies the computed size of the fullscreen image modal.
 	// Starts from config.Config.GetImageScale() and is live-adjustable with
@@ -546,6 +577,8 @@ func NewApp(client api.Client) App {
 		journal:            screens.NewJournalModel(0),
 		search:             screens.NewSearchModel(),
 		pathPrompt:         screens.NewPathPromptModel(),
+		iconPicker:         screens.NewIconPickerModel(),
+		attachURLPrompt:    screens.NewPathPromptModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -573,11 +606,12 @@ func (a App) WithAutoLogin(email, password string) App {
 	return a
 }
 
-// WithSavedSession attaches a persisted session loaded from ~/.cyber-tui.json.
-// When set, Init attempts to resume the session via token refresh instead of
-// showing the login screen.
-func (a App) WithSavedSession(s config.Config) App {
-	a.savedSession = &s
+// WithSavedPreferences loads display/behavior preferences from a persisted
+// config. Unlike WithSavedSession, this does not require a refresh token, so
+// it must be applied on every launch regardless of login method — otherwise
+// a token-expiry relogin silently resets these to zero values in memory,
+// and a later Settings save clobbers the real values on disk.
+func (a App) WithSavedPreferences(s config.Config) App {
 	a.relaxed = s.Density == "relaxed"
 	a.timezone = s.Timezone
 	a.loc = s.GetLocation()
@@ -586,10 +620,21 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.imageViewer = s.ImageViewer
 	a.graphicsProtocolName = s.GraphicsProtocol
 	a.inlineImages = s.InlineImages
+	a.dithering = s.Dithering
+	a.ditherSharpness = s.GetDitherSharpness()
 	a.imageScale = s.GetImageScale()
 	a.layoutName = s.Layout
 	a.layout = layoutFromName(s.Layout)
 	a.customPalette = s.CustomPalette
+	return a
+}
+
+// WithSavedSession attaches a persisted session loaded from ~/.cyber-tui.json.
+// When set, Init attempts to resume the session via token refresh instead of
+// showing the login screen.
+func (a App) WithSavedSession(s config.Config) App {
+	a.savedSession = &s
+	a = a.WithSavedPreferences(s)
 	return a
 }
 
@@ -812,7 +857,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -881,13 +926,22 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		model, cmd := a.handleURLPickerKey(m)
 		return model.(App), cmd, true
 	}
+	if a.iconPickerOpen {
+		model, cmd := a.handleIconPickerKey(m)
+		return model.(App), cmd, true
+	}
+	if a.attachURLPromptOpen {
+		model, cmd := a.handleAttachURLPromptKey(m)
+		return model.(App), cmd, true
+	}
 	// When a screen has a focused text input, let it consume all keys.
 	// ctrl+c is kept as a hard escape hatch; a handful of other global
 	// shortcuts get a ctrl-prefixed twin that reaches through too, since
 	// their bare key is unreachable while chatting (CIRC/C-Mail's compose
 	// input is focused for the entire detail view, not just a transient
 	// sub-mode like Feed's reply box): ctrl+o (open link), ctrl+q (quit),
-	// ctrl+t (theme picker), ctrl+left/right (cycle tabs). ctrl+/ (search)
+	// ctrl+t (theme picker), ctrl+] (icon picker), ctrl+left/right (cycle
+	// tabs). ctrl+/ (search)
 	// was tried and removed — the byte a physical ctrl+/ keystroke sends is
 	// inconsistent across terminals (0x1F on most, a literal NUL on e.g. Git
 	// Bash/MinTTY, indistinguishable there from ctrl+space/ctrl+2/ctrl+@), so
@@ -912,7 +966,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 				(a.active == screenCMail && a.cmail.ComposeEmpty()))
 		switch {
 		case m.String() == "ctrl+o", m.String() == "ctrl+q", m.String() == "ctrl+t",
-			m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
+			m.String() == "ctrl+]", m.String() == "ctrl+g", m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
 			// fall through to the global switch below
 		default:
 			return a, nil, false // fall through to delegateUpdate
@@ -953,6 +1007,26 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.themePickerOrig = theme.CurrentName()
 			a.themePickerCursor = themeIndex(theme.CurrentName())
 			return a, nil, true
+		}
+	case "ctrl+]":
+		if a.activeScreenHasFocusedInput() {
+			width := int(float64(a.width) * modalScreenMarginFrac)
+			if mw := a.layout.ModalMaxWidth(a.width); width > mw {
+				width = mw
+			}
+			height := int(float64(a.height) * modalScreenMarginFrac)
+			a.iconPickerOpen = true
+			var cmd tea.Cmd
+			a.iconPicker, cmd = a.iconPicker.Open()
+			a.iconPicker = a.iconPicker.SetSize(width, height)
+			return a, cmd, true
+		}
+	case "ctrl+g":
+		if a.activeScreenHasFocusedInput() {
+			a.attachURLPromptOpen = true
+			var cmd tea.Cmd
+			a.attachURLPrompt, cmd = a.attachURLPrompt.Open("attach image/gif url", "")
+			return a, cmd, true
 		}
 	case "v":
 		if a.active != screenLogin {
@@ -1097,6 +1171,7 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 		} else {
 			// Deleted from post detail: navigate to feed and reload.
 			a.active = screenFeed
+			a.postDetailStack = nil
 			return a, a.loadFeedCmd(), true
 		}
 		return a, nil, true
@@ -1128,22 +1203,22 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentURL), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
 	case postConvertedToNoteMsg:
 		a, notifyCmd := a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
 		return a, tea.Batch(notifyCmd, a.loadFeedCmd()), true
 	case screens.SubmitPostEditMsg:
-		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW), true
+		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentURL, msg.AttachmentTouched, msg.OtherAttachments), true
 	case postEditedMsg:
 		// Both Feed and PostDetail may hold their own local copy of this post;
 		// PostDetail's ApplyPostEdit has no postID param, so guard it here —
 		// otherwise editing from Feed while PostDetail has an unrelated post
 		// open would overwrite that unrelated post's content.
-		a.feed = a.feed.ApplyPostEdit(msg.postID, msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt)
+		a.feed = a.feed.ApplyPostEdit(msg.postID, msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
 		if a.postDetail.PostID() == msg.postID {
-			a.postDetail = a.postDetail.ApplyPostEdit(msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt)
+			a.postDetail = a.postDetail.ApplyPostEdit(msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
 		}
 		return a, nil, true
 	case screens.SubmitReplyMsg:
@@ -1168,6 +1243,11 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.pendingReplyID = msg.replyID
 		return a, a.loadRepliesCmd(msg.postID), true
 	case screens.BackToFeedMsg:
+		if n := len(a.postDetailStack); n > 0 {
+			a.postDetail = a.postDetailStack[n-1]
+			a.postDetailStack = a.postDetailStack[:n-1]
+			return a, nil, true
+		}
 		a.active = a.postDetailReturn
 		a.postDetail = a.postDetail.Close()
 		return a, nil, true
@@ -1227,6 +1307,17 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, tea.Batch(markReadCmd, activateCmd), true
 	case screens.SendRoomMessageMsg:
 		return a, a.sendRoomMessageCmd(msg.RoomID, msg.Body), true
+	case screens.MuteUserMsg:
+		return a, a.muteUserCmd(msg.RoomID, msg.Username), true
+	case userMutedMsg:
+		// Muting is enforced client-side off Settings.MutedUsersByRoom (see
+		// ChatroomsModel's SharedConfigMsg handler), which /mute updates
+		// server-side but never pushes to us — same reload roomCommandReplyMsg
+		// already does after a command completes. Without it the room keeps
+		// showing the just-muted user's messages until something else happens
+		// to reload settings.
+		a, notifyCmd := a.notify(notifyInfo, "muted "+msg.username)
+		return a, tea.Batch(notifyCmd, a.loadSettingsCmd()), true
 	case screens.FlagMessageMsg:
 		return a, a.flagRoomMessageCmd(msg.RoomID, msg.MessageID, msg.Reason), true
 	case screens.DeleteRoomMessageMsg:
@@ -1455,6 +1546,8 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		iv := msg.ImageViewer
 		gp := msg.GraphicsProtocol
 		ii := msg.InlineImages
+		dt := msg.Dithering
+		ds := msg.DitherSharpness
 		ln := msg.LayoutName
 		return a, func() tea.Msg {
 			if msg.RemoteChanged {
@@ -1469,9 +1562,11 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.ImageViewer = iv
 				cfg.GraphicsProtocol = gp
 				cfg.InlineImages = ii
+				cfg.Dithering = dt
+				cfg.DitherSharpness = ds
 				cfg.Layout = ln
 			})
-			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, layoutName: ln}
+			return settingsSavedMsg{settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -1480,22 +1575,33 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
-		a.graphicsProtocolName = msg.graphicsProtocol
-		if proto, ok := imgview.ProtocolFromName(msg.graphicsProtocol); ok {
-			a.graphicsProtocol = proto
-		} else {
-			// "" (auto): re-resolve via env-var detection only. The Sixel DA1
-			// probe (imgview.ProbeSixel) needs raw terminal access before Bubble
-			// Tea takes over stdin, so it can't safely re-run mid-session — see
-			// its doc comment. Best-effort here; a full restart re-probes Sixel.
-			a.graphicsProtocol = imgview.DetectProtocol()
+		if msg.graphicsProtocol != a.graphicsProtocolName {
+			// Only re-resolve when the override actually changed — saving an
+			// unrelated setting (dithering, wander mode, etc.) must not touch
+			// this. "" (auto) can only be re-resolved via env-var detection
+			// here: the Sixel DA1 probe (imgview.ProbeSixel) needs raw
+			// terminal access before Bubble Tea takes over stdin, so it can't
+			// safely re-run mid-session — see its doc comment. Without this
+			// guard, any settings save on a DA1-probed Sixel terminal would
+			// silently downgrade a.graphicsProtocol to whatever env-var
+			// detection alone finds (often ProtocolNone), breaking inline
+			// images and the image viewer until a full restart re-probes
+			// Sixel.
+			if proto, ok := imgview.ProtocolFromName(msg.graphicsProtocol); ok {
+				a.graphicsProtocol = proto
+			} else {
+				a.graphicsProtocol = imgview.DetectProtocol()
+			}
 		}
+		a.graphicsProtocolName = msg.graphicsProtocol
 		a.inlineImages = msg.inlineImages
+		a.dithering = msg.dithering
+		a.ditherSharpness = msg.ditherSharpness
 		a.layoutName = msg.layoutName
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
@@ -1693,6 +1799,19 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		termenv.Copy(urlutil.PostPermalink(msg.Post.AuthorUsername, msg.Post.Slug))
 		a, cmd := a.notify(notifyInfo, "Copied link to clipboard")
+		return a, cmd, true
+	case screens.CopyMessageTextMsg:
+		// Same SSH gate as CopyLinkMsg — see its comment.
+		if a.ephemeral {
+			a, cmd := a.notify(notifyInfo, "Copying is disabled in SSH sessions")
+			return a, cmd, true
+		}
+		if msg.Text == "" {
+			a, cmd := a.notify(notifyInfo, "nothing to copy")
+			return a, cmd, true
+		}
+		termenv.Copy(msg.Text)
+		a, cmd := a.notify(notifyInfo, "Copied message to clipboard")
 		return a, cmd, true
 	case screens.BookmarkPostMsg:
 		if msg.ReplyID != "" {
@@ -2698,7 +2817,7 @@ func (a App) routeURL(rawURL string) (App, tea.Cmd) {
 	if a.ephemeral {
 		return a.notify(notifyInfo, "Opening links is disabled in SSH sessions")
 	}
-	if a.canRenderImageInline(rawURL) {
+	if a.canRenderImageInline(rawURL) || a.canProbeImageInline() {
 		return a.openImageInTerminal(rawURL)
 	}
 	return a, openExternalURL(rawURL)
@@ -2717,6 +2836,23 @@ func (a App) canRenderImageInline(u string) bool {
 		a.imageViewer != "browser"
 }
 
+// canProbeImageInline reports whether u is worth an inline-open attempt even
+// though its extension doesn't look like an image: /gif <url> in circ/C-Mail
+// forwards whatever URL the user typed verbatim (chatrooms.go's slash-command
+// handling does no URL validation), and real gif links routinely lack a
+// literal ".gif" suffix (Tenor share pages, extensionless CDN links). Rather
+// than guess further from the URL text, this defers to openImageInTerminal's
+// real fetch+decode (via imgview.FetchAny, which sniffs the downloaded
+// bytes) as the source of truth, falling back to the browser via
+// handleImageViewer's existing error path when the content genuinely isn't a
+// decodable image. Same gates as canRenderImageInline minus the extension
+// check.
+func (a App) canProbeImageInline() bool {
+	return !a.ephemeral &&
+		a.graphicsProtocol != imgview.ProtocolNone &&
+		a.imageViewer != "browser"
+}
+
 // canInlineImages reports whether Feed/PostDetail should render post
 // attachments inline: the user's InlineImages preference is on, plus the
 // same protocol/imageViewer/ephemeral gates as the fullscreen image viewer
@@ -2727,6 +2863,36 @@ func (a App) canInlineImages() bool {
 		!a.ephemeral &&
 		a.graphicsProtocol != imgview.ProtocolNone &&
 		a.imageViewer != "browser"
+}
+
+// ditheringEnabled reports whether images encoded for the terminal should
+// have the RasterImage-style duotone dither effect applied (see Dither):
+// the user's Dithering preference is on, gated by the same imageViewer
+// check as graphicsProtocol/inlineImages — dithering is meaningless when
+// images open in the OS browser instead.
+func (a App) ditheringEnabled() bool {
+	return a.dithering && a.imageViewer != "browser"
+}
+
+// ditherOptions builds the imgview.DitherOptions to pass to Encode* when
+// ditheringEnabled is true, resolving the current theme's colors. Returns
+// nil when dithering is off.
+func (a App) ditherOptions() *imgview.DitherOptions {
+	if !a.ditheringEnabled() {
+		return nil
+	}
+	fg, _ := imgview.ParseHexColor(theme.CurrentPalette().Foreground)
+	bg, ok := imgview.ParseHexColor(theme.CurrentPalette().Background)
+	if !ok {
+		// Palette.Background is reserved/usually empty (see theme.go's Palette
+		// doc comment) — fall back to the theme's actual rendered background.
+		bg, _ = imgview.ParseHexColor(string(theme.ColorBackground))
+	}
+	return &imgview.DitherOptions{
+		PixelSize: imgview.PixelSizeForSharpness(a.ditherSharpness),
+		FgColor:   fg,
+		BgColor:   bg,
+	}
 }
 
 // activeInlineImageSlots returns the active screen's currently visible
@@ -2875,13 +3041,32 @@ func syncInlineImageErasures(slots []screens.InlineImageSlot, rowOrigin, colOrig
 }
 
 // inlineImageCacheKey identifies one encoded rendering of a slot's image —
-// slot key, URL, column budget, and protocol. Keying by slot (not just URL)
-// matters for Kitty, whose encoded bytes embed a placement id specific to
-// one on-screen instance (see imgview.EncodeKitty) — two slots showing the
-// same URL must never share an encode. Also matches how a resize (which
-// changes MaxCols) or a protocol change naturally invalidates old entries.
-func inlineImageCacheKey(slot screens.InlineImageSlot, proto imgview.GraphicsProtocol) string {
-	return fmt.Sprintf("%s|%s|%d|%d", slot.Key, slot.URL, slot.MaxCols, proto)
+// slot key, URL, column budget, protocol, and dithering state. Keying by
+// slot (not just URL) matters for Kitty, whose encoded bytes embed a
+// placement id specific to one on-screen instance (see imgview.EncodeKitty)
+// — two slots showing the same URL must never share an encode. Also matches
+// how a resize (which changes MaxCols) or a protocol change naturally
+// invalidates old entries — and, via ditherKeyFragment, how toggling
+// dithering, changing sharpness, or switching themes must too: without the
+// dither component, an already-cached encode from before such a change
+// would keep being served as-is (see syncInlineImages/fetchInlineImageCmd),
+// making the change appear to require a restart to take effect.
+func inlineImageCacheKey(slot screens.InlineImageSlot, proto imgview.GraphicsProtocol, dither *imgview.DitherOptions) string {
+	return fmt.Sprintf("%s|%s|%d|%d|%s", slot.Key, slot.URL, slot.MaxCols, proto, ditherKeyFragment(dither))
+}
+
+// ditherKeyFragment returns a compact, deterministic string identifying
+// dither's effect on the encoded output, for use as an inlineImageCacheKey
+// component — "-" when dithering is off, otherwise a value that changes
+// whenever the resulting pixels would: sharpness (PixelSize) or the active
+// theme's colors (FgColor/BgColor).
+func ditherKeyFragment(dither *imgview.DitherOptions) string {
+	if dither == nil {
+		return "-"
+	}
+	return fmt.Sprintf("d%d,%02x%02x%02x,%02x%02x%02x", dither.PixelSize,
+		dither.FgColor.R, dither.FgColor.G, dither.FgColor.B,
+		dither.BgColor.R, dither.BgColor.G, dither.BgColor.B)
 }
 
 // kittyModalPlacementID is a fixed, reserved Kitty placement/image id used
@@ -3111,8 +3296,9 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 	if a.inlineImageFetching == nil {
 		a.inlineImageFetching = make(map[string]bool)
 	}
+	ditherOpts := a.ditherOptions()
 	for _, slot := range slots {
-		key := inlineImageCacheKey(slot, a.graphicsProtocol)
+		key := inlineImageCacheKey(slot, a.graphicsProtocol, ditherOpts)
 		if _, cached := a.inlineImageCache[key]; cached {
 			a.touchInlineImageCache(key)
 			continue
@@ -3128,7 +3314,7 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		if isKitty {
 			placementID = placementIDs[slot.Key]
 		}
-		cmds = append(cmds, a.fetchInlineImageCmd(slot, key, placementID))
+		cmds = append(cmds, a.fetchInlineImageCmd(slot, key, placementID, ditherOpts))
 	}
 	if len(cmds) == 0 {
 		return a, nil
@@ -3153,11 +3339,14 @@ type inlineImageFetchedMsg struct {
 
 // fetchInlineImageCmd fetches and encodes slot's image for the currently
 // detected protocol. placementID is only used for Kitty (see
-// imgview.EncodeKitty); callers pass 0 for Sixel/iTerm2. Unlike the
-// fullscreen modal, there's no user-visible loading state to manage: a miss
-// this frame just means the reserved blank band stays blank until the
-// result lands.
-func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, placementID int) tea.Cmd {
+// imgview.EncodeKitty); callers pass 0 for Sixel/iTerm2. ditherOpts is
+// passed in (rather than recomputed via a.ditherOptions()) so it always
+// matches exactly what the caller used to compute key via
+// inlineImageCacheKey — a mismatch there would cache the encode under one
+// dither state while the bytes reflect another. Unlike the fullscreen
+// modal, there's no user-visible loading state to manage: a miss this frame
+// just means the reserved blank band stays blank until the result lands.
+func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, placementID int, ditherOpts *imgview.DitherOptions) tea.Cmd {
 	proto := a.graphicsProtocol
 	maxCols, maxRows := slot.MaxCols, slot.MaxRows
 	url := slot.URL
@@ -3174,11 +3363,11 @@ func (a App) fetchInlineImageCmd(slot screens.InlineImageSlot, key string, place
 		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
 		switch proto {
 		case imgview.ProtocolITerm2:
-			encoded, _, rows, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH, false)
+			encoded, _, rows, err = imgview.EncodeITerm2(img, maxCols, maxRows, cellW, cellH, false, ditherOpts)
 		case imgview.ProtocolSixel:
-			encoded, _, rows, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH, false)
+			encoded, _, rows, err = imgview.EncodeSixel(img, maxCols, maxRows, cellW, cellH, false, ditherOpts)
 		case imgview.ProtocolKitty:
-			encoded, _, rows, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID, false)
+			encoded, _, rows, err = imgview.EncodeKitty(img, maxCols, maxRows, cellW, cellH, placementID, false, ditherOpts)
 		default:
 			err = fmt.Errorf("inline images: unsupported protocol %v", proto)
 		}
@@ -3449,7 +3638,7 @@ func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
 // edges, not just merely within them.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
-	isGIF := urlutil.IsGIFURL(rawURL)
+	ditherOpts := a.ditherOptions()
 	scale := a.imageScale
 	if scale <= 0 {
 		scale = 1.0
@@ -3465,19 +3654,10 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 		if !hit {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			if isGIF {
-				g, err := imgview.FetchGIF(ctx, rawURL)
-				if err != nil {
-					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
-				}
-				frames, delays = imgview.GIFFrames(g)
-			} else {
-				img, err := imgview.Fetch(ctx, rawURL)
-				if err != nil {
-					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
-				}
-				frames = []image.Image{img}
-				delays = nil
+			var err error
+			frames, delays, err = imgview.FetchAny(ctx, rawURL)
+			if err != nil {
+				return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 			}
 		}
 		cellW, cellH, _ := imgview.TerminalCellPixelSize(int(os.Stdout.Fd()))
@@ -3503,19 +3683,19 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 			switch proto {
 			case imgview.ProtocolKitty:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, cellW, cellH, kittyModalPlacementID, true)
+				encodedFrames[i], cols, rows, err = imgview.EncodeKitty(img, displayCols, displayRows, cellW, cellH, kittyModalPlacementID, true, ditherOpts)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			case imgview.ProtocolITerm2:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows, cellW, cellH, true)
+				encodedFrames[i], cols, rows, err = imgview.EncodeITerm2(img, displayCols, displayRows, cellW, cellH, true, ditherOpts)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
 			case imgview.ProtocolSixel:
 				var err error
-				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH, true)
+				encodedFrames[i], cols, rows, err = imgview.EncodeSixel(img, displayCols, displayRows, cellW, cellH, true, ditherOpts)
 				if err != nil {
 					return imageFetchedMsg{rawURL: rawURL, gen: gen, err: err}
 				}
@@ -3698,6 +3878,90 @@ func (a App) handleURLPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+// handleIconPickerKey processes keyboard input while the icon picker overlay
+// is open. Esc and enter are handled here directly (mirrors
+// handleURLPickerKey); enter emits an InsertIconMsg that falls through to
+// delegateScreenUpdate and lands on whichever screen is currently active.
+// Every other key (tab/shift+tab/up/down/search typing) is forwarded to
+// IconPickerModel.Update.
+func (a App) handleIconPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.iconPickerOpen = false
+		return a, nil
+	case "enter":
+		glyph, ok := a.iconPicker.Selected()
+		if !ok {
+			return a, nil
+		}
+		a.iconPickerOpen = false
+		return a, func() tea.Msg { return screens.InsertIconMsg{Icon: glyph} }
+	}
+	var cmd tea.Cmd
+	a.iconPicker, cmd = a.iconPicker.Update(msg)
+	return a, cmd
+}
+
+// handleAttachURLPromptKey processes keyboard input while the attach-image-URL
+// prompt is open. Enter/esc are handled directly here (mirrors
+// handleIconPickerKey) rather than routed through
+// PathPromptSubmitMsg/PathPromptCancelMsg — those are already claimed by the
+// theme export/import prompt's handlePathPrompt, which switches purely on
+// message type, so reusing them here would misroute into the export/import
+// logic. Every other key (typing, cursor movement) is forwarded to
+// PathPromptModel.Update.
+func (a App) handleAttachURLPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.attachURLPromptOpen = false
+		return a, nil
+	case "enter":
+		url := strings.TrimSpace(a.attachURLPrompt.Value())
+		if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			a.attachURLPrompt = a.attachURLPrompt.SetWarning("must be an http(s) URL")
+			return a, nil
+		}
+		a.attachURLPromptOpen = false
+		return a.applyAttachURL(url)
+	}
+	var cmd tea.Cmd
+	a.attachURLPrompt, cmd = a.attachURLPrompt.Update(msg)
+	return a, cmd
+}
+
+// applyAttachURL dispatches a submitted attach-URL prompt result, per what
+// was confirmed live this session: posts get a native attachment (routed
+// through the create/edit request); circ/C-Mail can only embed an animated
+// GIF, via the server's own /gif command — visually confirmed on the
+// website, whereas markdown in a message's content does not render there;
+// and replies have no attachment mechanism at all (no attachments field in
+// the reply API). Where nothing can actually render, this warns instead of
+// silently inserting text that looks like it worked but won't show up
+// anywhere but cyber-tui's own inline-image view.
+func (a App) applyAttachURL(url string) (App, tea.Cmd) {
+	switch {
+	case a.active == screenFeed && a.feed.PanelActive():
+		a.feed = a.feed.SetPanelAttachment(url)
+		return a, nil
+	case a.active == screenPostDetail && a.postDetail.EditPanelActive():
+		a.postDetail = a.postDetail.SetEditPanelAttachment(url)
+		return a, nil
+	}
+	if url == "" {
+		return a, nil
+	}
+	switch {
+	case a.active == screenChatrooms, a.active == screenCMail:
+		if !urlutil.IsGIFURL(url) {
+			return a.notify(notifyWarn, "cyberspace.online can only embed a GIF in chat (via /gif) — a static image needs a file upload the API doesn't support")
+		}
+		return a, func() tea.Msg { return screens.SetComposeValueMsg{Value: "/gif " + url} }
+	case a.active == screenPostDetail && a.postDetail.ReplyComposeActive():
+		return a.notify(notifyWarn, "replies don't support image attachments — there's no attachments field in the reply API")
+	}
+	return a, func() tea.Msg { return screens.InsertIconMsg{Icon: "![](" + url + ")"} }
+}
+
 // --- commands ---
 
 // loginSuccessMsg carries the authenticated session back to the update loop so
@@ -3853,6 +4117,11 @@ type roomCommandReplyMsg struct {
 	reply  string
 }
 type roomMessageDeletedMsg struct{ messageID string }
+
+// userMutedMsg confirms a successful /mute send — needed because, per the
+// server ("/mute ... posts nothing"), a successful mute has no visible
+// effect in the room to tell the user it worked; see muteUserCmd.
+type userMutedMsg struct{ username string }
 type cmailCommandReplyMsg struct {
 	convID string
 	reply  string
@@ -3896,6 +4165,12 @@ type postEditedMsg struct {
 	topics           []string
 	isPublic, isNSFW bool
 	editedAt         time.Time
+	// attachments/attachmentsTouched mirror EditPost's own pair: Feed/
+	// PostDetail's local copy only overwrites its cached Attachments when
+	// attachmentsTouched — otherwise the edit didn't touch them server-side
+	// either, so the stale local copy is already correct.
+	attachments        []model.Attachment
+	attachmentsTouched bool
 }
 
 type replyEditedMsg struct {
@@ -3911,6 +4186,8 @@ type settingsSavedMsg struct {
 	imageViewer      string
 	graphicsProtocol string
 	inlineImages     bool
+	dithering        bool
+	ditherSharpness  string
 	layoutName       string
 }
 type wanderTickMsg struct{ gen int }
@@ -4413,6 +4690,20 @@ func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	}
 }
 
+// muteUserCmd sends "/mute <username>" as a normal room message — the only
+// way to mute is server-side, via the same slash command a user would type
+// by hand (see docs/00-latest-api-reference.md's Commands section). Unlike
+// sendRoomMessageCmd, success always reports back (userMutedMsg) since the
+// command posts nothing to the room for the user to see otherwise.
+func (a *App) muteUserCmd(roomID, username string) tea.Cmd {
+	return func() tea.Msg {
+		if _, err := a.client.SendRoomMessage(roomID, "/mute "+username); err != nil {
+			return actionErrMsg{err}
+		}
+		return userMutedMsg{username: username}
+	}
+}
+
 func (a *App) markRoomReadCmd(roomID string) tea.Cmd {
 	return func() tea.Msg {
 		_ = a.client.MarkRoomRead(roomID) // fire-and-forget
@@ -4500,9 +4791,59 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	}
 }
 
-func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool) tea.Cmd {
+// maxAttachmentDim is the width/height cap cyberspace.online enforces on a
+// post's native image/gif attachment — confirmed live (POST /v1/posts 400s
+// above it: "Image width must be an integer between 1 and 640px"). The API
+// requires the client to supply both dimensions and does not compute or
+// resize the image itself.
+const maxAttachmentDim = 640
+
+// attachmentTypeForURL infers a wireAttachment's "type" from the URL's path
+// extension (via urlutil.IsGIFURL — ignores query string/fragment, unlike a
+// raw suffix check, so a signed CDN link like ".gif?token=..." still
+// resolves correctly). This only covers native post/reply attachments,
+// which are always this client's own upload URLs with a known extension;
+// circ/C-Mail's /gif <url> accepts arbitrary user-typed URLs instead, so
+// openImageInTerminal no longer relies on extension sniffing — see
+// imgview.FetchAny.
+func attachmentTypeForURL(rawURL string) string {
+	if urlutil.IsGIFURL(rawURL) {
+		return "gif"
+	}
+	return "image"
+}
+
+// resolveAttachment fetches attachmentURL's declared dimensions and builds
+// the model.Attachment CreatePost/EditPost send. Returns nil, nil for an
+// empty URL (no attachment). Returns an error — surfaced to the user like any
+// other actionErrMsg/editErrorMsg — when the image can't be fetched or
+// exceeds maxAttachmentDim; this app has no way to resize it (no upload
+// endpoint to host the result), so the accurate move is to fail clearly here
+// rather than let the server reject a request the user already spent an
+// interaction composing.
+func resolveAttachment(attachmentURL string) (*model.Attachment, error) {
+	if attachmentURL == "" {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	width, height, err := imgview.Dimensions(ctx, attachmentURL)
+	if err != nil {
+		return nil, fmt.Errorf("attach image: %w", err)
+	}
+	if width > maxAttachmentDim || height > maxAttachmentDim {
+		return nil, fmt.Errorf("attach image: %dx%d exceeds the site's %dx%d limit for post attachments — try a smaller image, or paste the link in the body text instead", width, height, maxAttachmentDim, maxAttachmentDim)
+	}
+	return &model.Attachment{Type: attachmentTypeForURL(attachmentURL), Src: attachmentURL, Width: width, Height: height}, nil
+}
+
+func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool, attachmentURL string) tea.Cmd {
 	return func() tea.Msg {
-		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW)
+		attachment, err := resolveAttachment(attachmentURL)
+		if err != nil {
+			return actionErrMsg{err}
+		}
+		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, attachment)
 		if err != nil {
 			return actionErrMsg{err}
 		}
@@ -4621,7 +4962,15 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		a, cmd := a.notify(notifyError, msg.err.Error())
 		return a, cmd, true
 	case urlPostLoadedMsg:
-		a.postDetailReturn = msg.origin
+		if a.active == screenPostDetail {
+			// Already viewing a post and the link opened another one:
+			// push the current post so Esc returns to it instead of
+			// clobbering postDetailReturn with screenPostDetail itself.
+			a.postDetailStack = append(a.postDetailStack, a.postDetail)
+		} else {
+			a.postDetailReturn = msg.origin
+			a.postDetailStack = nil
+		}
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.post)
 		return a, a.loadRepliesCmd(msg.post.ID), true
@@ -4697,8 +5046,9 @@ func (a App) suppressActiveRoomMentions(notifs []model.Notification) (App, tea.C
 
 func (a *App) loadNotifsCmd() tea.Cmd {
 	unreadOnly := a.notifications.ShowUnreadOnly()
+	types := a.notifications.ActiveTypeFilter()
 	return func() tea.Msg {
-		notifs, cursor, err := a.client.GetNotifications("", unreadOnly, nil)
+		notifs, cursor, err := a.client.GetNotifications("", unreadOnly, types)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -4708,8 +5058,9 @@ func (a *App) loadNotifsCmd() tea.Cmd {
 
 func (a *App) loadNotifsPageCmd(cursor string) tea.Cmd {
 	unreadOnly := a.notifications.ShowUnreadOnly()
+	types := a.notifications.ActiveTypeFilter()
 	return func() tea.Msg {
-		notifs, nextCursor, err := a.client.GetNotifications(cursor, unreadOnly, nil)
+		notifs, nextCursor, err := a.client.GetNotifications(cursor, unreadOnly, types)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -5130,14 +5481,30 @@ func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 	}
 }
 
-func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool) tea.Cmd {
+// editPostCmd sends a post edit. otherAttachments are attachments the edit
+// panel found on the post but doesn't manage (e.g. an audio one) — when
+// attachmentTouched, they're resent alongside the resolved attachmentURL
+// since EditPost replaces the whole attachments array wholesale.
+func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool, attachmentURL string, attachmentTouched bool, otherAttachments []model.Attachment) tea.Cmd {
 	return func() tea.Msg {
-		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW); err != nil {
+		var attachments []model.Attachment
+		if attachmentTouched {
+			attachment, err := resolveAttachment(attachmentURL)
+			if err != nil {
+				return editErrorMsg(err)
+			}
+			attachments = append(attachments, otherAttachments...)
+			if attachment != nil {
+				attachments = append(attachments, *attachment)
+			}
+		}
+		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW, attachments, attachmentTouched); err != nil {
 			return editErrorMsg(err)
 		}
 		return postEditedMsg{
 			postID: postID, content: content, title: title, topics: topics,
 			isPublic: isPublic, isNSFW: isNSFW, editedAt: time.Now(),
+			attachments: attachments, attachmentsTouched: attachmentTouched,
 		}
 	}
 }
@@ -5240,7 +5607,7 @@ func (a *App) deleteRoomMessageCmd(roomID, messageID string) tea.Cmd {
 // Published notes have no title, are private, and not marked NSFW.
 func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, "", "", topics, false, false)
+		_, err := a.client.CreatePost(content, "", "", topics, false, false, nil)
 		if err != nil {
 			return actionErrMsg{err}
 		}

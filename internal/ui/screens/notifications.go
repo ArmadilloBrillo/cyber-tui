@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
@@ -37,24 +38,81 @@ type ShowNotificationPostMsg struct {
 	AuthorUsername string
 }
 
+// notifFilterDebounceDelay is how long the filter panel cursor must sit still
+// on a row before it's actually applied (fetched). Without this, quickly
+// scrolling through categories fires a fetch per keypress, which can arrive
+// out of order and briefly flash a stale category's results.
+const notifFilterDebounceDelay = 1 * time.Second
+
+// notifFilterDebounceMsg fires notifFilterDebounceDelay after a filter panel
+// cursor move. Update only applies it if the cursor hasn't moved again since
+// (checked via filterMoveAt) — a newer move's own scheduled tick will apply
+// instead, so at most one fetch happens per pause.
+type notifFilterDebounceMsg struct{}
+
+func scheduleNotifFilterDebounceCmd() tea.Cmd {
+	return tea.Tick(notifFilterDebounceDelay, func(time.Time) tea.Msg {
+		return notifFilterDebounceMsg{}
+	})
+}
+
+// notifCategory groups related notification types under one filterable label.
+// Kept as an ordered slice (not a map) so the filter panel and header summary
+// render in a stable, deterministic order.
+type notifCategory struct {
+	label string
+	types []string
+}
+
+var notifCategories = []notifCategory{
+	{label: "mentions", types: []string{"reply_mention", "post_mention", "chat_mention", "graffiti_mention"}},
+	{label: "social", types: []string{"new_follower", "unfollowed", "poke", "bookmark"}},
+	{label: "threads", types: []string{"reply", "thread_reply", "guild_new_thread", "new_post_friend", "new_post_following"}},
+	{label: "c-mail", types: []string{"dm_message"}},
+	{label: "account/system", types: []string{
+		"supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed",
+		"image_permission_granted", "image_permission_removed",
+		"attachment_permission_granted", "attachment_permission_removed",
+		"system_ban", "system_ban_lifted", "moderator_granted", "moderator_removed",
+		"api_access_granted", "api_access_removed", "post_cooldown", "rate_limit_warning",
+	}},
+}
+
+// notifFilterOptionCount returns the number of rows in the filter panel: the
+// synthetic "all" option (index 0) plus one per category.
+func notifFilterOptionCount() int { return len(notifCategories) + 1 }
+
+// notifFilterOptionLabel returns the display label for filter panel row i.
+func notifFilterOptionLabel(i int) string {
+	if i == 0 {
+		return "all"
+	}
+	return notifCategories[i-1].label
+}
+
 type NotificationsModel struct {
-	notifs         []model.Notification
-	notifOffsets   []int // start line of each notification within the viewport content
-	viewport       viewport.Model
-	width          int
-	height         int
-	selectedIndex  int
-	ready          bool
-	loading        bool
-	fetching       bool // true while the initial (or tab-switch) load is in flight
-	refreshing     bool
-	exhausted      bool
-	nextCursor     string
-	hasPaginated   bool
-	showUnreadOnly bool
-	err            error
-	relaxed        bool
-	loc            *time.Location
+	notifs              []model.Notification
+	notifOffsets        []int // start line of each notification within the viewport content
+	viewport            viewport.Model
+	width               int
+	height              int
+	selectedIndex       int
+	ready               bool
+	loading             bool
+	fetching            bool // true while the initial (or tab-switch) load is in flight
+	refreshing          bool
+	exhausted           bool
+	nextCursor          string
+	hasPaginated        bool
+	showUnreadOnly      bool
+	err                 error
+	relaxed             bool
+	loc                 *time.Location
+	filterCategoryIndex int // 0 = all (no filter); 1..len(notifCategories) map to notifCategories[i-1]; the last APPLIED (fetched) selection
+	filterOpen          bool
+	filterCursor        int       // row currently highlighted in the panel; may lag filterCategoryIndex while debouncing
+	filterOrigIndex     int       // filterCategoryIndex snapshot taken when the panel opened, for esc revert
+	filterMoveAt        time.Time // time of the most recent cursor move, for debouncing the fetch
 }
 
 func NewNotificationsModel() NotificationsModel {
@@ -136,6 +194,27 @@ func (m NotificationsModel) SetLocation(loc *time.Location) NotificationsModel {
 
 // ShowUnreadOnly reports whether the screen is currently filtering to unread-only.
 func (m NotificationsModel) ShowUnreadOnly() bool { return m.showUnreadOnly }
+
+// ActiveTypeFilter returns the []string the API expects for GetNotifications'
+// types param for the currently selected category. Returns nil when "all" is
+// selected, matching the "no filter" query shape/behavior the client used
+// before this feature existed. notifCategories is never mutated, so the
+// underlying slice is returned directly rather than copied.
+func (m NotificationsModel) ActiveTypeFilter() []string {
+	if m.filterCategoryIndex == 0 {
+		return nil
+	}
+	return notifCategories[m.filterCategoryIndex-1].types
+}
+
+// FilterSummary returns the active category's label, or "" when "all" is
+// selected (no filter applied).
+func (m NotificationsModel) FilterSummary() string {
+	if m.filterCategoryIndex == 0 {
+		return ""
+	}
+	return notifCategories[m.filterCategoryIndex-1].label
+}
 
 // HasPaginated reports whether the user has loaded pages beyond the first.
 func (m NotificationsModel) HasPaginated() bool { return m.hasPaginated }
@@ -255,7 +334,19 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case notifFilterDebounceMsg:
+		if !m.filterOpen || time.Since(m.filterMoveAt) < notifFilterDebounceDelay {
+			return m, nil // panel closed, or a newer move already reset the timer
+		}
+		if m.filterCursor == m.filterCategoryIndex {
+			return m, nil // cursor settled back on the already-applied category
+		}
+		return m.applyCategoryFilter(m.filterCursor)
+
 	case tea.KeyMsg:
+		if m.filterOpen {
+			return m.handleFilterPanelKey(msg)
+		}
 		visible := m.visibleNotifs()
 		switch msg.String() {
 		case "up", "k":
@@ -272,6 +363,30 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 		case "down", "j":
 			if m.selectedIndex < len(visible)-1 {
 				m.selectedIndex++
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+			} else if !m.loading && !m.exhausted && m.nextCursor != "" {
+				m.loading = true
+				cursor := m.nextCursor
+				m = m.refreshContent()
+				m.viewport.ScrollDown(1)
+				return m, func() tea.Msg { return LoadMoreNotifsMsg{Cursor: cursor} }
+			}
+			return m, nil
+		case "pgup":
+			if m.selectedIndex > 0 {
+				m.selectedIndex = max(0, m.selectedIndex-pageJumpItems)
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+			} else if !m.loading && !m.refreshing {
+				m.refreshing = true
+				m = m.refreshContent()
+				return m, func() tea.Msg { return RefreshNotifsMsg{} }
+			}
+			return m, nil
+		case "pgdown":
+			if m.selectedIndex < len(visible)-1 {
+				m.selectedIndex = min(len(visible)-1, m.selectedIndex+pageJumpItems)
 				m = m.refreshContent()
 				m = m.ensureSelectedVisible()
 			} else if !m.loading && !m.exhausted && m.nextCursor != "" {
@@ -301,6 +416,11 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 			m.fetching = true
 			m = m.refreshContent()
 			return m, func() tea.Msg { return RefreshNotifsMsg{} }
+		case "f":
+			m.filterOpen = true
+			m.filterOrigIndex = m.filterCategoryIndex
+			m.filterCursor = m.filterCategoryIndex
+			return m, nil
 		case "enter":
 			if len(visible) == 0 || m.selectedIndex >= len(visible) {
 				return m, nil
@@ -372,6 +492,53 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 	return m, cmd
 }
 
+// handleFilterPanelKey handles key input while the category filter panel is
+// open. Selection is live: every cursor move immediately applies and
+// refetches (mirrors the theme picker's live-preview-on-cursor-move
+// pattern in internal/ui/app.go's handleThemePickerKey). Esc reverts to
+// whichever category was active when the panel opened; enter just closes,
+// since the current cursor position is already applied.
+func (m NotificationsModel) handleFilterPanelKey(msg tea.KeyMsg) (NotificationsModel, tea.Cmd) {
+	n := notifFilterOptionCount()
+	switch msg.String() {
+	case "up", "k":
+		m.filterCursor = (m.filterCursor - 1 + n) % n
+		m.filterMoveAt = time.Now()
+		return m, scheduleNotifFilterDebounceCmd()
+	case "down", "j":
+		m.filterCursor = (m.filterCursor + 1) % n
+		m.filterMoveAt = time.Now()
+		return m, scheduleNotifFilterDebounceCmd()
+	case "esc":
+		m.filterOpen = false
+		if m.filterCategoryIndex != m.filterOrigIndex {
+			return m.applyCategoryFilter(m.filterOrigIndex)
+		}
+	case "enter":
+		m.filterOpen = false
+		if m.filterCursor != m.filterCategoryIndex {
+			// Apply the highlighted-but-not-yet-debounced selection
+			// immediately rather than making the user wait it out.
+			return m.applyCategoryFilter(m.filterCursor)
+		}
+	}
+	return m, nil
+}
+
+// applyCategoryFilter sets the active filter category, resets pagination
+// state, and refetches — the same reset shape as the existing 'u' unread-only
+// toggle. Shared by cursor movement and the esc-revert path.
+func (m NotificationsModel) applyCategoryFilter(index int) (NotificationsModel, tea.Cmd) {
+	m.filterCategoryIndex = index
+	m.selectedIndex = 0
+	m.notifs = nil
+	m.nextCursor = ""
+	m.exhausted = false
+	m.fetching = true
+	m = m.refreshContent()
+	return m, func() tea.Msg { return RefreshNotifsMsg{} }
+}
+
 func (m NotificationsModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight
 	if h < 1 {
@@ -388,9 +555,13 @@ func (m NotificationsModel) buildContent() (string, []int) {
 
 	var prefix string
 	startLine := 0
+	if summary := m.FilterSummary(); summary != "" {
+		prefix += theme.Subtle.Render("  filter: "+summary+"  (press 'f' to change)") + "\n"
+		startLine++
+	}
 	if m.refreshing {
-		prefix = theme.Subtle.Render("  fetching notifications...") + "\n"
-		startLine = 1
+		prefix += theme.Subtle.Render("  fetching notifications...") + "\n"
+		startLine++
 	}
 
 	if len(visible) == 0 {
@@ -680,5 +851,70 @@ func (m NotificationsModel) View() string {
 	if !m.ready {
 		return theme.Subtle.Render("loading notifications...")
 	}
+	if m.filterOpen {
+		return overlayCenter(m.viewport.View(), m.renderFilterPanel(), m.width, m.viewportHeight())
+	}
 	return m.viewport.View()
+}
+
+func (m NotificationsModel) renderFilterPanel() string {
+	title := theme.Title.Render("Filter Notifications")
+	var lines []string
+	for i := 0; i < notifFilterOptionCount(); i++ {
+		line := notifFilterOptionLabel(i)
+		if i == m.filterCursor {
+			line = theme.Highlight.Render("▸ " + line)
+		} else {
+			line = theme.Subtle.Render("  " + line)
+		}
+		lines = append(lines, line)
+	}
+	hint := theme.Subtle.Render("↑↓ select   enter confirm   esc cancel")
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		lipgloss.JoinVertical(lipgloss.Left, lines...),
+		"",
+		hint,
+	)
+	return theme.ActiveBorder.Render(body)
+}
+
+// overlayCenter splices fg, centered, on top of bg — used to keep the
+// notification list visible behind the filter panel rather than blanking it,
+// matching how the app's other modals (icon picker, theme picker, etc.)
+// overlay on top of the screen behind them instead of replacing it.
+func overlayCenter(bg, fg string, bgW, bgH int) string {
+	fgW := lipgloss.Width(fg)
+	fgLines := strings.Split(fg, "\n")
+	bgLines := strings.Split(bg, "\n")
+
+	xOff := (bgW - fgW) / 2
+	yOff := (bgH - len(fgLines)) / 2
+	if xOff < 0 {
+		xOff = 0
+	}
+	if yOff < 0 {
+		yOff = 0
+	}
+
+	result := make([]string, len(bgLines))
+	copy(result, bgLines)
+
+	for i, fgLine := range fgLines {
+		bi := yOff + i
+		if bi < 0 || bi >= len(result) {
+			continue
+		}
+		bgLine := result[bi]
+		bgLineW := ansi.StringWidth(bgLine)
+		needed := xOff + fgW
+		if bgLineW < needed {
+			bgLine += strings.Repeat(" ", needed-bgLineW)
+		}
+		left := ansi.Truncate(bgLine, xOff, "")
+		right := ansi.TruncateLeft(bgLine, xOff+fgW, "")
+		result[bi] = left + fgLine + right
+	}
+	return strings.Join(result, "\n")
 }

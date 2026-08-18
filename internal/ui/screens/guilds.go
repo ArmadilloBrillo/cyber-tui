@@ -2,6 +2,8 @@ package screens
 
 import (
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -112,19 +114,20 @@ type GuildsModel struct {
 	guildsExhausted  bool
 
 	// Guild posts state
-	activeGuild       string
-	activeGuildDetail model.Guild
-	guildDetailLoaded bool
-	confirming        guildsConfirm
-	ownGuildSlug      string // logged-in user's current guild membership (empty = no guild)
-	posts             []model.Post
-	postIndex         int
-	nextCursor        string
-	exhausted         bool
-	loading           bool
-	fetching          bool
-	refreshing        bool
-	loaded            bool
+	activeGuild        string
+	activeGuildDetail  model.Guild
+	guildDetailLoaded  bool
+	confirming         guildsConfirm
+	ownGuildSlug       string   // logged-in user's current guild membership (empty = no guild)
+	ownApprenticeSlugs []string // logged-in user's apprenticed guild slugs
+	posts              []model.Post
+	postIndex          int
+	nextCursor         string
+	exhausted          bool
+	loading            bool
+	fetching           bool
+	refreshing         bool
+	loaded             bool
 
 	// Guild members state
 	members           []model.GuildMember
@@ -186,9 +189,9 @@ func (m GuildsModel) visiblePosts() []model.Post {
 }
 
 // ComposeActive reports whether the new-thread compose panel is open.
-func (m GuildsModel) ComposeActive() bool            { return m.panel.IsActive() }
-func (m GuildsModel) ComposeHeight() int             { return m.panel.PanelHeight() }
-func (m GuildsModel) ComposeView(width int) string   { return m.panel.SetWidth(width).View() }
+func (m GuildsModel) ComposeActive() bool          { return m.panel.IsActive() }
+func (m GuildsModel) ComposeHeight() int           { return m.panel.PanelHeight() }
+func (m GuildsModel) ComposeView(width int) string { return m.panel.SetWidth(width).View() }
 
 // ActiveGuild returns the slug of the guild whose posts are currently displayed, or "" when in list view.
 func (m GuildsModel) ActiveGuild() string { return m.activeGuild }
@@ -217,7 +220,7 @@ func (m GuildsModel) SetFetching() GuildsModel {
 // SetGuilds replaces the guild list with a fresh page.
 func (m GuildsModel) SetGuilds(items []model.Guild, cursor string) GuildsModel {
 	m.err = nil
-	m.guilds = items
+	m.guilds = sortGuildsForDisplay(items, m.ownGuildSlug, m.ownApprenticeSlugs)
 	m.guildIndex = 0
 	m.guildsNextCursor = cursor
 	m.guildsExhausted = cursor == ""
@@ -334,7 +337,65 @@ func (m GuildsModel) IsDetailLoaded() bool { return m.guildDetailLoaded }
 // requiring a full SharedConfigMsg broadcast.
 func (m GuildsModel) SetOwnGuildSlug(slug string) GuildsModel {
 	m.ownGuildSlug = slug
+	m.guilds = sortGuildsForDisplay(m.guilds, m.ownGuildSlug, m.ownApprenticeSlugs)
+	if m.ready {
+		m = m.refreshContent()
+	}
 	return m
+}
+
+// SetOwnApprenticeSlugs updates the logged-in user's apprenticed guild slugs
+// and re-sorts the already-loaded guild list. Called by app.go directly
+// after fetching the user's own guild memberships, mirroring SetOwnGuildSlug.
+func (m GuildsModel) SetOwnApprenticeSlugs(slugs []string) GuildsModel {
+	m.ownApprenticeSlugs = slugs
+	m.guilds = sortGuildsForDisplay(m.guilds, m.ownGuildSlug, m.ownApprenticeSlugs)
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
+// sortGuildsForDisplay floats the user's own guild to the top, followed by
+// apprenticed guilds (ordered by member count), then the rest in the order
+// the server returned them.
+func sortGuildsForDisplay(guilds []model.Guild, ownSlug string, apprenticeSlugs []string) []model.Guild {
+	apprentice := make(map[string]struct{}, len(apprenticeSlugs))
+	for _, s := range apprenticeSlugs {
+		apprentice[s] = struct{}{}
+	}
+	rank := func(g model.Guild) int {
+		if ownSlug != "" && g.Slug == ownSlug {
+			return 0
+		}
+		if _, ok := apprentice[g.Slug]; ok {
+			return 1
+		}
+		return 2
+	}
+	sorted := append([]model.Guild(nil), guilds...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ri, rj := rank(sorted[i]), rank(sorted[j])
+		if ri != rj {
+			return ri < rj
+		}
+		if ri == 1 {
+			return sorted[i].MemberCount > sorted[j].MemberCount
+		}
+		return false
+	})
+	return sorted
+}
+
+// isOwnGuild reports whether slug is the logged-in user's badge guild.
+func (m GuildsModel) isOwnGuild(slug string) bool {
+	return m.ownGuildSlug != "" && slug == m.ownGuildSlug
+}
+
+// isApprenticeGuild reports whether slug is one of the logged-in user's
+// apprenticed guilds.
+func (m GuildsModel) isApprenticeGuild(slug string) bool {
+	return slices.Contains(m.ownApprenticeSlugs, slug)
 }
 
 // IsConfirmingJoin reports whether the join confirmation prompt is active.
@@ -364,6 +425,12 @@ func (m GuildsModel) Init() tea.Cmd { return nil }
 // Update handles messages for the guilds screen.
 func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case InsertIconMsg:
+		if m.panel.IsActive() {
+			m.panel = m.panel.InsertText(msg.Icon)
+		}
+		return m, nil
+
 	case SharedConfigMsg:
 		m.relaxed = msg.Relaxed
 		if msg.Loc != nil {
@@ -375,6 +442,8 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			m.postIndex = 0
 		}
 		m.ownGuildSlug = msg.OwnGuildSlug
+		m.ownApprenticeSlugs = msg.OwnApprenticeSlugs
+		m.guilds = sortGuildsForDisplay(m.guilds, m.ownGuildSlug, m.ownApprenticeSlugs)
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		if m.ready {
 			m = m.refreshContent()
@@ -534,6 +603,79 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			} else { // viewGuildMembers
 				if m.memberIndex < len(m.members)-1 {
 					m.memberIndex++
+					m = m.refreshContent()
+				} else if !m.membersExhausted && !m.loading {
+					slug, cursor := m.activeGuild, m.membersNextCursor
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreGuildMembersMsg{Slug: slug, Cursor: cursor}
+					}
+				}
+			}
+			return m, nil
+
+		case "pgup":
+			if m.view == viewGuildList {
+				if m.guildIndex > 0 {
+					m.guildIndex = max(0, m.guildIndex-pageJumpItems)
+					m = m.refreshContent()
+				}
+			} else if m.view == viewGuildPosts {
+				if m.postIndex > 0 {
+					m.postIndex = max(0, m.postIndex-pageJumpItems)
+					m = m.refreshContent()
+					var detailCmd tea.Cmd
+					m, detailCmd = m.currentDetailCmd()
+					return m, detailCmd
+				} else if !m.loading && !m.refreshing {
+					slug := m.activeGuild
+					m.refreshing = true
+					m = m.refreshContent()
+					return m, func() tea.Msg { return RefreshGuildPostsMsg{Slug: slug} }
+				}
+			} else { // viewGuildMembers
+				if m.memberIndex > 0 {
+					m.memberIndex = max(0, m.memberIndex-pageJumpItems)
+					m = m.refreshContent()
+				}
+			}
+			return m, nil
+
+		case "pgdown":
+			if m.view == viewGuildList {
+				if m.guildIndex < len(m.guilds)-1 {
+					m.guildIndex = min(len(m.guilds)-1, m.guildIndex+pageJumpItems)
+					m = m.refreshContent()
+				} else if !m.guildsExhausted && !m.loading {
+					cursor := m.guildsNextCursor
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreGuildsMsg{Cursor: cursor}
+					}
+				}
+			} else if m.view == viewGuildPosts {
+				if m.postIndex < len(m.visiblePosts())-1 {
+					m.postIndex = min(len(m.visiblePosts())-1, m.postIndex+pageJumpItems)
+					m = m.refreshContent()
+					var detailCmd tea.Cmd
+					m, detailCmd = m.currentDetailCmd()
+					return m, detailCmd
+				} else if !m.exhausted && !m.loading {
+					slug, cursor := m.activeGuild, m.nextCursor
+					m.loading = true
+					m = m.refreshContent()
+					m.viewport.ScrollDown(1)
+					return m, func() tea.Msg {
+						return LoadMoreGuildPostsMsg{Slug: slug, Cursor: cursor}
+					}
+				}
+			} else { // viewGuildMembers
+				if m.memberIndex < len(m.members)-1 {
+					m.memberIndex = min(len(m.members)-1, m.memberIndex+pageJumpItems)
 					m = m.refreshContent()
 				} else if !m.membersExhausted && !m.loading {
 					slug, cursor := m.activeGuild, m.membersNextCursor
@@ -857,7 +999,18 @@ func (m GuildsModel) renderGuildItem(index int) string {
 		subtleStyle = theme.Base
 	}
 
+	isOwn := m.isOwnGuild(guild.Slug)
+	isApprentice := !isOwn && m.isApprenticeGuild(guild.Slug)
+
 	iconStr := guildIcon(guild.Icon)
+	if iconStr == "◆" {
+		switch {
+		case isOwn:
+			iconStr = "★"
+		case isApprentice:
+			iconStr = "☆"
+		}
+	}
 	icon := subtleStyle.Render(iconStr) + " "
 	iconW := lipgloss.Width(icon)
 
@@ -1145,7 +1298,7 @@ func (m GuildsModel) GetFocusedURLs() []string {
 func (m GuildsModel) IsViewingGuildPosts() bool { return m.view == viewGuildPosts }
 
 func (m GuildsModel) IsCompactListActive() bool { return m.IsViewingGuildPosts() }
-func (m GuildsModel) ListTitle() string          { return "posts (◆ " + m.ActiveGuildName() + ")" }
+func (m GuildsModel) ListTitle() string         { return "posts (◆ " + m.ActiveGuildName() + ")" }
 
 // ActiveGuildName returns the display name of the active guild, falling back to the slug if detail has not yet loaded.
 func (m GuildsModel) ActiveGuildName() string {

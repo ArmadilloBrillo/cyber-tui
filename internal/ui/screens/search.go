@@ -360,6 +360,24 @@ func (m SearchModel) Update(msg tea.Msg) (SearchModel, tea.Cmd) {
 			}
 			return m, nil
 
+		case "pgup":
+			m = m.moveSelection(-pageJumpItems)
+			return m, nil
+
+		case "pgdown":
+			if m.selected < len(m.rows)-1 {
+				m = m.moveSelection(pageJumpItems)
+				return m, nil
+			}
+			if m.view == searchViewTypeList && !m.loading {
+				if cmd := m.loadMoreCmd(); cmd != nil {
+					m.loading = true
+					m = m.refreshContent()
+					return m, cmd
+				}
+			}
+			return m, nil
+
 		case "enter":
 			return m.handleEnter()
 
@@ -421,9 +439,24 @@ func (m SearchModel) loadMoreCmd() tea.Cmd {
 // moveSelection shifts m.selected by delta rows, skipping over header rows,
 // and re-renders so the newly selected row is highlighted and scrolled into view.
 func (m SearchModel) moveSelection(delta int) SearchModel {
+	if len(m.rows) == 0 {
+		return m
+	}
+	// Clamp before skipping headers, not after: an overshooting jump (e.g.
+	// PgDown within one page of the end) must land on the last/first
+	// selectable row, not bail out and leave the selection unmoved.
 	next := m.selected + delta
+	if next < 0 {
+		next = 0
+	} else if next >= len(m.rows) {
+		next = len(m.rows) - 1
+	}
+	step := 1
+	if delta < 0 {
+		step = -1
+	}
 	for next >= 0 && next < len(m.rows) && m.rows[next].kind == rowHeader {
-		next += delta
+		next += step
 	}
 	if next < 0 || next >= len(m.rows) || m.rows[next].kind == rowHeader {
 		return m
@@ -713,7 +746,7 @@ func (m SearchModel) refreshContent() SearchModel {
 // if no row is selected or the selected row isn't a post — used by App to
 // detect a selection-only move (see FeedModel.SelectedPostID's doc comment).
 func (m SearchModel) SelectedPostID() string {
-	if m.selected < 0 || m.selected >= len(m.rows) {
+	if m.view == searchViewQuery || m.selected < 0 || m.selected >= len(m.rows) {
 		return ""
 	}
 	row := m.rows[m.selected]
@@ -727,7 +760,7 @@ func (m SearchModel) SelectedPostID() string {
 // the viewport, top to bottom, across every visible post hit — see
 // PostDetailModel.VisibleInlineImages for the full contract.
 func (m SearchModel) VisibleInlineImages() []InlineImageSlot {
-	if !m.ready || !m.inlineImagesEnabled {
+	if !m.ready || !m.inlineImagesEnabled || m.view == searchViewQuery {
 		return nil
 	}
 	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height

@@ -74,6 +74,46 @@ func TestFetch_RejectsNon200(t *testing.T) {
 	}
 }
 
+// TestFetch_SendsUserAgent guards against a regression to Go's default
+// "Go-http-client/1.1", which Wikimedia's edge (and presumably other image
+// hosts with a similar bot policy) rejects outright with 403 — confirmed
+// live: the exact same request against a real Wikimedia-hosted GIF failed
+// without this header and succeeded with it.
+func TestFetch_SendsUserAgent(t *testing.T) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.Write(pngBytes(t, 1, 1))
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := imgview.Fetch(context.Background(), srv.URL); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if gotUA == "" || strings.HasPrefix(gotUA, "Go-http-client") {
+		t.Errorf("User-Agent = %q, want a non-empty, non-default value", gotUA)
+	}
+}
+
+func TestDimensions_ReturnsDeclaredSize(t *testing.T) {
+	srv := serve(t, http.StatusOK, pngBytes(t, 7, 5))
+	w, h, err := imgview.Dimensions(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("Dimensions: %v", err)
+	}
+	if w != 7 || h != 5 {
+		t.Errorf("Dimensions() = %dx%d, want 7x5", w, h)
+	}
+}
+
+func TestDimensions_RejectsNon200(t *testing.T) {
+	srv := serve(t, http.StatusNotFound, nil)
+	_, _, err := imgview.Dimensions(context.Background(), srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "404") {
+		t.Errorf("err = %v, want 404 error", err)
+	}
+}
+
 // gifBytes encodes an n-frame, wxh GIF, each frame a solid color from
 // palette[i % len(palette)] so frames are visually distinguishable.
 func gifBytes(t *testing.T, w, h, n int) []byte {
@@ -130,5 +170,50 @@ func TestFetchGIF_RejectsExcessiveDimensions(t *testing.T) {
 	_, err := imgview.FetchGIF(context.Background(), srv.URL)
 	if err == nil || !strings.Contains(err.Error(), "dimensions") {
 		t.Errorf("err = %v, want dimensions error", err)
+	}
+}
+
+// TestFetchAny_DetectsGIFFromExtensionlessURL guards the actual bug this
+// fixes: /gif <url> in circ/C-Mail forwards an arbitrary user-typed URL
+// (Tenor share links, CDN links with no ".gif" suffix, etc.) with no
+// extension to key off, so FetchAny must decide GIF-vs-static from the
+// downloaded bytes' own GIF87a/GIF89a header, not the URL's path.
+func TestFetchAny_DetectsGIFFromExtensionlessURL(t *testing.T) {
+	srv := serve(t, http.StatusOK, gifBytes(t, 4, 3, 3))
+	url := srv.URL + "/no-extension-here"
+	frames, delays, err := imgview.FetchAny(context.Background(), url)
+	if err != nil {
+		t.Fatalf("FetchAny: %v", err)
+	}
+	if len(frames) != 3 {
+		t.Errorf("frame count = %d, want 3", len(frames))
+	}
+	if len(delays) != 3 {
+		t.Errorf("delay count = %d, want 3", len(delays))
+	}
+}
+
+func TestFetchAny_StaticImageReturnsOneFrameNoDelays(t *testing.T) {
+	srv := serve(t, http.StatusOK, pngBytes(t, 4, 3))
+	frames, delays, err := imgview.FetchAny(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("FetchAny: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Errorf("frame count = %d, want 1", len(frames))
+	}
+	if delays != nil {
+		t.Errorf("delays = %v, want nil", delays)
+	}
+	if b := frames[0].Bounds(); b.Dx() != 4 || b.Dy() != 3 {
+		t.Errorf("bounds = %v, want 4x3", b)
+	}
+}
+
+func TestFetchAny_RejectsUndecodableContent(t *testing.T) {
+	srv := serve(t, http.StatusOK, []byte("<html>not an image</html>"))
+	_, _, err := imgview.FetchAny(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("FetchAny: want error for non-image content, got nil")
 	}
 }

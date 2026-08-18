@@ -362,12 +362,13 @@ type flagResponseData struct {
 }
 
 type createPostRequest struct {
-	Content  string   `json:"content"`
-	Title    string   `json:"title,omitempty"`
-	Topics   []string `json:"topics"`
-	IsPublic bool     `json:"isPublic"`
-	IsNSFW   bool     `json:"isNSFW"`
-	Slug     string   `json:"slug,omitempty"`
+	Content     string           `json:"content"`
+	Title       string           `json:"title,omitempty"`
+	Topics      []string         `json:"topics"`
+	IsPublic    bool             `json:"isPublic"`
+	IsNSFW      bool             `json:"isNSFW"`
+	Slug        string           `json:"slug,omitempty"`
+	Attachments []wireAttachment `json:"attachments,omitempty"`
 }
 
 type createPostResponseData struct {
@@ -378,12 +379,17 @@ type createPostResponseData struct {
 
 // editPostRequest deliberately omits omitempty on Title: the API accepts ""
 // to clear an existing title, and omitempty would silently drop that intent.
+// Attachments is a pointer for the same reason omitempty doesn't work for
+// Title: nil means "don't touch existing attachments" (omitted from the
+// JSON), while a non-nil pointer — even to an empty slice — is sent as-is,
+// replacing them (per the API: "Send [] to remove them").
 type editPostRequest struct {
-	Content  string   `json:"content"`
-	Title    string   `json:"title"`
-	Topics   []string `json:"topics"`
-	IsPublic bool     `json:"isPublic"`
-	IsNSFW   bool     `json:"isNSFW"`
+	Content     string            `json:"content"`
+	Title       string            `json:"title"`
+	Topics      []string          `json:"topics"`
+	IsPublic    bool              `json:"isPublic"`
+	IsNSFW      bool              `json:"isNSFW"`
+	Attachments *[]wireAttachment `json:"attachments,omitempty"`
 }
 
 type editReplyRequest struct {
@@ -920,6 +926,21 @@ func wireAttachmentsToModel(ws []wireAttachment) []model.Attachment {
 	return out
 }
 
+// wireAttachmentFromModel converts a model.Attachment to its wire shape, for
+// requests that set attachments (CreatePost, EditPost).
+func wireAttachmentFromModel(a model.Attachment) wireAttachment {
+	return wireAttachment{
+		Type:   a.Type,
+		Src:    a.Src,
+		Width:  a.Width,
+		Height: a.Height,
+		Origin: a.Origin,
+		Artist: a.Artist,
+		Title:  a.Title,
+		Genre:  a.Genre,
+	}
+}
+
 // wireAudioAttachmentToModel converts a message's optional audioAttachment
 // object to the model type. Returns nil when w is nil.
 func wireAudioAttachmentToModel(w *wireAttachment) *model.Attachment {
@@ -1310,14 +1331,19 @@ func (c *HTTPClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	return all, nil
 }
 
-func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool) (model.Post, error) {
+func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error) {
+	var attachments []wireAttachment
+	if attachment != nil {
+		attachments = []wireAttachment{wireAttachmentFromModel(*attachment)}
+	}
 	env, err := c.doJSON("POST", "/v1/posts", createPostRequest{
-		Content:  content,
-		Title:    title,
-		Topics:   topics,
-		IsPublic: isPublic,
-		IsNSFW:   isNSFW,
-		Slug:     slug,
+		Content:     content,
+		Title:       title,
+		Topics:      topics,
+		IsPublic:    isPublic,
+		IsNSFW:      isNSFW,
+		Slug:        slug,
+		Attachments: attachments,
 	})
 	if err != nil {
 		return model.Post{}, err
@@ -1338,13 +1364,22 @@ func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, is
 	}, nil
 }
 
-func (c *HTTPClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool) error {
+func (c *HTTPClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, attachments []model.Attachment, attachmentTouched bool) error {
+	var wireAttachments *[]wireAttachment
+	if attachmentTouched {
+		list := make([]wireAttachment, len(attachments))
+		for i, a := range attachments {
+			list[i] = wireAttachmentFromModel(a)
+		}
+		wireAttachments = &list
+	}
 	_, err := c.doJSON("PATCH", "/v1/posts/"+url.PathEscape(postID), editPostRequest{
-		Content:  content,
-		Title:    title,
-		Topics:   topics,
-		IsPublic: isPublic,
-		IsNSFW:   isNSFW,
+		Content:     content,
+		Title:       title,
+		Topics:      topics,
+		IsPublic:    isPublic,
+		IsNSFW:      isNSFW,
+		Attachments: wireAttachments,
 	})
 	return err
 }

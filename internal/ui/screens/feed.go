@@ -69,24 +69,31 @@ const feedMergeAnimDelay = 200 * time.Millisecond
 
 // SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
 type SubmitNewPostMsg struct {
-	Content  string
-	Title    string // empty = no title
-	Slug     string // empty = server-generated
-	Topics   []string
-	IsPublic bool
-	IsNSFW   bool
+	Content       string
+	Title         string // empty = no title
+	Slug          string // empty = server-generated
+	Topics        []string
+	IsPublic      bool
+	IsNSFW        bool
+	AttachmentURL string // empty = no attachment
 }
 
 // SubmitPostEditMsg is emitted when the user submits an edit to an existing
 // post via the 'e' key (Feed or PostDetail). Unlike SubmitNewPostMsg, slug is
 // not included — it's immutable once published.
 type SubmitPostEditMsg struct {
-	PostID   string
-	Content  string
-	Title    string
-	Topics   []string
-	IsPublic bool
-	IsNSFW   bool
+	PostID            string
+	Content           string
+	Title             string
+	Topics            []string
+	IsPublic          bool
+	IsNSFW            bool
+	AttachmentURL     string // only meaningful when AttachmentTouched
+	AttachmentTouched bool   // false = leave existing attachments alone
+	// OtherAttachments are attachments the edit panel found on the post but
+	// doesn't manage (e.g. an audio one) — re-sent alongside AttachmentURL
+	// when AttachmentTouched, since the API replaces the whole array.
+	OtherAttachments []model.Attachment
 }
 
 type FeedModel struct {
@@ -197,6 +204,7 @@ func (m FeedModel) SetPosts(posts []model.Post, cursor string) FeedModel {
 	m.posts = posts
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
+	m = m.evictStaleBodyCache()
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
@@ -346,8 +354,11 @@ func (m FeedModel) CanEditSelected() bool {
 }
 
 // ApplyPostEdit overwrites the edited fields of a local post by ID after a
-// successful PATCH, leaving AuthorID, CreatedAt, RepliesCount, etc. untouched.
-func (m FeedModel) ApplyPostEdit(postID, content, title string, topics []string, isPublic, isNSFW bool, editedAt time.Time) FeedModel {
+// successful PATCH, leaving AuthorID, CreatedAt, RepliesCount, etc.
+// untouched. Attachments is only applied when attachmentsTouched — the edit
+// didn't change them server-side otherwise, so the cached value is already
+// correct (see EditPost's own attachmentTouched).
+func (m FeedModel) ApplyPostEdit(postID, content, title string, topics []string, isPublic, isNSFW bool, editedAt time.Time, attachments []model.Attachment, attachmentsTouched bool) FeedModel {
 	for i, p := range m.posts {
 		if p.ID == postID {
 			p.Content = content
@@ -356,6 +367,9 @@ func (m FeedModel) ApplyPostEdit(postID, content, title string, topics []string,
 			p.IsPublic = isPublic
 			p.IsNSFW = isNSFW
 			p.EditedAt = editedAt
+			if attachmentsTouched {
+				p.Attachments = attachments
+			}
 			m.posts[i] = p
 			break
 		}
@@ -480,10 +494,27 @@ func (m FeedModel) ComposeActive() bool {
 func (m FeedModel) ComposeHeight() int           { return m.panel.PanelHeight() }
 func (m FeedModel) ComposeView(width int) string { return m.panel.SetWidth(width).View() }
 
+// PanelActive reports whether the new-post/edit-post panel is open, for
+// app.go to decide whether ctrl+g should set a native post attachment
+// instead of inserting markdown into whatever's focused.
+func (m FeedModel) PanelActive() bool { return m.panel.IsActive() }
+
+// SetPanelAttachment sets the panel's pending image/gif attachment URL.
+func (m FeedModel) SetPanelAttachment(url string) FeedModel {
+	m.panel = m.panel.SetAttachmentURL(url)
+	return m
+}
+
 func (m FeedModel) Init() tea.Cmd { return nil }
 
 func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case InsertIconMsg:
+		if m.panel.IsActive() {
+			m.panel = m.panel.InsertText(msg.Icon)
+		}
+		return m, nil
+
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.defaultPublicPost = msg.Settings.DefaultPublicPost
@@ -574,17 +605,20 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		topics := ParseTopics(m.panel.TopicsRaw())
 		isPublic := m.panel.IsPublic()
 		isNSFW := m.panel.IsNSFW()
+		attachmentURL := m.panel.AttachmentURL()
+		attachmentTouched := m.panel.AttachmentTouched()
+		otherAttachments := m.panel.OtherAttachments()
 		if m.editingPostID != "" {
 			postID := m.editingPostID
 			m = m.closeCompose()
 			return m, func() tea.Msg {
-				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
+				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentURL: attachmentURL, AttachmentTouched: attachmentTouched, OtherAttachments: otherAttachments}
 			}
 		}
 		slug := m.panel.SlugValue()
 		m = m.closeCompose()
 		return m, func() tea.Msg {
-			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW}
+			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentURL: attachmentURL}
 		}
 
 	case ComposeCancelMsg:
@@ -745,6 +779,40 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case "pgup":
+			if m.selectedIndex > 0 {
+				m.selectedIndex = max(0, m.selectedIndex-pageJumpItems)
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+				var detailCmd tea.Cmd
+				m, detailCmd = m.currentDetailCmd()
+				return m, detailCmd
+			} else if len(m.pendingNew) > 0 && !m.refreshing {
+				m.refreshing = true
+				m = m.refreshContent()
+				return m, tea.Tick(feedMergeAnimDelay, func(time.Time) tea.Msg { return mergePendingTickMsg{} })
+			} else if !m.loading && !m.refreshing {
+				m.refreshing = true
+				m = m.refreshContent()
+				return m, func() tea.Msg { return RefreshFeedMsg{} }
+			}
+			return m, nil
+		case "pgdown":
+			if m.selectedIndex < len(m.visiblePosts())-1 {
+				m.selectedIndex = min(len(m.visiblePosts())-1, m.selectedIndex+pageJumpItems)
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+				var detailCmd tea.Cmd
+				m, detailCmd = m.currentDetailCmd()
+				return m, detailCmd
+			} else {
+				var loadCmd tea.Cmd
+				m, loadCmd = m.triggerLoadMore()
+				if loadCmd != nil {
+					return m, loadCmd
+				}
+			}
+			return m, nil
 		}
 	}
 
@@ -865,6 +933,24 @@ type feedBodyCacheEntry struct {
 	editedAt            time.Time
 	inlineImagesEnabled bool
 	themeName           string
+}
+
+// evictStaleBodyCache drops bodyCache entries for posts no longer present in
+// m.posts. Called from SetPosts, whose wholesale replace of m.posts is the
+// only point where a post can permanently drop out of the loaded list —
+// without this, bodyCache grows for the life of the session since it's keyed
+// by post ID and otherwise only ever gains entries in renderPost.
+func (m FeedModel) evictStaleBodyCache() FeedModel {
+	live := make(map[string]bool, len(m.posts))
+	for _, p := range m.posts {
+		live[p.ID] = true
+	}
+	for id := range m.bodyCache {
+		if !live[id] {
+			delete(m.bodyCache, id)
+		}
+	}
+	return m
 }
 
 func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageSlot) {

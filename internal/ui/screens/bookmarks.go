@@ -199,6 +199,26 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 				return m, func() tea.Msg { return LoadMoreBookmarksMsg{Cursor: cursor} }
 			}
 			return m, nil
+		case "pgup":
+			if m.selectedIndex > 0 {
+				m.selectedIndex = max(0, m.selectedIndex-pageJumpItems)
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+			}
+			return m, nil
+		case "pgdown":
+			if m.selectedIndex < len(m.visibleItems())-1 {
+				m.selectedIndex = min(len(m.visibleItems())-1, m.selectedIndex+pageJumpItems)
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+			} else if !m.loading && !m.exhausted && m.nextCursor != "" {
+				m.loading = true
+				cursor := m.nextCursor
+				m = m.refreshContent()
+				m.viewport.ScrollDown(1)
+				return m, func() tea.Msg { return LoadMoreBookmarksMsg{Cursor: cursor} }
+			}
+			return m, nil
 		case "d":
 			visible := m.visibleItems()
 			if m.selectedIndex >= len(visible) {

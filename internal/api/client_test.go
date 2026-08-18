@@ -251,7 +251,7 @@ func TestHTTPCreatePost_SendsAllFields(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass") //nolint:errcheck
 
-	post, err := c.CreatePost("body text", "My Title", "", []string{"cyber"}, true, true)
+	post, err := c.CreatePost("body text", "My Title", "", []string{"cyber"}, true, true, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -3451,7 +3451,7 @@ func TestHTTPEditPost_CallsCorrectEndpoint(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	err := c.EditPost("p1", "corrected content", "New Title", []string{"go", "cli"}, true, false)
+	err := c.EditPost("p1", "corrected content", "New Title", []string{"go", "cli"}, true, false, nil, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -3484,7 +3484,7 @@ func TestHTTPEditPost_SendsEmptyTitleToClear(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	if err := c.EditPost("p1", "content", "", nil, false, false); err != nil {
+	if err := c.EditPost("p1", "content", "", nil, false, false, nil, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sawTitleKey {
@@ -3495,13 +3495,106 @@ func TestHTTPEditPost_SendsEmptyTitleToClear(t *testing.T) {
 	}
 }
 
+func TestHTTPCreatePost_SendsAttachment(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{"postId": "p1"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	attachment := &model.Attachment{Type: "gif", Src: "https://example.com/pic.gif", Width: 100, Height: 80}
+	if _, err := c.CreatePost("content", "", "", nil, false, false, attachment); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	attachments, ok := gotBody["attachments"].([]any)
+	if !ok || len(attachments) != 1 {
+		t.Fatalf("attachments = %v, want a single-element array", gotBody["attachments"])
+	}
+	att, _ := attachments[0].(map[string]any)
+	if att["type"] != "gif" || att["src"] != "https://example.com/pic.gif" || att["width"] != float64(100) || att["height"] != float64(80) {
+		t.Errorf("attachment = %v, want type=gif src=https://example.com/pic.gif width=100 height=80", att)
+	}
+}
+
+func TestHTTPCreatePost_NoAttachmentURL_OmitsAttachments(t *testing.T) {
+	var gotBody map[string]any
+	sawAttachmentsKey := false
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		sawAttachmentsKey = strings.Contains(string(raw), `"attachments"`)
+		json.Unmarshal(raw, &gotBody)
+		writeOK(t, w, map[string]any{"postId": "p1"})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if _, err := c.CreatePost("content", "", "", nil, false, false, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sawAttachmentsKey {
+		t.Fatal(`request body has "attachments" key with no attachment to send`)
+	}
+}
+
+// TestHTTPEditPost_AttachmentTouched covers the states EditPost's
+// attachmentTouched/attachments pair can produce on the wire: untouched
+// (field omitted, existing attachments left alone), touched+empty (field
+// sent as [], clearing them), touched+one (field sent as a one-element
+// array, replacing them), and touched+multiple (the shape a caller sends to
+// preserve an unrelated attachment — e.g. audio — alongside a new one,
+// since the API replaces the whole array).
+func TestHTTPEditPost_AttachmentTouched(t *testing.T) {
+	cases := []struct {
+		name              string
+		attachments       []model.Attachment
+		attachmentTouched bool
+		wantKeyPresent    bool
+		wantLen           int
+	}{
+		{"untouched omits the field", nil, false, false, 0},
+		{"touched+empty clears", nil, true, true, 0},
+		{"touched+one sets", []model.Attachment{{Type: "image", Src: "https://example.com/pic.png", Width: 100, Height: 100}}, true, true, 1},
+		{"touched+multiple preserves both", []model.Attachment{
+			{Type: "audio", Src: "https://youtu.be/x", Origin: "youtube", Artist: "a", Title: "t"},
+			{Type: "image", Src: "https://example.com/pic.png", Width: 100, Height: 100},
+		}, true, true, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotBody map[string]any
+			sawKey := false
+			c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				sawKey = strings.Contains(string(raw), `"attachments"`)
+				json.Unmarshal(raw, &gotBody)
+				writeOK(t, w, map[string]any{"postId": "p1"})
+			})))
+			c.Login("u@example.com", "pass")
+
+			if err := c.EditPost("p1", "content", "title", nil, false, false, tc.attachments, tc.attachmentTouched); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if sawKey != tc.wantKeyPresent {
+				t.Fatalf(`"attachments" key present = %v, want %v`, sawKey, tc.wantKeyPresent)
+			}
+			if !tc.wantKeyPresent {
+				return
+			}
+			attachments, _ := gotBody["attachments"].([]any)
+			if len(attachments) != tc.wantLen {
+				t.Errorf("attachments = %v, want len %d", gotBody["attachments"], tc.wantLen)
+			}
+		})
+	}
+}
+
 func TestHTTPEditPost_Forbidden(t *testing.T) {
 	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "FORBIDDEN", "outside edit window")
 	})))
 	c.Login("u@example.com", "pass")
 
-	err := c.EditPost("p1", "content", "title", nil, false, false)
+	err := c.EditPost("p1", "content", "title", nil, false, false, nil, false)
 	apiErr, ok := asAPIError(err)
 	if !ok {
 		t.Fatalf("expected *APIError, got %T: %v", err, err)

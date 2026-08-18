@@ -565,6 +565,11 @@ func (l MillerLayout) renderPathPrompt(a App) string {
 	return a.pathPrompt.View()
 }
 
+// renderAttachURLPrompt renders the attach-image/gif-URL prompt modal.
+func (l MillerLayout) renderAttachURLPrompt(a App) string {
+	return a.attachURLPrompt.View()
+}
+
 func (l MillerLayout) renderHelpModal(a App) string {
 	title := theme.Title.Render("shortcuts")
 	sectionStyle := theme.Subtle.Bold(true)
@@ -587,6 +592,8 @@ func (l MillerLayout) renderHelpModal(a App) string {
 		row("x / i", "export / import custom theme (in theme picker)"),
 		row("v", "density"),
 		row("o", "open url"),
+		row("ctrl+]", "icon picker"),
+		row("ctrl+g", "attach image/gif"),
 		row("q", "quit"),
 	)
 	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)
@@ -620,6 +627,10 @@ func (l MillerLayout) renderURLPicker(a App) string {
 	rows := append([]string{title, ""}, items...)
 	rows = append(rows, "", hint)
 	return theme.ActiveBorder.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
+}
+
+func (l MillerLayout) renderIconPicker(a App) string {
+	return a.iconPicker.View()
 }
 
 func (l MillerLayout) renderImageModal(a App) string {

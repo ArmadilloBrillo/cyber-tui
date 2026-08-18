@@ -24,7 +24,7 @@ func TestSortRoomUsers_AdminsFirstThenAlphabetical(t *testing.T) {
 		{UserID: "3", Username: "alice"},
 		{UserID: "4", Username: "bob", IsChatAdmin: true},
 	}
-	out := sortRoomUsers(in)
+	out := sortRoomUsers(in, 0)
 
 	want := []string{"bob", "Molly", "alice", "zeb"}
 	if len(out) != len(want) {
@@ -42,9 +42,59 @@ func TestSortRoomUsers_AdminsFirstThenAlphabetical(t *testing.T) {
 
 func TestSortRoomUsers_DoesNotMutateInput(t *testing.T) {
 	in := []model.RoomUser{{UserID: "1", Username: "zeb"}, {UserID: "2", Username: "alice"}}
-	_ = sortRoomUsers(in)
+	_ = sortRoomUsers(in, 0)
 	if in[0].Username != "zeb" {
 		t.Errorf("input slice was mutated: %+v", in)
+	}
+}
+
+// TestSortRoomUsers_ActiveBeforeIdle_AdminFirstWithinEachBlock covers the
+// full four-block order: active admins, active others, idle admins, idle
+// others, alphabetical within each.
+func TestSortRoomUsers_ActiveBeforeIdle_AdminFirstWithinEachBlock(t *testing.T) {
+	const idleAfterMs = 60_000
+	longAgo := time.Now().Add(-time.Hour)
+	justNow := time.Now()
+
+	in := []model.RoomUser{
+		{UserID: "1", Username: "zeb", LastActivity: &longAgo},                      // idle, non-admin
+		{UserID: "2", Username: "molly", IsChatAdmin: true, LastActivity: &longAgo}, // idle, admin
+		{UserID: "3", Username: "trinity", LastActivity: &justNow},                  // active, non-admin
+		{UserID: "4", Username: "alice", IsChatAdmin: true, LastActivity: &justNow}, // active, admin
+		{UserID: "5", Username: "bob", LastActivity: &justNow},                      // active, non-admin
+		{UserID: "6", Username: "dozer", IsChatAdmin: true, LastActivity: &longAgo}, // idle, admin
+	}
+	out := sortRoomUsers(in, idleAfterMs)
+
+	want := []string{
+		"alice",   // active, admin
+		"bob",     // active, others (alphabetical)
+		"trinity", // active, others (alphabetical)
+		"dozer",   // idle, admin (alphabetical)
+		"molly",   // idle, admin (alphabetical)
+		"zeb",     // idle, others
+	}
+	got := make([]string, len(out))
+	for i, u := range out {
+		got[i] = u.Username
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+// TestSortRoomUsers_NilLastActivity_NeverIdle guards the documented
+// contract on RoomUser.LastActivity: a nil value always sorts as active,
+// even with a real idleAfterMs threshold in effect.
+func TestSortRoomUsers_NilLastActivity_NeverIdle(t *testing.T) {
+	longAgo := time.Now().Add(-time.Hour)
+	in := []model.RoomUser{
+		{UserID: "1", Username: "zeb", LastActivity: &longAgo}, // idle
+		{UserID: "2", Username: "alice"},                       // no LastActivity reported — active
+	}
+	out := sortRoomUsers(in, 60_000)
+	if out[0].Username != "alice" {
+		t.Errorf("out[0].Username = %q, want alice (nil LastActivity sorts as active)", out[0].Username)
 	}
 }
 
@@ -1359,7 +1409,7 @@ func TestBrowsing_Enter_TogglesSpoilerReveal(t *testing.T) {
 	}
 	renderedWithReveal := func(m ChatroomsModel) string {
 		content, _, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
-			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil)
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil, nil)
 		return content
 	}
 	if strings.Contains(renderedWithReveal(m), "the ending is a twist") {
@@ -1412,7 +1462,7 @@ func TestBrowsing_Enter_TogglesL33tReveal(t *testing.T) {
 
 	renderedWithReveal := func(m ChatroomsModel) string {
 		content, _, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
-			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil)
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil, nil)
 		return content
 	}
 	if !strings.Contains(renderedWithReveal(m), "3l173") {
@@ -1469,6 +1519,128 @@ func TestBrowsing_P_NoSelectedMessage_IsNoop(t *testing.T) {
 	m = m.SetMessages("zion", nil)
 
 	_, cmd := m.updateBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd != nil {
+		t.Error("expected no-op when nothing is selected")
+	}
+}
+
+// --- start C-Mail conversation (see updateBrowsingKey's "c" case) ---
+
+func TestBrowsing_C_EmitsStartConversationMsg(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	sc, ok := cmd().(StartConversationMsg)
+	if !ok {
+		t.Fatalf("expected StartConversationMsg, got %T", cmd())
+	}
+	if sc.Username != "molly" {
+		t.Errorf("Username = %q, want molly", sc.Username)
+	}
+}
+
+func TestBrowsing_C_NoSelectedMessage_IsNoop(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", nil)
+
+	_, cmd := m.updateBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if cmd != nil {
+		t.Error("expected no-op when nothing is selected")
+	}
+}
+
+// --- mute user (see updateBrowsingKey's "m" case) ---
+
+func TestBrowsing_M_EmitsMuteUserMsg(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	mu, ok := cmd().(MuteUserMsg)
+	if !ok {
+		t.Fatalf("expected MuteUserMsg, got %T", cmd())
+	}
+	if mu.RoomID != "zion" || mu.Username != "molly" {
+		t.Errorf("MuteUserMsg = %+v, want RoomID=zion Username=molly", mu)
+	}
+}
+
+func TestBrowsing_M_OwnMessage_IsNoop(t *testing.T) {
+	// chatroomsInRoom sets the current user to "neo" — see its doc comment.
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "neo"}, Body: "hi", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.updateBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if cmd != nil {
+		t.Error("expected no-op when trying to mute yourself")
+	}
+}
+
+func TestBrowsing_M_NoSelectedMessage_IsNoop(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", nil)
+
+	_, cmd := m.updateBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	if cmd != nil {
+		t.Error("expected no-op when nothing is selected")
+	}
+}
+
+// --- copy message text (see updateBrowsingKey's "y" case) ---
+
+func TestBrowsing_Y_EmitsCopyMessageTextMsg(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi there", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	cp, ok := cmd().(CopyMessageTextMsg)
+	if !ok {
+		t.Fatalf("expected CopyMessageTextMsg, got %T", cmd())
+	}
+	if cp.Text != "hi there" {
+		t.Errorf("Text = %q, want %q", cp.Text, "hi there")
+	}
+}
+
+func TestBrowsing_Y_NoSelectedMessage_IsNoop(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", nil)
+
+	_, cmd := m.updateBrowsingKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	if cmd != nil {
 		t.Error("expected no-op when nothing is selected")
 	}
@@ -1548,6 +1720,52 @@ func TestPrependMessages_NotSubjectToByteCap(t *testing.T) {
 	}
 }
 
+// TestTrimMessageBuffer_EvictsStaleBodyCache guards against chatBodyCache
+// outliving the messages it was rendered from — an entry for a message
+// that's been evicted from m.messages by the byte cap must be dropped too,
+// or it sits in memory forever keyed by an ID nothing will ever look up
+// again.
+func TestTrimMessageBuffer_EvictsStaleBodyCache(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	big := chatMessageBufferMaxBytes
+	m.messages = []model.Message{bigMessage("old1", big), bigMessage("old2", big)}
+	m.chatBodyCache = map[string]chatBodyCacheEntry{
+		"old1": {rendered: "stale"},
+		"old2": {rendered: "kept"},
+	}
+
+	m = m.trimMessageBuffer()
+
+	if _, ok := m.chatBodyCache["old1"]; ok {
+		t.Error("expected chatBodyCache entry for the evicted message to be removed")
+	}
+	if _, ok := m.chatBodyCache["old2"]; !ok {
+		t.Error("expected chatBodyCache entry for the surviving message to remain")
+	}
+}
+
+// TestSetMessages_EvictsStaleBodyCache mirrors the Feed screen's
+// TestFeedSetPosts_EvictsStaleBodyCache — SetMessages wholesale-replacing
+// m.messages (room open/switch, or a fresh history load) is the other point
+// a message can permanently drop out of the loaded history, so it needs the
+// same cache cleanup as trimMessageBuffer.
+func TestSetMessages_EvictsStaleBodyCache(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.chatBodyCache = map[string]chatBodyCacheEntry{
+		"gone": {rendered: "stale"},
+		"kept": {rendered: "fresh"},
+	}
+
+	m = m.SetMessages("zion", []model.Message{{ID: "kept", From: model.User{Username: "trinity"}, CreatedAt: time.Now()}})
+
+	if _, ok := m.chatBodyCache["gone"]; ok {
+		t.Error("expected chatBodyCache entry for a message no longer in m.messages to be evicted")
+	}
+	if _, ok := m.chatBodyCache["kept"]; !ok {
+		t.Error("expected chatBodyCache entry for a message still in m.messages to survive")
+	}
+}
+
 func TestAppendMessage_EvictionResetsHistoryExhausted(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	big := chatMessageBufferMaxBytes / 2
@@ -1611,13 +1829,13 @@ func TestChatrooms_InlineImages_SuppressesRedundantTextOnceEnabled(t *testing.T)
 	}
 
 	disabled, _, _, _ := renderCircMessagesWithSelection(msgs, m.location(), m.timeDisplayFormat,
-		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, false, nil)
+		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, false, nil, nil)
 	if !strings.Contains(disabled, "https://example.com/attach.png") || !strings.Contains(disabled, "https://example.com/pic.png") {
 		t.Fatalf("setup: expected both URLs visible while disabled, got: %q", disabled)
 	}
 
 	enabled, _, _, _ := renderCircMessagesWithSelection(msgs, m.location(), m.timeDisplayFormat,
-		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, true, nil)
+		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, true, nil, nil)
 	if strings.Contains(enabled, "https://example.com/attach.png") {
 		t.Errorf("expected the attachment URL suppressed once enabled, got: %q", enabled)
 	}
@@ -2030,5 +2248,20 @@ func TestChatrooms_VisibleInlineImages_LastMessageImage_AfterRealRowsKnown(t *te
 	slots := m.VisibleInlineImages()
 	if len(slots) != 1 {
 		t.Fatalf("expected the last message's image to stay visible after its band shrank, got %d slots: %+v", len(slots), slots)
+	}
+}
+
+// TestChatroomsModel_SetComposeValueMsg_ReplacesInput guards ctrl+g's
+// /gif dispatch (see app.go's applyAttachURL): unlike InsertIconMsg, which
+// inserts at the cursor, SetComposeValueMsg must replace the whole input —
+// a /gif command has to be the message's entire content to be recognized.
+func TestChatroomsModel_SetComposeValueMsg_ReplacesInput(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.input.SetValue("some typed text")
+
+	m, _ = m.Update(SetComposeValueMsg{Value: "/gif https://example.com/pic.gif"})
+
+	if got := m.input.Value(); got != "/gif https://example.com/pic.gif" {
+		t.Errorf("input.Value() = %q, want the replaced /gif command", got)
 	}
 }

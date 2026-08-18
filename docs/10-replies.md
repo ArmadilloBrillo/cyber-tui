@@ -66,4 +66,4 @@ After a successful reply, the reply list for the current post is automatically r
 
 ## Ctrl+Enter Terminal Note
 
-`Ctrl+Enter` is only available as a distinct key sequence in terminals that support the [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/). Charm's SSH library enables this where supported. In terminals that do not support it, `Ctrl+Enter` falls back to a regular Enter keystroke. If this becomes an issue, an alternative binding (e.g. `Ctrl+S`) can be added to `ComposeModel.Update`.
+`Ctrl+Enter` is only available as a distinct key sequence in terminals that support the [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/), and only if the app negotiates it — this project's bubbletea version (v1.3.10) doesn't; that's a bubbletea v2-only feature, and neither `wish` nor `ssh` (the SSH libraries `internal/ssh/server.go` uses) implement it either. So today `Ctrl+Enter` falls back to a regular Enter keystroke everywhere, not just on unsupporting terminals. If this becomes an issue, an alternative binding (e.g. `Ctrl+S`) can be added to `ComposeModel.Update`.

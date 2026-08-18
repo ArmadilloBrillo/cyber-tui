@@ -101,5 +101,5 @@ No new shortcuts. The slug field in `PostComposePanel` is reached via Tab (after
 ## Known Limitations
 
 - Guild and GuildMember `profilePictureUrl` is captured in the model but not displayed.
-- Notification type filter API param is wired but no UI control exists yet.
+- Notification type filter API param has a UI control — see the category filter (`f` key) in `docs/15-notifications.md`.
 - C-Mail, cIRC, and Search (new in v0.7) are tracked in `docs/00-api-backlog.md` and not implemented here.

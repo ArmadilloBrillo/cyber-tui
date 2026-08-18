@@ -113,7 +113,7 @@ func main() {
 		log.Printf("imgview: KITTY_WINDOW_ID=%q TERM_PROGRAM=%q TERM=%q -> graphicsProtocol=%v",
 			os.Getenv("KITTY_WINDOW_ID"), os.Getenv("TERM_PROGRAM"), os.Getenv("TERM"), gfxProto)
 	}
-	app := ui.NewApp(newClient()).WithGraphicsProtocol(gfxProto)
+	app := ui.NewApp(newClient()).WithGraphicsProtocol(gfxProto).WithSavedPreferences(cfg)
 	// Prefer saved session (token-based) over autoEmail/autoPassword credentials.
 	if cfg.RefreshToken != "" {
 		app = app.WithSavedSession(cfg)

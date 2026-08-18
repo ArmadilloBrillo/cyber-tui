@@ -95,6 +95,7 @@ Notifications are grouped by calendar day in the user's configured timezone:
 | `m` | Mark selected notification as read |
 | `M` | Mark all notifications as read |
 | `u` | Toggle unread-only filter |
+| `f` | Open the category filter panel |
 | `esc` | (from PostDetail or profile) return to notifications |
 
 `M` marks the badge as read optimistically, then fires `POST /v1/notifications/read-all` in the background. That endpoint caps at 5,000 marked per call (v0.8.5+) and returns `hasMore`; `markAllNotifsReadCmd` (`internal/ui/app.go`) loops calling it while `hasMore` is `true`, bounded at `markAllNotifsReadMaxCalls` (20 calls / 100,000 notifications) as a defensive guard.
@@ -194,6 +195,31 @@ The notifications screen opens in unread-only mode by default. Press `u` to togg
 
 ---
 
+## Category Filter
+
+Press `f` to open a panel that filters the list down to one notification category at a time, useful when there are too many notifications and only some kinds are relevant right now:
+
+| Category | Types |
+|---|---|
+| `all` | (no filter — every type) |
+| `mentions` | `reply_mention`, `post_mention`, `chat_mention`, `graffiti_mention` |
+| `social` | `new_follower`, `unfollowed`, `poke`, `bookmark` |
+| `threads` | `reply`, `thread_reply`, `guild_new_thread`, `new_post_friend`, `new_post_following` |
+| `c-mail` | `dm_message` |
+| `account/system` | `supporter_granted`/`removed`, `hacker_granted`/`removed`, `image_permission_granted`/`removed`, `attachment_permission_granted`/`removed`, `system_ban`, `system_ban_lifted`, `moderator_granted`/`removed`, `api_access_granted`/`removed`, `post_cooldown`, `rate_limit_warning` |
+
+The panel is **single-select and live**: `↑`/`↓` (or `j`/`k`) move the cursor and wrap around at both ends (`up` from `all` jumps to `account/system`; `down` from `account/system` jumps back to `all`). The cursor moves instantly, but the actual fetch is **debounced by ~1 second** — the highlighted category is only applied once the cursor sits still for that long, so quickly scrolling through categories doesn't fire a fetch per keypress (which could arrive out of order and briefly flash a stale category's results). `enter` applies the highlighted category immediately, bypassing the debounce, and closes. `esc` reverts to whichever category was actually applied when the panel was opened (re-fetching back to it, not just whatever the cursor last touched) and closes. This mirrors the theme picker's live-preview-with-revert pattern (`internal/ui/app.go`'s `handleThemePickerKey`) rather than a checkbox-and-commit flow.
+
+Filtering is server-side via `GET /v1/notifications?type=...` (single category's types, or no `type` param at all for `all`), so pagination stays correct against the filtered set — same "reset pagination state, refetch" shape as the `u` unread-only toggle.
+
+Only one category's types are ever sent to the server at once. The API caps `type` at 1-20 comma-separated values (`docs/00-latest-api-reference.md`); the largest category, `account/system`, is 16 types, safely under that cap — so, unlike an earlier multi-select design that could combine categories past the limit, this cap is not user-reachable and needs no client-side guard.
+
+A `filter: <category>  (press 'f' to change)` line appears above the list whenever a filter is active, so a short list doesn't read as broken.
+
+**Not persisted across sessions** — the filter always resets to `all` (no filter) on every app launch, same as `showUnreadOnly`. This is deliberate: the tab badge (`polledUnreadCount`) always shows the true global unread count regardless of any active filter, so a persisted filter would leave the badge and the visible list silently mismatched every time the app opens.
+
+---
+
 ## Back Navigation
 
 Pressing `enter` on a navigable notification opens PostDetail. Pressing `esc` in PostDetail returns to the notifications screen with the previously selected notification visible. This uses a shared `postDetailReturn` field in the App to track which screen to return to (same mechanism used by Feed → PostDetail → Feed).
@@ -228,7 +254,7 @@ in place but unverified against a real payload.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/v1/notifications?limit=20&cursor=…` | Fetch notification page |
+| `GET` | `/v1/notifications?limit=20&cursor=…&type=…` | Fetch notification page; `type` is an optional comma-separated list of notification types, used by the category filter (`f` key) — see "Category Filter" above |
 | `PATCH` | `/v1/notifications/:id` | Mark one notification read |
 | `POST` | `/v1/notifications/read-all` | Mark all notifications read |
 | `GET` | `/v1/posts/:id` | Load post when opening from notification |

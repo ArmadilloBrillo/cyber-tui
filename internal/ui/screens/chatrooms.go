@@ -275,6 +275,12 @@ type ChatroomsModel struct {
 	// its reserved band can shrink from the fallback-max placeholder down
 	// to its real size once known — see SetImageRealRows.
 	imageRealRows map[string]int
+	// chatBodyCache memoizes renderCircMessagesStyled's per-message output,
+	// keyed by message ID, so refreshMessages() doesn't re-parse/re-style
+	// every held message on every call — critical since styleAnimTickMsg
+	// calls refreshMessages() ~6.7x/sec for as long as any animated-style
+	// message is visible. See chatBodyCacheEntry's doc comment.
+	chatBodyCache map[string]chatBodyCacheEntry
 	flagPrompt          FlagPrompt
 	flagTargetMsgID     string // message ID being flagged, set right before flagPrompt.Open()
 	confirmingDeleteMsg bool   // true while the y/n delete-confirm overlay for the selected message is showing
@@ -374,11 +380,12 @@ func NewChatroomsModel(currentUser string, client api.Client) ChatroomsModel {
 	inp := textinput.New()
 	inp.Placeholder = "type a message..."
 	return ChatroomsModel{
-		input:       inp,
-		currentUser: currentUser,
-		client:      client,
-		mode:        chatroomModeList,
-		flagPrompt:  NewFlagPrompt(),
+		input:         inp,
+		currentUser:   currentUser,
+		client:        client,
+		mode:          chatroomModeList,
+		flagPrompt:    NewFlagPrompt(),
+		chatBodyCache: make(map[string]chatBodyCacheEntry),
 	}
 }
 
@@ -838,6 +845,9 @@ func (m ChatroomsModel) trimMessageBuffer() ChatroomsModel {
 		i++
 	}
 	if i > 0 {
+		for j := 0; j < i; j++ {
+			delete(m.chatBodyCache, m.messages[j].ID)
+		}
 		m.messages = m.messages[i:]
 		m.historyExhausted = false
 	}
@@ -880,6 +890,26 @@ func (m ChatroomsModel) AppendSystemMessage(roomID, text string) ChatroomsModel 
 	})
 }
 
+// evictStaleBodyCache drops chatBodyCache entries for messages no longer
+// present in m.messages. Called from SetMessages, whose wholesale replace of
+// m.messages (room open/switch) is the point a message can permanently drop
+// out of the loaded history — without this, chatBodyCache would keep every
+// entry from every room ever opened this session. trimMessageBuffer handles
+// the other eviction point (rolling history cap) directly, since it already
+// knows exactly which messages it's dropping.
+func (m ChatroomsModel) evictStaleBodyCache() ChatroomsModel {
+	live := make(map[string]bool, len(m.messages))
+	for _, msg := range m.messages {
+		live[msg.ID] = true
+	}
+	for id := range m.chatBodyCache {
+		if !live[id] {
+			delete(m.chatBodyCache, id)
+		}
+	}
+	return m
+}
+
 // SetMessages replaces the message history for the active room.
 func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) ChatroomsModel {
 	if m.activeRoom == nil || m.activeRoom.Slug != roomID {
@@ -887,6 +917,7 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 	}
 	m.messages = msgs
 	m.err = nil
+	m = m.evictStaleBodyCache()
 	if m.ready {
 		m = m.refreshMessages()
 		m.viewport.GotoBottom()
@@ -894,8 +925,9 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 	return m
 }
 
-// SetRoomUsers replaces the presence panel's content, sorted admins-first
-// then alphabetical within each block. Recomputes the message viewport width
+// SetRoomUsers replaces the presence panel's content, sorted active before
+// idle, admins-first, then alphabetical within each block (see
+// sortRoomUsers). Recomputes the message viewport width
 // since the panel's presence affects it (panelWidths collapses to zero width
 // until the first snapshot arrives). The live presence stream fires this on
 // every change and on its own 5s re-evaluation timer, so — same as
@@ -903,7 +935,7 @@ func (m ChatroomsModel) SetMessages(roomID string, msgs []model.Message) Chatroo
 // re-home to the bottom if it was already there, or every presence tick
 // silently drifts the scroll position out from under the user.
 func (m ChatroomsModel) SetRoomUsers(users []model.RoomUser) ChatroomsModel {
-	m.roomUsers = sortRoomUsers(users)
+	m.roomUsers = sortRoomUsers(users, m.idleAfterMs)
 	if m.ready {
 		msgW, _ := m.panelWidths()
 		if msgW != m.viewport.Width {
@@ -1078,6 +1110,19 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		m.styleAnimRunning = false
 		if !m.animPaused {
 			m = m.refreshMessages()
+		}
+		return m, nil
+
+	case InsertIconMsg:
+		if m.mode == chatroomModeDetail {
+			m.input = insertAtCursor(m.input, msg.Icon)
+		}
+		return m, nil
+
+	case SetComposeValueMsg:
+		if m.mode == chatroomModeDetail {
+			m.input.SetValue(msg.Value)
+			m.input.CursorEnd()
 		}
 		return m, nil
 
@@ -1367,6 +1412,24 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 					}
 				}
 				return m, nil
+			case "pgup":
+				if m.selectedRoom > 0 {
+					m.selectedRoom = max(0, m.selectedRoom-pageJumpItems)
+					if m.ready {
+						m.listVP.SetContent(m.renderRoomCards())
+						m = m.ensureRoomVisible()
+					}
+				}
+				return m, nil
+			case "pgdown":
+				if m.selectedRoom < len(m.rooms)-1 {
+					m.selectedRoom = min(len(m.rooms)-1, m.selectedRoom+pageJumpItems)
+					if m.ready {
+						m.listVP.SetContent(m.renderRoomCards())
+						m = m.ensureRoomVisible()
+					}
+				}
+				return m, nil
 			case "enter":
 				if len(m.rooms) > 0 {
 					return m.enterRoomDetail(m.selectedRoom, m.rooms[m.selectedRoom])
@@ -1490,6 +1553,23 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			case "down":
 				m.viewport.ScrollDown(1)
 				return m, nil
+			case "pgup":
+				sel := selectableMessageIndices(m.messages, m.mutedUsers())
+				if len(sel) == 0 {
+					m.viewport.ScrollUp(m.viewport.Height)
+					return m.maybeLoadOlderMessages()
+				}
+				m.input.Blur()
+				m.selectedMsgID = m.messages[sel[len(sel)-1]].ID
+				m = m.refreshMessages()
+				m = m.ensureSelectedMessageVisible()
+				if len(sel) == 1 {
+					return m.maybeLoadOlderMessages()
+				}
+				return m, nil
+			case "pgdown":
+				m.viewport.ScrollDown(m.viewport.Height)
+				return m, nil
 			}
 		}
 	}
@@ -1601,7 +1681,7 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 	}
 	content, offsets, heights, imgSlots := renderCircMessagesWithSelection(
 		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID,
-		m.revealed, m.styleAnimFrame, m.mutedUsers(), m.inlineImagesEnabled, m.imageRealRows)
+		m.revealed, m.styleAnimFrame, m.mutedUsers(), m.inlineImagesEnabled, m.imageRealRows, m.chatBodyCache)
 	m.viewport.SetContent(content)
 	m.msgOffsets, m.msgHeights = offsets, heights
 	m.msgImages = imgSlots
@@ -1857,6 +1937,41 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		m.selectedMsgID = m.messages[sel[newPos]].ID
 		m.viewport.SetYOffset(newOffset)
 		return m.refreshMessages(), nil
+	case "pgup":
+		if curPos == 0 {
+			return m.maybeLoadOlderMessages()
+		}
+		newPos, newOffset := curPos, m.viewport.YOffset
+		for i := 0; i < m.viewport.Height && newPos > 0; i++ {
+			newPos, newOffset = millerPageNav(-1, m.viewport.Height, 0,
+				selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), newPos, newOffset)
+		}
+		if newPos < 0 {
+			newPos = 0
+		}
+		m.selectedMsgID = m.messages[sel[newPos]].ID
+		m.viewport.SetYOffset(newOffset)
+		m = m.refreshMessages()
+		if newPos == 0 {
+			return m.maybeLoadOlderMessages()
+		}
+		return m, nil
+	case "pgdown":
+		if curPos >= len(sel)-1 {
+			m.selectedMsgID = ""
+			m.input.Focus()
+			m = m.refreshMessages()
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+		newPos, newOffset := curPos, m.viewport.YOffset
+		for i := 0; i < m.viewport.Height && newPos < len(sel)-1; i++ {
+			newPos, newOffset = millerPageNav(+1, m.viewport.Height, 0,
+				selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), newPos, newOffset)
+		}
+		m.selectedMsgID = m.messages[sel[newPos]].ID
+		m.viewport.SetYOffset(newOffset)
+		return m.refreshMessages(), nil
 	case "enter":
 		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
 		if !ok || (!slices.Contains(targetMsg.Style, styleSpoiler) && !slices.Contains(targetMsg.Style, styleL33t)) {
@@ -1892,6 +2007,27 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		}
 		username := targetMsg.From.Username
 		return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+	case "c":
+		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
+		if !ok {
+			return m, nil
+		}
+		username := targetMsg.From.Username
+		return m, func() tea.Msg { return StartConversationMsg{Username: username} }
+	case "m":
+		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
+		if !ok || targetMsg.From.Username == m.currentUser || m.activeRoom == nil {
+			return m, nil
+		}
+		roomID, username := m.activeRoom.Slug, targetMsg.From.Username
+		return m, func() tea.Msg { return MuteUserMsg{RoomID: roomID, Username: username} }
+	case "y":
+		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
+		if !ok {
+			return m, nil
+		}
+		text := messageCopyText(targetMsg)
+		return m, func() tea.Msg { return CopyMessageTextMsg{Text: text} }
 	}
 	return m, nil
 }
@@ -2080,11 +2216,25 @@ func (m ChatroomsModel) mentionGhostText() string {
 	return string(top[len(q):])
 }
 
-// sortRoomUsers returns a copy of users ordered admins-first, then
-// alphabetically (case-insensitive) within each block.
-func sortRoomUsers(users []model.RoomUser) []model.RoomUser {
+// roomUserIsIdle reports whether u should be treated as idle given the
+// server's idleAfterMs threshold — shared by sortRoomUsers (idle users sort
+// after active ones) and renderRoomUsersPanel (💤 badge) so the two can
+// never disagree about who's idle. A nil LastActivity always means active
+// (the client never reported one), and idleAfterMs <= 0 (not yet known from
+// the server) means nobody is flagged.
+func roomUserIsIdle(u model.RoomUser, idleAfterMs int) bool {
+	return idleAfterMs > 0 && u.LastActivity != nil && time.Since(*u.LastActivity) > time.Duration(idleAfterMs)*time.Millisecond
+}
+
+// sortRoomUsers returns a copy of users ordered into four blocks — active
+// admins, active others, idle admins, idle others — alphabetical
+// (case-insensitive) within each.
+func sortRoomUsers(users []model.RoomUser, idleAfterMs int) []model.RoomUser {
 	out := append([]model.RoomUser(nil), users...)
 	sort.Slice(out, func(i, j int) bool {
+		if idleI, idleJ := roomUserIsIdle(out[i], idleAfterMs), roomUserIsIdle(out[j], idleAfterMs); idleI != idleJ {
+			return !idleI // active sorts before idle
+		}
 		if out[i].IsChatAdmin != out[j].IsChatAdmin {
 			return out[i].IsChatAdmin
 		}
@@ -2116,7 +2266,7 @@ func renderRoomUsersPanel(users []model.RoomUser, currentUser string, idleAfterM
 		case u.IsChatAdmin:
 			name = theme.Highlight.Render(name)
 		}
-		idle := idleAfterMs > 0 && u.LastActivity != nil && time.Since(*u.LastActivity) > time.Duration(idleAfterMs)*time.Millisecond
+		idle := roomUserIsIdle(u, idleAfterMs)
 		if idle {
 			name = theme.Subtle.Render("💤 ") + name
 		}

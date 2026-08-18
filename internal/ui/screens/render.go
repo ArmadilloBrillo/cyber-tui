@@ -441,6 +441,25 @@ func renderDeletedTombstone(username, ts string, viewportWidth int) string {
 	return prefix + theme.Subtle.Render(plainBody) + strings.Repeat(" ", pad) + theme.Subtle.Render(ts) + "\n"
 }
 
+// chatBodyCacheEntry is a memoized single-message renderCircMessagesStyled
+// result plus the inputs it was computed from, so a stale hit (width resize,
+// theme switch, reveal toggle, mute change, inline-images setting, or an
+// edited/tombstoned body) can be detected and recomputed instead of served.
+// Never populated for messages with an animated style (see hasAnimatedStyle)
+// — those must redraw every animation frame regardless.
+type chatBodyCacheEntry struct {
+	rendered            string
+	width               int
+	currentUser         string
+	timeDisplayFormat   string
+	revealed            bool
+	muted               bool
+	inlineImagesEnabled bool
+	body                string
+	deleted             bool
+	themeName           string
+}
+
 // renderCircMessagesWithSelection renders msgs exactly like renderCircMessages
 // (byte-identical when selectedID == ""), additionally returning each
 // message's start-line offset and rendered line-height (1:1 with msgs, so
@@ -464,7 +483,7 @@ func renderDeletedTombstone(username, ts string, viewportWidth int) string {
 // matching postImageSlot's convention elsewhere. realRows (keyed by
 // circMsgImageKey) supplies each image's already-known real row count, if
 // any — see chatImageBandRows.
-func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int, muted map[string]bool, inlineImagesEnabled bool, realRows map[string]int) (content string, offsets []int, heights []int, imgSlots [][]postImageSlot) {
+func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int, muted map[string]bool, inlineImagesEnabled bool, realRows map[string]int, cache map[string]chatBodyCacheEntry) (content string, offsets []int, heights []int, imgSlots [][]postImageSlot) {
 	offsets = make([]int, len(msgs))
 	heights = make([]int, len(msgs))
 	imgSlots = make([][]postImageSlot, len(msgs))
@@ -480,7 +499,30 @@ func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, t
 				renderMsg = sanitizeChatMessageForInlineImage(msg, url)
 			}
 		}
-		rendered := renderCircMessagesStyled([]model.Message{renderMsg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame, muted)
+		animated := hasAnimatedStyle(msg.Style)
+		muteState := muted[strings.ToLower(msg.From.Username)]
+		revealState := revealed[msg.ID]
+		themeName := theme.CurrentName()
+
+		rendered, ok := "", false
+		if !animated {
+			if e, hit := cache[msg.ID]; hit && e.width == viewportWidth && e.currentUser == currentUser &&
+				e.timeDisplayFormat == timeDisplayFormat && e.revealed == revealState && e.muted == muteState &&
+				e.inlineImagesEnabled == inlineImagesEnabled && e.body == msg.Body && e.deleted == msg.Deleted &&
+				e.themeName == themeName {
+				rendered, ok = e.rendered, true
+			}
+		}
+		if !ok {
+			rendered = renderCircMessagesStyled([]model.Message{renderMsg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame, muted)
+			if !animated && cache != nil {
+				cache[msg.ID] = chatBodyCacheEntry{
+					rendered: rendered, width: viewportWidth, currentUser: currentUser,
+					timeDisplayFormat: timeDisplayFormat, revealed: revealState, muted: muteState,
+					inlineImagesEnabled: inlineImagesEnabled, body: msg.Body, deleted: msg.Deleted, themeName: themeName,
+				}
+			}
+		}
 		if selectedID != "" && msg.ID == selectedID {
 			plain := strings.TrimSuffix(ansi.Strip(rendered), "\n")
 			rendered = theme.SelectedRow.Width(viewportWidth).Render(plain) + "\n"

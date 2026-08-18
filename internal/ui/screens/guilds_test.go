@@ -1,6 +1,7 @@
 package screens_test
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -93,6 +94,71 @@ func TestGuildsModel_AppendGuilds_AddsItems(t *testing.T) {
 	m = m.AppendGuilds(extra, "")
 	if !m.IsLoaded() {
 		t.Error("model should remain loaded after AppendGuilds")
+	}
+}
+
+// --- Ordering by membership ---
+
+func orderedGuilds() []model.Guild {
+	return []model.Guild{
+		{ID: "g1", Name: "Alpha", Slug: "alpha", MemberCount: 100},
+		{ID: "g2", Name: "Beta", Slug: "beta", MemberCount: 50},
+		{ID: "g3", Name: "Gamma", Slug: "gamma", MemberCount: 10},
+		{ID: "g4", Name: "Delta", Slug: "delta", MemberCount: 30},
+	}
+}
+
+func guildViewWithSize(m screens.GuildsModel) screens.GuildsModel {
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	return m
+}
+
+func TestGuildsModel_SetGuilds_OwnGuildFirst(t *testing.T) {
+	t.Helper()
+	m := guildViewWithSize(screens.NewGuildsModel())
+	m = m.SetOwnGuildSlug("gamma")
+	m = m.SetGuilds(orderedGuilds(), "")
+
+	view := m.View()
+	if got, want := strings.Index(view, "Gamma"), strings.Index(view, "Alpha"); got == -1 || want == -1 || got > want {
+		t.Errorf("Gamma (own guild) should render before Alpha; Gamma at %d, Alpha at %d", got, want)
+	}
+}
+
+func TestGuildsModel_SetGuilds_ApprenticesOrderedByMemberCount(t *testing.T) {
+	t.Helper()
+	m := guildViewWithSize(screens.NewGuildsModel())
+	m = m.SetOwnApprenticeSlugs([]string{"delta", "beta"}) // beta(50) should outrank delta(30)
+	m = m.SetGuilds(orderedGuilds(), "")
+
+	view := m.View()
+	betaPos := strings.Index(view, "Beta")
+	deltaPos := strings.Index(view, "Delta")
+	alphaPos := strings.Index(view, "Alpha")
+	if betaPos == -1 || deltaPos == -1 || alphaPos == -1 {
+		t.Fatal("expected all guild names present in view")
+	}
+	if betaPos > deltaPos {
+		t.Errorf("Beta (50 members) should render before Delta (30 members) among apprenticed guilds")
+	}
+	if deltaPos > alphaPos {
+		t.Errorf("apprenticed guilds should render before non-member guilds")
+	}
+}
+
+func TestGuildsModel_RenderGuildItem_ShowsMembershipIcons(t *testing.T) {
+	t.Helper()
+	m := guildViewWithSize(screens.NewGuildsModel())
+	m = m.SetOwnGuildSlug("alpha")
+	m = m.SetOwnApprenticeSlugs([]string{"beta"})
+	m = m.SetGuilds(orderedGuilds(), "")
+
+	view := m.View()
+	if !strings.Contains(view, "★") {
+		t.Error("expected own guild's icon swapped to ★")
+	}
+	if !strings.Contains(view, "☆") {
+		t.Error("expected apprenticed guild's icon swapped to ☆")
 	}
 }
 

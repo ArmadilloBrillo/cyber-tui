@@ -201,6 +201,36 @@ var settingsGroups = []settingsGroup{
 					return m.imageViewer != "browser"
 				},
 			},
+			{
+				label: "  dithering", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.dithering },
+				toggle:  func(m SettingsModel) SettingsModel { m.dithering = !m.dithering; return m },
+				showIf: func(m SettingsModel) bool {
+					return m.imageViewer != "browser"
+				},
+			},
+			{
+				label:   "    sharpness",
+				kind:    "enum",
+				options: []string{"rough", "medium", "sharp", "crisp"},
+				getEnum: func(m SettingsModel) string {
+					if m.ditherSharpness == "" {
+						return "medium"
+					}
+					return m.ditherSharpness
+				},
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					cur := m.ditherSharpness
+					if cur == "" {
+						cur = "medium"
+					}
+					m.ditherSharpness = cycleStringEnum(cur, []string{"rough", "medium", "sharp", "crisp"}, delta)
+					return m
+				},
+				showIf: func(m SettingsModel) bool {
+					return m.imageViewer != "browser" && m.dithering
+				},
+			},
 		},
 	},
 	{
@@ -231,6 +261,10 @@ type SettingsModel struct {
 	originalGraphicsProtocol string         // last saved baseline
 	inlineImages             bool           // live local config value
 	originalInlineImages     bool           // last saved baseline
+	dithering                bool           // live local config value
+	originalDithering        bool           // last saved baseline
+	ditherSharpness          string         // live local config value ("rough"/"medium"/"sharp")
+	originalDitherSharpness  string         // last saved baseline
 	layoutName               string         // live local config value ("tabs" or "miller")
 	originalLayoutName       string         // last saved baseline
 	cursor                   int
@@ -253,7 +287,7 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, layoutName string) SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, ditherSharpness string, layoutName string) SettingsModel {
 	m.err = nil
 	m.original = m.settings
 	m.wanderLust = wanderLust
@@ -268,6 +302,10 @@ func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, i
 	m.originalGraphicsProtocol = graphicsProtocol
 	m.inlineImages = inlineImages
 	m.originalInlineImages = inlineImages
+	m.dithering = dithering
+	m.originalDithering = dithering
+	m.ditherSharpness = ditherSharpness
+	m.originalDitherSharpness = ditherSharpness
 	m.layoutName = layoutName
 	m.originalLayoutName = layoutName
 	return m
@@ -288,6 +326,8 @@ func (m SettingsModel) IsDirty() bool {
 		m.imageViewer != m.originalImageViewer ||
 		m.graphicsProtocol != m.originalGraphicsProtocol ||
 		m.inlineImages != m.originalInlineImages ||
+		m.dithering != m.originalDithering ||
+		m.ditherSharpness != m.originalDitherSharpness ||
 		m.layoutName != m.originalLayoutName
 }
 
@@ -382,6 +422,10 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.originalGraphicsProtocol = msg.GraphicsProtocol
 			m.inlineImages = msg.InlineImages
 			m.originalInlineImages = msg.InlineImages
+			m.dithering = msg.Dithering
+			m.originalDithering = msg.Dithering
+			m.ditherSharpness = msg.DitherSharpness
+			m.originalDitherSharpness = msg.DitherSharpness
 			m.layoutName = msg.LayoutName
 			m.originalLayoutName = msg.LayoutName
 		}
@@ -434,10 +478,12 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				iv := m.imageViewer
 				gp := m.graphicsProtocol
 				ii := m.inlineImages
+				dt := m.dithering
+				ds := m.ditherSharpness
 				ln := m.layoutName
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, LayoutName: ln, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, LayoutName: ln, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -451,6 +497,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.imageViewer = m.originalImageViewer
 			m.graphicsProtocol = m.originalGraphicsProtocol
 			m.inlineImages = m.originalInlineImages
+			m.dithering = m.originalDithering
+			m.ditherSharpness = m.originalDitherSharpness
 			m.layoutName = m.originalLayoutName
 			m.err = nil
 			return m, nil

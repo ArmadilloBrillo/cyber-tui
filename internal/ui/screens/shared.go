@@ -10,6 +10,13 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
+// pageJumpItems is how many rows a PgUp/PgDn press moves a card-list cursor
+// (feed, bookmarks, guilds, notifications, topics, journal, chatrooms/cmail
+// list mode) by. Cards vary in rendered height, so this is an approximate
+// "jump ahead a bunch" step rather than an exact one-viewport-height jump —
+// matching how htop/k9s/lazygit-style TUIs page a variable-height list.
+const pageJumpItems = 10
+
 // typographicPunctOK mirrors the whitelist in the markdown package: EAW=A characters
 // that are consistently 1 column in Western terminals and safe to type/display.
 var typographicPunctOK = map[rune]bool{
@@ -63,6 +70,28 @@ func filterSlugCharsKeyMsg(msg tea.KeyMsg, extraAllowed string) (tea.KeyMsg, boo
 	}
 	msg.Runes = filtered
 	return msg, true
+}
+
+// insertAtCursor splices s into ti's value at the current cursor position
+// and moves the cursor to just after it. textinput.Model has no public
+// InsertString (unlike textarea.Model), so this does the splice by hand —
+// same shape as chatrooms.go's spliceMention.
+func insertAtCursor(ti textinput.Model, s string) textinput.Model {
+	val, pos := []rune(ti.Value()), ti.Position()
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(val) {
+		pos = len(val)
+	}
+	ins := []rune(s)
+	out := make([]rune, 0, len(val)+len(ins))
+	out = append(out, val[:pos]...)
+	out = append(out, ins...)
+	out = append(out, val[pos:]...)
+	ti.SetValue(string(out))
+	ti.SetCursor(pos + len(ins))
+	return ti
 }
 
 // topicsCount returns the number of non-empty, trimmed comma-separated
@@ -217,6 +246,26 @@ func messageURLs(msg model.Message) []string {
 		urls = append(urls, msg.AudioAttachment.Src)
 	}
 	return urls
+}
+
+// messageCopyText returns the text 'y' should copy for msg: its body, or —
+// for an attachment-only message with no body (an /gif or /song posted with
+// no caption) — the attachment's URL, so copying still does something
+// useful rather than copying an empty string.
+func messageCopyText(msg model.Message) string {
+	if msg.Body != "" {
+		return msg.Body
+	}
+	if msg.ImageUrl != "" {
+		return msg.ImageUrl
+	}
+	if msg.GifUrl != "" {
+		return msg.GifUrl
+	}
+	if msg.AudioAttachment != nil {
+		return msg.AudioAttachment.Src
+	}
+	return ""
 }
 
 // messageDisplayBody returns "" when Body merely duplicates ImageUrl or

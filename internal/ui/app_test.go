@@ -1,9 +1,14 @@
 package ui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
+	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1407,6 +1412,49 @@ func TestRouteURL_RelativeURL_ExternalOpen(t *testing.T) {
 	}
 }
 
+// TestRouteURL_ExtensionlessURL_ProbesInlineViewer guards the /gif <url>
+// bug: circ/C-Mail's gif attachments forward whatever URL the user typed,
+// which often has no ".gif" suffix (Tenor share links, extensionless CDN
+// URLs) — canRenderImageInline's extension check alone would reject these
+// and send them straight to the browser. With a graphics protocol
+// available, routeURL must still attempt the inline viewer (via
+// canProbeImageInline) and let the real fetch+decode in imgview.FetchAny
+// decide, rather than trusting the URL's extension. openImageInTerminal
+// bumps imageFetchGen, so that's used here as a proxy for "took the inline
+// path" without needing to inspect the opaque tea.Cmd closure.
+func TestRouteURL_ExtensionlessURL_ProbesInlineViewer(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.imageViewer = "terminal"
+	genBefore := a.imageFetchGen
+
+	a2, cmd := a.routeURL("https://example.com/no-extension-gif")
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	if a2.imageFetchGen == genBefore {
+		t.Error("expected routeURL to probe the inline viewer for an extensionless URL when a graphics protocol is detected")
+	}
+}
+
+// TestRouteURL_ExtensionlessURL_NoProtocol_OpensExternal confirms the probe
+// added for extensionless URLs still respects the same gates as
+// canRenderImageInline — no graphics protocol means straight to the
+// browser, same as today, no wasted fetch attempt.
+func TestRouteURL_ExtensionlessURL_NoProtocol_OpensExternal(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolNone
+	genBefore := a.imageFetchGen
+
+	a2, cmd := a.routeURL("https://example.com/no-extension-gif")
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	if a2.imageFetchGen != genBefore {
+		t.Error("expected no inline-viewer attempt without a detected graphics protocol")
+	}
+}
+
 func TestRouteURL_ReservedWord_NotTreatedAsUsername(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
@@ -1459,6 +1507,81 @@ func TestRouteURL_PostPermalink_BlogForm(t *testing.T) {
 	}
 	if loaded.origin != screenBookmarks {
 		t.Errorf("origin = %v, want screenBookmarks", loaded.origin)
+	}
+}
+
+// TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack is the
+// regression test for the "Esc does nothing after following an in-post link"
+// bug: opening a post-permalink link while already viewing a post used to
+// clobber postDetailReturn with screenPostDetail itself, leaving Esc unable
+// to leave. It should instead push the current post onto postDetailStack and
+// restore it (not refetch it) on the first Esc, falling back to the real
+// origin only once the stack is empty.
+func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) {
+	a := loggedInApp()
+	a = openPostFrom(a, screenFeed)
+	a.postDetail = a.postDetail.SetReplies([]model.Reply{{ID: "r1", PostID: "p1"}})
+
+	m, _, ok := a.handleNotifications(urlPostLoadedMsg{post: model.Post{ID: "p2"}, origin: screenBookmarks})
+	if !ok {
+		t.Fatal("expected urlPostLoadedMsg to be handled")
+	}
+	a = m
+
+	if a.postDetail.PostID() != "p2" {
+		t.Fatalf("expected p2 open, got %q", a.postDetail.PostID())
+	}
+	if len(a.postDetailStack) != 1 {
+		t.Fatalf("expected postDetailStack to have 1 entry, got %d", len(a.postDetailStack))
+	}
+	if a.postDetailReturn != screenFeed {
+		t.Errorf("postDetailReturn should stay screenFeed (the real origin), got %v", a.postDetailReturn)
+	}
+
+	// First Esc: pop back to p1, fully restored, without refetching.
+	m, _, ok = a.handlePostDetail(screens.BackToFeedMsg{})
+	if !ok {
+		t.Fatal("expected BackToFeedMsg to be handled")
+	}
+	a = m
+	if a.active != screenPostDetail {
+		t.Errorf("active = %v, want screenPostDetail (still nested)", a.active)
+	}
+	if a.postDetail.PostID() != "p1" {
+		t.Fatalf("expected p1 restored, got %q", a.postDetail.PostID())
+	}
+	if a.postDetail.Loading() {
+		t.Error("expected p1's already-loaded replies to be restored, not refetched (Loading() should be false)")
+	}
+	if len(a.postDetailStack) != 0 {
+		t.Errorf("expected postDetailStack empty after popping, got %d", len(a.postDetailStack))
+	}
+
+	// Second Esc: stack is empty, fall back to the real origin.
+	m, _, ok = a.handlePostDetail(screens.BackToFeedMsg{})
+	if !ok {
+		t.Fatal("expected BackToFeedMsg to be handled")
+	}
+	a = m
+	if a.active != screenFeed {
+		t.Errorf("active = %v, want screenFeed", a.active)
+	}
+	if a.postDetail.HasPost() {
+		t.Error("expected postDetail closed (no post) after returning to origin")
+	}
+}
+
+// TestActivateScreen_EscapeHatch_ClearsNestedStack ensures pressing the
+// origin tab's own key while nested (rather than pressing Esc) also clears
+// postDetailStack, so a stale stack can't leak into a later PostDetail
+// session opened fresh from that tab.
+func TestActivateScreen_EscapeHatch_ClearsNestedStack(t *testing.T) {
+	a := openPostFrom(loggedInApp(), screenBookmarks)
+	a.postDetailStack = []screens.PostDetailModel{a.postDetail}
+
+	a2, _ := activateScreen(a, screenBookmarks)
+	if len(a2.postDetailStack) != 0 {
+		t.Errorf("expected postDetailStack cleared by escape hatch, got %d entries", len(a2.postDetailStack))
 	}
 }
 
@@ -1907,7 +2030,7 @@ func (c *tooSoonPostClient) GetPost(postID string) (model.Post, error) {
 func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testing.T) {
 	a := NewApp(&tooSoonPostClient{MockClient: api.NewMockClient()})
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false)()
+	msg := a.createPostCmd("hello", "", "", nil, true, false, "")()
 	if _, ok := msg.(postConvertedToNoteMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postConvertedToNoteMsg", msg)
 	}
@@ -1916,9 +2039,237 @@ func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testin
 func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
 	a := NewApp(api.NewMockClient())
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false)()
+	msg := a.createPostCmd("hello", "", "", nil, true, false, "")()
 	if _, ok := msg.(postCreatedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
+	}
+}
+
+// --- resolveAttachment: dimension fetch + the API's 640px cap ---
+
+func testPNGServer(t *testing.T, w, h int) *httptest.Server {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Write(buf.Bytes())
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestResolveAttachment_EmptyURL_ReturnsNil(t *testing.T) {
+	attachment, err := resolveAttachment("")
+	if err != nil || attachment != nil {
+		t.Errorf("resolveAttachment(\"\") = %v, %v, want nil, nil", attachment, err)
+	}
+}
+
+func TestResolveAttachment_WithinLimit_SetsTypeAndDimensions(t *testing.T) {
+	srv := testPNGServer(t, 100, 50)
+	attachment, err := resolveAttachment(srv.URL + "/pic.png")
+	if err != nil {
+		t.Fatalf("resolveAttachment: %v", err)
+	}
+	if attachment.Type != "image" || attachment.Width != 100 || attachment.Height != 50 {
+		t.Errorf("attachment = %+v, want type=image width=100 height=50", attachment)
+	}
+}
+
+// TestResolveAttachment_GIFExtension_SetsGIFType guards attachmentTypeForURL's
+// extension-based inference, which the caller (createPostCmd/editPostCmd)
+// relies on since the API distinguishes "image" from "gif" attachments.
+func TestResolveAttachment_GIFExtension_SetsGIFType(t *testing.T) {
+	srv := testPNGServer(t, 10, 10) // content doesn't need to actually be a gif — only the URL suffix is inspected
+	attachment, err := resolveAttachment(srv.URL + "/pic.gif")
+	if err != nil {
+		t.Fatalf("resolveAttachment: %v", err)
+	}
+	if attachment.Type != "gif" {
+		t.Errorf("attachment.Type = %q, want gif", attachment.Type)
+	}
+}
+
+// TestResolveAttachment_ExceedsLimit_ReturnsClearError guards the one thing
+// this app has no way to fix automatically: there's no upload endpoint to
+// host a resized copy, so an oversized image must fail here with a message
+// that explains why, rather than as a raw 400 from the API (confirmed live:
+// POST /v1/posts rejects width/height above 640px).
+func TestResolveAttachment_ExceedsLimit_ReturnsClearError(t *testing.T) {
+	srv := testPNGServer(t, 1200, 480)
+	attachment, err := resolveAttachment(srv.URL + "/pic.png")
+	if attachment != nil {
+		t.Errorf("attachment = %+v, want nil on an oversized image", attachment)
+	}
+	if err == nil || !strings.Contains(err.Error(), "640") {
+		t.Errorf("err = %v, want a message mentioning the 640px limit", err)
+	}
+}
+
+// editPostRecordingClient captures the arguments EditPost was called with,
+// so a test can inspect exactly what editPostCmd sent without a real API.
+type editPostRecordingClient struct {
+	*api.MockClient
+	gotAttachments []model.Attachment
+	gotTouched     bool
+}
+
+func (c *editPostRecordingClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, attachments []model.Attachment, attachmentTouched bool) error {
+	c.gotAttachments = attachments
+	c.gotTouched = attachmentTouched
+	return nil
+}
+
+// TestEditPostCmd_MergesOtherAttachmentsWithResolvedAttachment guards the
+// merge editPostCmd is responsible for: the attachments array it sends must
+// combine otherAttachments (e.g. an audio one the edit panel doesn't manage)
+// with the newly resolved image, in that order — dropping otherAttachments
+// here would silently delete them server-side, since EditPost replaces the
+// whole array.
+func TestEditPostCmd_MergesOtherAttachmentsWithResolvedAttachment(t *testing.T) {
+	srv := testPNGServer(t, 10, 10)
+	client := &editPostRecordingClient{MockClient: api.NewMockClient()}
+	a := NewApp(client)
+	audio := model.Attachment{Type: "audio", Src: "https://youtu.be/old"}
+
+	msg := a.editPostCmd("p1", "content", "title", nil, false, false, srv.URL+"/pic.png", true, []model.Attachment{audio})()
+	if _, ok := msg.(postEditedMsg); !ok {
+		t.Fatalf("editPostCmd() = %T, want postEditedMsg", msg)
+	}
+	if !client.gotTouched {
+		t.Fatal("expected EditPost to be called with attachmentTouched = true")
+	}
+	want := []model.Attachment{audio, {Type: "image", Src: srv.URL + "/pic.png", Width: 10, Height: 10}}
+	if !slices.Equal(client.gotAttachments, want) {
+		t.Errorf("EditPost attachments = %+v, want %+v (other attachment first, then the resolved one)", client.gotAttachments, want)
+	}
+}
+
+// --- muteUserCmd / MuteUserMsg / userMutedMsg ---
+
+// sendRoomMessageRecordingClient captures the arguments SendRoomMessage was
+// called with, so a test can inspect exactly what got sent without a real API.
+type sendRoomMessageRecordingClient struct {
+	*api.MockClient
+	gotRoomID, gotBody string
+}
+
+func (c *sendRoomMessageRecordingClient) SendRoomMessage(roomID, body string) (string, error) {
+	c.gotRoomID, c.gotBody = roomID, body
+	return "", nil
+}
+
+// TestMuteUserCmd_SendsMuteSlashCommand guards the only way to mute:
+// sending "/mute <username>" as an ordinary room message, exactly as if the
+// user had typed it — there's no dedicated mute endpoint.
+func TestMuteUserCmd_SendsMuteSlashCommand(t *testing.T) {
+	client := &sendRoomMessageRecordingClient{MockClient: api.NewMockClient()}
+	a := NewApp(client)
+
+	msg := a.muteUserCmd("zion", "molly")()
+	if client.gotRoomID != "zion" || client.gotBody != "/mute molly" {
+		t.Errorf("SendRoomMessage(%q, %q), want (\"zion\", \"/mute molly\")", client.gotRoomID, client.gotBody)
+	}
+	um, ok := msg.(userMutedMsg)
+	if !ok {
+		t.Fatalf("muteUserCmd() = %T, want userMutedMsg", msg)
+	}
+	if um.username != "molly" {
+		t.Errorf("username = %q, want molly", um.username)
+	}
+}
+
+// mutedFailClient simulates the send itself failing (e.g. rate limit).
+type mutedFailClient struct{ *api.MockClient }
+
+func (c *mutedFailClient) SendRoomMessage(roomID, body string) (string, error) {
+	return "", &api.APIError{Code: "RATE_LIMITED", Status: 429, Message: "too many requests"}
+}
+
+func TestMuteUserCmd_SendFails_ReturnsActionErrMsg(t *testing.T) {
+	a := NewApp(&mutedFailClient{MockClient: api.NewMockClient()})
+
+	msg := a.muteUserCmd("zion", "molly")()
+	if _, ok := msg.(actionErrMsg); !ok {
+		t.Fatalf("muteUserCmd() = %T, want actionErrMsg", msg)
+	}
+}
+
+// TestApp_UserMutedMsg_ShowsNotification covers the reason userMutedMsg
+// exists at all: "/mute" posts nothing to the room, so without this the
+// user pressing 'm' would have no way to tell it worked.
+func TestApp_UserMutedMsg_ShowsNotification(t *testing.T) {
+	a := loggedInApp()
+
+	m, _ := a.Update(userMutedMsg{username: "molly"})
+	a = m.(App)
+
+	if a.notifyLevel != notifyInfo || a.notifyText != "muted molly" {
+		t.Errorf("notify = level=%v text=%q, want level=%v text=%q", a.notifyLevel, a.notifyText, notifyInfo, "muted molly")
+	}
+}
+
+// TestApp_UserMutedMsg_ReloadsSettings guards the fix for a real reported
+// bug: muting a user sent the /mute command fine but the room never
+// filtered their messages out, because ChatroomsModel's mute list only
+// updates from Settings.MutedUsersByRoom via SharedConfigMsg (see its
+// SharedConfigMsg handler), and /mute changes that server-side without ever
+// pushing the new value to us. batch[0] is the notify tick — not invoked
+// here since tea.Tick blocks for notifyTTL; only the settings-reload
+// command (batch[1], by construction — see the userMutedMsg case) is safe
+// to run synchronously.
+func TestApp_UserMutedMsg_ReloadsSettings(t *testing.T) {
+	a := loggedInApp()
+
+	_, cmd := a.Update(userMutedMsg{username: "molly"})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("cmd() = %T (len %d), want a 2-command tea.BatchMsg (notify + settings reload)", cmd(), len(batch))
+	}
+	if _, ok := batch[1]().(settingsLoadedMsg); !ok {
+		t.Errorf("batch[1]() = %T, want settingsLoadedMsg — the mute list refresh", batch[1]())
+	}
+}
+
+// --- CopyMessageTextMsg ---
+
+func TestApp_CopyMessageTextMsg_ShowsNotification(t *testing.T) {
+	a := loggedInApp()
+
+	m, _ := a.Update(screens.CopyMessageTextMsg{Text: "hi there"})
+	a = m.(App)
+
+	if a.notifyLevel != notifyInfo || a.notifyText != "Copied message to clipboard" {
+		t.Errorf("notify = level=%v text=%q, want level=%v text=%q", a.notifyLevel, a.notifyText, notifyInfo, "Copied message to clipboard")
+	}
+}
+
+func TestApp_CopyMessageTextMsg_EmptyText_NotifiesNothingToCopy(t *testing.T) {
+	a := loggedInApp()
+
+	m, _ := a.Update(screens.CopyMessageTextMsg{Text: ""})
+	a = m.(App)
+
+	if a.notifyLevel != notifyInfo || a.notifyText != "nothing to copy" {
+		t.Errorf("notify = level=%v text=%q, want level=%v text=%q", a.notifyLevel, a.notifyText, notifyInfo, "nothing to copy")
+	}
+}
+
+func TestApp_CopyMessageTextMsg_Ephemeral_DisabledInSSH(t *testing.T) {
+	a := loggedInApp()
+	a.ephemeral = true
+
+	m, _ := a.Update(screens.CopyMessageTextMsg{Text: "hi there"})
+	a = m.(App)
+
+	if a.notifyText != "Copying is disabled in SSH sessions" {
+		t.Errorf("notifyText = %q, want the SSH-disabled banner", a.notifyText)
 	}
 }
 
@@ -2050,6 +2401,277 @@ func TestApp_PostEditPanel_VisibleInFullRender(t *testing.T) {
 	}
 	if !strings.Contains(after, "distinctive body text") {
 		t.Errorf("expected the full App render to contain the pre-filled body content, got:\n%s", after)
+	}
+}
+
+// --- postEditedMsg: local cache must reflect an attachment change ---
+
+func TestPostEditedMsg_AttachmentsTouched_UpdatesFeedCache(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", Content: "body", Attachments: []model.Attachment{{Type: "audio", Src: "https://youtu.be/old"}}},
+	}, "")
+
+	newAttachments := []model.Attachment{
+		{Type: "audio", Src: "https://youtu.be/old"},
+		{Type: "image", Src: "https://example.com/new.png"},
+	}
+	m, _ := a.Update(postEditedMsg{
+		postID: "p1", content: "body", editedAt: time.Now(),
+		attachments: newAttachments, attachmentsTouched: true,
+	})
+	a = m.(App)
+
+	got := a.feed.GetFocusedURLs()
+	if !slices.Contains(got, "https://example.com/new.png") {
+		t.Errorf("GetFocusedURLs() = %v, want it to contain the newly attached image", got)
+	}
+}
+
+func TestPostEditedMsg_AttachmentsNotTouched_LeavesFeedCacheAlone(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts([]model.Post{
+		{ID: "p1", Content: "body", Attachments: []model.Attachment{{Type: "audio", Src: "https://youtu.be/old"}}},
+	}, "")
+
+	m, _ := a.Update(postEditedMsg{
+		postID: "p1", content: "edited body", editedAt: time.Now(),
+		attachmentsTouched: false,
+	})
+	a = m.(App)
+
+	got := a.feed.GetFocusedURLs()
+	if !slices.Contains(got, "https://youtu.be/old") {
+		t.Errorf("GetFocusedURLs() = %v, want the pre-existing attachment preserved when attachmentsTouched is false", got)
+	}
+}
+
+func TestPostEditedMsg_AttachmentsTouched_UpdatesPostDetailCache(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
+
+	m, _ := a.Update(postEditedMsg{
+		postID: "p1", content: "body", editedAt: time.Now(),
+		attachments:        []model.Attachment{{Type: "image", Src: "https://example.com/new.png"}},
+		attachmentsTouched: true,
+	})
+	a = m.(App)
+
+	got := a.postDetail.GetFocusedURLs()
+	if !slices.Contains(got, "https://example.com/new.png") {
+		t.Errorf("GetFocusedURLs() = %v, want it to contain the newly attached image", got)
+	}
+}
+
+// --- applyAttachURL: ctrl+g dispatch (native post attachment vs markdown insert) ---
+
+// TestApplyAttachURL_FeedPanelActive_SetsNativeAttachment covers the branch
+// that must win when the Feed new-post panel is open: a native attachment on
+// the panel, not markdown text inserted into whatever's focused.
+func TestApplyAttachURL_FeedPanelActive_SetsNativeAttachment(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.feed.Update(keyMsg("n"))
+	a.feed = m
+	if !a.feed.PanelActive() {
+		t.Fatal("setup: expected Feed's new-post panel open after 'n'")
+	}
+
+	a, cmd := a.applyAttachURL("https://example.com/pic.png")
+	if cmd != nil {
+		t.Error("expected no cmd for the native-attachment branch")
+	}
+	if got := a.feed.ComposeView(80); !strings.Contains(got, "https://example.com/pic.png") {
+		t.Errorf("ComposeView() = %q, want it to contain the attached URL", got)
+	}
+}
+
+// TestApplyAttachURL_PostDetailEditPanelActive_SetsNativeAttachment mirrors
+// the Feed case for PostDetail's edit panel (opened via 'e', separate from
+// the Feed instance).
+func TestApplyAttachURL_PostDetailEditPanelActive_SetsNativeAttachment(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "op", IsSupporter: true}
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.
+		SetCurrentUsername("op").
+		SetCurrentUserIsSupporter(true).
+		SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "body", CreatedAt: time.Now()})
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a = m.(App)
+	m, _ = a.Update(keyMsg("e"))
+	a = m.(App)
+	if !a.postDetail.EditPanelActive() {
+		t.Fatal("setup: expected PostDetail's edit panel open after 'e'")
+	}
+
+	a, cmd := a.applyAttachURL("https://example.com/pic.png")
+	if cmd != nil {
+		t.Error("expected no cmd for the native-attachment branch")
+	}
+	if got := a.View(); !strings.Contains(got, "https://example.com/pic.png") {
+		t.Errorf("full render doesn't contain the attached URL")
+	}
+}
+
+// TestApplyAttachURL_DefaultBranch_ReturnsInsertIconMsg covers the leftover
+// incidental surfaces (guild threads, journal, bio editing — anything not
+// explicitly special-cased): the URL still goes in as markdown image syntax
+// via the same InsertIconMsg dispatch the icon picker uses, since these were
+// never confirmed to render on the site either way and aren't part of the
+// four surfaces this feature targets.
+func TestApplyAttachURL_DefaultBranch_ReturnsInsertIconMsg(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
+
+	_, cmd := a.applyAttachURL("https://example.com/pic.gif")
+	if cmd == nil {
+		t.Fatal("expected a cmd for the markdown-insert branch")
+	}
+	msg, ok := cmd().(screens.InsertIconMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want screens.InsertIconMsg", msg)
+	}
+	if want := "![](https://example.com/pic.gif)"; msg.Icon != want {
+		t.Errorf("InsertIconMsg.Icon = %q, want %q", msg.Icon, want)
+	}
+}
+
+// TestApplyAttachURL_DefaultBranch_EmptyURL_NoCmd: an empty submission from
+// the prompt (e.g. esc'd out with nothing typed) must not insert an empty
+// markdown link.
+func TestApplyAttachURL_DefaultBranch_EmptyURL_NoCmd(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenGuilds
+
+	_, cmd := a.applyAttachURL("")
+	if cmd != nil {
+		t.Error("expected no cmd for an empty URL in the markdown-insert branch")
+	}
+}
+
+// --- applyAttachURL: circ/C-Mail only support GIF via /gif (confirmed live
+// this session — markdown-in-content doesn't render on the website, but
+// /gif's dedicated gifUrl field does) ---
+
+func TestApplyAttachURL_ChatroomsGIF_SetsGifCommand(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+
+	_, cmd := a.applyAttachURL("https://example.com/pic.gif")
+	if cmd == nil {
+		t.Fatal("expected a cmd for the /gif branch")
+	}
+	msg, ok := cmd().(screens.SetComposeValueMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want screens.SetComposeValueMsg", msg)
+	}
+	if want := "/gif https://example.com/pic.gif"; msg.Value != want {
+		t.Errorf("SetComposeValueMsg.Value = %q, want %q", msg.Value, want)
+	}
+}
+
+func TestApplyAttachURL_ChatroomsNonGIF_WarnsInsteadOfInserting(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+
+	a2, _ := a.applyAttachURL("https://example.com/pic.png")
+	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
+		t.Errorf("expected a warning notification for a non-GIF URL in chat, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+	}
+}
+
+func TestApplyAttachURL_CMailGIF_SetsGifCommand(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+
+	_, cmd := a.applyAttachURL("https://example.com/pic.gif")
+	if cmd == nil {
+		t.Fatal("expected a cmd for the /gif branch")
+	}
+	if _, ok := cmd().(screens.SetComposeValueMsg); !ok {
+		t.Fatalf("cmd() = %T, want screens.SetComposeValueMsg", cmd())
+	}
+}
+
+func TestApplyAttachURL_CMailNonGIF_WarnsInsteadOfInserting(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+
+	a2, _ := a.applyAttachURL("https://example.com/pic.png")
+	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
+		t.Errorf("expected a warning notification for a non-GIF URL in C-Mail, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+	}
+}
+
+// TestApplyAttachURL_ReplyCompose_WarnsInsteadOfInserting: the reply API has
+// no attachments field at all, so ctrl+g must not silently insert markdown
+// that (per the same live evidence as the chat case) won't render anywhere.
+func TestApplyAttachURL_ReplyCompose_WarnsInsteadOfInserting(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
+	m, _ := a.postDetail.OpenCompose()
+	a.postDetail = m
+	if !a.postDetail.ReplyComposeActive() {
+		t.Fatal("setup: expected the reply compose box open")
+	}
+
+	a2, _ := a.applyAttachURL("https://example.com/pic.png")
+	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
+		t.Errorf("expected a warning notification for a reply attachment, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+	}
+}
+
+// --- ctrl+g / attach-URL prompt ---
+
+func TestHandleKeys_CtrlG_OpensAttachURLPrompt_WhenInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlG})
+	if !consumed {
+		t.Fatal("expected ctrl+g to be consumed while a compose field is focused")
+	}
+	if !a2.attachURLPromptOpen {
+		t.Error("expected attachURLPromptOpen = true after ctrl+g")
+	}
+}
+
+// TestHandleAttachURLPromptKey_RejectsNonHTTPURL_KeepsPromptOpen guards the
+// minimal client-side validation: a bare string with no scheme (most likely
+// a typo, not a URL) must not be accepted as an attachment/markdown target.
+func TestHandleAttachURLPromptKey_RejectsNonHTTPURL_KeepsPromptOpen(t *testing.T) {
+	a := loggedInApp()
+	a.attachURLPromptOpen = true
+	a.attachURLPrompt, _ = a.attachURLPrompt.Open("attach image/gif url", "")
+	for _, r := range "not-a-url" {
+		m, _ := a.handleAttachURLPromptKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		a = m.(App)
+	}
+
+	m, _ := a.handleAttachURLPromptKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a = m.(App)
+	if !a.attachURLPromptOpen {
+		t.Error("expected the prompt to stay open after submitting a non-http(s) string")
+	}
+}
+
+func TestHandleAttachURLPromptKey_AcceptsHTTPURL_ClosesPrompt(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+	a.attachURLPromptOpen = true
+	a.attachURLPrompt, _ = a.attachURLPrompt.Open("attach image/gif url", "")
+	for _, r := range "https://example.com/a.png" {
+		m, _ := a.handleAttachURLPromptKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		a = m.(App)
+	}
+
+	m, _ := a.handleAttachURLPromptKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a = m.(App)
+	if a.attachURLPromptOpen {
+		t.Error("expected the prompt to close after submitting a valid http(s) URL")
 	}
 }
 
@@ -3855,20 +4477,59 @@ func TestSyncInlineImageErasures(t *testing.T) {
 // encodes rather than reuse a wrongly-sized/wrongly-encoded one.
 func TestInlineImageCacheKey_VariesByColsAndProtocol(t *testing.T) {
 	slot := screens.InlineImageSlot{URL: "https://example.com/a.png", MaxCols: 76}
-	key1 := inlineImageCacheKey(slot, imgview.ProtocolSixel)
-	key2 := inlineImageCacheKey(slot, imgview.ProtocolSixel)
+	key1 := inlineImageCacheKey(slot, imgview.ProtocolSixel, nil)
+	key2 := inlineImageCacheKey(slot, imgview.ProtocolSixel, nil)
 	if key1 != key2 {
 		t.Error("expected the same slot+protocol to produce the same key")
 	}
 
 	wider := slot
 	wider.MaxCols = 100
-	if inlineImageCacheKey(wider, imgview.ProtocolSixel) == key1 {
+	if inlineImageCacheKey(wider, imgview.ProtocolSixel, nil) == key1 {
 		t.Error("expected a different MaxCols to produce a different key")
 	}
 
-	if inlineImageCacheKey(slot, imgview.ProtocolITerm2) == key1 {
+	if inlineImageCacheKey(slot, imgview.ProtocolITerm2, nil) == key1 {
 		t.Error("expected a different protocol to produce a different key")
+	}
+}
+
+// TestInlineImageCacheKey_VariesByDitherState is a regression test: toggling
+// dithering, changing sharpness, or switching themes (which changes the
+// duotone colors) must invalidate an already-cached encode — otherwise a
+// cached image keeps showing whatever dither state produced it until the
+// cache entry is evicted or the app restarts (see inlineImageCacheKey's doc
+// comment).
+func TestInlineImageCacheKey_VariesByDitherState(t *testing.T) {
+	slot := screens.InlineImageSlot{URL: "https://example.com/a.png", MaxCols: 76}
+	proto := imgview.ProtocolKitty
+
+	noDither := inlineImageCacheKey(slot, proto, nil)
+	dithered := inlineImageCacheKey(slot, proto, &imgview.DitherOptions{
+		PixelSize: 2,
+		FgColor:   color.RGBA{R: 0, G: 255, B: 65, A: 255},
+		BgColor:   color.RGBA{R: 13, G: 13, B: 13, A: 255},
+	})
+	if noDither == dithered {
+		t.Error("expected turning dithering on to produce a different key")
+	}
+
+	sharp := inlineImageCacheKey(slot, proto, &imgview.DitherOptions{
+		PixelSize: 1, // "crisp" instead of "medium"
+		FgColor:   color.RGBA{R: 0, G: 255, B: 65, A: 255},
+		BgColor:   color.RGBA{R: 13, G: 13, B: 13, A: 255},
+	})
+	if sharp == dithered {
+		t.Error("expected a different sharpness (PixelSize) to produce a different key")
+	}
+
+	otherTheme := inlineImageCacheKey(slot, proto, &imgview.DitherOptions{
+		PixelSize: 2,
+		FgColor:   color.RGBA{R: 255, G: 176, B: 0, A: 255}, // amber, e.g. vt320 theme
+		BgColor:   color.RGBA{R: 13, G: 13, B: 13, A: 255},
+	})
+	if otherTheme == dithered {
+		t.Error("expected a different theme's FgColor to produce a different key")
 	}
 }
 
@@ -3958,7 +4619,7 @@ func feedAppWithOneImage(t *testing.T) (a App, key string) {
 	if len(slots) != 1 {
 		t.Fatalf("setup: expected 1 visible slot, got %d", len(slots))
 	}
-	return a, inlineImageCacheKey(slots[0], a.graphicsProtocol)
+	return a, inlineImageCacheKey(slots[0], a.graphicsProtocol, nil)
 }
 
 // TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses is a
@@ -3991,6 +4652,40 @@ func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T
 	a, _ = a.syncInlineImages()
 	if !a.inlineImageFetching[key] {
 		t.Error("expected syncInlineImages to retry once the cooldown has lapsed")
+	}
+}
+
+// TestSyncInlineImages_DitherToggleInvalidatesCache is a regression test:
+// before inlineImageCacheKey included dither state, an image already cached
+// (fetched and encoded before dithering was turned on) kept being served
+// as-is by syncInlineImages/injectInlineImages, since its cache key never
+// changed — dithering appeared to require a restart to take visible effect.
+func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
+	a, key := feedAppWithOneImage(t)
+
+	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
+	if _, cached := a.inlineImageCache[key]; !cached {
+		t.Fatal("setup: expected the encode to be cached under the no-dither key")
+	}
+
+	a, cmd := a.syncInlineImages()
+	if cmd != nil {
+		t.Fatal("setup: expected a cache hit (no fetch) before enabling dithering")
+	}
+
+	a.dithering = true
+	a.ditherSharpness = "sharp"
+
+	a, cmd = a.syncInlineImages()
+	if cmd == nil {
+		t.Fatal("expected enabling dithering to invalidate the cached key and schedule a fresh fetch")
+	}
+	newKey := inlineImageCacheKey(a.feed.VisibleInlineImages()[0], a.graphicsProtocol, a.ditherOptions())
+	if newKey == key {
+		t.Fatal("setup: expected the dither-enabled key to differ from the no-dither key")
+	}
+	if !a.inlineImageFetching[newKey] {
+		t.Errorf("expected a fetch scheduled under the new dither-enabled key %q, fetching=%v", newKey, a.inlineImageFetching)
 	}
 }
 
@@ -4450,5 +5145,99 @@ func TestHandleGuilds_UserGuildsLoaded_GuardsOnUsernameMatch(t *testing.T) {
 	}
 	if len(a3.profile.Apprenticeships()) != 1 {
 		t.Errorf("expected apprenticeships applied for matching username, got %+v", a3.profile.Apprenticeships())
+	}
+}
+
+// TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol is a
+// regression test: a.graphicsProtocol can be ProtocolSixel here only because
+// the startup DA1 probe (imgview.ProbeSixel) found it — that probe can't
+// safely re-run mid-session (it needs raw terminal access before Bubble Tea
+// takes over stdin). Saving any setting whose graphics-protocol override
+// (graphicsProtocolName) hasn't changed must leave a.graphicsProtocol alone;
+// re-resolving it via imgview.DetectProtocol()'s env-var-only detection on
+// every save would silently downgrade a DA1-probed Sixel session to
+// ProtocolNone, breaking inline images and the image viewer until a full
+// restart re-probes Sixel.
+func TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolSixel
+	a.graphicsProtocolName = "" // auto — the only way DetectProtocol() ever gets consulted
+
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+		GraphicsProtocol: "", // unchanged
+		Dithering:        true,
+		ImageViewer:      "terminal",
+	})
+	if !ok || cmd == nil {
+		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
+	}
+	msg := cmd()
+	saved, ok := msg.(settingsSavedMsg)
+	if !ok {
+		t.Fatalf("expected settingsSavedMsg, got %T", msg)
+	}
+
+	a2, _, ok := a.handleSettings(saved)
+	if !ok {
+		t.Fatal("expected handleSettings to handle settingsSavedMsg")
+	}
+	if a2.graphicsProtocol != imgview.ProtocolSixel {
+		t.Errorf("graphicsProtocol = %v after saving an unrelated setting, want unchanged ProtocolSixel", a2.graphicsProtocol)
+	}
+}
+
+// TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves confirms the
+// override still takes effect when the user actually changes it — the fix
+// for the regression above only skips re-resolution when the override is
+// unchanged.
+func TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves(t *testing.T) {
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolSixel
+	a.graphicsProtocolName = ""
+
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+		GraphicsProtocol: "kitty", // changed
+		ImageViewer:      "terminal",
+	})
+	if !ok || cmd == nil {
+		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
+	}
+	saved := cmd().(settingsSavedMsg)
+
+	a2, _, ok := a.handleSettings(saved)
+	if !ok {
+		t.Fatal("expected handleSettings to handle settingsSavedMsg")
+	}
+	if a2.graphicsProtocol != imgview.ProtocolKitty {
+		t.Errorf("graphicsProtocol = %v after changing the override to kitty, want ProtocolKitty", a2.graphicsProtocol)
+	}
+}
+
+// TestWithSavedPreferences_LoadsWithoutRefreshToken guards against a
+// regression where display preferences (graphics protocol, dithering,
+// thread depth, timezone) were only loaded via WithSavedSession, which
+// requires a refresh token. A normal token-expiry relogin clears the token
+// on disk but leaves the rest of the saved config intact; preferences must
+// still load on the WithAutoLogin/WithSavedEmail paths too.
+func TestWithSavedPreferences_LoadsWithoutRefreshToken(t *testing.T) {
+	cfg := config.Config{
+		GraphicsProtocol: "sixel",
+		Dithering:        true,
+		MaxThreadDepth:   20,
+		Timezone:         "UTC+2",
+	}
+
+	a := newTestApp().WithAutoLogin("user@example.com", "pw").WithSavedPreferences(cfg)
+	if a.graphicsProtocolName != "sixel" {
+		t.Errorf("graphicsProtocolName = %q, want sixel", a.graphicsProtocolName)
+	}
+	if !a.dithering {
+		t.Error("dithering = false, want true")
+	}
+	if a.maxThreadDepth != 20 {
+		t.Errorf("maxThreadDepth = %d, want 20", a.maxThreadDepth)
+	}
+	if a.timezone != "UTC+2" {
+		t.Errorf("timezone = %q, want UTC+2", a.timezone)
 	}
 }

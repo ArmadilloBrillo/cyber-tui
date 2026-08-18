@@ -13,7 +13,15 @@ import (
 	"time"
 
 	_ "golang.org/x/image/webp"
+
+	"github.com/ragnar/cyber-tui/internal/version"
 )
+
+// userAgent identifies cyber-tui to image hosts. Some (Wikimedia's edge,
+// confirmed live) return 403 for Go's default "Go-http-client/1.1" — an
+// identifiable UA with a contact URL is what their bot policy actually asks
+// for, and fixes the block.
+var userAgent = "cyber-tui/" + version.Version + " (+https://github.com/ArmadilloBrillo/cyber-tui)"
 
 // maxImageBytes caps how much of an image response body is read into memory,
 // matching the 10 MiB response cap used by the API and RTDB clients.
@@ -37,21 +45,33 @@ const maxGIFTotalPixels = 64 << 20
 // global mutations to http.DefaultClient.
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
-// fetchBody downloads rawURL, capping the read at maxImageBytes.
-func fetchBody(ctx context.Context, rawURL string) ([]byte, error) {
+// openImageResponse issues the GET request shared by fetchBody and
+// Dimensions. The caller must close the returned response's body.
+func openImageResponse(ctx context.Context, rawURL string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("imgview: %w", err)
 	}
 	req.Header.Set("Accept", "image/webp,image/png,image/jpeg,image/gif,image/*,*/*;q=0.8")
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("imgview: %w", err)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return nil, fmt.Errorf("imgview: server returned %s", resp.Status)
 	}
+	return resp, nil
+}
+
+// fetchBody downloads rawURL, capping the read at maxImageBytes.
+func fetchBody(ctx context.Context, rawURL string) ([]byte, error) {
+	resp, err := openImageResponse(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("imgview: read body: %w", err)
@@ -83,12 +103,35 @@ func Fetch(ctx context.Context, rawURL string) (image.Image, error) {
 	return img, nil
 }
 
+// Dimensions fetches rawURL and returns its declared width/height. Unlike
+// Fetch, it reads only as far as image.DecodeConfig needs (the format
+// header, typically well under 1KiB) rather than downloading the whole
+// body — used where a caller needs an image's size but not its content
+// (e.g. cyberspace.online's post-attachments API, which requires
+// width/height on the request and does not compute them itself).
+func Dimensions(ctx context.Context, rawURL string) (width, height int, err error) {
+	resp, err := openImageResponse(ctx, rawURL)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	cfg, _, err := image.DecodeConfig(io.LimitReader(resp.Body, maxImageBytes))
+	if err != nil {
+		return 0, 0, fmt.Errorf("imgview: decode: %w", err)
+	}
+	return cfg.Width, cfg.Height, nil
+}
+
 // FetchGIF downloads the GIF at rawURL and decodes all of its frames.
 func FetchGIF(ctx context.Context, rawURL string) (*gif.GIF, error) {
 	body, err := fetchBody(ctx, rawURL)
 	if err != nil {
 		return nil, err
 	}
+	return decodeGIF(body)
+}
+
+func decodeGIF(body []byte) (*gif.GIF, error) {
 	cfg, err := gif.DecodeConfig(bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("imgview: decode: %w", err)
@@ -107,4 +150,38 @@ func FetchGIF(ctx context.Context, rawURL string) (*gif.GIF, error) {
 		return nil, fmt.Errorf("imgview: gif frames×dimensions %d exceed %d pixel budget", total, maxGIFTotalPixels)
 	}
 	return g, nil
+}
+
+// FetchAny downloads the resource at rawURL and decodes it as an animated
+// GIF (all frames) or a static image (single frame), deciding which from the
+// downloaded bytes' own GIF87a/GIF89a magic header rather than rawURL's file
+// extension — /gif <url> in circ/C-Mail accepts any user-supplied URL, and
+// plenty of real gif links (Tenor share pages, extensionless CDN links)
+// don't end in literal ".gif", so extension sniffing false-negatives on
+// them. Returns one frame with a nil delay slice for a non-GIF image.
+func FetchAny(ctx context.Context, rawURL string) (frames []image.Image, delays []time.Duration, err error) {
+	body, err := fetchBody(ctx, rawURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(body) >= 6 && (string(body[:6]) == "GIF87a" || string(body[:6]) == "GIF89a") {
+		g, err := decodeGIF(body)
+		if err != nil {
+			return nil, nil, err
+		}
+		frames, delays = GIFFrames(g)
+		return frames, delays, nil
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("imgview: decode: %w", err)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width*cfg.Height > maxImagePixels {
+		return nil, nil, fmt.Errorf("imgview: image dimensions %dx%d exceed limit", cfg.Width, cfg.Height)
+	}
+	img, _, err := image.Decode(bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("imgview: decode: %w", err)
+	}
+	return []image.Image{img}, nil, nil
 }
