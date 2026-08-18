@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -5315,6 +5316,68 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 	}
 	if cfg.GraphicsProtocol != "sixel" {
 		t.Errorf("saved config graphicsProtocol = %q, want sixel", cfg.GraphicsProtocol)
+	}
+}
+
+// TestSaveConfig_ConcurrentCallsDoNotClobberEachOther reproduces the general
+// lost-update race saveConfig is exposed to: unlike the ctrl+s-vs-ctrl+s case
+// above, this races saveConfig itself (as called from unrelated triggers like
+// the density toggle, theme save, and login) directly against each other.
+// Each call does its own load-mutate-write of the whole config file with no
+// synchronization beyond saveConfigMu; if that lock were missing, whichever
+// goroutine's write lands last would silently discard the other's field.
+func TestSaveConfig_ConcurrentCallsDoNotClobberEachOther(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	a := loggedInApp()
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			a.saveConfig(func(cfg *config.Config) {
+				cfg.Density = fmt.Sprintf("density-%d", i)
+			})
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		a.saveConfig(func(cfg *config.Config) {
+			cfg.Theme = "custom"
+			cfg.CustomPalette = &theme.Palette{Accent: "#ff00ff"}
+		})
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		a.saveConfig(func(cfg *config.Config) {
+			cfg.Timezone = "UTC+5:30"
+		})
+	}()
+	close(start)
+	wg.Wait()
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if cfg.Theme != "custom" || cfg.CustomPalette == nil || cfg.CustomPalette.Accent != "#ff00ff" {
+		t.Errorf("theme save was clobbered by a concurrent save: Theme=%q CustomPalette=%v", cfg.Theme, cfg.CustomPalette)
+	}
+	if cfg.Timezone != "UTC+5:30" {
+		t.Errorf("timezone save was clobbered by a concurrent save: Timezone=%q", cfg.Timezone)
+	}
+	if !strings.HasPrefix(cfg.Density, "density-") {
+		t.Errorf("density save was clobbered by a concurrent save: Density=%q", cfg.Density)
 	}
 }
 
