@@ -674,12 +674,21 @@ func (a App) WithEphemeralSession() App {
 	return a
 }
 
+// saveConfigMu serializes saveConfig's load-mutate-write cycle across the
+// several tea.Cmd goroutines that can call it concurrently (settings save,
+// density toggle, theme save, login, ...). Without it, two overlapping calls
+// each read the same stale snapshot and the last write wins, silently
+// discarding whichever fields the other call touched.
+var saveConfigMu sync.Mutex
+
 // saveConfig loads the persisted config, applies mutate, and writes it back. It
 // is a no-op for ephemeral (SSH-hosted) sessions.
 func (a *App) saveConfig(mutate func(cfg *config.Config)) {
 	if a.ephemeral {
 		return
 	}
+	saveConfigMu.Lock()
+	defer saveConfigMu.Unlock()
 	cfg, err := config.Load()
 	if err != nil {
 		return
