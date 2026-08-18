@@ -393,6 +393,44 @@ func TestSettings_SharedConfigMsg_PreservesEditsOnRebroadcast(t *testing.T) {
 	}
 }
 
+// TestSettings_SharedConfigMsg_SeedsPrefsAfterSetSettings reproduces the
+// exact ordering app.go's settingsLoadedMsg handler uses: SetSettings(...)
+// runs first, then broadcastConfig() sends a SharedConfigMsg. A stale guard
+// tied to m.original's zero-ness (rather than a dedicated seeded flag) would
+// already be tripped by SetSettings, silently skipping the preference fields
+// below and leaving them zeroed — which then get saved back to disk.
+func TestSettings_SharedConfigMsg_SeedsPrefsAfterSetSettings(t *testing.T) {
+	m := NewSettingsModel()
+	m = m.SetSettings(defaultSettings())
+
+	m, _ = m.Update(SharedConfigMsg{
+		Width:            80,
+		Height:           24,
+		Settings:         defaultSettings(),
+		WanderLust:       true,
+		MaxThreadDepth:   20,
+		InlineImages:     true,
+		Dithering:        true,
+		GraphicsProtocol: "sixel",
+	})
+
+	if !m.wanderLust {
+		t.Error("wanderLust should be seeded from SharedConfigMsg even after a prior SetSettings call")
+	}
+	if m.maxThreadDepth != 20 {
+		t.Errorf("maxThreadDepth = %d, want 20", m.maxThreadDepth)
+	}
+	if !m.inlineImages {
+		t.Error("inlineImages should be seeded from SharedConfigMsg even after a prior SetSettings call")
+	}
+	if !m.dithering {
+		t.Error("dithering should be seeded from SharedConfigMsg even after a prior SetSettings call")
+	}
+	if m.graphicsProtocol != "sixel" {
+		t.Errorf("graphicsProtocol = %q, want sixel", m.graphicsProtocol)
+	}
+}
+
 // --- Setter Tests ---
 
 func TestSettings_SetSettings_SetsOriginal(t *testing.T) {
