@@ -130,6 +130,10 @@ func cmailInConversation(client api.Client, convID string) CMailModel {
 	conv := model.Conversation{ID: convID, Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
 	m := NewCMailModel("neo", "", client)
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
+	// Matches production default (App.typingIndicatorsEnabled, hydrated true
+	// unless the user opted out) — tests that specifically exercise the
+	// toggle-off path set this false explicitly.
+	m.typingIndicatorsEnabled = true
 	m.activeConvID = convID
 	m.activeConv = &conv
 	m.mode = cmailModeDetail
@@ -454,31 +458,182 @@ func TestKeystroke_EmptyInput_ClearsTypingImmediately(t *testing.T) {
 	}
 }
 
-func TestIdleCheck_NoRecentKeystroke_ClearsTyping(t *testing.T) {
+// TestTypingAnimTick_IdleClearsTyping mirrors the old, now-deleted
+// TestIdleCheck_NoRecentKeystroke_ClearsTyping — idle-clearing was merged
+// into typingAnimTickMsg's handler (audit item #6: two independent 500ms
+// tea.Tick chains coalesced into one). The merged handler's cmds batch has
+// 2 entries (clear-typing + reschedule) exactly when idle-clearing fires;
+// calling the returned tea.Cmd here is safe (tea.Batch with 2+ valid cmds
+// returns BatchMsg immediately) but must not be done in the
+// single-cmd (reschedule-only) case below, since tea.Batch collapses to
+// the bare cmd itself then — calling *that* would block on tea.Tick's
+// internal sleep.
+func TestTypingAnimTick_IdleClearsTyping(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
 	m.announcingTyping = true
 	m.lastKeystrokeAt = time.Now().Add(-5 * time.Second)
 
-	m2, cmd := m.Update(typingIdleCheckMsg{convID: "c1"})
+	m2, cmd := m.Update(typingAnimTickMsg{convID: "c1"})
 	if m2.announcingTyping {
 		t.Error("expected announcingTyping to flip false after the idle threshold")
+	}
+	if cmd == nil {
+		t.Fatal("expected a batch command (clear-typing + reschedule)")
+	}
+	result := cmd() // call exactly once — a collapsed single-cmd result can be a tea.Tick, safe to invoke only once
+	batch, ok := result.(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Errorf("expected a 2-cmd batch (clear-typing + reschedule), got %#v", result)
+	}
+}
+
+// TestTypingAnimTick_RecentKeystrokeKeepsAnnouncing mirrors the old, now-
+// deleted TestIdleCheck_RecentKeystroke_Reschedules.
+func TestTypingAnimTick_RecentKeystrokeKeepsAnnouncing(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.announcingTyping = true
+	m.lastKeystrokeAt = time.Now()
+
+	m2, cmd := m.Update(typingAnimTickMsg{convID: "c1"})
+	if !m2.announcingTyping {
+		t.Error("expected announcingTyping to remain true with a recent keystroke")
+	}
+	if cmd == nil {
+		t.Fatal("expected a rescheduled command")
+	}
+}
+
+// --- typing-indicators toggle (audit item #6) ---
+
+func TestConvOpenCmds_TypingIndicatorsDisabled_OmitsTypingSubscriptionAndTick(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m.typingIndicatorsEnabled = false
+
+	cmd := m.ConvOpenCmds("c1")
+	if cmd == nil {
+		t.Fatal("expected a batch command")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Errorf("expected a 2-cmd batch (load history + open DM subscription only), got %#v", cmd())
+	}
+}
+
+func TestConvOpenCmds_TypingIndicatorsEnabled_IncludesTypingSubscriptionAndTick(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m.typingIndicatorsEnabled = true
+
+	cmd := m.ConvOpenCmds("c1")
+	if cmd == nil {
+		t.Fatal("expected a batch command")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 4 {
+		t.Errorf("expected a 4-cmd batch (+ typing subscription + merged anim/idle tick), got %#v", cmd())
+	}
+}
+
+func TestCMailEnterOpensConversation_TypingIndicatorsDisabled_OmitsTypingCmds(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m.typingIndicatorsEnabled = false
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}},
+	})
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m2.IsShowingDetail() {
+		t.Fatal("setup: expected detail mode after Enter")
+	}
+	if cmd == nil {
+		t.Fatal("expected a batch command")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 3 {
+		t.Errorf("expected a 3-cmd batch (load history + open DM subscription + CMailConvSelectedMsg only), got %#v", cmd())
+	}
+}
+
+func TestCMailEnterOpensConversation_TypingIndicatorsEnabled_IncludesTypingCmds(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m.typingIndicatorsEnabled = true
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}},
+	})
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m2.IsShowingDetail() {
+		t.Fatal("setup: expected detail mode after Enter")
+	}
+	if cmd == nil {
+		t.Fatal("expected a batch command")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 5 {
+		t.Errorf("expected a 5-cmd batch (+ typing subscription + merged anim/idle tick), got %#v", cmd())
+	}
+}
+
+func TestHandleTypingInputChanged_DisabledIsNoop(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.typingIndicatorsEnabled = false
+
+	m2, cmd := m.handleTypingInputChanged("hello")
+	if m2.announcingTyping {
+		t.Error("expected announcingTyping to stay false when typing indicators are disabled")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd when typing indicators are disabled")
+	}
+}
+
+// TestSharedConfigMsg_TypingIndicatorsLiveDisable_CancelsSubscriptionAndClearsAnnouncing
+// guards the live-toggle path: the merged tick's own typingIndicatorsEnabled
+// guard stops the animation side within one 500ms tick on its own, but the
+// RTDB subscription is push-based (nothing else would close it) and the
+// SharedConfigMsg handler must cancel it explicitly, or it — and the
+// "@x is typing" render it feeds — would keep running until the
+// conversation closes.
+func TestSharedConfigMsg_TypingIndicatorsLiveDisable_CancelsSubscriptionAndClearsAnnouncing(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.typingIndicatorsEnabled = true
+	m.typingSub = &dmTypingSubscription{ConvID: "c1", C: make(chan []model.TypingUser), cancel: func() {}}
+	m.typingUsers = []model.TypingUser{{Username: "trinity"}}
+	m.announcingTyping = true
+
+	m2, cmd := m.Update(SharedConfigMsg{TypingIndicatorsEnabled: false})
+
+	if m2.typingIndicatorsEnabled {
+		t.Error("expected typingIndicatorsEnabled to flip false")
+	}
+	if m2.typingSub != nil {
+		t.Error("expected typingSub to be cancelled and cleared")
+	}
+	if m2.announcingTyping {
+		t.Error("expected announcingTyping to clear on live-disable")
+	}
+	if len(m2.typingUsers) != 0 {
+		t.Error("expected typingUsers to be cleared so the indicator stops rendering")
 	}
 	if cmd == nil {
 		t.Fatal("expected a clear-typing command")
 	}
 }
 
-func TestIdleCheck_RecentKeystroke_Reschedules(t *testing.T) {
+func TestSharedConfigMsg_TypingIndicatorsLiveEnable_ReopensSubscription(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
-	m.announcingTyping = true
-	m.lastKeystrokeAt = time.Now()
+	m.typingIndicatorsEnabled = false
 
-	m2, cmd := m.Update(typingIdleCheckMsg{convID: "c1"})
-	if !m2.announcingTyping {
-		t.Error("expected announcingTyping to remain true with a recent keystroke")
+	m2, cmd := m.Update(SharedConfigMsg{TypingIndicatorsEnabled: true})
+
+	if !m2.typingIndicatorsEnabled {
+		t.Error("expected typingIndicatorsEnabled to flip true")
 	}
 	if cmd == nil {
-		t.Fatal("expected a rescheduled idle-check command")
+		t.Fatal("expected a batch reopening the subscription and tick")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Errorf("expected a 2-cmd batch (open typing subscription + schedule merged tick), got %#v", cmd())
 	}
 }
 
@@ -751,12 +906,12 @@ func TestCMail_InlineImages_SuppressesRedundantTextOnceEnabled(t *testing.T) {
 		{ID: "m3", From: model.User{Username: "trinity"}, Body: "check this out: https://example.com/mixed.png", CreatedAt: time.Now().Add(2 * time.Minute)},
 	}
 
-	disabled, _, _, _ := renderChatMessagesWithSelection(msgs, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width, m.styleAnimFrame, "", false, nil)
+	disabled, _, _, _ := renderChatMessagesWithSelection(msgs, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width, m.styleAnimFrame, "", false, nil, nil)
 	if !strings.Contains(disabled, "https://example.com/attach.png") || !strings.Contains(disabled, "https://example.com/pic.png") {
 		t.Fatalf("setup: expected both URLs visible while disabled, got: %q", disabled)
 	}
 
-	enabled, _, _, _ := renderChatMessagesWithSelection(msgs, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width, m.styleAnimFrame, "", true, nil)
+	enabled, _, _, _ := renderChatMessagesWithSelection(msgs, m.currentUser, m.location(), m.timeDisplayFormat, m.viewport.Width, m.styleAnimFrame, "", true, nil, nil)
 	if strings.Contains(enabled, "https://example.com/attach.png") {
 		t.Errorf("expected the attachment URL suppressed once enabled, got: %q", enabled)
 	}
@@ -974,6 +1129,53 @@ func TestCMailAppendMessage_TrimsOldestWhenOverByteCap(t *testing.T) {
 	}
 	if total > chatMessageBufferMaxBytes {
 		t.Errorf("total estimated size = %d, want <= %d", total, chatMessageBufferMaxBytes)
+	}
+}
+
+// TestCMailTrimMessageBuffer_EvictsStaleBodyCache mirrors
+// TestTrimMessageBuffer_EvictsStaleBodyCache (chatrooms_test.go) — an entry
+// for a message evicted from activeConv.Messages by the byte cap must be
+// dropped too, or it sits in memory forever keyed by an ID nothing will ever
+// look up again.
+func TestCMailTrimMessageBuffer_EvictsStaleBodyCache(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	big := chatMessageBufferMaxBytes
+	m = m.SetConversationMessages("c1", []model.Message{bigMessage("old1", big), bigMessage("old2", big)})
+	m.chatBodyCache = map[string]cmailBodyCacheEntry{
+		"old1": {rendered: "stale"},
+		"old2": {rendered: "kept"},
+	}
+
+	m = m.trimMessageBuffer()
+
+	if _, ok := m.chatBodyCache["old1"]; ok {
+		t.Error("expected chatBodyCache entry for the evicted message to be removed")
+	}
+	if _, ok := m.chatBodyCache["old2"]; !ok {
+		t.Error("expected chatBodyCache entry for the surviving message to remain")
+	}
+}
+
+// TestCMailSetConversationMessages_EvictsStaleBodyCache mirrors
+// TestSetMessages_EvictsStaleBodyCache (chatrooms_test.go) —
+// SetConversationMessages wholesale-replacing activeConv.Messages
+// (conversation open/switch, or a fresh history load) is the other point a
+// message can permanently drop out of the loaded history, so it needs the
+// same cache cleanup as trimMessageBuffer.
+func TestCMailSetConversationMessages_EvictsStaleBodyCache(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.chatBodyCache = map[string]cmailBodyCacheEntry{
+		"gone": {rendered: "stale"},
+		"kept": {rendered: "fresh"},
+	}
+
+	m = m.SetConversationMessages("c1", []model.Message{{ID: "kept", From: model.User{Username: "trinity"}, CreatedAt: time.Now()}})
+
+	if _, ok := m.chatBodyCache["gone"]; ok {
+		t.Error("expected chatBodyCache entry for a message no longer in activeConv.Messages to be evicted")
+	}
+	if _, ok := m.chatBodyCache["kept"]; !ok {
+		t.Error("expected chatBodyCache entry for a message still in activeConv.Messages to survive")
 	}
 }
 

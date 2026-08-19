@@ -289,6 +289,14 @@ SSH mode is experimental and unauthenticated; startup warns accordingly. The SSH
 
 ---
 
+### `internal/update`
+
+#### `check.go`
+
+`Latest(ctx) (Release, error)` fetches GitHub's latest-release API and returns `{TagName, HTMLURL}`. Dedicated HTTP client (8s timeout, identifying User-Agent), independent of the cyberspace.online API client. Used once at startup to power the update-available banner — see `docs/47-update-check.md`.
+
+---
+
 ### `internal/ui`
 
 #### `app.go`
@@ -365,7 +373,7 @@ Home feed of posts from followed users.
 
 - Cursor-based pagination: emits `LoadMoreFeedMsg` when viewport reaches the bottom; App appends new posts
 - Emits `RefreshFeedMsg` when pressing Up at the top (no entries pending) — see `docs/13-feed-refresh.md`
-- Background poll every 15s stages newly-seen posts (`pendingNew`) without touching the viewport; shows a "load N new entries" banner and a Feed-tab badge. Pressing Up at the top with entries pending merges them locally instead of emitting `RefreshFeedMsg` — see `docs/39-feed-background-poll.md`
+- Background poll every 60s (configurable off via Settings → feed → auto-refresh; local-only `Config.FeedManualRefreshOnly`) stages newly-seen posts (`pendingNew`) without touching the viewport; shows a "load N new entries" banner and a Feed-tab badge. Pressing Up at the top with entries pending merges them locally instead of emitting `RefreshFeedMsg` — see `docs/39-feed-background-poll.md`
 - Emits `ShowPostMsg` on Enter → App navigates to PostDetail
 - Emits `SubmitNewPostMsg` on compose submit (content + topics)
 - `n` opens compose for a new post (with topics input); `r` opens compose for a reply
@@ -450,7 +458,7 @@ Settings are organised into static `settingsGroups`, each containing `settingsIt
 
 **Deferred fields** (read from API, never patched): `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics`
 
-**Local-only fields** (persisted to `~/.cyber-tui.json`, never sent to the API): `imageViewer` (enum, "terminal"/"browser" — "terminal" tries inline/fullscreen-modal rendering via `internal/ui/imgview` when a graphics protocol was detected, falling back to the browser only if none was; "browser" always opens images externally regardless of protocol detection), `inlineImages` (bool, gates Feed/Post Detail's automatic inline rendering independent of the fullscreen modal), `layoutName` ("tabs"/"miller" — see `internal/ui/layout.go`'s `layoutFromName`)
+**Local-only fields** (persisted to `~/.cyber-tui.json`, never sent to the API): `imageViewer` (enum, "terminal"/"browser" — "terminal" tries inline/fullscreen-modal rendering via `internal/ui/imgview` when a graphics protocol was detected, falling back to the browser only if none was; "browser" always opens images externally regardless of protocol detection), `inlineImages` (bool, gates Feed/Post Detail's automatic inline rendering independent of the fullscreen modal), `layoutName` ("tabs"/"miller" — see `internal/ui/layout.go`'s `layoutFromName`), `feedManualRefreshOnly` (bool, "feed" group, "auto-refresh (background poll)" — disables the 60s feed background poll; see `docs/39-feed-background-poll.md`), `typingIndicatorsEnabled` (bool, "c-mail" group, "typing indicators" — positive polarity; disables C-Mail's typing-presence subscription, announce/clear calls, and merged anim/idle-check tick; see `docs/00-battery-audit.md` item #6)
 
 - `j`/`k` navigate; Space/Enter toggle booleans or cycle enum options
 - ctrl+s emits `SaveSettingsMsg` with the updated settings; ESC discards
@@ -476,7 +484,7 @@ Direct messages (C-Mail) with live Firebase RTDB integration.
 - **Live conversation list:** an account-wide `SubscribeUserConversations(ctx, uid, initial)` RTDB subscription on `user_conversations/<uid>` keeps the conversation list and unread badge current, opened directly in `afterLoginCmd` (`CMailModel.OpenUserConvsSubscription()`) right after login — **no REST seed**: the subscription's own first event is a full snapshot (same as `chat_presence`'s), so it's the sole writer to `CMailModel.conversations` after login. (A REST `GetConversations()` seed followed by the live subscription was tried first and reverted — the REST call and the subscription's internal merge state were two independent writers with no reconciliation, so a REST-only update would get silently clobbered by the next unrelated live event; `activateScreen`'s C-Mail case and the post-`StartConversation` refresh both used to call `GetConversations()` for the same reason and were removed for the same reason.) Torn down only on session end (`CancelUserConvsSubscription()`, called from `handleUnauthorized`) — independent of `dmSub`/`activeConvID` and unaffected by tab switches or leaving a conversation. Its own reconnect sequence (`userConvsReconnect*` fields/messages) mirrors `reconnectConvCmd`'s backoff schedule but gives up silently with no UI indicator on exhaustion. `pollUnreadTickMsg`'s 60s ticker no longer touches C-Mail — it now drives only the notifications unread-count badge.
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendMessage`'s reply text is routed through app.go's `cmailCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice`. `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live for CIRC, parsed defensively here) rendered via `renderActionLine` as classic IRC `* username body *`
 - When InlineImages is gated on, a message's image (its `ImageUrl`/`GifUrl` attachment field, or the first image-looking URL found in its body — `chatInlineImageURL()`, `shared.go`) renders inline in a reserved band appended after that message; the message is rendered from a `sanitizeChatMessageForInlineImage()` copy so its attachment badge or URL-only body isn't shown redundantly behind the image (a URL alongside other text is left alone — `renderChatMessagesWithSelection`, `render.go`); `VisibleInlineImages()` exposes the currently on-screen slots the same way Feed/PostDetail do. The band starts at a fixed fallback-max size and shrinks to the image's real fetched row count once known (`chatImageBandRows()`, `App.recordInlineImageRealRows` → `SetImageRealRows()`) — never a trailing spacer, so a small image never leaves a wall of blank lines below it
-- **Typing indicator:** while the compose input is non-empty, `announceTypingCmd`/`AnnounceTyping` announces "typing" and a self-rescheduling heartbeat `tea.Tick` (`scheduleTypingHeartbeatCmd`, cadence from the server response, never hard-coded) re-announces it; an idle-check `tea.Tick` chain (`scheduleTypingIdleCheckCmd`, 2.5s threshold) clears it (`clearTypingCmd`/`ClearTyping`) once keystrokes stop, or immediately if the input is emptied. Sending a message clears the local flag without a network call (the server auto-clears typing on send). Opening a conversation also subscribes to the other participant's live typing status (`SubscribeDMTyping`, `dm_presence/<convID>` — full filtered snapshot per receive, mirroring `SubscribeRoomPresence`); when fresh, `View()` appends `@other is typing…` to the detail header. Detail-header-only, no list-mode badge.
+- **Typing indicator:** while the compose input is non-empty, `announceTypingCmd`/`AnnounceTyping` announces "typing" and a self-rescheduling heartbeat `tea.Tick` (`scheduleTypingHeartbeatCmd`, cadence from the server response, never hard-coded) re-announces it. Idle-clearing (`clearTypingCmd`/`ClearTyping`, 2.5s threshold, `dmTypingIdleThreshold`) is folded into the same merged `tea.Tick` chain that drives the "..." dot animation (`scheduleTypingAnimCmd`/`typingAnimTickMsg`) — the two used to be independent 500ms chains and were coalesced into one (`docs/00-battery-audit.md` item #6). Sending a message clears the local flag without a network call (the server auto-clears typing on send). Opening a conversation also subscribes to the other participant's live typing status (`SubscribeDMTyping`, `dm_presence/<convID>` — full filtered snapshot per receive, mirroring `SubscribeRoomPresence`); when fresh, `View()` appends `@other is typing…` to the detail header. Detail-header-only, no list-mode badge. The whole subsystem (subscription, announce/clear, and the merged tick) is gated by the **Settings → c-mail → typing indicators** toggle (local-only `Config.TypingIndicatorsDisabled`, positive-polarity `CMailModel.typingIndicatorsEnabled` at runtime) — live in both directions, reacting to `SharedConfigMsg` even while a conversation is already open.
 
 Key types: `CMailModel`, `cmailMode` (`cmailModeList` / `cmailModeDetail`), `CMailConvSelectedMsg` (emitted on Enter; App calls `MarkCMailRead`), `SendCMailMsg`, `StartConversationMsg`, `CMailReconnectedMsg`, `LeaveCMailMsg`
 Key internal types: `dmSubscription` (RTDB channel + cancel func + `ConvID`), `dmSubscribedMsg`, `dmReceivedMsg`, `dmStreamClosedMsg`, `dmReconnectedMsg`, `dmReconnectFailedMsg`, `dmReconnectRetryDueMsg`, `cmailMsgsLoadedMsg`, `cmailOlderMsgsLoadedMsg`; typing: `dmTypingSubscription`, `typingAnnouncedMsg`, `typingHeartbeatTickMsg`, `typingIdleCheckMsg`, `typingAnimTickMsg`, `dmTypingSubscribedMsg`, `dmTypingReceivedMsg`, `dmTypingStreamClosedMsg`
@@ -1041,6 +1049,10 @@ go vet ./...
 Version metadata is injected at build time via `-ldflags` from `Makefile`. The version package (`internal/version`) defines three vars — `Version`, `Commit`, `Date` — defaulting to `"dev"/"none"/"unknown"` for untagged builds.
 
 Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` flag and the help modal (`?`) both display the current version.
+
+### Release Platforms
+
+`.github/workflows/release.yml` (and the mirrored `make build-all`) cross-compile release binaries for: `linux/amd64`, `linux/arm64`, `linux/arm` (`GOARM=7`, e.g. Raspberry Pi 3 on a 32-bit OS — asset name `cyber-tui-linux-armv7l`), `darwin/amd64`, `darwin/arm64`, and `windows/amd64`.
 
 ---
 

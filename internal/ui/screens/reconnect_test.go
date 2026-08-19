@@ -49,6 +49,13 @@ func (c *flakySubscribeClient) SubscribeUserConversations(ctx context.Context, u
 	return c.MockClient.SubscribeUserConversations(ctx, uid, initial)
 }
 
+func (c *flakySubscribeClient) SubscribeDMTyping(ctx context.Context, conversationID string, staleAfterMs int) (<-chan []model.TypingUser, context.CancelFunc, error) {
+	if atomic.AddInt32(&c.subscribeFailures, -1) >= 0 {
+		return nil, nil, errors.New("boom")
+	}
+	return c.MockClient.SubscribeDMTyping(ctx, conversationID, staleAfterMs)
+}
+
 // failingRefreshClient always fails RefreshSession, for exercising give-up
 // after exhausting reconnect attempts.
 type failingRefreshClient struct {
@@ -669,5 +676,149 @@ func TestCMailUserConvsReconnect_CancelStopsRetrySequence(t *testing.T) {
 	}
 	if m2.userConvsReconnecting {
 		t.Error("expected userConvsReconnecting to stay cleared after a stale result")
+	}
+}
+
+// --- C-Mail typing-presence subscription reconnect ---
+// Independent of the message-stream dmSub reconnect sequence above (own
+// state fields, own message types) but the same bounded-backoff shape —
+// guards against regressing to the old immediate/uncapped retry.
+
+func TestCMailTypingReconnect_StaleEventIgnored(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m.activeConvID = "c1"
+	m.mode = cmailModeDetail
+
+	_, cmd := m.Update(dmTypingStreamClosedMsg{convID: "old-abandoned-conv"})
+	if cmd != nil {
+		t.Error("expected no reconnect command for a stale stream-closed event")
+	}
+}
+
+func TestCMailTypingReconnect_SucceedsForActiveConversation(t *testing.T) {
+	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+
+	_, cmd := m.Update(dmTypingStreamClosedMsg{convID: "c1"})
+	if cmd == nil {
+		t.Fatal("expected a reconnect command")
+	}
+	msg := cmd()
+	reconnected, ok := msg.(dmTypingReconnectedMsg)
+	if !ok {
+		t.Fatalf("expected dmTypingReconnectedMsg, got %T", msg)
+	}
+	if reconnected.sub == nil || reconnected.sub.ConvID != "c1" {
+		t.Fatalf("expected reconnected sub for conv c1, got %+v", reconnected.sub)
+	}
+
+	m2, cmd2 := m.Update(reconnected)
+	if m2.typingSub != reconnected.sub {
+		t.Error("expected m.typingSub to be set to the reconnected subscription")
+	}
+	if cmd2 == nil {
+		t.Error("expected a command to resume waiting on the reconnected subscription")
+	}
+}
+
+func TestCMailTypingReconnect_RetriesWithBackoffThenSucceeds(t *testing.T) {
+	withShortBackoff(t)
+
+	client := &flakySubscribeClient{MockClient: api.NewMockClient(), subscribeFailures: 2}
+	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
+	m := NewCMailModel("neo", "", client)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+
+	m, cmd := m.Update(dmTypingStreamClosedMsg{convID: "c1"})
+	if !m.typingReconnecting {
+		t.Fatal("expected typingReconnecting to be true after stream closed")
+	}
+
+	var succeeded bool
+	for i := 0; i < 10 && cmd != nil && !succeeded; i++ {
+		msg := cmd()
+		m, cmd = m.Update(msg)
+		if _, ok := msg.(dmTypingReconnectedMsg); ok {
+			succeeded = true
+		}
+	}
+
+	if !succeeded {
+		t.Fatal("expected reconnect to eventually succeed")
+	}
+	if m.typingReconnecting || m.typingReconnectFailed {
+		t.Errorf("expected reconnect state cleared after success, got typingReconnecting=%v typingReconnectFailed=%v", m.typingReconnecting, m.typingReconnectFailed)
+	}
+	if m.typingSub == nil {
+		t.Error("expected typingSub to be set after successful reconnect")
+	}
+}
+
+func TestCMailTypingReconnect_GivesUpAfterMaxAttempts(t *testing.T) {
+	withShortBackoff(t)
+
+	client := &failingRefreshClient{MockClient: api.NewMockClient()}
+	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
+	m := NewCMailModel("neo", "", client)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+
+	m, cmd := m.Update(dmTypingStreamClosedMsg{convID: "c1"})
+	for i := 0; i < 20 && cmd != nil && !m.typingReconnectFailed; i++ {
+		msg := cmd()
+		m, cmd = m.Update(msg)
+	}
+
+	if !m.typingReconnectFailed {
+		t.Fatal("expected typingReconnectFailed to be true after exhausting all attempts")
+	}
+	if m.typingReconnecting {
+		t.Error("expected typingReconnecting to be false once attempts are exhausted")
+	}
+	if m.typingSub != nil {
+		t.Error("expected typingSub to remain nil after giving up")
+	}
+	// Deliberately no UI-indicator assertion here: typing-presence reconnect
+	// has no View() indicator, matching CIRC presence's precedent (unlike the
+	// message-stream reconnect, which does show "live updates lost").
+}
+
+func TestCMailTypingReconnect_CancelSubscriptionStopsRetrySequence(t *testing.T) {
+	client := &failingRefreshClient{MockClient: api.NewMockClient()}
+	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
+	m := NewCMailModel("neo", "", client)
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+
+	m, cmd := m.Update(dmTypingStreamClosedMsg{convID: "c1"})
+	if !m.typingReconnecting {
+		t.Fatal("expected typingReconnecting to be true after stream closed")
+	}
+	failMsg := cmd()
+
+	m = m.CancelSubscription()
+	if m.typingReconnecting {
+		t.Error("expected typingReconnecting to be false after CancelSubscription")
+	}
+	if m.typingReconnectCancel != nil {
+		t.Error("expected typingReconnectCancel to be cleared after CancelSubscription")
+	}
+
+	// A late-arriving result for the cancelled sequence must be a no-op.
+	m2, cmd2 := m.Update(failMsg)
+	if cmd2 != nil {
+		t.Error("expected no further command from a stale reconnect result after cancellation")
+	}
+	if m2.typingReconnecting || m2.typingReconnectFailed {
+		t.Error("expected reconnect state to stay cleared after a stale result")
 	}
 }

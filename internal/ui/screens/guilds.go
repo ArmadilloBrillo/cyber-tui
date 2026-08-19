@@ -11,7 +11,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
-	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -165,6 +164,13 @@ type GuildsModel struct {
 	// see TopicsModel's field of the same name for the convention.
 	postImages          [][]postImageSlot
 	inlineImagesEnabled bool
+
+	// postBodyCache/replyBodyCache memoize the Miller detail pane's post
+	// card and thread replies (cachedPostCard/cachedReplyCard, render.go) so
+	// an unrelated re-render doesn't re-parse markdown for content that
+	// hasn't changed — mirrors FeedModel.bodyCache/ChatroomsModel.chatBodyCache.
+	postBodyCache  map[string]feedBodyCacheEntry
+	replyBodyCache map[string]replyBodyCacheEntry
 }
 
 // NewGuildsModel returns a zero-value GuildsModel ready for first use.
@@ -172,6 +178,8 @@ func NewGuildsModel() GuildsModel {
 	return GuildsModel{
 		panel:            NewPostComposePanel(0),
 		threadReplyIndex: -1,
+		postBodyCache:    make(map[string]feedBodyCacheEntry),
+		replyBodyCache:   make(map[string]replyBodyCacheEntry),
 	}
 }
 
@@ -249,6 +257,38 @@ func (m GuildsModel) AppendGuilds(items []model.Guild, cursor string) GuildsMode
 	return m
 }
 
+// evictStalePostBodyCache drops postBodyCache entries for posts no longer
+// present in m.posts — mirrors FeedModel.evictStaleBodyCache (feed.go).
+func (m GuildsModel) evictStalePostBodyCache() GuildsModel {
+	live := make(map[string]bool, len(m.posts))
+	for _, p := range m.posts {
+		live[p.ID] = true
+	}
+	for id := range m.postBodyCache {
+		if !live[id] {
+			delete(m.postBodyCache, id)
+		}
+	}
+	return m
+}
+
+// evictStaleReplyBodyCache drops replyBodyCache entries for replies no
+// longer present in m.threadReplies — called whenever a fresh reply page
+// replaces the thread (GuildThreadRepliesMsg), the point a reply can
+// permanently drop out of the loaded thread.
+func (m GuildsModel) evictStaleReplyBodyCache() GuildsModel {
+	live := make(map[string]bool, len(m.threadReplies))
+	for _, r := range m.threadReplies {
+		live[r.ID] = true
+	}
+	for id := range m.replyBodyCache {
+		if !live[id] {
+			delete(m.replyBodyCache, id)
+		}
+	}
+	return m
+}
+
 // SetGuildPosts replaces the post list for a guild and switches to posts view.
 func (m GuildsModel) SetGuildPosts(posts []model.Post, cursor string) GuildsModel {
 	m.err = nil
@@ -259,6 +299,7 @@ func (m GuildsModel) SetGuildPosts(posts []model.Post, cursor string) GuildsMode
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	m = m.evictStalePostBodyCache()
 	if !m.panel.IsActive() {
 		m.panel = m.panel.Close()
 	}
@@ -504,6 +545,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			m.threadReplyIndex = -1
 			m.threadScrollOffset = 0
 			m.threadLoading = false
+			m = m.evictStaleReplyBodyCache()
 		}
 		return m, nil
 
@@ -1199,7 +1241,7 @@ func (m GuildsModel) VisibleDetailInlineImages(width, height int) []InlineImageS
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
 	postSelected := m.threadReplyIndex < 0
-	_, imgSlots := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, true)
+	_, imgSlots := cachedPostCard(m.postBodyCache, p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, true)
 	if len(imgSlots) == 0 {
 		return nil
 	}
@@ -1393,33 +1435,7 @@ func (m GuildsModel) CurrentDetailCmd() (GuildsModel, tea.Cmd) {
 }
 
 func (m GuildsModel) renderDetailReply(node replyNode, selected bool, width int) string {
-	indentW := node.Depth * 3
-	cardWidth := width - 2 - indentW
-	if cardWidth < 4 {
-		cardWidth = 4
-	}
-	innerWidth := cardWidth - 2
-	if innerWidth < 1 {
-		innerWidth = 1
-	}
-	header := theme.Highlight.Render("@" + node.Reply.AuthorUsername)
-	if node.ParentUsername != "" {
-		header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
-	}
-	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false) + editedSuffix(node.Reply.EditedAt))
-	body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
-	boxStyle := theme.Border
-	if selected {
-		boxStyle = theme.ActiveBorder
-	}
-	if cardWidth > 0 {
-		boxStyle = boxStyle.Width(cardWidth)
-	}
-	card := boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
-	if indentW > 0 {
-		return lipgloss.NewStyle().MarginLeft(indentW).Render(card)
-	}
-	return card
+	return cachedReplyCard(m.replyBodyCache, node, selected, width, m.location(), m.timeDisplayFormat)
 }
 
 func (m GuildsModel) renderCompactPost(p model.Post, selected bool, width int) string {
@@ -1501,7 +1517,7 @@ func (m GuildsModel) pageThreadNav(delta, paneH, paneW int) GuildsModel {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
 
-	postCard, _ := RenderPost(p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
+	postCard, _ := cachedPostCard(m.postBodyCache, p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
 	postH := lipgloss.Height(postCard)
 
 	replyStarts := make([]int, len(m.threadFlatTree))
@@ -1537,7 +1553,7 @@ func (m GuildsModel) DetailView(width, height int) string {
 	_, watched := m.watchedPostIDs[p.ID]
 
 	postSelected := m.threadReplyIndex < 0
-	card, _ := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
+	card, _ := cachedPostCard(m.postBodyCache, p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
 
 	var parts []string
 	startLines := []int{0}

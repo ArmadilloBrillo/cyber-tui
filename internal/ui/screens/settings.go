@@ -243,35 +243,68 @@ var settingsGroups = []settingsGroup{
 			},
 		},
 	},
+	{
+		title: "feed",
+		items: []settingsItem{
+			{
+				// Internally tracked as feedManualRefreshOnly (true = off);
+				// inverted here so "on" reads as the enabled state — see
+				// docs/39-feed-background-poll.md.
+				label: "auto-refresh (background poll)", kind: "bool",
+				getBool: func(m SettingsModel) bool { return !m.feedManualRefreshOnly },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.feedManualRefreshOnly = !m.feedManualRefreshOnly
+					return m
+				},
+			},
+		},
+	},
+	{
+		title: "c-mail",
+		items: []settingsItem{
+			{
+				label: "typing indicators", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.typingIndicatorsEnabled },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.typingIndicatorsEnabled = !m.typingIndicatorsEnabled
+					return m
+				},
+			},
+		},
+	},
 }
 
 // SettingsModel is the Settings screen.
 type SettingsModel struct {
-	settings                 model.Settings // live/edited values
-	original                 model.Settings // last saved baseline
-	wanderLust               bool           // live local config value
-	originalWanderLust       bool           // last saved baseline for wanderLust
-	maxThreadDepth           int            // live local config value (1–5)
-	originalMaxThreadDepth   int            // last saved baseline
-	timezone                 string         // live local config value (UTC offset label)
-	originalTimezone         string         // last saved baseline
-	imageViewer              string         // live local config value ("terminal" or "browser")
-	originalImageViewer      string         // last saved baseline
-	graphicsProtocol         string         // live local config value ("" auto, or "kitty"/"iterm2"/"sixel")
-	originalGraphicsProtocol string         // last saved baseline
-	inlineImages             bool           // live local config value
-	originalInlineImages     bool           // last saved baseline
-	dithering                bool           // live local config value
-	originalDithering        bool           // last saved baseline
-	ditherSharpness          string         // live local config value ("rough"/"medium"/"sharp")
-	originalDitherSharpness  string         // last saved baseline
-	layoutName               string         // live local config value ("tabs" or "miller")
-	originalLayoutName       string         // last saved baseline
-	prefsSeeded              bool           // whether the SharedConfigMsg preference fields above have been seeded once
-	cursor                   int
-	width                    int
-	height                   int
-	err                      error
+	settings                      model.Settings // live/edited values
+	original                      model.Settings // last saved baseline
+	wanderLust                    bool           // live local config value
+	originalWanderLust            bool           // last saved baseline for wanderLust
+	maxThreadDepth                int            // live local config value (1–5)
+	originalMaxThreadDepth        int            // last saved baseline
+	timezone                      string         // live local config value (UTC offset label)
+	originalTimezone              string         // last saved baseline
+	imageViewer                   string         // live local config value ("terminal" or "browser")
+	originalImageViewer           string         // last saved baseline
+	graphicsProtocol              string         // live local config value ("" auto, or "kitty"/"iterm2"/"sixel")
+	originalGraphicsProtocol      string         // last saved baseline
+	inlineImages                  bool           // live local config value
+	originalInlineImages          bool           // last saved baseline
+	dithering                     bool           // live local config value
+	originalDithering             bool           // last saved baseline
+	ditherSharpness               string         // live local config value ("rough"/"medium"/"sharp")
+	originalDitherSharpness       string         // last saved baseline
+	layoutName                    string         // live local config value ("tabs" or "miller")
+	originalLayoutName            string         // last saved baseline
+	feedManualRefreshOnly         bool           // live local config value (true = feed background poll off)
+	originalFeedManualRefreshOnly bool           // last saved baseline
+	typingIndicatorsEnabled         bool         // live local config value (positive polarity)
+	originalTypingIndicatorsEnabled bool         // last saved baseline
+	prefsSeeded                     bool         // whether the SharedConfigMsg preference fields above have been seeded once
+	cursor                          int
+	width                           int
+	height                          int
+	err                             error
 }
 
 // NewSettingsModel creates a new SettingsModel.
@@ -288,11 +321,15 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, ditherSharpness string, layoutName string) SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typingIndicatorsEnabled bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, ditherSharpness string, layoutName string) SettingsModel {
 	m.err = nil
 	m.original = m.settings
 	m.wanderLust = wanderLust
 	m.originalWanderLust = wanderLust
+	m.feedManualRefreshOnly = feedManualRefreshOnly
+	m.originalFeedManualRefreshOnly = feedManualRefreshOnly
+	m.typingIndicatorsEnabled = typingIndicatorsEnabled
+	m.originalTypingIndicatorsEnabled = typingIndicatorsEnabled
 	m.maxThreadDepth = maxThreadDepth
 	m.originalMaxThreadDepth = maxThreadDepth
 	m.timezone = timezone
@@ -322,6 +359,8 @@ func (m SettingsModel) SetError(err error) SettingsModel {
 func (m SettingsModel) IsDirty() bool {
 	return !settingsEqual(m.settings, m.original) ||
 		m.wanderLust != m.originalWanderLust ||
+		m.feedManualRefreshOnly != m.originalFeedManualRefreshOnly ||
+		m.typingIndicatorsEnabled != m.originalTypingIndicatorsEnabled ||
 		m.maxThreadDepth != m.originalMaxThreadDepth ||
 		m.timezone != m.originalTimezone ||
 		m.imageViewer != m.originalImageViewer ||
@@ -413,6 +452,10 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.prefsSeeded = true
 			m.wanderLust = msg.WanderLust
 			m.originalWanderLust = msg.WanderLust
+			m.feedManualRefreshOnly = msg.FeedManualRefreshOnly
+			m.originalFeedManualRefreshOnly = msg.FeedManualRefreshOnly
+			m.typingIndicatorsEnabled = msg.TypingIndicatorsEnabled
+			m.originalTypingIndicatorsEnabled = msg.TypingIndicatorsEnabled
 			m.maxThreadDepth = msg.MaxThreadDepth
 			m.originalMaxThreadDepth = msg.MaxThreadDepth
 			tz := msg.Timezone
@@ -482,6 +525,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			if m.IsDirty() {
 				s := m.settings
 				wl := m.wanderLust
+				fmro := m.feedManualRefreshOnly
+				tie := m.typingIndicatorsEnabled
 				td := m.maxThreadDepth
 				tz := m.timezone
 				iv := m.imageViewer
@@ -492,7 +537,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				ln := m.layoutName
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, LayoutName: ln, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, LayoutName: ln, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -501,6 +546,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			// Revert to original.
 			m.settings = m.original
 			m.wanderLust = m.originalWanderLust
+			m.feedManualRefreshOnly = m.originalFeedManualRefreshOnly
+			m.typingIndicatorsEnabled = m.originalTypingIndicatorsEnabled
 			m.maxThreadDepth = m.originalMaxThreadDepth
 			m.timezone = m.originalTimezone
 			m.imageViewer = m.originalImageViewer
