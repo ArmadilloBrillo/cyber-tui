@@ -93,6 +93,14 @@ A scan of this repo reports **seven** suppressions, not six: the Go example
 above is real text in a real file, so its own `threatcrush-disable-next-line`
 line suppresses the mock string it demonstrates.
 
+One more, added later — `sql-format-call` in `internal/ui/app.go` (the
+update-available notification's `fmt.Sprintf` call, `docs/47-update-check.md`):
+the rule pattern-matches *any* format-helper call building a string and
+labels it "SQL text produced by a format helper," with no actual SQL/database
+code anywhere in this repo to be near. Medium severity, so it never hit the
+`--fail-on critical,high` gate — suppressed anyway to keep the Security tab
+free of noise that would otherwise need re-explaining on every future scan.
+
 ## Running locally
 
 ```bash

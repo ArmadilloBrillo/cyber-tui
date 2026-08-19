@@ -1715,6 +1715,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case updateAvailableMsg:
 		var cmd tea.Cmd
+		// threatcrush-disable-next-line sql-format-call  UI notification string, no SQL anywhere in this codebase
 		a, cmd = a.notify(notifyWarn, fmt.Sprintf("update available: %s (you have %s) — %s", msg.tag, version.Version, msg.url))
 		return a, cmd, true
 	}
