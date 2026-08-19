@@ -7,9 +7,11 @@ banner and a tab badge tell the user entries are waiting, and the existing
 pull-to-top gesture (`docs/13-feed-refresh.md`) brings them into view.
 
 ## Behaviour
-- Every 15s (after login, running globally regardless of the active tab —
-  same shape as the notifications unread-count poll), the app fetches the
-  newest page of the feed and diffs it against the currently loaded posts.
+- Every 60s (after login, running globally regardless of the active tab —
+  same cadence and shape as the notifications unread-count poll), the app
+  fetches the newest page of the feed and diffs it against the currently
+  loaded posts. (60s since the 2026-08-19 battery audit — see "Battery"
+  below; was 15s before.)
 - New (not-yet-seen) post IDs are staged on `FeedModel` as `pendingNew` —
   not merged into `posts`, so the viewport and scroll position are
   untouched.
@@ -25,6 +27,27 @@ pull-to-top gesture (`docs/13-feed-refresh.md`) brings them into view.
 - The poll is skipped while a manual refresh is in flight (`refreshing`) or
   before the feed has loaded once, and reschedules itself either way.
 
+## Battery: manual-refresh-only toggle
+This poll was the single largest network offender found in the
+2026-08-19 battery audit (`docs/00-battery-audit.md`, item #5) — a full
+20-post page fetched every 15s, unconditionally, for the whole session. A
+hard "only poll while Feed is the active tab" gate was considered and
+rejected: it would silently defeat the cross-tab `(N)` badge above, which
+this doc's own "Behaviour" section describes as deliberately running
+globally. The fix taken instead:
+- The interval was lengthened from 15s to 60s (`feedPollInterval` in
+  `app.go`) — matches the notifications poll's cadence, a straight 4x cut
+  in radio wakes, zero change to the cross-tab badge behavior.
+- A new **Settings → feed → auto-refresh (background poll)** toggle
+  (`config.Config.FeedManualRefreshOnly`, default off = auto-poll on) lets a
+  user disable the poll entirely. With it on, `scheduleFeedPollCmd` is never
+  started at login and `feedPollTickMsg` self-terminates without
+  rescheduling if the poll was already running when the user turns it on;
+  flipping it back off mid-session restarts the chain immediately from the
+  settings-save handler (nothing else would revive it otherwise). The
+  manual `Up`-at-top refresh gesture works identically either way — this
+  toggle only affects the automatic background check.
+
 ## Known limitation
 The poll reuses the same `GetFeed("")` endpoint as the initial load, which
 returns only the newest 20 posts per request. Walking multiple
@@ -39,9 +62,10 @@ The count self-corrects on the next 15s tick as more of the backlog surfaces.
 
 ## Message flow
 ```
-App (after login)
-  → schedules feedPollTickMsg every 15s (scheduleFeedPollCmd)
+App (after login, only if FeedManualRefreshOnly is off)
+  → schedules feedPollTickMsg every 60s (scheduleFeedPollCmd)
 App.Update (feedPollTickMsg)
+  → skips (no reschedule) if FeedManualRefreshOnly is now on
   → skips if feed not loaded yet or a manual refresh is in flight
   → else: fetchFeedPeekCmd() (GetFeed("")) + reschedules itself
   → result arrives as feedPeekMsg{posts}
@@ -64,7 +88,10 @@ FeedModel (up at index 0, pendingNew non-empty)
 | `internal/ui/screens/feed.go` | `mergePendingTickMsg`, `feedMergeAnimDelay` | ~200ms delay so the local merge shows the same transition as a real refresh |
 | `internal/ui/screens/feed.go` | `buildContent()` | Renders the "load N (or N+) new entries" banner when `pendingNew` is non-empty |
 | `internal/ui/app.go` | `feedPollTickMsg`, `feedPeekMsg` | Poll tick and peek-result messages |
-| `internal/ui/app.go` | `scheduleFeedPollCmd()`, `fetchFeedPeekCmd()` | 15s self-rescheduling ticker (mirrors `schedulePollCmd`/`pollUnreadTickMsg`) |
-| `internal/ui/app.go` | `afterLoginCmd()` | Starts the ticker once, alongside the notifications poll |
+| `internal/ui/app.go` | `feedPollInterval`, `scheduleFeedPollCmd()`, `fetchFeedPeekCmd()` | 60s self-rescheduling ticker (mirrors `schedulePollCmd`/`pollUnreadTickMsg`) |
+| `internal/ui/app.go` | `afterLoginCmd()` | Starts the ticker once, alongside the notifications poll — skipped if `FeedManualRefreshOnly` is on |
+| `internal/ui/app.go` | `App.feedManualRefreshOnly` | Local config value gating the ticker — see "Battery" above |
+| `internal/config/session.go` | `Config.FeedManualRefreshOnly` | Persisted toggle value |
+| `internal/ui/screens/settings.go` | `"feed"` settings group | "auto-refresh (background poll)" toggle row |
 | `internal/ui/layout_tabs.go` | `renderTabBar()` | `(N)` badge for `screenFeed` |
 | `internal/ui/layout_miller.go` | `renderNav()` | `●N` badge for `screenFeed` |

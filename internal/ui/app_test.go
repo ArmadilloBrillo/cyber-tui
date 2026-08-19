@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -1778,6 +1779,161 @@ func TestHandleUnauthorized_InvalidatesPendingTickers(t *testing.T) {
 	// by a fresh login — must still do real work, not be dropped too.
 	if _, cmd, ok := a2.handleNotifications(pollUnreadTickMsg{gen: a2.sessionGen}); !ok || cmd == nil {
 		t.Errorf("pollUnreadTickMsg{gen: current} handled=%v cmd=%v, want handled=true cmd=non-nil", ok, cmd)
+	}
+}
+
+// TestFeedPollTick_StopsWhenManualRefreshOnly guards audit item #5's
+// manual-refresh-only toggle (docs/39-feed-background-poll.md): a tick
+// stamped with the current sessionGen must still self-terminate (no
+// reschedule) once the user has disabled the background poll mid-session —
+// mirrors the sessionGen self-termination pattern above, but gated on the
+// feedManualRefreshOnly flag instead of a stale generation.
+func TestFeedPollTick_StopsWhenManualRefreshOnly(t *testing.T) {
+	a := loggedInApp()
+	a.feedManualRefreshOnly = true
+
+	if _, cmd, ok := a.handleNotifications(feedPollTickMsg{gen: a.sessionGen}); !ok || cmd != nil {
+		t.Errorf("feedPollTickMsg with feedManualRefreshOnly=true: handled=%v cmd=%v, want handled=true cmd=nil", ok, cmd)
+	}
+}
+
+// TestHandleSettings_ManualToAutoRestartsFeedPoll guards the other half of
+// the toggle: flipping feedManualRefreshOnly from true to false must revive
+// the poll chain immediately, since nothing else would (afterLoginCmd only
+// runs once, at login). The restarted schedule cmd is asserted by presence
+// in the returned batch, not by executing it — scheduleFeedPollCmd's cmd is
+// a 60s tea.Tick, which would block the test if actually invoked.
+func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	a := loggedInApp()
+	a.feedManualRefreshOnly = true
+
+	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+		FeedManualRefreshOnly: false,
+		ImageViewer:            "terminal",
+	})
+	if !ok || cmd == nil {
+		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
+	}
+	msg := cmd()
+	saved, ok := msg.(settingsSavedMsg)
+	if !ok {
+		t.Fatalf("expected settingsSavedMsg, got %T", msg)
+	}
+
+	a2, cmd2, ok := a.handleSettings(saved)
+	if !ok {
+		t.Fatal("expected handleSettings to handle settingsSavedMsg")
+	}
+	if a2.feedManualRefreshOnly {
+		t.Error("expected feedManualRefreshOnly to be false after enabling auto-refresh")
+	}
+	if cmd2 == nil {
+		t.Fatal("expected a non-nil cmd batch")
+	}
+	batch, ok := cmd2().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected tea.BatchMsg, got %T", cmd2())
+	}
+	// notifyCmd + saveCmd are always present; a manual->auto transition adds
+	// the restarted feed-poll schedule as a third.
+	if len(batch) != 3 {
+		t.Errorf("expected 3 cmds in the batch (notify, save, restarted feed-poll schedule), got %d", len(batch))
+	}
+}
+
+// subscribeCancelSpyClient wraps MockClient's SubscribeDMs/SubscribeRoom
+// cancel funcs to record whether they were actually invoked — used below to
+// verify handleUnauthorized tears down a live per-conversation/per-room
+// subscription, not just the account-wide conversation-list stream.
+type subscribeCancelSpyClient struct {
+	*api.MockClient
+	dmCancelled   bool
+	roomCancelled bool
+}
+
+func (c *subscribeCancelSpyClient) SubscribeDMs(ctx context.Context, convID string) (<-chan model.Message, context.CancelFunc, error) {
+	ch, cancel, err := c.MockClient.SubscribeDMs(ctx, convID)
+	if err != nil {
+		return ch, cancel, err
+	}
+	return ch, func() { c.dmCancelled = true; cancel() }, nil
+}
+
+func (c *subscribeCancelSpyClient) SubscribeRoom(ctx context.Context, roomID string) (<-chan model.Message, context.CancelFunc, error) {
+	ch, cancel, err := c.MockClient.SubscribeRoom(ctx, roomID)
+	if err != nil {
+		return ch, cancel, err
+	}
+	return ch, func() { c.roomCancelled = true; cancel() }, nil
+}
+
+// TestHandleUnauthorized_CancelsLiveDMSubscription guards the battery-audit
+// fix where session expiry left an open C-Mail conversation's live RTDB
+// subscription (and its typing-heartbeat/idle-check/anim tea.Tick chains)
+// running indefinitely against the now-dead token.
+func TestHandleUnauthorized_CancelsLiveDMSubscription(t *testing.T) {
+	spy := &subscribeCancelSpyClient{MockClient: api.NewMockClient()}
+	a := loggedInApp()
+	a.ephemeral = true
+	a.client = spy
+	a.currentUser = model.User{Username: "neo"}
+	a.cmail = screens.NewCMailModel("neo", "", spy)
+	a.cmail = a.cmail.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}},
+	})
+	cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, cmd := cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.cmail = cm
+	if cmd == nil {
+		t.Fatal("expected a batch command opening the conversation")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) < 2 {
+		t.Fatalf("expected a batch of at least 2 commands, got %T", cmd())
+	}
+	subscribedMsg := batch[1]() // openDMSubscriptionCmd's slot in the Enter handler's batch order
+	a.cmail, _ = a.cmail.Update(subscribedMsg)
+
+	m, _ := a.Update(errMsg{api.ErrUnauthorized})
+	_ = m.(App)
+
+	if !spy.dmCancelled {
+		t.Error("expected the open DM subscription's cancel func to be called on session expiry")
+	}
+}
+
+// TestHandleUnauthorized_CancelsLiveRoomSubscription is the CIRC counterpart
+// to TestHandleUnauthorized_CancelsLiveDMSubscription.
+func TestHandleUnauthorized_CancelsLiveRoomSubscription(t *testing.T) {
+	spy := &subscribeCancelSpyClient{MockClient: api.NewMockClient()}
+	a := loggedInApp()
+	a.ephemeral = true
+	a.client = spy
+	a.currentUser = model.User{Username: "neo"}
+	a.chatrooms = screens.NewChatroomsModel("neo", spy)
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, cmd := cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+	if cmd == nil {
+		t.Fatal("expected a batch command opening the room")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) < 2 {
+		t.Fatalf("expected a batch of at least 2 commands, got %T", cmd())
+	}
+	subscribedMsg := batch[1]() // openRoomSubscriptionCmd's slot in enterRoomDetail's batch order
+	a.chatrooms, _ = a.chatrooms.Update(subscribedMsg)
+
+	m, _ := a.Update(errMsg{api.ErrUnauthorized})
+	_ = m.(App)
+
+	if !spy.roomCancelled {
+		t.Error("expected the open room subscription's cancel func to be called on session expiry")
 	}
 }
 

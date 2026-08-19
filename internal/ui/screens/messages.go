@@ -41,9 +41,13 @@ type SharedConfigMsg struct {
 	Relaxed        bool
 	Settings       model.Settings
 	WanderLust     bool
-	MaxThreadDepth int
-	Timezone       string
-	ImageViewer    string
+	// FeedManualRefreshOnly is the user's raw preference
+	// (config.Config.FeedManualRefreshOnly), used by the settings screen to
+	// display/edit the toggle — see docs/39-feed-background-poll.md.
+	FeedManualRefreshOnly bool
+	MaxThreadDepth        int
+	Timezone              string
+	ImageViewer           string
 	// GraphicsProtocol is the user's raw override preference
 	// (config.Config.GraphicsProtocol): "" autodetects, or "kitty"/"iterm2"/"sixel"
 	// forces a choice. Used by the settings screen to display/edit the enum.
@@ -69,6 +73,12 @@ type SharedConfigMsg struct {
 	// the Guilds screen to float those guilds toward the top of the list.
 	OwnApprenticeSlugs []string
 	LayoutName         string // "tabs" or "miller"; used by settings screen to show current value
+	// TypingIndicatorsEnabled is the user's preference (positive polarity —
+	// config.Config.TypingIndicatorsDisabled is inverted once at load time),
+	// consumed directly by CMailModel to gate its typing-presence
+	// subscription, announce/clear calls, and the merged anim/idle-check
+	// tick — see docs/00-battery-audit.md item #6.
+	TypingIndicatorsEnabled bool
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -133,17 +143,19 @@ type LeaveChatroomsMsg struct{}
 // with unsaved changes. App.handleSettings calls UpdateSettings and returns
 // settingsSavedMsg or errMsg.
 type SaveSettingsMsg struct {
-	Settings         model.Settings
-	WanderLust       bool
-	MaxThreadDepth   int
-	Timezone         string
-	ImageViewer      string
-	GraphicsProtocol string
-	InlineImages     bool
-	Dithering        bool
-	DitherSharpness  string
-	LayoutName       string // "tabs" or "miller"
-	RemoteChanged    bool   // true when API-managed fields differ from the last saved baseline
+	Settings                model.Settings
+	WanderLust              bool
+	FeedManualRefreshOnly   bool
+	TypingIndicatorsEnabled bool
+	MaxThreadDepth          int
+	Timezone                string
+	ImageViewer             string
+	GraphicsProtocol        string
+	InlineImages            bool
+	Dithering               bool
+	DitherSharpness         string
+	LayoutName              string // "tabs" or "miller"
+	RemoteChanged           bool   // true when API-managed fields differ from the last saved baseline
 }
 
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark

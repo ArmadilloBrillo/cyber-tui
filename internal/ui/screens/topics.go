@@ -9,7 +9,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/model"
-	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -107,10 +106,21 @@ type TopicsModel struct {
 	relaxed           bool
 	timeDisplayFormat string
 	filterNSFW        bool
+
+	// postBodyCache/replyBodyCache memoize the Miller detail pane's post
+	// card and thread replies (cachedPostCard/cachedReplyCard, render.go) so
+	// an unrelated re-render doesn't re-parse markdown for content that
+	// hasn't changed — mirrors FeedModel.bodyCache/ChatroomsModel.chatBodyCache.
+	postBodyCache  map[string]feedBodyCacheEntry
+	replyBodyCache map[string]replyBodyCacheEntry
 }
 
 func NewTopicsModel() TopicsModel {
-	return TopicsModel{threadReplyIndex: -1}
+	return TopicsModel{
+		threadReplyIndex: -1,
+		postBodyCache:    make(map[string]feedBodyCacheEntry),
+		replyBodyCache:   make(map[string]replyBodyCacheEntry),
+	}
 }
 
 func (m TopicsModel) visiblePosts() []model.Post {
@@ -167,6 +177,38 @@ func (m TopicsModel) AppendTopics(items []model.Topic, cursor string) TopicsMode
 	return m
 }
 
+// evictStalePostBodyCache drops postBodyCache entries for posts no longer
+// present in m.posts — mirrors FeedModel.evictStaleBodyCache (feed.go).
+func (m TopicsModel) evictStalePostBodyCache() TopicsModel {
+	live := make(map[string]bool, len(m.posts))
+	for _, p := range m.posts {
+		live[p.ID] = true
+	}
+	for id := range m.postBodyCache {
+		if !live[id] {
+			delete(m.postBodyCache, id)
+		}
+	}
+	return m
+}
+
+// evictStaleReplyBodyCache drops replyBodyCache entries for replies no
+// longer present in m.threadReplies — called whenever a fresh reply page
+// replaces the thread (TopicThreadRepliesMsg), the point a reply can
+// permanently drop out of the loaded thread.
+func (m TopicsModel) evictStaleReplyBodyCache() TopicsModel {
+	live := make(map[string]bool, len(m.threadReplies))
+	for _, r := range m.threadReplies {
+		live[r.ID] = true
+	}
+	for id := range m.replyBodyCache {
+		if !live[id] {
+			delete(m.replyBodyCache, id)
+		}
+	}
+	return m
+}
+
 func (m TopicsModel) SetTopicPosts(posts []model.Post, cursor string) TopicsModel {
 	m.err = nil
 	m.posts = posts
@@ -176,6 +218,7 @@ func (m TopicsModel) SetTopicPosts(posts []model.Post, cursor string) TopicsMode
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	m = m.evictStalePostBodyCache()
 	m.view = viewTopicPosts
 	if m.ready {
 		m = m.refreshContent()
@@ -254,6 +297,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			m.threadReplyIndex = -1
 			m.threadScrollOffset = 0
 			m.threadLoading = false
+			m = m.evictStaleReplyBodyCache()
 		}
 		return m, nil
 
@@ -636,7 +680,7 @@ func (m TopicsModel) VisibleDetailInlineImages(width, height int) []InlineImageS
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
 	postSelected := m.threadReplyIndex < 0
-	_, imgSlots := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, true)
+	_, imgSlots := cachedPostCard(m.postBodyCache, p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, true)
 	if len(imgSlots) == 0 {
 		return nil
 	}
@@ -809,33 +853,7 @@ func (m TopicsModel) CurrentDetailCmd() (TopicsModel, tea.Cmd) {
 }
 
 func (m TopicsModel) renderDetailReply(node replyNode, selected bool, width int) string {
-	indentW := node.Depth * 3
-	cardWidth := width - 2 - indentW
-	if cardWidth < 4 {
-		cardWidth = 4
-	}
-	innerWidth := cardWidth - 2
-	if innerWidth < 1 {
-		innerWidth = 1
-	}
-	header := theme.Highlight.Render("@" + node.Reply.AuthorUsername)
-	if node.ParentUsername != "" {
-		header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
-	}
-	header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, m.location(), m.timeDisplayFormat, false) + editedSuffix(node.Reply.EditedAt))
-	body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
-	boxStyle := theme.Border
-	if selected {
-		boxStyle = theme.ActiveBorder
-	}
-	if cardWidth > 0 {
-		boxStyle = boxStyle.Width(cardWidth)
-	}
-	card := boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
-	if indentW > 0 {
-		return lipgloss.NewStyle().MarginLeft(indentW).Render(card)
-	}
-	return card
+	return cachedReplyCard(m.replyBodyCache, node, selected, width, m.location(), m.timeDisplayFormat)
 }
 
 func (m TopicsModel) renderCompactPost(p model.Post, selected bool, width int) string {
@@ -917,7 +935,7 @@ func (m TopicsModel) pageThreadNav(delta, paneH, paneW int) TopicsModel {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
 
-	postCard, _ := RenderPost(p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
+	postCard, _ := cachedPostCard(m.postBodyCache, p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
 	postH := lipgloss.Height(postCard)
 
 	replyStarts := make([]int, len(m.threadFlatTree))
@@ -953,7 +971,7 @@ func (m TopicsModel) DetailView(width, height int) string {
 	_, watched := m.watchedPostIDs[p.ID]
 
 	postSelected := m.threadReplyIndex < 0
-	card, _ := RenderPost(p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
+	card, _ := cachedPostCard(m.postBodyCache, p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
 
 	var parts []string
 	startLines := []int{0}
