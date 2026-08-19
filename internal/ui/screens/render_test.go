@@ -743,7 +743,7 @@ func TestRenderChatMessagesWithSelection_HighlightsSelectedAndMatchesUnselected(
 	}
 
 	unselected := renderChatMessagesStyled(msgs, "case", time.UTC, "datetime", width, 0)
-	content, offsets, heights, _ := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "", false, nil)
+	content, offsets, heights, _ := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "", false, nil, nil)
 	if content != unselected {
 		t.Errorf("renderChatMessagesWithSelection with selectedID==\"\" should match renderChatMessagesStyled;\ngot:  %q\nwant: %q", content, unselected)
 	}
@@ -751,7 +751,7 @@ func TestRenderChatMessagesWithSelection_HighlightsSelectedAndMatchesUnselected(
 		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
 	}
 
-	selected, _, _, _ := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "m1", false, nil)
+	selected, _, _, _ := renderChatMessagesWithSelection(msgs, "case", time.UTC, "datetime", width, 0, "m1", false, nil, nil)
 	if selected == unselected {
 		t.Error("expected selecting m1 to change the rendered content (highlight)")
 	}
@@ -836,6 +836,95 @@ func TestFeedRenderPost_CacheInvalidatesOnEditedAtOnlyChange(t *testing.T) {
 
 	post.EditedAt = time.Now()
 	after, _ := m.renderPost(post, false)
+	if !strings.Contains(ansi.Strip(after), "(edited)") {
+		t.Errorf("expected cache to invalidate after EditedAt-only change, got stale body: %q", after)
+	}
+}
+
+// --- cachedPostCard / cachedReplyCard (Guilds/Topics Miller detail pane) ---
+// Mirrors the TestFeedRenderPost_* trio above — same mechanism, exercised
+// directly against the shared free functions rather than through FeedModel,
+// since GuildsModel and TopicsModel both call them identically.
+
+func TestCachedPostCard_CachesBodyAcrossSelectionChange(t *testing.T) {
+	withTrueColor(t)
+	cache := map[string]feedBodyCacheEntry{}
+	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "hello world"}
+
+	unselected, _ := cachedPostCard(cache, post, false, false, false, 80, time.UTC, "datetime", 0, false)
+	selected, _ := cachedPostCard(cache, post, true, false, false, 80, time.UTC, "datetime", 0, false)
+
+	if unselected == selected {
+		t.Error("expected selected vs unselected rendering to differ (border style)")
+	}
+	if _, hit := cache["p1"]; !hit {
+		t.Fatal("expected cachedPostCard to populate the body cache")
+	}
+
+	post.Content = "edited content"
+	edited, _ := cachedPostCard(cache, post, false, false, false, 80, time.UTC, "datetime", 0, false)
+	if strings.Contains(ansi.Strip(edited), "hello world") {
+		t.Error("expected cache to invalidate after post content changed, got stale body")
+	}
+	if !strings.Contains(ansi.Strip(edited), "edited content") {
+		t.Errorf("expected edited content in output, got: %q", edited)
+	}
+}
+
+func TestCachedPostCard_CacheInvalidatesOnEditedAtOnlyChange(t *testing.T) {
+	withTrueColor(t)
+	cache := map[string]feedBodyCacheEntry{}
+	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "same content"}
+
+	before, _ := cachedPostCard(cache, post, false, false, false, 80, time.UTC, "datetime", 0, false)
+	if strings.Contains(ansi.Strip(before), "(edited)") {
+		t.Fatalf("expected no (edited) marker before EditedAt is set, got: %q", before)
+	}
+
+	post.EditedAt = time.Now()
+	after, _ := cachedPostCard(cache, post, false, false, false, 80, time.UTC, "datetime", 0, false)
+	if !strings.Contains(ansi.Strip(after), "(edited)") {
+		t.Errorf("expected cache to invalidate after EditedAt-only change, got stale body: %q", after)
+	}
+}
+
+func TestCachedReplyCard_CachesBodyAcrossSelectionChange(t *testing.T) {
+	withTrueColor(t)
+	cache := map[string]replyBodyCacheEntry{}
+	node := replyNode{Reply: model.Reply{ID: "r1", AuthorUsername: "bob", Content: "hello reply"}}
+
+	unselected := cachedReplyCard(cache, node, false, 80, time.UTC, "datetime")
+	selected := cachedReplyCard(cache, node, true, 80, time.UTC, "datetime")
+
+	if unselected == selected {
+		t.Error("expected selected vs unselected rendering to differ (border style)")
+	}
+	if _, hit := cache["r1"]; !hit {
+		t.Fatal("expected cachedReplyCard to populate the body cache")
+	}
+
+	node.Reply.Content = "edited reply"
+	edited := cachedReplyCard(cache, node, false, 80, time.UTC, "datetime")
+	if strings.Contains(ansi.Strip(edited), "hello reply") {
+		t.Error("expected cache to invalidate after reply content changed, got stale body")
+	}
+	if !strings.Contains(ansi.Strip(edited), "edited reply") {
+		t.Errorf("expected edited content in output, got: %q", edited)
+	}
+}
+
+func TestCachedReplyCard_CacheInvalidatesOnEditedAtOnlyChange(t *testing.T) {
+	withTrueColor(t)
+	cache := map[string]replyBodyCacheEntry{}
+	node := replyNode{Reply: model.Reply{ID: "r1", AuthorUsername: "bob", Content: "same content"}}
+
+	before := cachedReplyCard(cache, node, false, 80, time.UTC, "datetime")
+	if strings.Contains(ansi.Strip(before), "(edited)") {
+		t.Fatalf("expected no (edited) marker before EditedAt is set, got: %q", before)
+	}
+
+	node.Reply.EditedAt = time.Now()
+	after := cachedReplyCard(cache, node, false, 80, time.UTC, "datetime")
 	if !strings.Contains(ansi.Strip(after), "(edited)") {
 		t.Errorf("expected cache to invalidate after EditedAt-only change, got stale body: %q", after)
 	}
@@ -985,6 +1074,90 @@ func TestRenderCircMessagesWithSelection_AnimatedMessageNeverCached(t *testing.T
 	}
 
 	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, nil, cache)
+
+	if strings.Contains(content, "CACHED-SENTINEL") {
+		t.Errorf("expected an animated-style message to bypass the cache entirely, got: %q", content)
+	}
+	if e, hit := cache["m1"]; !hit || e.rendered != "CACHED-SENTINEL\n" {
+		t.Errorf("expected the pre-existing cache entry to be left untouched, not overwritten, for an animated message")
+	}
+}
+
+// --- cmailBodyCache ---
+// Mirrors the chatBodyCache trio above — same mechanism, applied to
+// renderChatMessagesWithSelection (C-Mail) instead of
+// renderCircMessagesWithSelection (Chatrooms).
+
+func TestRenderChatMessagesWithSelection_UsesCachedBodyOnHit(t *testing.T) {
+	const width = 60
+	msg := circMsg("bob", "hi from bob")
+	msg.ID = "m1"
+	msgs := []model.Message{msg}
+
+	cache := map[string]cmailBodyCacheEntry{
+		"m1": {
+			rendered:          "CACHED-SENTINEL\n",
+			width:             width,
+			currentUser:       "alice",
+			timeDisplayFormat: "datetime",
+			body:              msg.Body,
+			themeName:         theme.CurrentName(),
+		},
+	}
+
+	content, _, _, _ := renderChatMessagesWithSelection(msgs, "alice", time.UTC, "datetime", width, 0, "", false, nil, cache)
+
+	if !strings.Contains(content, "CACHED-SENTINEL") {
+		t.Errorf("expected the matching cache entry to be reused, got: %q", content)
+	}
+}
+
+func TestRenderChatMessagesWithSelection_StaleCacheEntryIsRecomputed(t *testing.T) {
+	const width = 60
+	msg := circMsg("bob", "hi from bob")
+	msg.ID = "m1"
+	msgs := []model.Message{msg}
+
+	cache := map[string]cmailBodyCacheEntry{
+		"m1": {
+			rendered:          "CACHED-SENTINEL\n",
+			width:             width,
+			currentUser:       "alice",
+			timeDisplayFormat: "datetime",
+			body:              "a different body than msg.Body",
+			themeName:         theme.CurrentName(),
+		},
+	}
+
+	content, _, _, _ := renderChatMessagesWithSelection(msgs, "alice", time.UTC, "datetime", width, 0, "", false, nil, cache)
+
+	if strings.Contains(content, "CACHED-SENTINEL") {
+		t.Errorf("expected a stale cache entry (body mismatch) to be recomputed, not reused, got: %q", content)
+	}
+	if !strings.Contains(content, "hi from bob") {
+		t.Errorf("expected the message's real body in freshly rendered output, got: %q", content)
+	}
+}
+
+func TestRenderChatMessagesWithSelection_AnimatedMessageNeverCached(t *testing.T) {
+	const width = 60
+	msg := circMsg("bob", "hi from bob")
+	msg.ID = "m1"
+	msg.Style = []string{styleBlink}
+	msgs := []model.Message{msg}
+
+	cache := map[string]cmailBodyCacheEntry{
+		"m1": {
+			rendered:          "CACHED-SENTINEL\n",
+			width:             width,
+			currentUser:       "alice",
+			timeDisplayFormat: "datetime",
+			body:              msg.Body,
+			themeName:         theme.CurrentName(),
+		},
+	}
+
+	content, _, _, _ := renderChatMessagesWithSelection(msgs, "alice", time.UTC, "datetime", width, 0, "", false, nil, cache)
 
 	if strings.Contains(content, "CACHED-SENTINEL") {
 		t.Errorf("expected an animated-style message to bypass the cache entirely, got: %q", content)

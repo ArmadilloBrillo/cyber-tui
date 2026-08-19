@@ -251,7 +251,7 @@ func TestSettings_Esc_ClearsError(t *testing.T) {
 func TestSettings_SetSaved_ClearsError(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetError(testErr)
-	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	m = m.SetSaved(false, false, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.err != nil {
 		t.Error("SetSaved should clear error")
 	}
@@ -263,7 +263,7 @@ func TestSettings_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty after change")
 	}
-	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	m = m.SetSaved(false, false, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.IsDirty() {
 		t.Error("after SetSaved, should not be dirty")
 	}
@@ -344,7 +344,7 @@ func TestSettings_Dithering_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty before SetSaved")
 	}
-	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, true, "sharp", "tabs")
+	m = m.SetSaved(false, false, true, 3, "UTC", "terminal", "", false, true, "sharp", "tabs")
 	if m.originalDithering != true || m.originalDitherSharpness != "sharp" {
 		t.Error("SetSaved should update originalDithering/originalDitherSharpness to the saved values")
 	}
@@ -510,7 +510,7 @@ func TestSettings_View_DirtyFooterHint(t *testing.T) {
 
 func TestSettings_View_SavedMessage(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m = m.SetSaved(false, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	m = m.SetSaved(false, false, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	view := m.View()
 	if !containsSubstring(view, "saved!") {
 		t.Error("View should show 'saved!' when saved=true")
@@ -581,9 +581,169 @@ func TestSettings_WanderSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
 	m.originalWanderLust = false // dirty
-	m = m.SetSaved(true, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	m = m.SetSaved(true, false, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.originalWanderLust != true {
 		t.Error("SetSaved should update originalWanderLust to the saved value")
+	}
+	if m.IsDirty() {
+		t.Error("should not be dirty after SetSaved")
+	}
+}
+
+// --- Feed auto-refresh tests ---
+// Mirrors the Wander* tests above for feedManualRefreshOnly (audit item #5,
+// docs/39-feed-background-poll.md). The toggle test locates its row via
+// flatItems instead of a hardcoded cursor index — the Wander toggle test's
+// own comment ("shifted by the new dithering toggle above it") shows why a
+// magic index is fragile against unrelated settings-group changes.
+
+func TestSettings_FeedGroup_Visible(t *testing.T) {
+	m := initSettings(defaultSettings())
+	view := m.View()
+	if !containsSubstring(view, "feed") {
+		t.Error("View should contain 'feed' group header")
+	}
+}
+
+func TestSettings_FeedAutoRefreshToggle(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.feedManualRefreshOnly = false // auto-refresh currently on
+
+	items := flatItems(m)
+	idx := -1
+	for i, it := range items {
+		if it.label == "auto-refresh (background poll)" {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatal("expected an auto-refresh settings item")
+	}
+	m.cursor = idx
+	m, _ = m.Update(keyMsg("enter"))
+	if !m.feedManualRefreshOnly {
+		t.Error("toggling auto-refresh off should flip feedManualRefreshOnly to true")
+	}
+}
+
+func TestSettings_FeedAutoRefreshDirty(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.feedManualRefreshOnly = true
+	m.originalFeedManualRefreshOnly = true
+	if m.IsDirty() {
+		t.Error("should not be dirty before change")
+	}
+	m.feedManualRefreshOnly = false
+	if !m.IsDirty() {
+		t.Error("IsDirty should return true when feedManualRefreshOnly differs from original")
+	}
+}
+
+func TestSettings_FeedAutoRefreshSaveMsg(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.feedManualRefreshOnly = true
+	m.originalFeedManualRefreshOnly = false // make it dirty
+	var got tea.Msg
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd != nil {
+		got = cmd()
+	}
+	save, ok := got.(SaveSettingsMsg)
+	if !ok {
+		t.Fatal("ctrl+s should emit SaveSettingsMsg")
+	}
+	if save.FeedManualRefreshOnly != true {
+		t.Error("SaveSettingsMsg.FeedManualRefreshOnly should reflect current feedManualRefreshOnly value")
+	}
+}
+
+func TestSettings_FeedAutoRefreshSetSaved(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.feedManualRefreshOnly = true
+	m.originalFeedManualRefreshOnly = false // dirty
+	m = m.SetSaved(false, true, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	if m.originalFeedManualRefreshOnly != true {
+		t.Error("SetSaved should update originalFeedManualRefreshOnly to the saved value")
+	}
+	if m.IsDirty() {
+		t.Error("should not be dirty after SetSaved")
+	}
+}
+
+// --- C-Mail typing indicators tests (audit item #6) ---
+// Mirrors the Feed auto-refresh tests above, but positive polarity
+// throughout (typingIndicatorsEnabled), so no display-label inversion is
+// needed in the settings item's getBool/toggle closures.
+
+func TestSettings_CMailGroup_Visible(t *testing.T) {
+	m := initSettings(defaultSettings())
+	view := m.View()
+	if !containsSubstring(view, "c-mail") {
+		t.Error("View should contain 'c-mail' group header")
+	}
+}
+
+func TestSettings_TypingIndicatorsToggle(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.typingIndicatorsEnabled = true
+
+	items := flatItems(m)
+	idx := -1
+	for i, it := range items {
+		if it.label == "typing indicators" {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatal("expected a typing indicators settings item")
+	}
+	m.cursor = idx
+	m, _ = m.Update(keyMsg("enter"))
+	if m.typingIndicatorsEnabled {
+		t.Error("toggling typing indicators should flip typingIndicatorsEnabled to false")
+	}
+}
+
+func TestSettings_TypingIndicatorsDirty(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.typingIndicatorsEnabled = true
+	m.originalTypingIndicatorsEnabled = true
+	if m.IsDirty() {
+		t.Error("should not be dirty before change")
+	}
+	m.typingIndicatorsEnabled = false
+	if !m.IsDirty() {
+		t.Error("IsDirty should return true when typingIndicatorsEnabled differs from original")
+	}
+}
+
+func TestSettings_TypingIndicatorsSaveMsg(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.typingIndicatorsEnabled = false
+	m.originalTypingIndicatorsEnabled = true // make it dirty
+	var got tea.Msg
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd != nil {
+		got = cmd()
+	}
+	save, ok := got.(SaveSettingsMsg)
+	if !ok {
+		t.Fatal("ctrl+s should emit SaveSettingsMsg")
+	}
+	if save.TypingIndicatorsEnabled != false {
+		t.Error("SaveSettingsMsg.TypingIndicatorsEnabled should reflect current typingIndicatorsEnabled value")
+	}
+}
+
+func TestSettings_TypingIndicatorsSetSaved(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.typingIndicatorsEnabled = false
+	m.originalTypingIndicatorsEnabled = true // dirty
+	m = m.SetSaved(false, false, false, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	if m.originalTypingIndicatorsEnabled != false {
+		t.Error("SetSaved should update originalTypingIndicatorsEnabled to the saved value")
 	}
 	if m.IsDirty() {
 		t.Error("should not be dirty after SetSaved")

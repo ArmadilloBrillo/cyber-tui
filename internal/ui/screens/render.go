@@ -37,6 +37,109 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 	return boxStyle.Render(content), imgSlots
 }
 
+// cachedPostCard renders a post's card exactly like RenderPost, additionally
+// memoizing the pre-border body (via feedBodyCacheEntry, feed.go) by post
+// ID — mirrors FeedModel's renderPost method as a free function, so
+// GuildsModel and TopicsModel's identical Miller detail-pane post card can
+// share the same cache mechanism instead of duplicating it, and each an
+// unrelated re-render (background poll, unrelated selection move) doesn't
+// re-parse markdown for a post that hasn't changed.
+func cachedPostCard(cache map[string]feedBodyCacheEntry, p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled bool) (string, []postImageSlot) {
+	topics := strings.Join(p.Topics, ",")
+	themeName := theme.CurrentName()
+
+	body, imgSlots, ok := "", []postImageSlot(nil), false
+	if e, hit := cache[p.ID]; hit && e.width == width && e.bookmarked == bookmarked && e.watched == watched &&
+		e.content == p.Content && e.title == p.Title && e.topics == topics && e.isPublic == p.IsPublic &&
+		e.isNSFW == p.IsNSFW && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == inlineImagesEnabled &&
+		e.themeName == themeName {
+		body, imgSlots, ok = e.body, e.imgSlots, true
+	}
+	if !ok {
+		body, imgSlots = renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines, inlineImagesEnabled)
+		if cache != nil {
+			cache[p.ID] = feedBodyCacheEntry{
+				body: body, imgSlots: imgSlots, width: width, bookmarked: bookmarked, watched: watched,
+				content: p.Content, title: p.Title, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW,
+				editedAt: p.EditedAt, inlineImagesEnabled: inlineImagesEnabled, themeName: themeName,
+			}
+		}
+	}
+
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if width-4 > 0 {
+		boxStyle = boxStyle.Width(width - 2)
+	}
+	return boxStyle.Render(body), imgSlots
+}
+
+// replyBodyCacheEntry memoizes a single thread reply's rendered header+body
+// (pre-border/indent — those are cheap lipgloss wraps applied fresh every
+// call, only the markdown parse is worth caching), mirroring
+// feedBodyCacheEntry's shape but for model.Reply. Shared by GuildsModel and
+// TopicsModel, whose thread-reply rendering is otherwise byte-identical.
+// Like feedBodyCacheEntry, doesn't track timezone/time-format — neither does
+// the pattern this mirrors, see renderPost's cache in feed.go.
+type replyBodyCacheEntry struct {
+	rendered  string
+	width     int
+	content   string
+	editedAt  time.Time
+	themeName string
+}
+
+// cachedReplyCard renders a single thread reply's card (header + markdown
+// body + border + indent) exactly like GuildsModel/TopicsModel's identical
+// renderDetailReply, additionally memoizing the header+body part by reply
+// ID — extracted once since both screens render the same
+// replyNode/model.Reply shape, mirroring cachedPostCard's approach.
+func cachedReplyCard(cache map[string]replyBodyCacheEntry, node replyNode, selected bool, width int, loc *time.Location, timeDisplayFormat string) string {
+	indentW := node.Depth * 3
+	cardWidth := width - 2 - indentW
+	if cardWidth < 4 {
+		cardWidth = 4
+	}
+	innerWidth := cardWidth - 2
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+
+	themeName := theme.CurrentName()
+	rendered, ok := "", false
+	if e, hit := cache[node.Reply.ID]; hit && e.width == cardWidth && e.content == node.Reply.Content &&
+		e.editedAt.Equal(node.Reply.EditedAt) && e.themeName == themeName {
+		rendered, ok = e.rendered, true
+	}
+	if !ok {
+		header := theme.Highlight.Render("@" + node.Reply.AuthorUsername)
+		if node.ParentUsername != "" {
+			header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
+		}
+		header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, loc, timeDisplayFormat, false) + editedSuffix(node.Reply.EditedAt))
+		body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
+		rendered = lipgloss.JoinVertical(lipgloss.Left, header, body)
+		if cache != nil {
+			cache[node.Reply.ID] = replyBodyCacheEntry{rendered: rendered, width: cardWidth, content: node.Reply.Content, editedAt: node.Reply.EditedAt, themeName: themeName}
+		}
+	}
+
+	boxStyle := theme.Border
+	if selected {
+		boxStyle = theme.ActiveBorder
+	}
+	if cardWidth > 0 {
+		boxStyle = boxStyle.Width(cardWidth)
+	}
+	card := boxStyle.Render(rendered)
+	if indentW > 0 {
+		return lipgloss.NewStyle().MarginLeft(indentW).Render(card)
+	}
+	return card
+}
+
 // renderPostBody renders everything in a post's card except the selection
 // border (header, badges, title, markdown body, topics) — the part that's
 // identical whether or not the post is selected. Split out from RenderPost
@@ -732,6 +835,22 @@ func renderChatMessagesStyled(msgs []model.Message, currentUser string, loc *tim
 	return sb.String()
 }
 
+// cmailBodyCacheEntry mirrors chatBodyCacheEntry (Chatrooms' equivalent
+// cache) minus the revealed/muted fields — C-Mail has no spoiler-reveal or
+// mute concept, confirmed by renderChatMessagesWithSelection's signature
+// taking neither. Never populated for messages with an animated style (see
+// hasAnimatedStyle) — those must redraw every animation frame regardless.
+type cmailBodyCacheEntry struct {
+	rendered            string
+	width               int
+	currentUser         string
+	timeDisplayFormat   string
+	inlineImagesEnabled bool
+	body                string
+	deleted             bool
+	themeName           string
+}
+
 // renderChatMessagesWithSelection renders msgs exactly like
 // renderChatMessagesStyled (byte-identical when selectedID == ""),
 // additionally returning each message's start-line offset and rendered
@@ -742,8 +861,11 @@ func renderChatMessagesStyled(msgs []model.Message, currentUser string, loc *tim
 // renderCircMessagesWithSelection — additive image bands, never replacing
 // existing content, imgSlots 1:1 with msgs. realRows (keyed by
 // cmailMsgImageKey) supplies each image's already-known real row count, if
-// any — see chatImageBandRows.
-func renderChatMessagesWithSelection(msgs []model.Message, currentUser string, loc *time.Location, timeDisplayFormat string, viewportWidth int, frame int, selectedID string, inlineImagesEnabled bool, realRows map[string]int) (content string, offsets []int, heights []int, imgSlots [][]postImageSlot) {
+// any — see chatImageBandRows. cache memoizes each non-animated message's
+// rendered body by ID, mirroring renderCircMessagesWithSelection's cache —
+// critical since styleAnimTickMsg calls this ~6.7x/sec for as long as any
+// animated-style message is loaded.
+func renderChatMessagesWithSelection(msgs []model.Message, currentUser string, loc *time.Location, timeDisplayFormat string, viewportWidth int, frame int, selectedID string, inlineImagesEnabled bool, realRows map[string]int, cache map[string]cmailBodyCacheEntry) (content string, offsets []int, heights []int, imgSlots [][]postImageSlot) {
 	offsets = make([]int, len(msgs))
 	heights = make([]int, len(msgs))
 	imgSlots = make([][]postImageSlot, len(msgs))
@@ -758,7 +880,27 @@ func renderChatMessagesWithSelection(msgs []model.Message, currentUser string, l
 				renderMsg = sanitizeChatMessageForInlineImage(msg, url)
 			}
 		}
-		rendered := renderChatMessagesStyled([]model.Message{renderMsg}, currentUser, loc, timeDisplayFormat, viewportWidth, frame)
+		animated := hasAnimatedStyle(msg.Style)
+		themeName := theme.CurrentName()
+
+		rendered, ok := "", false
+		if !animated {
+			if e, hit := cache[msg.ID]; hit && e.width == viewportWidth && e.currentUser == currentUser &&
+				e.timeDisplayFormat == timeDisplayFormat && e.inlineImagesEnabled == inlineImagesEnabled &&
+				e.body == msg.Body && e.deleted == msg.Deleted && e.themeName == themeName {
+				rendered, ok = e.rendered, true
+			}
+		}
+		if !ok {
+			rendered = renderChatMessagesStyled([]model.Message{renderMsg}, currentUser, loc, timeDisplayFormat, viewportWidth, frame)
+			if !animated && cache != nil {
+				cache[msg.ID] = cmailBodyCacheEntry{
+					rendered: rendered, width: viewportWidth, currentUser: currentUser,
+					timeDisplayFormat: timeDisplayFormat, inlineImagesEnabled: inlineImagesEnabled,
+					body: msg.Body, deleted: msg.Deleted, themeName: themeName,
+				}
+			}
+		}
 		if selectedID != "" && msg.ID == selectedID {
 			plain := strings.TrimSuffix(ansi.Strip(rendered), "\n")
 			rendered = theme.SelectedRow.Width(viewportWidth).Render(plain) + "\n"

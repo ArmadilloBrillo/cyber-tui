@@ -462,6 +462,16 @@ type App struct {
 	wanderLust bool
 	// maxThreadDepth is the local config value for reply nesting depth. Defaults to 3.
 	maxThreadDepth int
+	// feedManualRefreshOnly is the local config value disabling Feed's
+	// background poll (see docs/39-feed-background-poll.md). Defaults to
+	// false (auto-poll on).
+	feedManualRefreshOnly bool
+	// typingIndicatorsEnabled is the local config value (inverted from
+	// config.Config.TypingIndicatorsDisabled) gating C-Mail's typing
+	// indicators — see docs/00-battery-audit.md item #6. Defaults to false
+	// until WithSavedPreferences runs (then true unless the user opted out),
+	// same zero-value-before-hydration window every local preference has.
+	typingIndicatorsEnabled bool
 
 	// graphicsProtocol is the terminal image display protocol detected at startup.
 	// ProtocolNone means no image display is available and URLs open in a browser.
@@ -630,6 +640,8 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	a.timezone = s.Timezone
 	a.loc = s.GetLocation()
 	a.wanderLust = s.WanderLust
+	a.feedManualRefreshOnly = s.FeedManualRefreshOnly
+	a.typingIndicatorsEnabled = !s.TypingIndicatorsDisabled
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
 	a.graphicsProtocolName = s.GraphicsProtocol
@@ -880,7 +892,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -1568,6 +1580,8 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SaveSettingsMsg:
 		s := msg.Settings
 		wl := msg.WanderLust
+		fmro := msg.FeedManualRefreshOnly
+		tie := msg.TypingIndicatorsEnabled
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
@@ -1584,7 +1598,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -1600,6 +1614,17 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		a.settings = msg.settings
 		a.wanderLust = msg.wanderLust
+		// wasManual detects a manual→auto transition so the (possibly dead)
+		// feed-poll tea.Tick chain gets restarted immediately below, rather
+		// than staying off until the next app restart — see
+		// docs/39-feed-background-poll.md.
+		wasManual := a.feedManualRefreshOnly
+		a.feedManualRefreshOnly = msg.feedManualRefreshOnly
+		// No "restart a dead chain" logic needed here, unlike the feed poll
+		// above — CMailModel reacts live to every SharedConfigMsg broadcast
+		// (broadcastConfig below) to start/stop its own typing-indicator
+		// subsystem, see cmail.go's SharedConfigMsg handler.
+		a.typingIndicatorsEnabled = msg.typingIndicatorsEnabled
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
@@ -1629,15 +1654,17 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "settings saved")
-		wl, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
+		wl, fmro, tie, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
+				cfg.FeedManualRefreshOnly = fmro
+				cfg.TypingIndicatorsDisabled = !tie
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
@@ -1649,8 +1676,11 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 			})
 			return nil
 		}
+		cmds := []tea.Cmd{notifyCmd, saveCmd}
+		if wasManual && !a.feedManualRefreshOnly {
+			cmds = append(cmds, a.scheduleFeedPollCmd())
+		}
 		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
-			cmds := []tea.Cmd{notifyCmd, saveCmd}
 			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < min {
 				cmds = append(cmds, a.loadFeedPageCmd(cursor))
 			}
@@ -1664,9 +1694,8 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 					cmds = append(cmds, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), cursor))
 				}
 			}
-			return a, tea.Batch(cmds...), true
 		}
-		return a, tea.Batch(notifyCmd, saveCmd), true
+		return a, tea.Batch(cmds...), true
 
 	case wanderTickMsg:
 		if msg.gen != a.sessionGen {
@@ -2544,6 +2573,8 @@ func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
 	_ = a.client.Logout()
 	a.tokens = model.Tokens{}
 	a.cmail = a.cmail.CancelUserConvsSubscription()
+	a.cmail = a.cmail.CancelSubscription()
+	a.chatrooms = a.chatrooms.CancelSubscription()
 	a.saveConfig(func(cfg *config.Config) { cfg.RefreshToken = "" })
 	// Invalidates the poll/wander/logo-idle tea.Tick chains started by
 	// afterLoginCmd: each carries the gen it was scheduled under, so once
@@ -4145,6 +4176,13 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	// OpenUserConvsSubscription's doc comment).
 	var cmailCmd tea.Cmd
 	a.cmail, cmailCmd = a.cmail.OpenUserConvsSubscription()
+	// Don't start the feed-poll tea.Tick chain at all when the user has
+	// opted out — nothing else would revive it (see feedPollTickMsg and the
+	// settingsSavedMsg manual→auto restart above).
+	var feedPollCmd tea.Cmd
+	if !a.feedManualRefreshOnly {
+		feedPollCmd = a.scheduleFeedPollCmd()
+	}
 	return tea.Batch(
 		a.loadFeedCmd(),
 		a.loadBookmarksCmd(""),
@@ -4154,7 +4192,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		cmailCmd,
 		a.fetchUnreadCountCmd(),
 		a.schedulePollCmd(),
-		a.scheduleFeedPollCmd(),
+		feedPollCmd,
 		a.loadSettingsCmd(),
 		a.scheduleWanderCmd(),
 		a.checkAndWanderCmd(),
@@ -4242,10 +4280,12 @@ type replyEditedMsg struct {
 }
 type settingsLoadedMsg struct{ settings model.Settings }
 type settingsSavedMsg struct {
-	seq              int
-	settings         model.Settings
-	wanderLust       bool
-	maxThreadDepth   int
+	seq                     int
+	settings                model.Settings
+	wanderLust              bool
+	feedManualRefreshOnly   bool
+	typingIndicatorsEnabled bool
+	maxThreadDepth          int
 	timezone         string
 	imageViewer      string
 	graphicsProtocol string
@@ -4554,9 +4594,14 @@ func (a *App) fetchFeedPeekCmd() tea.Cmd {
 	}
 }
 
+// feedPollInterval is how often the background poll (fetchFeedPeekCmd)
+// checks for new posts — see docs/39-feed-background-poll.md. Matches the
+// notifications unread-count poll's cadence (schedulePollCmd).
+const feedPollInterval = 60 * time.Second
+
 func (a *App) scheduleFeedPollCmd() tea.Cmd {
 	gen := a.sessionGen
-	return tea.Tick(15*time.Second, func(time.Time) tea.Msg { return feedPollTickMsg{gen: gen} })
+	return tea.Tick(feedPollInterval, func(time.Time) tea.Msg { return feedPollTickMsg{gen: gen} })
 }
 
 func (a *App) loadFeedPageCmd(cursor string) tea.Cmd {
@@ -5088,6 +5133,9 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	case feedPollTickMsg:
 		if msg.gen != a.sessionGen {
 			return a, nil, true
+		}
+		if a.feedManualRefreshOnly {
+			return a, nil, true // user disabled auto-refresh mid-session — chain dies here
 		}
 		if !a.feed.IsLoaded() || a.feed.IsRefreshing() {
 			return a, a.scheduleFeedPollCmd(), true

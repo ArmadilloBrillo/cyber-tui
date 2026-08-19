@@ -105,6 +105,23 @@ type Config struct {
 	// Only meaningful when Dithering is on. See GetDitherSharpness.
 	DitherSharpness string `json:"ditherSharpness,omitempty"`
 
+	// FeedManualRefreshOnly disables Feed's background poll (see
+	// docs/39-feed-background-poll.md) — the 60s tea.Tick chain that fetches
+	// a peek page to stage the "(N) new posts" badge. Off (auto-poll) by
+	// default when absent from the JSON file, preserving existing behavior.
+	// The manual Up-arrow-at-top refresh gesture is unaffected either way.
+	FeedManualRefreshOnly bool `json:"feedManualRefreshOnly,omitempty"`
+
+	// TypingIndicatorsDisabled turns off C-Mail's whole typing-indicator
+	// subsystem (see docs/00-battery-audit.md item #6): the inbound
+	// typing-presence RTDB subscription, the outbound announce/clear calls
+	// and their heartbeat re-announce chain, and the merged animation/
+	// idle-check tea.Tick. Off (indicators enabled) by default when absent
+	// from the JSON file, preserving existing behavior — inverted at load
+	// time so the rest of the app reads the positive
+	// "typingIndicatorsEnabled" instead of double-negating this field.
+	TypingIndicatorsDisabled bool `json:"typingIndicatorsDisabled,omitempty"`
+
 	// ImageScale multiplies the fullscreen image modal's display size,
 	// relative to the image's own native (1:1 pixel) size — 1.0 shows it at
 	// native size (clamped to fit the terminal), not a fraction of the
