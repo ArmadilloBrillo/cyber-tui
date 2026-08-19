@@ -25,6 +25,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
+	"github.com/ragnar/cyber-tui/internal/version"
 )
 
 func keyMsg(key string) tea.KeyMsg {
@@ -5811,4 +5812,43 @@ func TestWithSavedPreferences_LoadsWithoutRefreshToken(t *testing.T) {
 	if a.timezone != "UTC+2" {
 		t.Errorf("timezone = %q, want UTC+2", a.timezone)
 	}
+}
+
+// --- checkForUpdateCmd / updateAvailableMsg ---
+
+func TestCheckForUpdateCmd_SkipsDevVersion(t *testing.T) {
+	// version.Version defaults to "dev" for a plain `go test` build, which is
+	// exactly the case this must skip — no ldflags override needed.
+	a := loggedInApp()
+	if cmd := a.checkForUpdateCmd(); cmd != nil {
+		t.Error("checkForUpdateCmd on a dev build: expected nil cmd, got non-nil")
+	}
+}
+
+func TestCheckForUpdateCmd_SkipsEphemeralSession(t *testing.T) {
+	old := version.Version
+	version.Version = "v1.0.0"
+	t.Cleanup(func() { version.Version = old })
+
+	a := loggedInApp()
+	a.ephemeral = true
+	if cmd := a.checkForUpdateCmd(); cmd != nil {
+		t.Error("checkForUpdateCmd on an ephemeral session: expected nil cmd, got non-nil")
+	}
+}
+
+func TestHandleSettings_UpdateAvailableMsgShowsBanner(t *testing.T) {
+	a := loggedInApp()
+
+	a, cmd, ok := a.handleSettings(updateAvailableMsg{tag: "v9.9.9", url: "https://example.com/releases/v9.9.9"})
+	if !ok {
+		t.Fatal("handleSettings did not claim updateAvailableMsg")
+	}
+	if a.notifyLevel != notifyWarn {
+		t.Errorf("notifyLevel = %v, want notifyWarn", a.notifyLevel)
+	}
+	if !strings.Contains(a.notifyText, "v9.9.9") {
+		t.Errorf("notifyText = %q, want it to mention v9.9.9", a.notifyText)
+	}
+	runCmd(t, cmd) // just confirm the expire-tick cmd doesn't panic
 }

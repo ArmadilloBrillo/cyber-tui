@@ -26,6 +26,8 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
+	"github.com/ragnar/cyber-tui/internal/update"
+	"github.com/ragnar/cyber-tui/internal/version"
 )
 
 type screen int
@@ -1710,6 +1712,12 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 			})
 		}
 		return a, nil, true
+
+	case updateAvailableMsg:
+		var cmd tea.Cmd
+		// threatcrush-disable-next-line sql-format-call  UI notification string, no SQL anywhere in this codebase
+		a, cmd = a.notify(notifyWarn, fmt.Sprintf("update available: %s (you have %s) — %s", msg.tag, version.Version, msg.url))
+		return a, cmd, true
 	}
 	return a, nil, false
 }
@@ -4197,6 +4205,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.scheduleWanderCmd(),
 		a.checkAndWanderCmd(),
 		a.scheduleLogoAnimCmd(),
+		a.checkForUpdateCmd(),
 	)
 }
 
@@ -4296,6 +4305,7 @@ type settingsSavedMsg struct {
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
+type updateAvailableMsg struct{ tag, url string }
 type errMsg struct{ err error }
 
 // notifPostLoadErrMsg is the failure of opening a post from the Notifications
@@ -5822,6 +5832,25 @@ func (a *App) checkAndWanderCmd() tea.Cmd {
 			return wanderDoneMsg{}
 		}
 		return wanderDoneMsg{at: time.Now().UTC()}
+	}
+}
+
+// checkForUpdateCmd checks GitHub for a newer release once at startup, only
+// on an actual released build (version.Version != "dev"). All failures —
+// including "already on the latest release" — are silent; the user is only
+// notified when a strictly newer tag is found.
+func (a *App) checkForUpdateCmd() tea.Cmd {
+	if a.ephemeral || version.Version == "dev" {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		rel, err := update.Latest(ctx)
+		if err != nil || rel.TagName == "" || rel.TagName == version.Version {
+			return nil
+		}
+		return updateAvailableMsg{tag: rel.TagName, url: rel.HTMLURL}
 	}
 }
 

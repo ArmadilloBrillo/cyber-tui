@@ -289,6 +289,14 @@ SSH mode is experimental and unauthenticated; startup warns accordingly. The SSH
 
 ---
 
+### `internal/update`
+
+#### `check.go`
+
+`Latest(ctx) (Release, error)` fetches GitHub's latest-release API and returns `{TagName, HTMLURL}`. Dedicated HTTP client (8s timeout, identifying User-Agent), independent of the cyberspace.online API client. Used once at startup to power the update-available banner — see `docs/47-update-check.md`.
+
+---
+
 ### `internal/ui`
 
 #### `app.go`
