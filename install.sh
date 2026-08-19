@@ -188,6 +188,7 @@ detect_target() {
 	case "$arch" in
 	x86_64 | amd64) arch="amd64" ;;
 	aarch64 | arm64) arch="arm64" ;;
+	armv7l) arch="armv7l" ;;
 	*)
 		echo "unsupported"
 		return
@@ -195,7 +196,7 @@ detect_target() {
 	esac
 
 	case "$os-$arch" in
-	linux-amd64 | linux-arm64 | darwin-amd64 | darwin-arm64 | windows-amd64) echo "$os-$arch" ;;
+	linux-amd64 | linux-arm64 | linux-armv7l | darwin-amd64 | darwin-arm64 | windows-amd64) echo "$os-$arch" ;;
 	*) echo "unsupported" ;;
 	esac
 }

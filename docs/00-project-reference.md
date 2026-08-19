@@ -1042,6 +1042,10 @@ Version metadata is injected at build time via `-ldflags` from `Makefile`. The v
 
 Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` flag and the help modal (`?`) both display the current version.
 
+### Release Platforms
+
+`.github/workflows/release.yml` (and the mirrored `make build-all`) cross-compile release binaries for: `linux/amd64`, `linux/arm64`, `linux/arm` (`GOARM=7`, e.g. Raspberry Pi 3 on a 32-bit OS — asset name `cyber-tui-linux-armv7l`), `darwin/amd64`, `darwin/arm64`, and `windows/amd64`.
+
 ---
 
 ## Deferred / Known Limitations
