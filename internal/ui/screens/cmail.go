@@ -240,6 +240,11 @@ type CMailModel struct {
 	// output, keyed by message ID — see ChatroomsModel's chatBodyCache field
 	// of the same name and cmailBodyCacheEntry's doc comment.
 	chatBodyCache map[string]cmailBodyCacheEntry
+	// otherProfiles caches a conversation partner's full profile (fetched via
+	// GetProfile, keyed by username) once App has resolved it — see
+	// SetOtherProfile/otherParticipantBadgeUser. Conversation data alone never
+	// carries SupporterIcon/IsSupporter.
+	otherProfiles map[string]model.User
 
 	// canGoBack is true when the active conversation was opened via a
 	// deep link (e.g. 'c' on a post, or a chat_mention/dm_message
@@ -330,9 +335,15 @@ type SendCMailMsg struct {
 }
 
 // CMailConvSelectedMsg is emitted when the user opens a conversation.
-// App uses it to call MarkCMailRead on the server.
+// App uses it to call MarkCMailRead on the server, and — when OtherUsername
+// is non-empty — to fetch that participant's full profile (for their
+// SupporterIcon; conversation data alone never carries it, see
+// otherParticipantUser's doc comment) via GetProfile, caching the result
+// with SetOtherProfile. Left empty by whoever emits this when the
+// participant can't be resolved (e.g. "unknown") or is already cached.
 type CMailConvSelectedMsg struct {
 	ConversationID string
+	OtherUsername  string
 }
 
 // NewCMailModel creates a new CMailModel for the given authenticated user.
@@ -1262,10 +1273,13 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 						m.listVP.SetContent(m.renderConvCards())
 					}
 					convID := conv.ID
+					fetchOther := m.OtherProfileFetchTarget(conv)
 					cmds := []tea.Cmd{
 						m.loadConvMessagesCmd(conv.ID),
 						m.openDMSubscriptionCmd(conv.ID),
-						func() tea.Msg { return CMailConvSelectedMsg{ConversationID: convID} },
+						func() tea.Msg {
+							return CMailConvSelectedMsg{ConversationID: convID, OtherUsername: fetchOther}
+						},
 					}
 					if m.typingIndicatorsEnabled {
 						cmds = append(cmds, m.openTypingSubscriptionCmd(conv.ID), scheduleTypingAnimCmd(conv.ID))
@@ -1529,13 +1543,70 @@ func (m CMailModel) handleTypingInputChanged(newVal string) (CMailModel, tea.Cmd
 	return m, m.announceTypingCmd(convID)
 }
 
-func (m CMailModel) otherParticipant(conv model.Conversation) string {
+// OtherParticipant returns conv's other participant's username.
+func (m CMailModel) OtherParticipant(conv model.Conversation) string {
+	return m.otherParticipantUser(conv).Username
+}
+
+// OtherProfileFetchTarget returns the username CMailConvSelectedMsg should
+// set as OtherUsername to trigger a profile fetch for conv's other
+// participant, or "" if there's nothing to fetch — unresolvable ("unknown",
+// empty conversation stub) or already cached (HasOtherProfile). Both
+// emission sites (opening an existing conversation, starting a new one)
+// call this so the "should we fetch" decision lives in one place.
+func (m CMailModel) OtherProfileFetchTarget(conv model.Conversation) string {
+	other := m.OtherParticipant(conv)
+	if other == "" || other == "unknown" || m.HasOtherProfile(other) {
+		return ""
+	}
+	return other
+}
+
+// otherParticipantUser is OtherParticipant's full-user counterpart, used
+// where the detail header needs more than just the name (e.g. badge icons).
+// This is always the thin shape conversation data actually carries (no
+// SupporterIcon/GuildIcon/IsSupporter) — see otherParticipantBadgeUser for
+// the version that overlays a fetched full profile when available.
+func (m CMailModel) otherParticipantUser(conv model.Conversation) model.User {
 	for _, u := range conv.Participants {
 		if u.Username != "" && u.Username != m.currentUser {
-			return u.Username
+			return u
 		}
 	}
-	return "unknown"
+	return model.User{Username: "unknown"}
+}
+
+// otherParticipantBadgeUser is otherParticipantUser overlaid with a fetched
+// full profile from m.otherProfiles, if one has been fetched (see
+// SetOtherProfile) — its SupporterIcon/IsSupporter are what the header badge
+// actually renders from, since conversation data alone never carries them.
+// Falls back to the thin otherParticipantUser (no badge codes) until fetched.
+func (m CMailModel) otherParticipantBadgeUser(conv model.Conversation) model.User {
+	u := m.otherParticipantUser(conv)
+	if full, ok := m.otherProfiles[u.Username]; ok {
+		return full
+	}
+	return u
+}
+
+// HasOtherProfile reports whether username's full profile has already been
+// fetched (see SetOtherProfile) — App checks this before firing another
+// fetch for the same conversation partner.
+func (m CMailModel) HasOtherProfile(username string) bool {
+	_, ok := m.otherProfiles[username]
+	return ok
+}
+
+// SetOtherProfile caches username's full profile (fetched via GetProfile so
+// the C-Mail header badge can show their real SupporterIcon — conversation
+// data itself never carries it, see otherParticipantUser). Never evicted:
+// bounded by the number of distinct people DMed in a session, which is small.
+func (m CMailModel) SetOtherProfile(username string, u model.User) CMailModel {
+	if m.otherProfiles == nil {
+		m.otherProfiles = make(map[string]model.User)
+	}
+	m.otherProfiles[username] = u
+	return m
 }
 
 // cmailCardHeight is the number of terminal lines each conversation card occupies:
@@ -1569,7 +1640,7 @@ func (m CMailModel) renderConvCards() string {
 
 	var sb strings.Builder
 	for i, c := range m.conversations {
-		other := m.otherParticipant(c)
+		other := m.OtherParticipant(c)
 
 		// Left side: @username
 		nameStr := theme.Highlight.Render("@" + other)
@@ -1673,6 +1744,19 @@ func (m CMailModel) VisibleInlineImages() []InlineImageSlot {
 	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
 
 	var slots []InlineImageSlot
+
+	badgeUser := m.otherParticipantBadgeUser(*m.activeConv)
+	badges := userBadgeCodes(badgeUser)
+	if len(badges) > 0 {
+		headerW := lipgloss.Width(theme.Title.Render("@" + badgeUser.Username))
+		for i, code := range badges {
+			col := headerW + i*(badgeIconCols+1) + 1
+			if slot, ok := badgeSlot(code, 0, col, fmt.Sprintf("cmail:%s:badge:%d", badgeUser.Username, i)); ok {
+				slots = append(slots, slot)
+			}
+		}
+	}
+
 	for i, msg := range m.activeConv.Messages {
 		if i >= len(m.msgImages) || i >= len(m.msgOffsets) {
 			continue
@@ -1907,7 +1991,7 @@ func (m CMailModel) typingIndicator() string {
 	if m.activeConv == nil {
 		return ""
 	}
-	other := m.otherParticipant(*m.activeConv)
+	other := m.OtherParticipant(*m.activeConv)
 	for _, u := range m.typingUsers {
 		if u.Username == other {
 			dots := strings.Repeat(".", m.typingAnimFrame%4)
@@ -1924,10 +2008,17 @@ func (m CMailModel) View() string {
 			return ""
 		}
 		other := ""
+		var badgeUser model.User
 		if m.activeConv != nil {
-			other = m.otherParticipant(*m.activeConv)
+			badgeUser = m.otherParticipantBadgeUser(*m.activeConv)
+			other = badgeUser.Username
 		}
 		header := theme.Title.Render("@" + other)
+		if m.inlineImagesEnabled {
+			if n := len(userBadgeCodes(badgeUser)); n > 0 {
+				header += badgeGap(n)
+			}
+		}
 		if m.loadingHistory {
 			header += theme.Subtle.Render("  (loading history…)")
 		}

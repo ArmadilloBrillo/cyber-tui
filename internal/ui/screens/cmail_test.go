@@ -38,8 +38,8 @@ func TestOtherParticipant_EmptyUsernameFallsBackToUnknown(t *testing.T) {
 	m := NewCMailModel("me", "", nil)
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: ""}}}
 
-	if got := m.otherParticipant(conv); got != "unknown" {
-		t.Fatalf("otherParticipant() with blank username = %q, want %q", got, "unknown")
+	if got := m.OtherParticipant(conv); got != "unknown" {
+		t.Fatalf("OtherParticipant() with blank username = %q, want %q", got, "unknown")
 	}
 }
 
@@ -573,6 +573,56 @@ func TestCMailEnterOpensConversation_TypingIndicatorsEnabled_IncludesTypingCmds(
 	}
 }
 
+// TestCMailEnter_EmitsOtherUsernameWhenNotCached confirms opening a
+// conversation includes the other participant's username in
+// CMailConvSelectedMsg.OtherUsername when their profile hasn't been fetched
+// yet, so App knows to fetch it (see OtherProfileFetchTarget).
+func TestCMailEnter_EmitsOtherUsernameWhenNotCached(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}},
+	})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a batch command opening the conversation")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) < 3 {
+		t.Fatalf("expected a batch of at least 3 commands, got %T", cmd())
+	}
+	selected, ok := batch[2]().(CMailConvSelectedMsg)
+	if !ok {
+		t.Fatalf("batch[2]() = %T, want CMailConvSelectedMsg", batch[2]())
+	}
+	if selected.OtherUsername != "trinity" {
+		t.Errorf("OtherUsername = %q, want %q", selected.OtherUsername, "trinity")
+	}
+}
+
+// TestCMailEnter_OmitsOtherUsernameWhenAlreadyCached confirms no fetch is
+// requested for a conversation partner whose profile is already cached.
+func TestCMailEnter_OmitsOtherUsernameWhenAlreadyCached(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}},
+	})
+	m = m.SetOtherProfile("trinity", model.User{Username: "trinity"})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) < 3 {
+		t.Fatalf("expected a batch of at least 3 commands, got %T", cmd())
+	}
+	selected, ok := batch[2]().(CMailConvSelectedMsg)
+	if !ok {
+		t.Fatalf("batch[2]() = %T, want CMailConvSelectedMsg", batch[2]())
+	}
+	if selected.OtherUsername != "" {
+		t.Errorf("expected empty OtherUsername for an already-cached profile, got %q", selected.OtherUsername)
+	}
+}
+
 func TestHandleTypingInputChanged_DisabledIsNoop(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
 	m.typingIndicatorsEnabled = false
@@ -890,6 +940,58 @@ func TestCMail_VisibleInlineImages_RowAccountsForHeader(t *testing.T) {
 	}
 	if strings.Contains(lines[slots[0].Row], "@trinity") || strings.Contains(ansi.Strip(lines[slots[0].Row]), "─") {
 		t.Errorf("Row %d lands on the header/divider line: %q", slots[0].Row, lines[slots[0].Row])
+	}
+}
+
+// TestCMail_VisibleInlineImages_HeaderBadge confirms the other participant's
+// supporter badge renders next to the "@username" detail header (row 0)
+// once their full profile has been fetched and cached (SetOtherProfile) —
+// and only the header, not the conversation list card or per-message.
+// Conversation data (Participants) is deliberately left as the real thin
+// shape (no badge fields) here — TestCMail_VisibleInlineImages_NoHeaderBadgeBeforeFetch
+// covers the pre-fetch state. Also confirms no second (guild) badge slot —
+// GuildIcon isn't a resolvable badge code even once a full profile is cached.
+func TestCMail_VisibleInlineImages_HeaderBadge(t *testing.T) {
+	conv := model.Conversation{ID: "c1", Participants: []model.User{
+		{Username: "neo"},
+		{Username: "trinity"},
+	}}
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+	m = m.SetOtherProfile("trinity", model.User{
+		Username: "trinity", IsSupporter: true, SupporterIcon: "pi", GuildIcon: "ph:crown",
+	})
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected exactly 1 badge slot (supporter only), got %d: %+v", len(slots), slots)
+	}
+	if !strings.HasSuffix(slots[0].Key, "badge:0") {
+		t.Errorf("Key = %q, want a suffix of badge:0", slots[0].Key)
+	}
+	if slots[0].URL != "badge:pi" {
+		t.Errorf("URL = %q, want badge:pi", slots[0].URL)
+	}
+	if slots[0].Row != 0 {
+		t.Errorf("expected the header badge on row 0, got %d", slots[0].Row)
+	}
+}
+
+// TestCMail_VisibleInlineImages_NoHeaderBadgeBeforeFetch confirms no header
+// badge shows before the other participant's profile has been fetched —
+// conversation data (Participants) never carries SupporterIcon on its own.
+func TestCMail_VisibleInlineImages_NoHeaderBadgeBeforeFetch(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+
+	for _, s := range m.VisibleInlineImages() {
+		if strings.Contains(s.Key, "badge:") {
+			t.Errorf("expected no badge slots before the profile fetch completes, got %+v", s)
+		}
 	}
 }
 
