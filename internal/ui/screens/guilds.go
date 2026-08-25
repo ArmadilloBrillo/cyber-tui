@@ -1196,6 +1196,11 @@ func (m GuildsModel) SelectedPostID() string {
 // VisibleInlineImages returns the inline image slots currently fully within
 // the viewport, top to bottom, across every visible guild post — see
 // PostDetailModel.VisibleInlineImages for the full contract.
+// VisibleInlineImages does not cover the guild list's own icon glyph
+// (renderGuildItem's "◆"/★/☆ fallback): Guild.Icon values are confirmed live
+// (GET /v1/guilds) to be Unicode/CLDR emoji character names or an
+// unidentified "dinkie-icons:" set, not a resolvable badge-icon code — see
+// userBadgeCodes' doc comment and docs/00-api-backlog.md.
 func (m GuildsModel) VisibleInlineImages() []InlineImageSlot {
 	if !m.ready || !m.inlineImagesEnabled || m.view != viewGuildPosts {
 		return nil

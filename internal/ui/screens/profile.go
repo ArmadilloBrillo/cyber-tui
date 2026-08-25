@@ -759,7 +759,11 @@ func (m ProfileModel) View() string {
 
 	// --- View mode: compact header + tab bar + content ---
 
-	out := m.viewBodyBeforeWebsiteBand(username)
+	if n := len(m.usernameBadges()); m.inlineImagesEnabled && n > 0 {
+		username += badgeGap(n)
+	}
+
+	out, _, _ := m.viewBodyBeforeWebsiteBand(username)
 	if m.inlineImagesEnabled && m.user.WebsiteImageUrl != "" {
 		// Directly abutting out with the band string gives exactly one blank
 		// line before the image (the band's own leading spacer) and one
@@ -781,7 +785,8 @@ func (m ProfileModel) View() string {
 // "recompute fresh, don't try to persist it" approach
 // FeedModel.VisibleDetailInlineImages uses, since a value-receiver View()
 // can't stash this back onto the model for VisibleInlineImages to read.
-func (m ProfileModel) viewBodyBeforeWebsiteBand(username string) string {
+func (m ProfileModel) viewBodyBeforeWebsiteBand(username string) (body string, contentStartRow int, supporterBadge profileBadgeSpot) {
+	supporterBadge = profileBadgeSpot{Row: -1}
 	var counts string
 	if m.showFollowerCount {
 		counts = theme.Subtle.Render(fmt.Sprintf(
@@ -827,7 +832,7 @@ func (m ProfileModel) viewBodyBeforeWebsiteBand(username string) string {
 	var content string
 	switch m.activeTab {
 	case tabInfo:
-		content = m.infoTabView()
+		content, supporterBadge = m.infoTabView()
 	case tabPosts:
 		content = m.postsTabView()
 	case tabReplies:
@@ -850,8 +855,25 @@ func (m ProfileModel) viewBodyBeforeWebsiteBand(username string) string {
 	if m.showFollowerCount {
 		headerParts = append(headerParts, counts)
 	}
-	headerParts = append(headerParts, "", tabBar, "", content)
-	return lipgloss.JoinVertical(lipgloss.Left, headerParts...)
+	headerParts = append(headerParts, "", tabBar, "")
+	contentStartRow = lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, headerParts...))
+	headerParts = append(headerParts, content)
+	return lipgloss.JoinVertical(lipgloss.Left, headerParts...), contentStartRow, supporterBadge
+}
+
+// profileBadgeSpot locates a badge icon's reserved space within a tab's
+// rendered content: Row is the 0-based line offset from that content's own
+// first line (-1 if the badge has nothing to show), Col is the on-screen
+// column where the reserved gap (see badgeGap) begins.
+type profileBadgeSpot struct {
+	Row int
+	Col int
+}
+
+// usernameBadges returns the SupporterIcon/GuildIcon codes to render next to
+// the username line.
+func (m ProfileModel) usernameBadges() []string {
+	return userBadgeCodes(m.user)
 }
 
 // VisibleInlineImages returns the inline image slot(s) currently on screen:
@@ -888,16 +910,39 @@ func (m ProfileModel) VisibleInlineImages() []InlineImageSlot {
 		})
 	}
 	addBand(m.user.ProfilePictureUrl, "picture", 1) // row 0 is the username line
+
+	username := theme.Title.Render("@" + m.user.Username)
+	badges := m.usernameBadges()
+	if len(badges) > 0 {
+		username += badgeGap(len(badges))
+	}
+	usernameW := lipgloss.Width(theme.Title.Render("@" + m.user.Username))
+	for i, code := range badges {
+		col := usernameW + i*(badgeIconCols+1) + 1
+		if slot, ok := badgeSlot(code, 0, col, fmt.Sprintf("profile:%s:badge:username:%d", m.user.Username, i)); ok {
+			slots = append(slots, slot)
+		}
+	}
+
+	body, contentStartRow, supporterBadge := m.viewBodyBeforeWebsiteBand(username)
 	if m.user.WebsiteImageUrl != "" {
-		username := theme.Title.Render("@" + m.user.Username)
-		bodyHeight := lipgloss.Height(m.viewBodyBeforeWebsiteBand(username))
-		addBand(m.user.WebsiteImageUrl, "website", bodyHeight)
+		addBand(m.user.WebsiteImageUrl, "website", lipgloss.Height(body))
+	}
+	if supporterBadge.Row >= 0 {
+		if slot, ok := badgeSlot(m.user.SupporterIcon, contentStartRow+supporterBadge.Row, supporterBadge.Col, "profile:"+m.user.Username+":badge:supporter"); ok {
+			slots = append(slots, slot)
+		}
 	}
 	return slots
 }
 
 // infoTabView renders the Info tab content (bio, website, location, hint).
-func (m ProfileModel) infoTabView() string {
+// supporterBadge locates the Supporter row's reserved badge icon space (Row
+// -1 if inline images are off or the user isn't a supporter) — see
+// profileBadgeSpot. The Guild row has no equivalent: GuildIcon isn't a
+// resolvable badge image, see userBadgeCodes' doc comment.
+func (m ProfileModel) infoTabView() (content string, supporterBadge profileBadgeSpot) {
+	supporterBadge = profileBadgeSpot{Row: -1}
 	// lbl pads the keyword to a fixed width so all values left-align.
 	// "Apprentice" is the longest keyword at 10 chars; total label = 12 ("keyword: ").
 	lbl := func(s string) string {
@@ -942,6 +987,8 @@ func (m ProfileModel) infoTabView() string {
 			theme.Base.Render(fmt.Sprintf("%g, %g", m.user.LocationLatitude, m.user.LocationLongitude)))
 	}
 
+	supporterRowIdx := -1
+
 	guildName := m.user.GuildName
 	if guildName == "" {
 		guildName = m.user.GuildSlug
@@ -969,14 +1016,22 @@ func (m ProfileModel) infoTabView() string {
 		rows = append(rows, lbl("Picture")+theme.Base.Render(m.user.ProfilePictureUrl))
 	}
 
+	label := lbl("Supporter")
 	supporterVal := "no"
+	suffix := ""
 	if m.user.IsSupporter {
 		supporterVal = "yes"
 		if m.user.SupporterIcon != "" {
-			supporterVal = "yes (" + m.user.SupporterIcon + ")"
+			if m.inlineImagesEnabled {
+				supporterRowIdx = len(rows)
+				supporterBadge.Col = lipgloss.Width(label + theme.Base.Render(supporterVal) + " ")
+				suffix = " " + badgeGap(1)
+			} else {
+				supporterVal = "yes (" + m.user.SupporterIcon + ")"
+			}
 		}
 	}
-	rows = append(rows, lbl("Supporter")+theme.Base.Render(supporterVal))
+	rows = append(rows, label+theme.Base.Render(supporterVal)+suffix)
 
 	rows = append(rows, "")
 
@@ -986,7 +1041,10 @@ func (m ProfileModel) infoTabView() string {
 		rows = append(rows, theme.Highlight.Render("saved."))
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	if supporterRowIdx >= 0 {
+		supporterBadge.Row = lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, rows[:supporterRowIdx]...))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...), supporterBadge
 }
 
 // tabSliceRange returns the [top, end) index range of items to render for the

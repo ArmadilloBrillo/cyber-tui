@@ -441,6 +441,52 @@ func setupCMailDetail(a App) App {
 	return a
 }
 
+// --- CMailConvSelectedMsg: other-participant profile fetch for the header badge ---
+
+// TestHandleCMail_ConvSelected_FetchesAndCachesOtherProfile confirms opening
+// a conversation with a non-empty OtherUsername fires a profile fetch
+// (loadCMailOtherProfileCmd) whose result, once fed back through Update,
+// populates CMailModel's otherProfiles cache — the data the header badge
+// reads from (conversation data alone never carries SupporterIcon).
+func TestHandleCMail_ConvSelected_FetchesAndCachesOtherProfile(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+
+	m, cmd := a.Update(screens.CMailConvSelectedMsg{ConversationID: "c1", OtherUsername: "trinity"})
+	a2 := m.(App)
+	if a2.cmail.HasOtherProfile("trinity") {
+		t.Fatal("expected the fetch to only happen via the returned cmd, not synchronously")
+	}
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	loaded := findBatchedMsg[cmailOtherProfileLoadedMsg](t, cmd())
+
+	m2, _ := a2.Update(loaded)
+	a3 := m2.(App)
+	if !a3.cmail.HasOtherProfile("trinity") {
+		t.Error("expected trinity's profile to be cached after cmailOtherProfileLoadedMsg is applied")
+	}
+}
+
+// TestHandleCMail_ConvSelected_NoFetchWhenOtherUsernameEmpty confirms no
+// profile-fetch cmd fires when OtherUsername is empty (already cached, or
+// unresolvable) — only the read-marking cmd should be in the batch.
+func TestHandleCMail_ConvSelected_NoFetchWhenOtherUsernameEmpty(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+
+	_, cmd := a.Update(screens.CMailConvSelectedMsg{ConversationID: "c1", OtherUsername: ""})
+	if cmd == nil {
+		t.Fatal("expected the read-marking cmd still present")
+	}
+	for _, msg := range resolveMsgs(cmd) {
+		if _, ok := msg.(cmailOtherProfileLoadedMsg); ok {
+			t.Error("expected no profile-fetch cmd when OtherUsername is empty")
+		}
+	}
+}
+
 func TestHandleKeys_CtrlO_ReachesOpenLink_WhileChatroomsInputFocused(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
 	if !a.chatrooms.InputFocused() {

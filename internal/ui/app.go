@@ -1401,7 +1401,14 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
 	case screens.CMailConvSelectedMsg:
-		return a, a.markCMailReadCmd(msg.ConversationID), true
+		cmds := []tea.Cmd{a.markCMailReadCmd(msg.ConversationID)}
+		if msg.OtherUsername != "" {
+			cmds = append(cmds, a.loadCMailOtherProfileCmd(msg.OtherUsername))
+		}
+		return a, tea.Batch(cmds...), true
+	case cmailOtherProfileLoadedMsg:
+		a.cmail = a.cmail.SetOtherProfile(msg.username, msg.user)
+		return a, nil, true
 	case screens.StartConversationMsg:
 		if msg.Username == "" || msg.Username == a.currentUser.Username {
 			return a, nil, true
@@ -1413,13 +1420,16 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.active = screenCMail
 		a.cmail = a.cmail.SetActiveConversation(msg.conv)
 		convID := msg.conv.ID
+		fetchOther := a.cmail.OtherProfileFetchTarget(msg.conv)
 		// The new conversation appears in the list via the live
 		// user_conversations subscription once the server's write reaches
 		// it — no REST refetch here (would race the subscription's own
 		// state; see OpenUserConvsSubscription's doc comment).
 		return a, tea.Batch(
 			a.cmail.ConvOpenCmds(convID),
-			func() tea.Msg { return screens.CMailConvSelectedMsg{ConversationID: convID} },
+			func() tea.Msg {
+				return screens.CMailConvSelectedMsg{ConversationID: convID, OtherUsername: fetchOther}
+			},
 		), true
 	case screens.CMailReconnectedMsg:
 		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
@@ -4243,6 +4253,15 @@ type userProfileLoadedMsg struct {
 	isFollowing bool
 	followID    string
 }
+
+// cmailOtherProfileLoadedMsg carries a C-Mail conversation partner's full
+// profile, fetched (see loadCMailOtherProfileCmd) so their real
+// SupporterIcon is available for the detail header badge — conversation
+// data alone never carries it.
+type cmailOtherProfileLoadedMsg struct {
+	username string
+	user     model.User
+}
 type followResultMsg struct{ followID string }
 type unfollowResultMsg struct{}
 
@@ -4679,6 +4698,21 @@ func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 			}
 		}
 		return userProfileLoadedMsg{user: user, isFollowing: isFollowing, followID: followID}
+	}
+}
+
+// loadCMailOtherProfileCmd fetches username's full profile so the C-Mail
+// detail header can show their real SupporterIcon (see
+// CMailConvSelectedMsg's doc comment — conversation data never carries it).
+// A failure just means the badge silently stays absent; that's an
+// acceptable outcome here, not worth a user-facing error toast.
+func (a *App) loadCMailOtherProfileCmd(username string) tea.Cmd {
+	return func() tea.Msg {
+		user, err := a.client.GetProfile(username)
+		if err != nil {
+			return nil
+		}
+		return cmailOtherProfileLoadedMsg{username: username, user: user}
 	}
 }
 
