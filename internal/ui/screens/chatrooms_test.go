@@ -1766,6 +1766,83 @@ func TestSetMessages_EvictsStaleBodyCache(t *testing.T) {
 	}
 }
 
+// TestVisibleMessageIDs_ChatroomsModel mirrors maybeStartStyleAnim's
+// viewport-bounds check: only messages whose offset/height span overlaps
+// [YOffset, YOffset+Height) should come back.
+func TestVisibleMessageIDs_ChatroomsModel(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.messages = []model.Message{{ID: "offscreen1"}, {ID: "visible1"}, {ID: "offscreen2"}}
+	m.msgOffsets = []int{0, 5, 10}
+	m.msgHeights = []int{1, 1, 1}
+	m.viewport.YOffset = 5
+	m.viewport.Height = 1
+
+	ids := m.visibleMessageIDs()
+
+	if len(ids) != 1 || ids[0] != "visible1" {
+		t.Errorf("visibleMessageIDs() = %v, want [visible1]", ids)
+	}
+}
+
+// TestRefreshRelativeTimestamps_OnlyTouchesVisibleCacheEntries guards the
+// cost constraint RefreshRelativeTimestamps exists for: it must never
+// invalidate more than the currently visible messages, or the periodic tick
+// that calls it would force a full history re-render every interval
+// regardless of room size (see RefreshRelativeTimestamps' doc comment and
+// maybeStartStyleAnim's, which rejects that exact tradeoff for the animation
+// ticker).
+func TestRefreshRelativeTimestamps_OnlyTouchesVisibleCacheEntries(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.timeDisplayFormat = "relative"
+	m.messages = []model.Message{
+		{ID: "offscreen1", Body: "hello", From: model.User{Username: "neo"}, CreatedAt: time.Now()},
+		{ID: "visible1", Body: "world", From: model.User{Username: "neo"}, CreatedAt: time.Now()},
+	}
+	m.msgOffsets = []int{0, 5}
+	m.msgHeights = []int{1, 1}
+	m.viewport.YOffset = 5
+	m.viewport.Height = 1
+
+	seed := func(msg model.Message, rendered string) chatBodyCacheEntry {
+		return chatBodyCacheEntry{
+			rendered: rendered, width: m.viewport.Width, currentUser: m.currentUser,
+			timeDisplayFormat: "relative", body: msg.Body, themeName: theme.CurrentName(),
+		}
+	}
+	m.chatBodyCache = map[string]chatBodyCacheEntry{
+		"offscreen1": seed(m.messages[0], "STALE_OFFSCREEN"),
+		"visible1":   seed(m.messages[1], "STALE_VISIBLE"),
+	}
+
+	m = m.RefreshRelativeTimestamps()
+
+	if e, ok := m.chatBodyCache["offscreen1"]; !ok || e.rendered != "STALE_OFFSCREEN" {
+		t.Errorf("expected the off-screen cache entry untouched (still a hit), got %+v, ok=%v", e, ok)
+	}
+	if e, ok := m.chatBodyCache["visible1"]; !ok || e.rendered == "STALE_VISIBLE" {
+		t.Errorf("expected the visible cache entry recomputed with a fresh timestamp, got %+v, ok=%v", e, ok)
+	}
+}
+
+// TestRefreshRelativeTimestamps_NoopWhenNotRelative confirms the format
+// gate: nothing in chatBodyCache should be touched when the active
+// time-display setting isn't "relative", since every other format's output
+// doesn't depend on the current time.
+func TestRefreshRelativeTimestamps_NoopWhenNotRelative(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.timeDisplayFormat = "datetime"
+	m.messages = []model.Message{{ID: "msg1", Body: "hi", From: model.User{Username: "neo"}, CreatedAt: time.Now()}}
+	m.msgOffsets = []int{0}
+	m.msgHeights = []int{1}
+	m.chatBodyCache = map[string]chatBodyCacheEntry{"msg1": {rendered: "UNCHANGED"}}
+
+	m = m.RefreshRelativeTimestamps()
+
+	if e := m.chatBodyCache["msg1"]; e.rendered != "UNCHANGED" {
+		t.Errorf("expected no-op outside relative mode, got %+v", e)
+	}
+}
+
 func TestAppendMessage_EvictionResetsHistoryExhausted(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	big := chatMessageBufferMaxBytes / 2

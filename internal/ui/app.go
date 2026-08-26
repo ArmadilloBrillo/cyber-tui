@@ -818,6 +818,9 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 	if a2, cmd, ok := a.handleCMail(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleRelativeTimeTick(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleProfile(msg); ok {
 		return a2, cmd
 	}
@@ -1459,6 +1462,28 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 	}
 	return a, nil, false
+}
+
+// handleRelativeTimeTick keeps cIRC/C-Mail's "Nm ago"-style timestamps
+// current by re-rendering whichever of the two is active — see
+// screens.ChatroomsModel.RefreshRelativeTimestamps for why this is a no-op
+// everywhere else (wrong screen active, or not in "relative" display mode).
+// Always reschedules, mirroring schedulePollCmd's shape.
+func (a App) handleRelativeTimeTick(msg tea.Msg) (App, tea.Cmd, bool) {
+	t, ok := msg.(relativeTimeTickMsg)
+	if !ok {
+		return a, nil, false
+	}
+	if t.gen != a.sessionGen {
+		return a, nil, true
+	}
+	switch a.active {
+	case screenChatrooms:
+		a.chatrooms = a.chatrooms.RefreshRelativeTimestamps()
+	case screenCMail:
+		a.cmail = a.cmail.RefreshRelativeTimestamps()
+	}
+	return a, a.scheduleRelativeTimeTickCmd(), true
 }
 
 // handleProfile processes profile load, save, and sub-tab messages.
@@ -4216,6 +4241,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.checkAndWanderCmd(),
 		a.scheduleLogoAnimCmd(),
 		a.checkForUpdateCmd(),
+		a.scheduleRelativeTimeTickCmd(),
 	)
 }
 
@@ -4591,6 +4617,11 @@ type urlPostLoadedMsg struct {
 }
 type profilePostLoadedMsg struct{ post model.Post }
 type pollUnreadTickMsg struct{ gen int }
+
+// relativeTimeTickMsg drives the periodic re-render that keeps cIRC/C-Mail's
+// "Nm ago"-style timestamps current — see
+// screens.ChatroomsModel.RefreshRelativeTimestamps.
+type relativeTimeTickMsg struct{ gen int }
 type unreadCountMsg struct {
 	count int
 	exact bool
@@ -5823,6 +5854,17 @@ func (a *App) loadNoteRevisionCmd(noteID string, revision int) tea.Cmd {
 func (a *App) schedulePollCmd() tea.Cmd {
 	gen := a.sessionGen
 	return tea.Tick(60*time.Second, func(time.Time) tea.Msg { return pollUnreadTickMsg{gen: gen} })
+}
+
+// scheduleRelativeTimeTickCmd self-reschedules every 20s, close enough to
+// relative time's coarsest visible increment ("just now" -> "1m ago") that
+// the lag is imperceptible. handleRelativeTimeTick only acts on it when the
+// active screen is cIRC or C-Mail and its time-display setting is
+// "relative" — otherwise this is a no-op tick, so it always runs rather than
+// starting/stopping around room/conversation open-close lifecycle.
+func (a *App) scheduleRelativeTimeTickCmd() tea.Cmd {
+	gen := a.sessionGen
+	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return relativeTimeTickMsg{gen: gen} })
 }
 
 func (a *App) scheduleWanderCmd() tea.Cmd {

@@ -1821,11 +1821,27 @@ func TestHandleUnauthorized_InvalidatesPendingTickers(t *testing.T) {
 	if _, cmd, ok := a2.handleSettings(wanderTickMsg{gen: genBefore}); !ok || cmd != nil {
 		t.Errorf("wanderTickMsg{gen: %d} (stale) handled=%v cmd=%v, want handled=true cmd=nil", genBefore, ok, cmd)
 	}
+	if _, cmd, ok := a2.handleRelativeTimeTick(relativeTimeTickMsg{gen: genBefore}); !ok || cmd != nil {
+		t.Errorf("relativeTimeTickMsg{gen: %d} (stale) handled=%v cmd=%v, want handled=true cmd=nil", genBefore, ok, cmd)
+	}
 
 	// A tick stamped with the current (post-expiry) gen — e.g. one scheduled
 	// by a fresh login — must still do real work, not be dropped too.
 	if _, cmd, ok := a2.handleNotifications(pollUnreadTickMsg{gen: a2.sessionGen}); !ok || cmd == nil {
 		t.Errorf("pollUnreadTickMsg{gen: current} handled=%v cmd=%v, want handled=true cmd=non-nil", ok, cmd)
+	}
+}
+
+// TestHandleRelativeTimeTick_AlwaysReschedules guards the tick's
+// self-perpetuating chain: since RefreshRelativeTimestamps is a no-op on any
+// screen other than cIRC/C-Mail (or in a non-"relative" display format), the
+// tick must still reschedule itself regardless of which screen is active —
+// otherwise switching away from cIRC/C-Mail even briefly would let the whole
+// chain die instead of merely idling.
+func TestHandleRelativeTimeTick_AlwaysReschedules(t *testing.T) {
+	a := loggedInApp() // a.active == screenFeed
+	if _, cmd, ok := a.handleRelativeTimeTick(relativeTimeTickMsg{gen: a.sessionGen}); !ok || cmd == nil {
+		t.Errorf("relativeTimeTickMsg on screenFeed: handled=%v cmd=%v, want handled=true cmd=non-nil (reschedule)", ok, cmd)
 	}
 }
 

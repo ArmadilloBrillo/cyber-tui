@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 func TestCMailTotalUnread(t *testing.T) {
@@ -87,6 +88,77 @@ func TestCMailDetailView_HeaderHasDividerBeforeMessages(t *testing.T) {
 	}
 	if strings.Contains(lines[0], "─") {
 		t.Errorf("did not expect the divider character on the header line itself, got: %q", lines[0])
+	}
+}
+
+// TestVisibleMessageIDs_CMailModel mirrors
+// TestVisibleMessageIDs_ChatroomsModel — only messages whose offset/height
+// span overlaps [YOffset, YOffset+Height) should come back.
+func TestVisibleMessageIDs_CMailModel(t *testing.T) {
+	conv := model.Conversation{
+		ID: "c1",
+		Messages: []model.Message{
+			{ID: "offscreen1"}, {ID: "visible1"}, {ID: "offscreen2"},
+		},
+	}
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+	m.msgOffsets = []int{0, 5, 10}
+	m.msgHeights = []int{1, 1, 1}
+	m.viewport.YOffset = 5
+	m.viewport.Height = 1
+
+	ids := m.visibleMessageIDs()
+
+	if len(ids) != 1 || ids[0] != "visible1" {
+		t.Errorf("visibleMessageIDs() = %v, want [visible1]", ids)
+	}
+}
+
+// TestRefreshRelativeTimestamps_CMail_OnlyTouchesVisibleCacheEntries mirrors
+// TestRefreshRelativeTimestamps_OnlyTouchesVisibleCacheEntries in
+// chatrooms_test.go — see RefreshRelativeTimestamps' doc comment for why
+// this must stay bounded to the visible range.
+func TestRefreshRelativeTimestamps_CMail_OnlyTouchesVisibleCacheEntries(t *testing.T) {
+	conv := model.Conversation{
+		ID: "c1",
+		Messages: []model.Message{
+			{ID: "offscreen1", Body: "hello", From: model.User{Username: "neo"}, CreatedAt: time.Now()},
+			{ID: "visible1", Body: "world", From: model.User{Username: "neo"}, CreatedAt: time.Now()},
+		},
+	}
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+	m.timeDisplayFormat = "relative"
+	m.msgOffsets = []int{0, 5}
+	m.msgHeights = []int{1, 1}
+	m.viewport.YOffset = 5
+	m.viewport.Height = 1
+
+	seed := func(msg model.Message, rendered string) cmailBodyCacheEntry {
+		return cmailBodyCacheEntry{
+			rendered: rendered, width: m.viewport.Width, currentUser: m.currentUser,
+			timeDisplayFormat: "relative", body: msg.Body, themeName: theme.CurrentName(),
+		}
+	}
+	m.chatBodyCache = map[string]cmailBodyCacheEntry{
+		"offscreen1": seed(conv.Messages[0], "STALE_OFFSCREEN"),
+		"visible1":   seed(conv.Messages[1], "STALE_VISIBLE"),
+	}
+
+	m = m.RefreshRelativeTimestamps()
+
+	if e, ok := m.chatBodyCache["offscreen1"]; !ok || e.rendered != "STALE_OFFSCREEN" {
+		t.Errorf("expected the off-screen cache entry untouched (still a hit), got %+v, ok=%v", e, ok)
+	}
+	if e, ok := m.chatBodyCache["visible1"]; !ok || e.rendered == "STALE_VISIBLE" {
+		t.Errorf("expected the visible cache entry recomputed with a fresh timestamp, got %+v, ok=%v", e, ok)
 	}
 }
 

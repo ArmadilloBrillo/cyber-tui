@@ -1712,6 +1712,41 @@ func (m CMailModel) refreshMessages() CMailModel {
 	return m
 }
 
+// visibleMessageIDs returns the IDs of messages currently within the
+// viewport — mirrors ChatroomsModel.visibleMessageIDs.
+func (m CMailModel) visibleMessageIDs() []string {
+	if m.activeConv == nil {
+		return nil
+	}
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+	var ids []string
+	for i, msg := range m.activeConv.Messages {
+		if i >= len(m.msgOffsets) || i >= len(m.msgHeights) {
+			break
+		}
+		itemStart, itemEnd := m.msgOffsets[i], m.msgOffsets[i]+m.msgHeights[i]
+		if itemEnd <= top || itemStart >= bottom {
+			continue
+		}
+		ids = append(ids, msg.ID)
+	}
+	return ids
+}
+
+// RefreshRelativeTimestamps re-renders the "Nm ago"-style timestamps of
+// currently visible messages — mirrors ChatroomsModel.RefreshRelativeTimestamps,
+// see its doc comment for why this is scoped to the visible range rather than
+// evicting the whole chatBodyCache.
+func (m CMailModel) RefreshRelativeTimestamps() CMailModel {
+	if !m.ready || m.activeConv == nil || m.timeDisplayFormat != "relative" || m.mode != cmailModeDetail {
+		return m
+	}
+	for _, id := range m.visibleMessageIDs() {
+		delete(m.chatBodyCache, id)
+	}
+	return m.refreshMessages()
+}
+
 // SetImageRealRows records key's actual fetched/fitted row count and, if it
 // changed, re-renders so the reserved band shrinks to the image's real
 // size, re-homing the viewport to the bottom if it was already there
