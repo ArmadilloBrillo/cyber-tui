@@ -116,6 +116,7 @@ Like CIRC (`docs/33-circ.md`), any `/`-prefixed input not recognized is rejected
 | `TotalUnread() int` | Sum of `UnreadCount` across all conversations, for the tab-bar badge |
 | `SelectedMessageID() string` | The browsing-selected message's ID, or `""` while composing/typing |
 | `GetFocusedURLs() []string` | URLs from just the selected message while browsing, or across all loaded messages in the open conversation otherwise (`URLProvider`); nil outside detail mode |
+| `RefreshRelativeTimestamps() CMailModel` | Re-renders visible messages' timestamps when `timeDisplayFormat == "relative"`; called by `App`'s periodic tick so "Nm ago" strings advance while a conversation sits open — see `docs/17-settings.md`'s "Relative time live refresh" |
 
 ---
 

@@ -325,7 +325,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 - Manages global shortcuts (`1`–`9` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `o` URL opener, `q`/`ctrl+c` quit)
 - Handles automatic token refresh on `ErrUnauthorized` responses
 - Surfaces transient errors via a **global notification banner** that replaces the status-bar row, colored by severity, and auto-dismisses after 4 s or on the next keypress (which still performs its normal action)
-- Runs background tick jobs: `schedulePollCmd` (60 s unread count), `scheduleWanderCmd` (1 h wander check)
+- Runs background tick jobs: `schedulePollCmd` (60 s unread count), `scheduleWanderCmd` (1 h wander check), `scheduleRelativeTimeTickCmd` (20 s, keeps CIRC/C-Mail's `"relative"`-mode timestamps advancing — see `docs/17-settings.md`)
 
 **Error handling — errors never block a screen:**
 
