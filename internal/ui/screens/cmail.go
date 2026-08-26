@@ -776,22 +776,6 @@ func (m CMailModel) zeroActiveConvUnread() CMailModel {
 	return m
 }
 
-// bumpActiveConvUnread increments UnreadCount on the m.conversations entry
-// matching the currently open conversation, mirroring ChatroomsModel's
-// `if !m.focused { m.unreadCount++ }` — except here the target is the
-// existing per-conversation UnreadCount TotalUnread() already sums, not a
-// separate counter, so the tab-bar badge reflects it immediately instead of
-// waiting for the next 60s poll.
-func (m CMailModel) bumpActiveConvUnread() CMailModel {
-	for i := range m.conversations {
-		if m.conversations[i].ID == m.activeConvID {
-			m.conversations[i].UnreadCount++
-			break
-		}
-	}
-	return m
-}
-
 // HasLiveConv reports whether a conversation is currently open in detail
 // mode with its subscription state intact — used by activateScreen to
 // decide whether re-entering the C-Mail tab should resume in place instead
@@ -1003,12 +987,6 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 
 	case dmReceivedMsg:
 		m = m.AppendMessage(msg.msg)
-		// Also counts as unread while focused if the view isn't at the
-		// bottom (scrolled up reading history) — see ChatroomsModel's
-		// equivalent for why this is reliable here too.
-		if !m.focused || !m.viewport.AtBottom() {
-			m = m.bumpActiveConvUnread()
-		}
 		if m.dmSub != nil {
 			return m, waitForDM(m.dmSub)
 		}

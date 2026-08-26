@@ -296,7 +296,12 @@ func TestCMail_Send_SpoilerCannotChain(t *testing.T) {
 
 // --- background-tab persistence ---
 
-func TestDMReceived_BumpsUnreadWhileUnfocused(t *testing.T) {
+// TestDMReceived_DoesNotBumpUnreadWhileUnfocused confirms dmReceivedMsg alone
+// never writes UnreadCount, even while the tab is unfocused — that field has
+// a single writer, the account-wide userConvsReceivedMsg/SetConversations
+// push (see docs/09-rtdb-cmail.md), so a local bump here would double-count
+// against it.
+func TestDMReceived_DoesNotBumpUnreadWhileUnfocused(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
 	m = m.SetConversations([]model.Conversation{{ID: "c1"}})
 	m = m.SetFocused(false)
@@ -304,8 +309,8 @@ func TestDMReceived_BumpsUnreadWhileUnfocused(t *testing.T) {
 	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
 	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey again"}})
 
-	if got := m.TotalUnread(); got != 2 {
-		t.Errorf("TotalUnread() = %d, want 2", got)
+	if got := m.TotalUnread(); got != 0 {
+		t.Errorf("TotalUnread() = %d, want 0 (dmReceivedMsg alone must not write UnreadCount)", got)
 	}
 }
 
@@ -323,9 +328,8 @@ func TestDMReceived_DoesNotBumpUnreadWhileFocused(t *testing.T) {
 
 func TestSetFocusedCMail_ClearsUnreadOnReturn(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
-	m = m.SetConversations([]model.Conversation{{ID: "c1"}})
 	m = m.SetFocused(false)
-	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
+	m = m.SetConversations([]model.Conversation{{ID: "c1", UnreadCount: 1}}) // mirrors the account-wide push reporting a new message
 	if got := m.TotalUnread(); got != 1 {
 		t.Fatalf("setup: expected TotalUnread 1, got %d", got)
 	}
@@ -1227,12 +1231,15 @@ func TestCMail_AppendMessage_FollowsWhenAlreadyAtBottom(t *testing.T) {
 	}
 }
 
-// TestCMail_TotalUnread_IncrementsWhileFocusedButScrolledUp confirms the tab
-// badge grows even while C-Mail is the active screen, as long as the view
-// isn't at the bottom.
-func TestCMail_TotalUnread_IncrementsWhileFocusedButScrolledUp(t *testing.T) {
+// TestCMail_TotalUnread_UnaffectedByDMReceivedWhileScrolledUp confirms a
+// live dmReceivedMsg never touches UnreadCount by itself, even while
+// scrolled up away from the bottom — UnreadCount has a single writer, the
+// account-wide userConvsReceivedMsg/SetConversations push (see
+// docs/09-rtdb-cmail.md), so a second local writer here would double-count
+// against that push.
+func TestCMail_TotalUnread_UnaffectedByDMReceivedWhileScrolledUp(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
-	m.conversations = []model.Conversation{{ID: "c1"}} // bumpActiveConvUnread/TotalUnread read from here, not activeConv
+	m.conversations = []model.Conversation{{ID: "c1"}} // TotalUnread reads from here, not activeConv
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12})
 	m = m.SetFocused(true)
 	m = m.SetConversationMessages("c1", manyPlainCMailMessages(10))
@@ -1243,8 +1250,15 @@ func TestCMail_TotalUnread_IncrementsWhileFocusedButScrolledUp(t *testing.T) {
 
 	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()}})
 
+	if m.TotalUnread() != 0 {
+		t.Errorf("TotalUnread() = %d, want 0 (dmReceivedMsg alone must not write UnreadCount)", m.TotalUnread())
+	}
+
+	// The account-wide push is what actually reflects the new unread state.
+	m, _ = m.Update(userConvsReceivedMsg{convs: []model.Conversation{{ID: "c1", UnreadCount: 1}}})
+
 	if m.TotalUnread() != 1 {
-		t.Errorf("TotalUnread() = %d, want 1", m.TotalUnread())
+		t.Errorf("TotalUnread() = %d, want 1 after the account-wide push", m.TotalUnread())
 	}
 }
 
@@ -1407,7 +1421,7 @@ func TestCMail_TotalUnread_ClearsWhenScrolledBackToBottom(t *testing.T) {
 	m = m.SetFocused(true)
 	m = m.SetConversationMessages("c1", manyPlainCMailMessages(10))
 	m.viewport.SetYOffset(0)
-	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()}})
+	m = m.SetConversations([]model.Conversation{{ID: "c1", UnreadCount: 1}}) // mirrors the account-wide push reporting a new message
 	if m.TotalUnread() == 0 {
 		t.Fatal("setup: expected TotalUnread > 0 while scrolled up")
 	}
