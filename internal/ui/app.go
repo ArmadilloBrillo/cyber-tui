@@ -28,6 +28,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 	"github.com/ragnar/cyber-tui/internal/update"
 	"github.com/ragnar/cyber-tui/internal/version"
+	"github.com/ragnar/cyber-tui/internal/youtube"
 )
 
 type screen int
@@ -111,10 +112,10 @@ type App struct {
 	// tab — separate from ProfileModel's apprenticeships, which get
 	// overwritten when viewing another user's profile.
 	ownApprenticeSlugs []string
-	active      screen
-	focus       focusTarget
-	width       int
-	height      int
+	active             screen
+	focus              focusTarget
+	width              int
+	height             int
 
 	// autoEmail and autoPassword are set from the config file.
 	// When both are non-empty, Init fires loginCmd immediately.
@@ -191,6 +192,13 @@ type App struct {
 	// wherever InsertIconMsg would land — see applyAttachURL.
 	attachURLPromptOpen bool
 	attachURLPrompt     screens.PathPromptModel
+
+	// songPrompt state — open with ctrl+j from a focused cIRC composer
+	// (supporter accounts only). Submit hands off a built "/song ..."
+	// command via SetComposeValueMsg, the same mechanism ctrl+g's GIF
+	// attach uses — see applyAttachURL and submitSongPrompt.
+	songPromptOpen bool
+	songPrompt     screens.SongPromptModel
 
 	// imageCarousel state — populated when an image is opened from a picker
 	// containing more than one image, letting left/right cycle between them
@@ -605,6 +613,7 @@ func NewApp(client api.Client) App {
 		pathPrompt:         screens.NewPathPromptModel(),
 		iconPicker:         screens.NewIconPickerModel(),
 		attachURLPrompt:    screens.NewPathPromptModel(),
+		songPrompt:         screens.NewSongPromptModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -869,6 +878,9 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 	if a2, cmd, ok := a.handleInlineImageFetched(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleSongMetadataFetched(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleErr(msg); ok {
 		return a2, cmd
 	}
@@ -974,6 +986,10 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		model, cmd := a.handleAttachURLPromptKey(m)
 		return model.(App), cmd, true
 	}
+	if a.songPromptOpen {
+		model, cmd := a.handleSongPromptKey(m)
+		return model.(App), cmd, true
+	}
 	// When a screen has a focused text input, let it consume all keys.
 	// ctrl+c is kept as a hard escape hatch; a handful of other global
 	// shortcuts get a ctrl-prefixed twin that reaches through too, since
@@ -1006,7 +1022,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 				(a.active == screenCMail && a.cmail.ComposeEmpty()))
 		switch {
 		case m.String() == "ctrl+o", m.String() == "ctrl+q", m.String() == "ctrl+t",
-			m.String() == "ctrl+]", m.String() == "ctrl+g", m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
+			m.String() == "ctrl+]", m.String() == "ctrl+g", m.String() == "ctrl+j", m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
 			// fall through to the global switch below
 		default:
 			return a, nil, false // fall through to delegateUpdate
@@ -1066,6 +1082,17 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.attachURLPromptOpen = true
 			var cmd tea.Cmd
 			a.attachURLPrompt, cmd = a.attachURLPrompt.Open("attach image/gif url", "")
+			return a, cmd, true
+		}
+	case "ctrl+j":
+		if a.active == screenChatrooms && a.activeScreenHasFocusedInput() {
+			if !a.currentUser.IsSupporter {
+				a.chatrooms = a.chatrooms.AppendSystemMessage(a.chatrooms.ActiveRoomSlug(), "*** song attachments require supporter status")
+				return a, nil, true
+			}
+			a.songPromptOpen = true
+			var cmd tea.Cmd
+			a.songPrompt, cmd = a.songPrompt.Open()
 			return a, cmd, true
 		}
 	case "v":
@@ -4016,11 +4043,12 @@ func (a App) handleURLPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleIconPickerKey processes keyboard input while the icon picker overlay
-// is open. Esc and enter are handled here directly (mirrors
-// handleURLPickerKey); enter emits an InsertIconMsg that falls through to
-// delegateScreenUpdate and lands on whichever screen is currently active.
-// Every other key (tab/shift+tab/up/down/search typing) is forwarded to
-// IconPickerModel.Update.
+// is open. Esc, enter, and ctrl+n are handled here directly (mirrors
+// handleURLPickerKey); enter and ctrl+n both emit an InsertIconMsg that
+// falls through to delegateScreenUpdate and lands on whichever screen is
+// currently active — enter also closes the picker, ctrl+n leaves it open so
+// several icons can be inserted in a row. Every other key (tab/shift+tab/
+// up/down/search typing) is forwarded to IconPickerModel.Update.
 func (a App) handleIconPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -4032,6 +4060,14 @@ func (a App) handleIconPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.iconPickerOpen = false
+		return a, func() tea.Msg { return screens.InsertIconMsg{Icon: glyph} }
+	case "ctrl+n":
+		// Same as enter, but leaves the picker open so several icons can be
+		// inserted in a row without reopening it each time.
+		glyph, ok := a.iconPicker.Selected()
+		if !ok {
+			return a, nil
+		}
 		return a, func() tea.Msg { return screens.InsertIconMsg{Icon: glyph} }
 	}
 	var cmd tea.Cmd
@@ -4097,6 +4133,101 @@ func (a App) applyAttachURL(url string) (App, tea.Cmd) {
 		return a.notify(notifyWarn, "replies don't support image attachments — there's no attachments field in the reply API")
 	}
 	return a, func() tea.Msg { return screens.InsertIconMsg{Icon: "![](" + url + ")"} }
+}
+
+// handleSongPromptKey processes keyboard input while the ctrl+j song-attach
+// prompt is open. Esc/tab/shift+tab/ctrl+s are handled directly here; Enter's
+// behavior depends on which field has focus (mirrors the modal's own field
+// order): on the url field it validates and kicks off the async oEmbed
+// fetch (see fetchSongMetadataCmd), on artist/title it just advances focus
+// like tab, and on genre (the last field) it submits, same as ctrl+s. Every
+// other key is forwarded to SongPromptModel.Update.
+func (a App) handleSongPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.songPromptOpen = false
+		return a, nil
+	case "tab", "shift+tab":
+		var cmd tea.Cmd
+		a.songPrompt, cmd = a.songPrompt.Update(msg)
+		return a, cmd
+	case "ctrl+s":
+		return a.submitSongPrompt()
+	case "enter":
+		if a.songPrompt.OnURLField() {
+			url := a.songPrompt.URLValue()
+			if _, ok := youtube.ExtractVideoID(url); !ok {
+				a.songPrompt = a.songPrompt.SetWarning("not a recognized YouTube URL")
+				return a, nil
+			}
+			var advanceCmd tea.Cmd
+			a.songPrompt, advanceCmd = a.songPrompt.NextField()
+			a.songPrompt = a.songPrompt.SetLoading(true)
+			return a, tea.Batch(advanceCmd, a.fetchSongMetadataCmd(url))
+		}
+		if !a.songPrompt.OnLastField() {
+			var cmd tea.Cmd
+			a.songPrompt, cmd = a.songPrompt.NextField()
+			return a, cmd
+		}
+		return a.submitSongPrompt()
+	}
+	var cmd tea.Cmd
+	a.songPrompt, cmd = a.songPrompt.Update(msg)
+	return a, cmd
+}
+
+// submitSongPrompt validates the song prompt's fields and, if valid, closes
+// the modal and hands the built "/song ..." command to the chatrooms
+// composer via SetComposeValueMsg — the same handoff applyAttachURL uses
+// for ctrl+g's "/gif <url>". The user still presses Enter in the composer
+// itself to actually send it.
+func (a App) submitSongPrompt() (App, tea.Cmd) {
+	cmd, ok := a.songPrompt.BuildCommand()
+	if !ok {
+		a.songPrompt = a.songPrompt.SetWarning("enter a YouTube URL, artist, and title")
+		return a, nil
+	}
+	a.songPromptOpen = false
+	return a, func() tea.Msg { return screens.SetComposeValueMsg{Value: cmd} }
+}
+
+// songMetadataFetchedMsg reports the result of one fetchSongMetadataCmd.
+type songMetadataFetchedMsg struct {
+	title  string
+	artist string
+	err    error
+}
+
+// fetchSongMetadataCmd looks up rawURL's title/channel via YouTube's public
+// oEmbed endpoint (internal/youtube) — best-effort autofill, never blocking
+// submission (see SongPromptModel.FetchFailed).
+func (a App) fetchSongMetadataCmd(rawURL string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		title, artist, err := youtube.FetchMetadata(ctx, rawURL)
+		return songMetadataFetchedMsg{title: title, artist: artist, err: err}
+	}
+}
+
+// handleSongMetadataFetched applies a resolved songMetadataFetchedMsg to the
+// still-open song prompt. If the prompt was closed (cancelled) before the
+// fetch resolved, the result is simply dropped.
+func (a App) handleSongMetadataFetched(msg tea.Msg) (App, tea.Cmd, bool) {
+	m, ok := msg.(songMetadataFetchedMsg)
+	if !ok {
+		return a, nil, false
+	}
+	if !a.songPromptOpen {
+		return a, nil, true
+	}
+	if m.err != nil {
+		a.songPrompt = a.songPrompt.FetchFailed()
+	} else {
+		a.songPrompt = a.songPrompt.ApplyMetadata(m.title, m.artist)
+	}
+	return a, nil, true
 }
 
 // --- commands ---
@@ -4340,13 +4471,13 @@ type settingsSavedMsg struct {
 	feedManualRefreshOnly   bool
 	typingIndicatorsEnabled bool
 	maxThreadDepth          int
-	timezone         string
-	imageViewer      string
-	graphicsProtocol string
-	inlineImages     bool
-	dithering        bool
-	ditherSharpness  string
-	layoutName       string
+	timezone                string
+	imageViewer             string
+	graphicsProtocol        string
+	inlineImages            bool
+	dithering               bool
+	ditherSharpness         string
+	layoutName              string
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made

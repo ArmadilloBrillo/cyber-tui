@@ -19,6 +19,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -1876,7 +1877,7 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 
 	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		FeedManualRefreshOnly: false,
-		ImageViewer:            "terminal",
+		ImageViewer:           "terminal",
 	})
 	if !ok || cmd == nil {
 		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
@@ -2872,6 +2873,255 @@ func TestHandleKeys_CtrlG_OpensAttachURLPrompt_WhenInputFocused(t *testing.T) {
 	}
 	if !a2.attachURLPromptOpen {
 		t.Error("expected attachURLPromptOpen = true after ctrl+g")
+	}
+}
+
+// --- ctrl+j / song prompt ---
+
+func TestHandleKeys_CtrlJ_OpensSongPrompt_WhenSupporterAndChatroomsFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	a.currentUser = model.User{IsSupporter: true}
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if !consumed {
+		t.Fatal("expected ctrl+j to be consumed while cIRC's compose field is focused")
+	}
+	if !a2.songPromptOpen {
+		t.Error("expected songPromptOpen = true after ctrl+j for a supporter")
+	}
+}
+
+// TestHandleKeys_CtrlJ_NonSupporter_RejectsLocally_DoesNotOpenModal guards
+// the client-side supporter gate: /song is 403 server-side for a
+// non-supporter, so ctrl+j should reject instantly with a local system
+// message instead of opening a modal whose submit would just fail later.
+func TestHandleKeys_CtrlJ_NonSupporter_RejectsLocally_DoesNotOpenModal(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	a.currentUser = model.User{IsSupporter: false}
+
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if !consumed {
+		t.Fatal("expected ctrl+j to be consumed even when rejected locally")
+	}
+	if a2.songPromptOpen {
+		t.Error("expected songPromptOpen to stay false for a non-supporter")
+	}
+	if !strings.Contains(ansi.Strip(a2.chatrooms.View()), "supporter status") {
+		t.Error("expected a local system message explaining the supporter requirement")
+	}
+}
+
+// TestHandleKeys_CtrlJ_NotConsumed_OutsideChatrooms guards the scoping to
+// cIRC only — /song is technically accepted server-side in C-Mail too
+// (baseSlashCommands), but this modal is cIRC-only per the feature's scope.
+func TestHandleKeys_CtrlJ_NotConsumed_OutsideChatrooms(t *testing.T) {
+	a := setupCMailDetail(loggedInApp())
+	a.currentUser = model.User{IsSupporter: true}
+
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if consumed {
+		t.Error("expected ctrl+j to be unconsumed (and not open the song prompt) outside cIRC")
+	}
+}
+
+// TestHandleSongPromptKey_Esc_ClosesWithoutSubmitting guards cancellation.
+func TestHandleSongPromptKey_Esc_ClosesWithoutSubmitting(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+
+	model, cmd := a.handleSongPromptKey(tea.KeyMsg{Type: tea.KeyEsc})
+	a2 := model.(App)
+	if a2.songPromptOpen {
+		t.Error("expected songPromptOpen = false after esc")
+	}
+	if cmd != nil {
+		t.Error("expected esc to return no cmd")
+	}
+}
+
+// TestHandleSongPromptKey_EnterOnURL_ValidURL_FetchesAndAdvancesFocus guards
+// the url-field Enter behavior: a valid YouTube URL should trigger the
+// metadata fetch and move focus to artist, not submit.
+func TestHandleSongPromptKey_EnterOnURL_ValidURL_FetchesAndAdvancesFocus(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	for _, r := range "https://youtu.be/dQw4w9WgXcQ" {
+		a.songPrompt, _ = a.songPrompt.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	model, cmd := a.handleSongPromptKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a2 := model.(App)
+	if a2.songPrompt.OnURLField() {
+		t.Error("expected enter on a valid url to advance focus off the url field")
+	}
+	if !a2.songPromptOpen {
+		t.Error("expected the prompt to stay open while the fetch is in flight")
+	}
+	if cmd == nil {
+		t.Fatal("expected enter on a valid url to return a cmd (the metadata fetch)")
+	}
+}
+
+// TestHandleSongPromptKey_EnterOnURL_InvalidURL_ShowsWarning guards the
+// client-side validation short-circuit — no fetch, no focus change.
+func TestHandleSongPromptKey_EnterOnURL_InvalidURL_ShowsWarning(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	for _, r := range "not a youtube url" {
+		a.songPrompt, _ = a.songPrompt.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	model, _ := a.handleSongPromptKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a2 := model.(App)
+	if !a2.songPrompt.OnURLField() {
+		t.Error("expected focus to stay on the url field after an invalid url")
+	}
+}
+
+// TestSubmitSongPrompt_ValidFields_ClosesAndSetsComposeValue guards the
+// submit handoff mirroring applyAttachURL's ctrl+g GIF handoff.
+func TestSubmitSongPrompt_ValidFields_ClosesAndSetsComposeValue(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	fillSongPrompt(&a, "https://youtu.be/dQw4w9WgXcQ", "Rick Astley", "Never Gonna Give You Up", "")
+
+	a2, cmd := a.submitSongPrompt()
+	if a2.songPromptOpen {
+		t.Error("expected songPromptOpen = false after a valid submit")
+	}
+	if cmd == nil {
+		t.Fatal("expected a cmd emitting SetComposeValueMsg")
+	}
+	msg, ok := cmd().(screens.SetComposeValueMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want screens.SetComposeValueMsg", cmd())
+	}
+	want := "/song https://youtu.be/dQw4w9WgXcQ | Rick Astley | Never Gonna Give You Up"
+	if msg.Value != want {
+		t.Errorf("SetComposeValueMsg.Value = %q, want %q", msg.Value, want)
+	}
+}
+
+// TestSubmitSongPrompt_MissingTitle_StaysOpenWithWarning guards that an
+// incomplete submit never hands a malformed /song command to the composer.
+func TestSubmitSongPrompt_MissingTitle_StaysOpenWithWarning(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	fillSongPrompt(&a, "https://youtu.be/dQw4w9WgXcQ", "Rick Astley", "", "")
+
+	a2, cmd := a.submitSongPrompt()
+	if !a2.songPromptOpen {
+		t.Error("expected the prompt to stay open when a required field is missing")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd when submit is rejected")
+	}
+}
+
+// TestHandleSongMetadataFetched_Success_AppliesToOpenPrompt guards the async
+// fetch result being applied while the modal is still open.
+func TestHandleSongMetadataFetched_Success_AppliesToOpenPrompt(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	a.songPrompt = a.songPrompt.SetLoading(true)
+
+	a2, _, ok := a.handleSongMetadataFetched(songMetadataFetchedMsg{title: "Never Gonna Give You Up", artist: "Rick Astley"})
+	if !ok {
+		t.Fatal("expected handleSongMetadataFetched to claim its own message type")
+	}
+	if a2.songPrompt.TitleValue() != "Never Gonna Give You Up" || a2.songPrompt.ArtistValue() != "Rick Astley" {
+		t.Errorf("got title=%q artist=%q, want the fetched values", a2.songPrompt.TitleValue(), a2.songPrompt.ArtistValue())
+	}
+}
+
+// TestHandleSongMetadataFetched_PromptClosed_Dropped guards against a stale
+// fetch (from a cancelled prompt) reopening or mutating a fresh one.
+func TestHandleSongMetadataFetched_PromptClosed_Dropped(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = false
+
+	a2, cmd, ok := a.handleSongMetadataFetched(songMetadataFetchedMsg{title: "t", artist: "a"})
+	if !ok {
+		t.Fatal("expected handleSongMetadataFetched to claim its own message type even when dropped")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd for a dropped fetch result")
+	}
+	if a2.songPromptOpen {
+		t.Error("expected songPromptOpen to remain false")
+	}
+}
+
+// fillSongPrompt types url/artist/title/genre into a.songPrompt's four
+// fields in order, tabbing between them.
+func fillSongPrompt(a *App, url, artist, title, genre string) {
+	type_ := func(s string) {
+		for _, r := range s {
+			a.songPrompt, _ = a.songPrompt.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+	}
+	type_(url)
+	a.songPrompt, _ = a.songPrompt.NextField()
+	type_(artist)
+	a.songPrompt, _ = a.songPrompt.NextField()
+	type_(title)
+	a.songPrompt, _ = a.songPrompt.NextField()
+	type_(genre)
+}
+
+// --- ctrl+n / icon picker insert-and-stay ---
+
+// TestHandleIconPickerKey_CtrlN_InsertsWithoutClosing guards the whole point
+// of ctrl+n: unlike enter, it must leave iconPickerOpen true so several
+// icons can be picked in a row.
+func TestHandleIconPickerKey_CtrlN_InsertsWithoutClosing(t *testing.T) {
+	a := loggedInApp()
+	a.iconPickerOpen = true
+	a.iconPicker, _ = a.iconPicker.Open()
+
+	model, cmd := a.handleIconPickerKey(tea.KeyMsg{Type: tea.KeyCtrlN})
+	a2 := model.(App)
+	if !a2.iconPickerOpen {
+		t.Error("expected iconPickerOpen to remain true after ctrl+n")
+	}
+	if cmd == nil {
+		t.Fatal("expected ctrl+n to return a cmd emitting InsertIconMsg")
+	}
+	msg, ok := cmd().(screens.InsertIconMsg)
+	if !ok {
+		t.Fatalf("expected InsertIconMsg, got %T", cmd())
+	}
+	if msg.Icon == "" {
+		t.Error("expected a non-empty icon glyph")
+	}
+}
+
+// TestHandleIconPickerKey_Enter_ClosesPicker guards the contrast with
+// ctrl+n above — enter still closes the picker as before.
+func TestHandleIconPickerKey_Enter_ClosesPicker(t *testing.T) {
+	a := loggedInApp()
+	a.iconPickerOpen = true
+	a.iconPicker, _ = a.iconPicker.Open()
+
+	model, cmd := a.handleIconPickerKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a2 := model.(App)
+	if a2.iconPickerOpen {
+		t.Error("expected iconPickerOpen to be false after enter")
+	}
+	if cmd == nil {
+		t.Fatal("expected enter to return a cmd emitting InsertIconMsg")
+	}
+	if _, ok := cmd().(screens.InsertIconMsg); !ok {
+		t.Fatalf("expected InsertIconMsg, got %T", cmd())
 	}
 }
 

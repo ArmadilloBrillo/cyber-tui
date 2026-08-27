@@ -574,6 +574,7 @@ func (f fakeModalRenderer) renderHelpModal(a App) string       { return "" }
 func (f fakeModalRenderer) renderURLPicker(a App) string       { return "" }
 func (f fakeModalRenderer) renderIconPicker(a App) string      { return "" }
 func (f fakeModalRenderer) renderAttachURLPrompt(a App) string { return "" }
+func (f fakeModalRenderer) renderSongPrompt(a App) string      { return "" }
 func (f fakeModalRenderer) renderImageModal(a App) string      { return "" }
 func (f fakeModalRenderer) InlineImageSlots(a App) ([]screens.InlineImageSlot, int, int, string) {
 	return f.slots, f.rowOrigin, f.colOrigin, ""
