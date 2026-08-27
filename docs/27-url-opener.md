@@ -67,6 +67,16 @@ URLs on `cyberspace.online` or `www.cyberspace.online` are checked for known pat
 | `/{username}` (bare, and not one of the reserved words below) | Navigate to that user's profile in the TUI |
 | Anything else | Open in browser |
 
+`/{username}/{slug}` and `/{username}/blog/{slug}` both resolve via
+`GET /v1/users/:username/posts/:slug`. When a post has no custom/generated
+slug, the website's permalink for it falls back to `/{username}/{postId}`
+— a raw post ID sitting in the slug position, indistinguishable from a real
+slug on the wire — and that endpoint 404s for an ID-shaped segment rather
+than also matching by ID. `loadPostBySlugCmd` (`internal/ui/app.go`) retries
+once via `GET /v1/posts/:id` (treating the segment as a raw ID) on a 404
+before reporting the link as broken, so both permalink shapes resolve. See
+`docs/00-api-backlog.md` for the underlying server-side gap.
+
 Checks run in the order above — a top-level path (`topics`, `guilds`, `chat`,
 plus a handful of other real cyberspace.online pages with no TUI equivalent —
 `search`, `notifications`, `bookmarks`, `settings`, `jukebox`, `globe`,

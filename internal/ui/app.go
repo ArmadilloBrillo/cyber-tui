@@ -6094,10 +6094,22 @@ func (a *App) loadPostAndShowCmd(postID string) tea.Cmd {
 // username and per-author slug. origin is the screen to return to when
 // PostDetail closes; it travels through urlPostLoadedMsg rather than being
 // read from a.active when the response arrives.
+//
+// The website falls back to a raw post-ID permalink (/{username}/{postId})
+// when a post has no custom/generated slug — a shape indistinguishable from
+// a real slug on the wire (confirmed live: the slug lookup 404s for one of
+// these, GET /v1/posts/:id for the same segment succeeds). So on a 404 here,
+// retry once as an ID lookup before reporting the link as broken.
 func (a *App) loadPostBySlugCmd(username, slug string, origin screen) tea.Cmd {
 	return func() tea.Msg {
 		post, err := a.client.GetPostBySlug(username, slug)
 		if err != nil {
+			var apiErr *api.APIError
+			if errors.As(err, &apiErr) && apiErr.Status == 404 {
+				if idPost, idErr := a.client.GetPost(slug); idErr == nil {
+					return urlPostLoadedMsg{post: idPost, origin: origin}
+				}
+			}
 			return urlPostLoadErrMsg{err}
 		}
 		return urlPostLoadedMsg{post: post, origin: origin}
