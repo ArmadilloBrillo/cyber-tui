@@ -15,6 +15,7 @@ const defaultBaseURL = "https://api.cyberspace.online"
 func main() {
 	method := flag.String("method", "GET", "HTTP method")
 	body := flag.String("body", "", "request body (JSON string)")
+	bodyFile := flag.String("body-file", "", "request body (path to JSON file; avoids shell quoting issues)")
 	baseURL := flag.String("base-url", "", "override API base URL")
 	flag.Parse()
 
@@ -49,7 +50,14 @@ func main() {
 	}
 
 	var bodyBytes []byte
-	if *body != "" {
+	if *bodyFile != "" {
+		b, err := os.ReadFile(*bodyFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: read body file: %v\n", err)
+			os.Exit(1)
+		}
+		bodyBytes = b
+	} else if *body != "" {
 		bodyBytes = []byte(*body)
 	}
 
