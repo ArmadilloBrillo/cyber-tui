@@ -1576,6 +1576,110 @@ func TestRouteURL_PostPermalink_BlogForm(t *testing.T) {
 	}
 }
 
+// slugIDFallbackClient simulates a post permalink with no custom slug: the
+// website falls back to /{username}/{postId}, so GetPostBySlug 404s for
+// that segment while GetPost (treating it as a raw ID) succeeds.
+type slugIDFallbackClient struct {
+	*api.MockClient
+	post model.Post
+}
+
+func (c *slugIDFallbackClient) GetPostBySlug(username, slug string) (model.Post, error) {
+	return model.Post{}, &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "post not found"}
+}
+
+func (c *slugIDFallbackClient) GetPost(postID string) (model.Post, error) {
+	return c.post, nil
+}
+
+// TestLoadPostBySlugCmd_SlugLookup404_FallsBackToIDLookup is the regression
+// test for a real bug: a post link like
+// https://cyberspace.online/dragor/vVIgcSbI9CHYsIxjTNsC (no custom slug, so
+// the second path segment is really the raw post ID) 404'd on the
+// slug-lookup endpoint and was reported as "deleted" even though the post
+// existed — confirmed live via GET /v1/posts/:id succeeding for the same
+// segment.
+func TestLoadPostBySlugCmd_SlugLookup404_FallsBackToIDLookup(t *testing.T) {
+	client := &slugIDFallbackClient{
+		MockClient: api.NewMockClient(),
+		post:       model.Post{ID: "vVIgcSbI9CHYsIxjTNsC", AuthorUsername: "dragor", Content: "hello"},
+	}
+	a := NewApp(client)
+
+	msg := a.loadPostBySlugCmd("dragor", "vVIgcSbI9CHYsIxjTNsC", screenFeed)()
+	loaded, ok := msg.(urlPostLoadedMsg)
+	if !ok {
+		t.Fatalf("loadPostBySlugCmd()() = %T, want urlPostLoadedMsg", msg)
+	}
+	if loaded.post.ID != "vVIgcSbI9CHYsIxjTNsC" {
+		t.Errorf("post.ID = %q, want the ID-lookup result", loaded.post.ID)
+	}
+	if loaded.origin != screenFeed {
+		t.Errorf("origin = %v, want screenFeed", loaded.origin)
+	}
+}
+
+// doubleNotFoundClient simulates a genuinely broken/deleted post link:
+// neither the slug lookup nor the ID-lookup fallback finds anything.
+type doubleNotFoundClient struct {
+	*api.MockClient
+}
+
+func (c *doubleNotFoundClient) GetPostBySlug(username, slug string) (model.Post, error) {
+	return model.Post{}, &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "post not found"}
+}
+
+func (c *doubleNotFoundClient) GetPost(postID string) (model.Post, error) {
+	return model.Post{}, &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "post not found"}
+}
+
+// TestLoadPostBySlugCmd_BothLookupsFail_ReturnsErr guards that a genuinely
+// broken link still reports as unreachable instead of the ID-lookup
+// fallback masking every 404.
+func TestLoadPostBySlugCmd_BothLookupsFail_ReturnsErr(t *testing.T) {
+	a := NewApp(&doubleNotFoundClient{MockClient: api.NewMockClient()})
+
+	msg := a.loadPostBySlugCmd("dragor", "does-not-exist", screenFeed)()
+	if _, ok := msg.(urlPostLoadErrMsg); !ok {
+		t.Fatalf("loadPostBySlugCmd()() = %T, want urlPostLoadErrMsg", msg)
+	}
+}
+
+// nonNotFoundSpyClient tracks whether GetPost was called, to guard that the
+// ID-lookup fallback only triggers on a 404 — retrying on a network/5xx
+// error would just mask or duplicate an unrelated failure.
+type nonNotFoundSpyClient struct {
+	*api.MockClient
+	getPostCalled bool
+}
+
+func (c *nonNotFoundSpyClient) GetPostBySlug(username, slug string) (model.Post, error) {
+	return model.Post{}, &api.APIError{Code: "INTERNAL", Status: 500, Message: "server error"}
+}
+
+func (c *nonNotFoundSpyClient) GetPost(postID string) (model.Post, error) {
+	c.getPostCalled = true
+	return model.Post{}, nil
+}
+
+func TestLoadPostBySlugCmd_NonNotFoundError_DoesNotRetryAsID(t *testing.T) {
+	client := &nonNotFoundSpyClient{MockClient: api.NewMockClient()}
+	a := NewApp(client)
+
+	msg := a.loadPostBySlugCmd("dragor", "some-slug", screenFeed)()
+	if client.getPostCalled {
+		t.Error("expected GetPost not to be called for a non-404 error")
+	}
+	errMsg, ok := msg.(urlPostLoadErrMsg)
+	if !ok {
+		t.Fatalf("loadPostBySlugCmd()() = %T, want urlPostLoadErrMsg", msg)
+	}
+	var apiErr *api.APIError
+	if !errors.As(errMsg.err, &apiErr) || apiErr.Status != 500 {
+		t.Errorf("expected the original 500 error to surface unchanged, got %v", errMsg.err)
+	}
+}
+
 // TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack is the
 // regression test for the "Esc does nothing after following an in-post link"
 // bug: opening a post-permalink link while already viewing a post used to
