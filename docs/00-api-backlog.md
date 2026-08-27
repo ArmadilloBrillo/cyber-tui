@@ -192,6 +192,7 @@ cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAt
 | `gifUrl`, `audioAttachment`, `style`, chained styles | Render/decode in message view; `style: "art"` needs base64 decode | **Done** — wire/model fields across all four message shapes, attachment badges reusing `renderAttachments`, and a middle-fidelity style pipeline (ANSI attributes for blink/quiet/rainbow, Unicode substitution for l33t/cursive/flip, ASCII-safe jitter for glitch, `tea.Tick`-driven slow/wave/glitch animation, select-to-reveal spoiler in cIRC only — see `internal/ui/screens/chatstyle.go`) |
 | `/mute` family + `mutedUsersByRoom` | Client-side message filtering by muted user | **Done** — cIRC only (C-Mail 400s per API spec); see `docs/37-circ-mute.md` |
 | Empty `content` with attachment-only messages | Message rendering must not assume non-empty `content` | **Done** — covered by the same change; `messageDisplayBody` skips duplicate URL text and empty bodies render without assuming non-empty `content` |
+| `/song` composer UI | A guided way to build the `/song <url> \| <artist> \| <title> [\| <genre>]` command instead of hand-typing it | **Done** — `ctrl+j` Song Prompt modal in cIRC (supporter-gated client-side ahead of the server's 403), artist/title auto-filled via YouTube's public oEmbed endpoint (`internal/youtube`); see `docs/49-song-attach.md`. C-Mail not covered (out of this feature's scope, though the API accepts `/song` there too) |
 
 ### cIRC idle presence (new in v0.8.1)
 

@@ -697,6 +697,17 @@ Fetches and displays images in the terminal using native graphics protocols (Kit
 
 ---
 
+### `internal/youtube`
+
+Lightweight, unauthenticated helpers for YouTube video links — no `internal/api` dependency (this talks to `youtube.com`, not cyberspace.online). Backs the Song Prompt modal's auto-fill (`docs/49-song-attach.md`).
+
+| Identifier | Kind | Purpose |
+|---|---|---|
+| `ExtractVideoID(rawURL string) (id string, ok bool)` | func | Recognizes `youtube.com/watch?v=`, `youtu.be/<id>`, `youtube.com/shorts/<id>`, `youtube.com/embed/<id>` (`www.`/`m.` host prefixes accepted). Client-side validation ahead of a fetch or submit — the server itself 400s a non-YouTube `/song` link |
+| `FetchMetadata(ctx, rawURL) (title, author string, err error)` | func | GETs YouTube's public oEmbed endpoint, no API key. `author_name` (the channel) stands in for "artist" — oEmbed has no artist/genre field, so genre is always left for the user to fill in manually. Own `http.Client` (8s timeout) and User-Agent, mirroring `internal/ui/imgview/fetch.go`'s pattern for third-party fetches |
+
+---
+
 ## Configuration File
 
 Location: `~/.cyber-tui.json`  
@@ -918,6 +929,37 @@ fields.
 | `ctrl+s` | Submit (validates the slug field first; invalid slug refocuses it with an inline error) |
 | `esc` | Cancel |
 
+### Icon Picker
+
+`Ctrl+]` (`internal/ui/screens/iconpicker.go`) opens a modal over any focused
+compose input: tabs between icon sets, a live search box, and a scrollable
+list. Two tabs — Emoji and Kaomoji.
+
+| Key | Action |
+|---|---|
+| `tab` / `shift+tab` | Switch icon set |
+| `↑`/`↓`, `pgup`/`pgdn` | Move selection |
+| (typing) | Filter the active set by name |
+| `enter` | Insert the selected icon and close the picker |
+| `ctrl+n` | Insert the selected icon and leave the picker open, for inserting several in a row |
+| `esc` | Close without inserting |
+
+### Song Prompt
+
+`ctrl+j` (`internal/ui/screens/songprompt.go`) opens a modal over CIRC's
+composer (supporter accounts only — see the CIRC table below) for attaching
+a YouTube track: URL, Artist, Title, Genre. Artist/Title auto-fill
+best-effort from the URL via `internal/youtube`'s oEmbed lookup; Genre is
+always manual (oEmbed has no genre field). See `docs/49-song-attach.md`.
+
+| Key | Action |
+|---|---|
+| `tab` / `shift+tab` | Cycle fields: url → artist → title → genre |
+| `enter` on url | Validate the URL and fetch artist/title metadata, advancing focus to artist |
+| `enter` on artist/title | Advance focus (same as tab) |
+| `enter` on genre, or `ctrl+s` | Submit — hands the built `/song ...` command to the composer (still requires `enter` there to send) |
+| `esc` | Cancel without inserting anything |
+
 ### Notifications
 
 | Key | Action |
@@ -978,6 +1020,7 @@ fields.
 | `enter` | Send message (when input non-empty) |
 | `esc` | Return to list mode — or, if this room was opened via a `chat_mention` notification, leave Chatrooms entirely and return to that origin screen |
 | `ctrl+o` | Open URLs/images found across the loaded room history (plain `o` is captured by the compose input) |
+| `ctrl+j` | Open the Song Prompt modal to attach a YouTube track (supporter accounts only — a non-supporter gets a local `*** song attachments require supporter status` notice instead) |
 | all other | Forwarded to compose input |
 
 ### Search
@@ -1070,7 +1113,7 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 | **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized. `mutedUsersByRoom` is also read but excluded from PATCH for a different reason — it's server-managed via `/mute` slash commands only (see `docs/37-circ-mute.md`), never client-patched |
 | **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |
 | **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |
-| **Attachments** | Images render inline (Feed, Post Detail, Search, Topics, Guilds post lists, C-Mail, cIRC, Profile — gated by the InlineImages setting; see `docs/45-inline-images-everywhere.md`) and open in a fullscreen modal (`o`) via `internal/ui/imgview` (Kitty/iTerm2/Sixel, falling back to the OS browser when no protocol is detected or the Image Viewer setting is "browser"). YouTube audio attachments are still not supported |
+| **Attachments** | Images render inline (Feed, Post Detail, Search, Topics, Guilds post lists, C-Mail, cIRC, Profile — gated by the InlineImages setting; see `docs/45-inline-images-everywhere.md`) and open in a fullscreen modal (`o`) via `internal/ui/imgview` (Kitty/iTerm2/Sixel, falling back to the OS browser when no protocol is detected or the Image Viewer setting is "browser"). YouTube audio attachments can be composed in cIRC via the `ctrl+j` Song Prompt modal (`docs/49-song-attach.md`, supporter accounts only) — not yet available in C-Mail or for blog posts (the API only accepts them via chat's `/song` command, not the posts endpoints) |
 | **Badge icons — supporter only, posts/replies not covered** | A real inline supporter badge icon renders next to usernames on Profile and the C-Mail detail header (`docs/48-badge-icons.md`). Two things it does NOT cover: (1) Feed/Post Detail/Search/Topics/Bookmarks — post/reply API payloads carry no author badge data at all, only `authorId`/`authorUsername`; would need a per-author `GET /v1/users/:username` fetch-and-cache subsystem or the API adding these fields directly. (2) Guild badges (Guilds list icon, Profile's guild badge) — attempted and reverted, since `Guild.Icon`/`GuildIcon` values are confirmed live to be Unicode/CLDR emoji character names or an unidentified `dinkie-icons:` set, not the Lucide/Phosphor scheme `SupporterIcon` uses. See `docs/00-api-backlog.md`. |
 | **iTerm2/Sixel inline-image repaint workarounds** | First real-terminal testing of the feature (native macOS iTerm2, this was previously only eyeballed on Kitty) found several rendering bugs whose fixes lean on genuine workarounds rather than clean solutions — an inert dirty-marker byte to force Bubble Tea's per-line diff to reissue a line, and explicit on-screen-rectangle tracking to erase stale image pixels (iTerm2/Sixel have no placement/compositing concept like Kitty's). A residual single-line flash on a selection change touching a visible image was evaluated and accepted rather than fixed. See `docs/plan-inline-images-improvements.md` §8 for what each workaround depends on and when to revisit it. On Windows specifically, Sixel detection via `imgview.ProbeSixel`'s DA1 query has been observed to never receive a response from WezTerm — `DetectProtocol()`'s env-var check (`TERM_PROGRAM=WezTerm` → iTerm2 protocol) is the reliable path there instead |
 | **Inline/fullscreen images on Windows: known, accepted limitation** | Do not reliably render — a fragment appears in the wrong screen position instead. This is a Windows/ConPTY problem, not a WezTerm one: WezTerm supports the iTerm2 protocol per its own docs, and the same escape sequence renders correctly on real iTerm2 (macOS, no ConPTY involved) and in isolated replay outside Bubble Tea. Root cause: `injectInlineImages` batches each image's cursor-position (CUP) escape with the image OSC sequence into one write, and Bubble Tea's renderer (`standard_renderer.go`, vendored) always appends its own trailing cursor-position CSI after all frame content in the same syscall write — ConPTY (Windows' only pty layer, unavoidable for a native Win32 console app) is known to reorder an OSC relative to a CSI that follows it in the same write (`microsoft/terminal#17314`). Every graphics protocol this app supports has turned up a confirmed or documented Windows-specific problem during this investigation, not just iTerm2 — Kitty is unimplemented on WezTerm's Windows build entirely (`wezterm/wezterm#5757`), and Sixel is documented broken there too (`wezterm/wezterm#5758`). The workaround is Settings → Image Viewer → `browser`, which routes `o` through the OS browser instead (fully functional) and simply skips inline thumbnails; the app previously surfaced a one-time post-login notice pointing at this on Windows but it was removed as too noisy — the limitation is unchanged, just no longer announced on every login. Not fixable within cyber-tui without bypassing Bubble Tea's renderer for image writes entirely — judged not worth the architectural risk for a Windows-only ConPTY bug; not planned, and deliberately not auto-disabled (kept fully user-controlled via the existing toggle). See `docs/plan-inline-images-improvements.md` §9 for the full investigation. The unrelated fixes found along the way (WezTerm's own scroll-on-last-line bug, and images not being downscaled to their display size before encoding) are kept — both genuinely correct regardless of this outcome |

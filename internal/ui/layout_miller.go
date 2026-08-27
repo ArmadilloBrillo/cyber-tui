@@ -594,6 +594,7 @@ func (l MillerLayout) renderHelpModal(a App) string {
 		row("o", "open url"),
 		row("ctrl+]", "icon picker"),
 		row("ctrl+g", "attach image/gif"),
+		row("ctrl+j", "attach song (circ, supporter)"),
 		row("q", "quit"),
 	)
 	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)
@@ -631,6 +632,10 @@ func (l MillerLayout) renderURLPicker(a App) string {
 
 func (l MillerLayout) renderIconPicker(a App) string {
 	return a.iconPicker.View()
+}
+
+func (l MillerLayout) renderSongPrompt(a App) string {
+	return a.songPrompt.View()
 }
 
 func (l MillerLayout) renderImageModal(a App) string {
