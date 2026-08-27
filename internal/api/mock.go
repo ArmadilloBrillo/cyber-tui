@@ -204,8 +204,8 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 	}, "", nil
 }
 
-func (m *MockClient) CreateReply(postID, content, parentReplyID string) (model.Reply, error) {
-	return model.Reply{
+func (m *MockClient) CreateReply(postID, content, parentReplyID string, attachment *model.Attachment) (model.Reply, error) {
+	reply := model.Reply{
 		ID:             "reply-new-1",
 		PostID:         postID,
 		AuthorID:       mockUsers[0].ID,
@@ -213,7 +213,11 @@ func (m *MockClient) CreateReply(postID, content, parentReplyID string) (model.R
 		Content:        content,
 		ParentReplyID:  parentReplyID,
 		CreatedAt:      time.Now(),
-	}, nil
+	}
+	if attachment != nil {
+		reply.Attachments = []model.Attachment{*attachment}
+	}
+	return reply, nil
 }
 
 func (m *MockClient) GetReply(replyID string) (model.Reply, error) {
