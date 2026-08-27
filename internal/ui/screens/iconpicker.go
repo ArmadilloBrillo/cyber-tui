@@ -223,9 +223,17 @@ func (m IconPickerModel) Update(msg tea.KeyMsg) (IconPickerModel, tea.Cmd) {
 	if km, ok := filterAmbiguousKeyMsg(msg); ok {
 		msg = km
 	}
+	before := m.query.Value()
 	var cmd tea.Cmd
 	m.query, cmd = m.query.Update(msg)
-	m = m.refiltered()
+	if m.query.Value() != before {
+		// Only re-filter (which resets selection/scroll to the top) when the
+		// query actually changed. Otherwise any key this switch and the
+		// textinput both ignore — e.g. a modifier combo a given terminal
+		// doesn't encode the way this app expects — would silently yank the
+		// selection back to row 0 despite nothing about the list changing.
+		m = m.refiltered()
+	}
 	return m, cmd
 }
 
@@ -271,7 +279,7 @@ func (m IconPickerModel) View() string {
 		lines = append(lines, theme.Subtle.Render("  no matches"))
 	}
 
-	hint := theme.Subtle.Render("↑↓ select   tab switch   enter insert   esc close")
+	hint := theme.Subtle.Render("↑↓ select   tab switch   enter insert   ctrl+n insert & stay   esc close")
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		title,
