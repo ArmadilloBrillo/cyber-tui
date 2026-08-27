@@ -41,8 +41,11 @@ type Client interface {
 	GetPostReplies(postID string) ([]model.Reply, error)
 	// GetReply fetches a single reply by ID (used when opening a reply bookmark).
 	GetReply(replyID string) (model.Reply, error)
-	// CreateReply posts a reply to postID. Pass empty parentReplyID for top-level replies.
-	CreateReply(postID, content, parentReplyID string) (model.Reply, error)
+	// CreateReply posts a reply to postID. Pass empty parentReplyID for
+	// top-level replies. attachment, if non-nil, attaches an image/gif or
+	// audio (YouTube) URL — same shape and width/height rules as CreatePost's
+	// attachment param.
+	CreateReply(postID, content, parentReplyID string, attachment *model.Attachment) (model.Reply, error)
 
 	// Profile
 	GetOwnProfile() (model.User, error)

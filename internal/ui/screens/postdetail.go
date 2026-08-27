@@ -99,6 +99,8 @@ type SubmitReplyMsg struct {
 	PostID        string
 	ParentReplyID string
 	Content       string
+	AttachmentURL string            // empty = no image/gif attachment; resolved (dimensions fetched) by App before sending
+	Attachment    *model.Attachment // pending audio (YouTube) attachment, already fully built — nil = none
 }
 
 // SubmitReplyEditMsg is emitted when the user submits an edit to their own
@@ -132,14 +134,17 @@ type PostDetailModel struct {
 	loading             bool
 	err                 error
 
-	compose           ComposeModel
-	replyPostID       string           // postID set when compose opens
-	replyParentID     string           // parentReplyID set when compose opens (empty = top-level)
-	editingReplyID    string           // non-empty while m.compose is editing this reply rather than composing a new one
-	editPanel         PostComposePanel // post-edit panel; PostDetail has no "new post" panel, only this edit-mode one
-	relaxed           bool             // true = blank lines between post, header, and replies
-	loc               *time.Location   // timezone for timestamp display; nil = UTC
-	timeDisplayFormat string           // API setting: "datetime", "relative", "unix", "swatch"
+	compose              ComposeModel
+	replyPostID          string            // postID set when compose opens
+	replyParentID        string            // parentReplyID set when compose opens (empty = top-level)
+	replyContextBase     string            // compose.context before any attachment note is appended — see setReplyComposeContext
+	replyAttachmentURL   string            // pending image/gif attachment URL for the reply compose box, set via ctrl+g; resolved (dimensions fetched) by App at submit time
+	replyAudioAttachment *model.Attachment // pending audio (YouTube) attachment for the reply compose box, set via ctrl+j
+	editingReplyID       string            // non-empty while m.compose is editing this reply rather than composing a new one
+	editPanel            PostComposePanel  // post-edit panel; PostDetail has no "new post" panel, only this edit-mode one
+	relaxed              bool              // true = blank lines between post, header, and replies
+	loc                  *time.Location    // timezone for timestamp display; nil = UTC
+	timeDisplayFormat    string            // API setting: "datetime", "relative", "unix", "swatch"
 
 	currentUsername        string        // set after login; guards the delete key to own content
 	currentUserIsSupporter bool          // set after login/profile load; edit requires supporter status
@@ -239,6 +244,8 @@ func (m PostDetailModel) Close() PostDetailModel {
 	m.loading = false
 	m.err = nil
 	m.compose = m.compose.Close()
+	m.replyAttachmentURL = ""
+	m.replyAudioAttachment = nil
 	m.confirming = pdConfirmNone
 	m.flagPrompt = NewFlagPrompt()
 	m.flagTargetPostID, m.flagTargetReplyID = "", ""
@@ -318,13 +325,55 @@ func (m PostDetailModel) ComposeActive() bool {
 func (m PostDetailModel) EditPanelActive() bool { return m.editPanel.IsActive() }
 
 // ReplyComposeActive reports whether the reply compose box specifically
-// (not the edit panel) is open — see app.go's applyAttachURL, which warns
-// instead of inserting here: the reply API has no attachments field at all.
+// (not the edit panel) is open — see app.go's applyAttachURL, which routes
+// ctrl+g here to SetReplyAttachmentURL (confirmed live 2026-08-27 that the
+// API's attachments field works on replies too, despite docs.md never
+// mentioning it — see docs/00-api-backlog.md).
 func (m PostDetailModel) ReplyComposeActive() bool { return m.compose.IsActive() }
+
+// setReplyComposeContext rebuilds the compose box's context label from
+// replyContextBase plus a short note about whichever attachment (image/gif
+// URL or audio) is currently pending, so the user sees it's attached before
+// submitting. Only one of the two is ever shown — SetReplyAttachmentURL and
+// SetReplyAudioAttachment each clear the other, matching PostComposePanel's
+// one-slot-per-kind behavior.
+func (m PostDetailModel) setReplyComposeContext() PostDetailModel {
+	ctx := m.replyContextBase
+	switch {
+	case m.replyAttachmentURL != "":
+		ctx += " · attach " + m.replyAttachmentURL
+	case m.replyAudioAttachment != nil:
+		ctx += " · song " + m.replyAudioAttachment.Artist + " — " + m.replyAudioAttachment.Title
+	}
+	m.compose = m.compose.SetContext(ctx)
+	return m
+}
+
+// SetReplyAttachmentURL sets (or, given "", clears) the reply compose box's
+// pending image/gif attachment URL — see app.go's applyAttachURL (ctrl+g).
+func (m PostDetailModel) SetReplyAttachmentURL(url string) PostDetailModel {
+	m.replyAttachmentURL = url
+	m.replyAudioAttachment = nil
+	return m.setReplyComposeContext()
+}
+
+// SetReplyAudioAttachment sets the reply compose box's pending audio
+// (YouTube) attachment — see app.go's submitSongPrompt (ctrl+j).
+func (m PostDetailModel) SetReplyAudioAttachment(a model.Attachment) PostDetailModel {
+	m.replyAudioAttachment = &a
+	m.replyAttachmentURL = ""
+	return m.setReplyComposeContext()
+}
 
 // SetEditPanelAttachment sets the edit panel's pending image/gif attachment URL.
 func (m PostDetailModel) SetEditPanelAttachment(url string) PostDetailModel {
 	m.editPanel = m.editPanel.SetAttachmentURL(url)
+	return m
+}
+
+// SetEditPanelAudioAttachment sets the edit panel's pending audio (YouTube) attachment.
+func (m PostDetailModel) SetEditPanelAudioAttachment(a model.Attachment) PostDetailModel {
+	m.editPanel = m.editPanel.SetPendingAudio(&a)
 	return m
 }
 
@@ -458,6 +507,8 @@ func (m PostDetailModel) SetLocation(loc *time.Location) PostDetailModel {
 // Returns (model, cmd) where cmd starts the cursor blink animation.
 func (m PostDetailModel) OpenCompose() (PostDetailModel, tea.Cmd) {
 	m.replyPostID = m.post.ID
+	m.replyAttachmentURL = ""
+	m.replyAudioAttachment = nil
 	var ctx string
 	if m.selectedReply >= 0 && m.selectedReply < len(m.flatTree) {
 		m.replyParentID = m.flatTree[m.selectedReply].Reply.ID
@@ -466,6 +517,7 @@ func (m PostDetailModel) OpenCompose() (PostDetailModel, tea.Cmd) {
 		m.replyParentID = ""
 		ctx = "replying to @" + m.post.AuthorUsername
 	}
+	m.replyContextBase = ctx
 	var cmd tea.Cmd
 	m.compose, cmd = m.compose.Open(ctx, "write your reply…")
 	if m.ready {
@@ -631,7 +683,11 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			}
 		}
 		parentID := m.replyParentID
+		attachmentURL := m.replyAttachmentURL
+		attachment := m.replyAudioAttachment
 		m.compose = m.compose.Close()
+		m.replyAttachmentURL = ""
+		m.replyAudioAttachment = nil
 		if m.ready {
 			m.viewport.Height = m.viewportHeight()
 		}
@@ -640,6 +696,8 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				PostID:        postID,
 				ParentReplyID: parentID,
 				Content:       content,
+				AttachmentURL: attachmentURL,
+				Attachment:    attachment,
 			}
 		}
 
@@ -647,6 +705,8 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		m.compose = m.compose.Close()
 		m.editPanel = m.editPanel.Close()
 		m.editingReplyID = ""
+		m.replyAttachmentURL = ""
+		m.replyAudioAttachment = nil
 		if m.ready {
 			m.viewport.Height = m.viewportHeight()
 		}
@@ -759,6 +819,10 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			reply := m.flatTree[m.selectedReply].Reply
 			m.editingReplyID = reply.ID
 			m.replyPostID = m.post.ID
+			// Reply edit only supports content (docs.md, confirmed) — no
+			// attachment state carries into an edit-in-progress.
+			m.replyAttachmentURL = ""
+			m.replyAudioAttachment = nil
 			var cmd tea.Cmd
 			m.compose, cmd = m.compose.OpenWithContent("editing reply", "write your reply…", reply.Content)
 			m.viewport.Height = m.viewportHeight()

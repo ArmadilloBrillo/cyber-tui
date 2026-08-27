@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/youtube"
 )
@@ -117,23 +118,36 @@ func (m SongPromptModel) FetchFailed() SongPromptModel {
 	return m
 }
 
-// BuildCommand validates the current field values and, if valid, returns the
-// "/song <url> | <artist> | <title> [| <genre>]" string ready to hand to the
-// composer. Genre is the only optional field, matching the server's own
-// /song syntax (see docs/00-latest-api-reference.md).
-func (m SongPromptModel) BuildCommand() (string, bool) {
+// BuildAttachment validates the current field values and, if valid, returns
+// a model.Attachment ready to send as a post/reply's native audio attachment
+// — the same shape the API's chat audioAttachment field uses (type "audio",
+// origin "youtube"). Genre is the only optional field, matching the server's
+// own /song syntax (see docs/00-latest-api-reference.md). Shared validation
+// for both this and BuildCommand.
+func (m SongPromptModel) BuildAttachment() (model.Attachment, bool) {
 	url := m.URLValue()
 	artist := m.ArtistValue()
 	title := m.TitleValue()
 	if _, ok := youtube.ExtractVideoID(url); !ok {
-		return "", false
+		return model.Attachment{}, false
 	}
 	if artist == "" || title == "" {
+		return model.Attachment{}, false
+	}
+	return model.Attachment{Type: "audio", Src: url, Origin: "youtube", Artist: artist, Title: title, Genre: m.GenreValue()}, true
+}
+
+// BuildCommand validates the current field values and, if valid, returns the
+// "/song <url> | <artist> | <title> [| <genre>]" string ready to hand to the
+// chat composer.
+func (m SongPromptModel) BuildCommand() (string, bool) {
+	att, ok := m.BuildAttachment()
+	if !ok {
 		return "", false
 	}
-	cmd := "/song " + url + " | " + artist + " | " + title
-	if genre := m.GenreValue(); genre != "" {
-		cmd += " | " + genre
+	cmd := "/song " + att.Src + " | " + att.Artist + " | " + att.Title
+	if att.Genre != "" {
+		cmd += " | " + att.Genre
 	}
 	return cmd, true
 }
