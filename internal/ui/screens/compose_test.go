@@ -35,15 +35,16 @@ func TestPostComposePanel_OpenForEdit_TextareaHeightMatchesBodyLines(t *testing.
 	}
 }
 
-// TestPostComposePanel_OpenForEdit_PrefillsImageAndAudioAttachments guards
-// the prefill PostDetail/Feed rely on to avoid clobbering an existing
-// attachment on save: OpenForEdit must seed attachmentURL from the post's
-// own image/gif attachment and pendingAudio from its audio attachment, but
-// leave both untouched so a save that never calls SetAttachmentURL/
-// SetPendingAudio omits the attachments field entirely (see EditPost's
-// attachmentTouched). OtherAttachments stays empty here since both slots
-// were filled — it only catches attachment types beyond these two.
-func TestPostComposePanel_OpenForEdit_PrefillsImageAndAudioAttachments(t *testing.T) {
+// TestPostComposePanel_OpenForEdit_PrefillsImageAttachment guards the
+// prefill PostDetail/Feed rely on to avoid clobbering an existing attachment
+// on save: OpenForEdit must seed attachmentURL from the post's own
+// image/gif attachment (skipping any audio one), but leave it untouched so
+// a save that never calls SetAttachmentURL omits the attachments field
+// entirely (see EditPost's attachmentTouched). The audio attachment must
+// still be preserved (via OtherAttachments) rather than discarded, since a
+// touched save resends the whole attachments array and would otherwise
+// silently drop it.
+func TestPostComposePanel_OpenForEdit_PrefillsImageAttachment(t *testing.T) {
 	m := NewPostComposePanel(80)
 	audio := model.Attachment{Type: "audio", Src: "https://example.com/track.mp3"}
 	m, _ = m.OpenForEdit(model.Post{
@@ -53,13 +54,10 @@ func TestPostComposePanel_OpenForEdit_PrefillsImageAndAudioAttachments(t *testin
 		},
 	})
 	if got := m.AttachmentURL(); got != "https://example.com/pic.png" {
-		t.Errorf("AttachmentURL() = %q, want the image attachment's src", got)
+		t.Errorf("AttachmentURL() = %q, want the image attachment's src (audio skipped)", got)
 	}
-	if got := m.PendingAudio(); got == nil || *got != audio {
-		t.Errorf("PendingAudio() = %v, want %v", got, audio)
-	}
-	if got := m.OtherAttachments(); len(got) != 0 {
-		t.Errorf("OtherAttachments() = %v, want empty — both attachments have dedicated slots", got)
+	if got := m.OtherAttachments(); len(got) != 1 || got[0] != audio {
+		t.Errorf("OtherAttachments() = %v, want [%v] (the audio attachment, preserved)", got, audio)
 	}
 	if m.AttachmentTouched() {
 		t.Error("AttachmentTouched() = true after OpenForEdit, want false — prefilling isn't a user edit")
@@ -99,40 +97,5 @@ func TestPostComposePanel_Open_ResetsAttachment(t *testing.T) {
 	}
 	if m.AttachmentTouched() {
 		t.Error("AttachmentTouched() = true after Open(), want false")
-	}
-}
-
-// TestPostComposePanel_ImageAndAudioAttachmentsAreMutuallyExclusive guards
-// CreatePost's single-attachment signature: setting an image clears a
-// pending audio one and vice versa, so a submit never has to decide which of
-// two set attachments to actually send.
-func TestPostComposePanel_ImageAndAudioAttachmentsAreMutuallyExclusive(t *testing.T) {
-	audio := &model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Origin: "youtube", Artist: "a", Title: "t"}
-
-	m := NewPostComposePanel(80)
-	m = m.SetPendingAudio(audio)
-	m = m.SetAttachmentURL("https://example.com/pic.png")
-	if got := m.PendingAudio(); got != nil {
-		t.Errorf("PendingAudio() = %v after SetAttachmentURL, want nil", got)
-	}
-
-	m2 := NewPostComposePanel(80)
-	m2 = m2.SetAttachmentURL("https://example.com/pic.png")
-	m2 = m2.SetPendingAudio(audio)
-	if got := m2.AttachmentURL(); got != "" {
-		t.Errorf("AttachmentURL() = %q after SetPendingAudio, want empty", got)
-	}
-}
-
-// TestPostComposePanel_PanelHeight_GrowsForPendingAudio guards the layout
-// math: a pending audio attachment adds exactly one row, the same as an
-// image attachment does, so App's viewport-height recalculation stays in
-// sync with what View() actually renders.
-func TestPostComposePanel_PanelHeight_GrowsForPendingAudio(t *testing.T) {
-	m := NewPostComposePanel(80)
-	base := m.PanelHeight()
-	m = m.SetPendingAudio(&model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Artist: "a", Title: "t"})
-	if got := m.PanelHeight(); got != base+1 {
-		t.Errorf("PanelHeight() = %d after SetPendingAudio, want %d", got, base+1)
 	}
 }

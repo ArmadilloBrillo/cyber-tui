@@ -137,14 +137,6 @@ func (m ComposeModel) Close() ComposeModel {
 // IsActive reports whether the compose box is open and focused.
 func (m ComposeModel) IsActive() bool { return m.active }
 
-// SetContext replaces the label shown above the editor — used to append a
-// pending-attachment note (e.g. PostDetail's reply compose showing "song
-// <artist> — <title>" after ctrl+j) without reopening the box.
-func (m ComposeModel) SetContext(ctx string) ComposeModel {
-	m.context = ctx
-	return m
-}
-
 // Content returns the current textarea value.
 func (m ComposeModel) Content() string { return m.textarea.Value() }
 
@@ -324,16 +316,11 @@ type PostComposePanel struct {
 	// existing one (e.g. an audio attachment this panel knows nothing about).
 	attachmentURL     string
 	attachmentTouched bool
-	// pendingAudio is a pending audio (YouTube) attachment, set via ctrl+j
-	// (see app.go's submitSongPrompt) — the post/reply equivalent of cIRC's
-	// /song. Confirmed live that the API accepts a "audio"-type attachment
-	// on posts/replies with no width/height (docs/00-api-backlog.md).
-	pendingAudio *model.Attachment
 	// otherAttachments holds every attachment OpenForEdit found on the post
-	// besides the ones it loaded into attachmentURL/pendingAudio — carried
-	// through untouched so a submit that sends the attachments field
-	// (attachmentTouched) re-includes them instead of dropping them, since
-	// the API replaces the whole array wholesale.
+	// besides the one it loaded into attachmentURL (e.g. a /song jukebox
+	// track) — carried through untouched so a submit that sends the
+	// attachments field (attachmentTouched) re-includes them instead of
+	// dropping them, since the API replaces the whole array wholesale.
 	otherAttachments []model.Attachment
 }
 
@@ -381,7 +368,6 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.textarea.SetHeight(composeMinLines)
 	m.attachmentURL = ""
 	m.attachmentTouched = false
-	m.pendingAudio = nil
 	m.otherAttachments = nil
 	m.textarea.Blur()
 	m.slugInput.Blur()
@@ -406,18 +392,13 @@ func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cm
 	m.textarea.SetValue(post.Content)
 	m.attachmentURL = ""
 	m.attachmentTouched = false
-	m.pendingAudio = nil
 	m.otherAttachments = nil
 	for _, a := range post.Attachments {
-		switch {
-		case m.attachmentURL == "" && (a.Type == "image" || a.Type == "gif"):
+		if m.attachmentURL == "" && (a.Type == "image" || a.Type == "gif") {
 			m.attachmentURL = a.Src
-		case m.pendingAudio == nil && a.Type == "audio":
-			attCopy := a
-			m.pendingAudio = &attCopy
-		default:
-			m.otherAttachments = append(m.otherAttachments, a)
+			continue
 		}
+		m.otherAttachments = append(m.otherAttachments, a)
 	}
 	m.titleInput.Blur()
 	m.slugInput.Blur()
@@ -448,46 +429,23 @@ func (m PostComposePanel) Close() PostComposePanel {
 	m.topicsInput.Blur()
 	m.attachmentURL = ""
 	m.attachmentTouched = false
-	m.pendingAudio = nil
 	m.otherAttachments = nil
 	return m
 }
 
-func (m PostComposePanel) IsActive() bool  { return m.active }
-func (m PostComposePanel) Content() string { return m.textarea.Value() }
+func (m PostComposePanel) IsActive() bool     { return m.active }
+func (m PostComposePanel) Content() string    { return m.textarea.Value() }
 
 // SetAttachmentURL sets (or, given "", clears) the pending image/gif
 // attachment and marks it touched — see the struct's attachmentTouched doc.
-// Setting a non-empty URL clears any pending audio attachment: CreatePost
-// only accepts one native attachment per post, so the two slots are
-// mutually exclusive (matching how EditPost/CreateReply's equivalent panels
-// behave too).
 func (m PostComposePanel) SetAttachmentURL(url string) PostComposePanel {
 	m.attachmentURL = url
 	m.attachmentTouched = true
-	if url != "" {
-		m.pendingAudio = nil
-	}
 	return m
 }
 
 func (m PostComposePanel) AttachmentURL() string   { return m.attachmentURL }
 func (m PostComposePanel) AttachmentTouched() bool { return m.attachmentTouched }
-
-// SetPendingAudio sets (or, given nil, clears) the pending audio (YouTube)
-// attachment built by the ctrl+j song prompt, and marks attachments touched
-// — see the struct's attachmentTouched doc. Setting one clears a pending
-// image/gif — see SetAttachmentURL's doc for why the two are exclusive.
-func (m PostComposePanel) SetPendingAudio(a *model.Attachment) PostComposePanel {
-	m.pendingAudio = a
-	m.attachmentTouched = true
-	if a != nil {
-		m.attachmentURL = ""
-	}
-	return m
-}
-
-func (m PostComposePanel) PendingAudio() *model.Attachment { return m.pendingAudio }
 
 // OtherAttachments returns every attachment OpenForEdit found on the post
 // besides the image/gif one tracked by AttachmentURL — see the struct's
@@ -523,9 +481,6 @@ func (m PostComposePanel) PanelHeight() int {
 		h = m.bodyLines + 6
 	}
 	if m.attachmentURL != "" {
-		h++
-	}
-	if m.pendingAudio != nil {
 		h++
 	}
 	return h
@@ -795,14 +750,6 @@ func (m PostComposePanel) View() string {
 			url = ansiTruncate(url, remaining)
 		}
 		rows = append(rows, theme.Subtle.Render("attach ")+theme.Base.Render(url))
-	}
-	if m.pendingAudio != nil {
-		const songLabelW = 7 // "song   " — matches attachLabelW
-		label := m.pendingAudio.Artist + " — " + m.pendingAudio.Title
-		if remaining := innerW - songLabelW; remaining > 1 {
-			label = ansiTruncate(label, remaining)
-		}
-		rows = append(rows, theme.Subtle.Render("song   ")+theme.Base.Render(label))
 	}
 	inner := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	boxStyle := theme.ActiveBorder

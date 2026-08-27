@@ -946,19 +946,18 @@ list. Two tabs — Emoji and Kaomoji.
 
 ### Song Prompt
 
-`ctrl+j` (`internal/ui/screens/songprompt.go`) opens a modal (supporter
-accounts only) for attaching a YouTube track: URL, Artist, Title, Genre.
-Artist/Title auto-fill best-effort from the URL via `internal/youtube`'s
-oEmbed lookup; Genre is always manual (oEmbed has no genre field). Opens from
-CIRC's composer, Feed's new-post panel, and Post Detail's edit panel/reply
-compose (`docs/49-song-attach.md`, `docs/50-post-reply-attachments.md`).
+`ctrl+j` (`internal/ui/screens/songprompt.go`) opens a modal over CIRC's
+composer (supporter accounts only — see the CIRC table below) for attaching
+a YouTube track: URL, Artist, Title, Genre. Artist/Title auto-fill
+best-effort from the URL via `internal/youtube`'s oEmbed lookup; Genre is
+always manual (oEmbed has no genre field). See `docs/49-song-attach.md`.
 
 | Key | Action |
 |---|---|
 | `tab` / `shift+tab` | Cycle fields: url → artist → title → genre |
 | `enter` on url | Validate the URL and fetch artist/title metadata, advancing focus to artist |
 | `enter` on artist/title | Advance focus (same as tab) |
-| `enter` on genre, or `ctrl+s` | Submit — in CIRC/C-Mail, hands the built `/song ...` command to the composer (still requires `enter` there to send); on a post/reply target, sets a native audio attachment directly |
+| `enter` on genre, or `ctrl+s` | Submit — hands the built `/song ...` command to the composer (still requires `enter` there to send) |
 | `esc` | Cancel without inserting anything |
 
 ### Notifications

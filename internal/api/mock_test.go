@@ -434,7 +434,7 @@ func TestMockGetPostReplies_AnyPostID(t *testing.T) {
 
 func TestMockCreateReply_ReturnsReply(t *testing.T) {
 	m := newMock()
-	r, err := m.CreateReply("p1", "great post", "", nil)
+	r, err := m.CreateReply("p1", "great post", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -451,24 +451,12 @@ func TestMockCreateReply_ReturnsReply(t *testing.T) {
 
 func TestMockCreateReply_WithParent(t *testing.T) {
 	m := newMock()
-	r, err := m.CreateReply("p1", "nested reply", "r1", nil)
+	r, err := m.CreateReply("p1", "nested reply", "r1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if r.ParentReplyID != "r1" {
 		t.Errorf("expected ParentReplyID=%q, got %q", "r1", r.ParentReplyID)
-	}
-}
-
-func TestMockCreateReply_WithAttachment(t *testing.T) {
-	m := newMock()
-	att := &model.Attachment{Type: "audio", Src: "https://youtube.com/watch?v=abc", Origin: "youtube", Artist: "a", Title: "t"}
-	r, err := m.CreateReply("p1", "check this out", "", att)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(r.Attachments) != 1 || r.Attachments[0] != *att {
-		t.Errorf("expected attachment %+v to round-trip, got %+v", *att, r.Attachments)
 	}
 }
 

@@ -1085,17 +1085,10 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, cmd, true
 		}
 	case "ctrl+j":
-		songTargetActive := a.active == screenChatrooms ||
-			(a.active == screenFeed && a.feed.PanelActive()) ||
-			(a.active == screenPostDetail && (a.postDetail.EditPanelActive() || a.postDetail.ReplyComposeActive()))
-		if songTargetActive && a.activeScreenHasFocusedInput() {
+		if a.active == screenChatrooms && a.activeScreenHasFocusedInput() {
 			if !a.currentUser.IsSupporter {
-				if a.active == screenChatrooms {
-					a.chatrooms = a.chatrooms.AppendSystemMessage(a.chatrooms.ActiveRoomSlug(), "*** song attachments require supporter status")
-					return a, nil, true
-				}
-				a, cmd := a.notify(notifyWarn, "song attachments require supporter status")
-				return a, cmd, true
+				a.chatrooms = a.chatrooms.AppendSystemMessage(a.chatrooms.ActiveRoomSlug(), "*** song attachments require supporter status")
+				return a, nil, true
 			}
 			a.songPromptOpen = true
 			var cmd tea.Cmd
@@ -1277,14 +1270,14 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentURL, msg.AudioAttachment), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentURL), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
 	case postConvertedToNoteMsg:
 		a, notifyCmd := a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
 		return a, tea.Batch(notifyCmd, a.loadFeedCmd()), true
 	case screens.SubmitPostEditMsg:
-		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentURL, msg.AttachmentTouched, msg.AudioAttachment, msg.OtherAttachments), true
+		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentURL, msg.AttachmentTouched, msg.OtherAttachments), true
 	case postEditedMsg:
 		// Both Feed and PostDetail may hold their own local copy of this post;
 		// PostDetail's ApplyPostEdit has no postID param, so guard it here —
@@ -1296,7 +1289,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitReplyMsg:
-		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID, msg.AttachmentURL, msg.Attachment), true
+		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID), true
 	case screens.SubmitReplyEditMsg:
 		return a, a.editReplyCmd(msg.ReplyID, msg.Content), true
 	case replyEditedMsg:
@@ -4110,13 +4103,12 @@ func (a App) handleAttachURLPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // applyAttachURL dispatches a submitted attach-URL prompt result, per what
-// was confirmed live this session: posts and replies both get a native
-// attachment (routed through the create/edit request — confirmed live
-// 2026-08-27 that the reply API accepts attachments too, despite docs.md
-// never mentioning it, see docs/00-api-backlog.md); circ/C-Mail can only
-// embed an animated GIF, via the server's own /gif command — visually
-// confirmed on the website, whereas markdown in a message's content does not
-// render there. Where nothing can actually render, this warns instead of
+// was confirmed live this session: posts get a native attachment (routed
+// through the create/edit request); circ/C-Mail can only embed an animated
+// GIF, via the server's own /gif command — visually confirmed on the
+// website, whereas markdown in a message's content does not render there;
+// and replies have no attachment mechanism at all (no attachments field in
+// the reply API). Where nothing can actually render, this warns instead of
 // silently inserting text that looks like it worked but won't show up
 // anywhere but cyber-tui's own inline-image view.
 func (a App) applyAttachURL(url string) (App, tea.Cmd) {
@@ -4127,18 +4119,18 @@ func (a App) applyAttachURL(url string) (App, tea.Cmd) {
 	case a.active == screenPostDetail && a.postDetail.EditPanelActive():
 		a.postDetail = a.postDetail.SetEditPanelAttachment(url)
 		return a, nil
-	case a.active == screenPostDetail && a.postDetail.ReplyComposeActive():
-		a.postDetail = a.postDetail.SetReplyAttachmentURL(url)
-		return a, nil
 	}
 	if url == "" {
 		return a, nil
 	}
-	if a.active == screenChatrooms || a.active == screenCMail {
+	switch {
+	case a.active == screenChatrooms, a.active == screenCMail:
 		if !urlutil.IsGIFURL(url) {
 			return a.notify(notifyWarn, "cyberspace.online can only embed a GIF in chat (via /gif) — a static image needs a file upload the API doesn't support")
 		}
 		return a, func() tea.Msg { return screens.SetComposeValueMsg{Value: "/gif " + url} }
+	case a.active == screenPostDetail && a.postDetail.ReplyComposeActive():
+		return a.notify(notifyWarn, "replies don't support image attachments — there's no attachments field in the reply API")
 	}
 	return a, func() tea.Msg { return screens.InsertIconMsg{Icon: "![](" + url + ")"} }
 }
@@ -4186,36 +4178,17 @@ func (a App) handleSongPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // submitSongPrompt validates the song prompt's fields and, if valid, closes
-// the modal and dispatches the built attachment per target: Feed's new-post
-// panel / Post Detail's edit panel / Post Detail's reply compose each get a
-// native model.Attachment (confirmed live 2026-08-27 that posts and replies
-// both accept a "audio" attachment with no width/height — see
-// docs/00-api-backlog.md); cIRC/C-Mail instead get the "/song ..." command
-// text handed to the composer via SetComposeValueMsg — the same handoff
-// applyAttachURL uses for ctrl+g's "/gif <url>" — since the user still
-// presses Enter there to actually send it.
+// the modal and hands the built "/song ..." command to the chatrooms
+// composer via SetComposeValueMsg — the same handoff applyAttachURL uses
+// for ctrl+g's "/gif <url>". The user still presses Enter in the composer
+// itself to actually send it.
 func (a App) submitSongPrompt() (App, tea.Cmd) {
-	att, ok := a.songPrompt.BuildAttachment()
+	cmd, ok := a.songPrompt.BuildCommand()
 	if !ok {
 		a.songPrompt = a.songPrompt.SetWarning("enter a YouTube URL, artist, and title")
 		return a, nil
 	}
 	a.songPromptOpen = false
-	switch {
-	case a.active == screenFeed && a.feed.PanelActive():
-		a.feed = a.feed.SetPanelAudioAttachment(att)
-		return a, nil
-	case a.active == screenPostDetail && a.postDetail.EditPanelActive():
-		a.postDetail = a.postDetail.SetEditPanelAudioAttachment(att)
-		return a, nil
-	case a.active == screenPostDetail && a.postDetail.ReplyComposeActive():
-		a.postDetail = a.postDetail.SetReplyAudioAttachment(att)
-		return a, nil
-	}
-	cmd := "/song " + att.Src + " | " + att.Artist + " | " + att.Title
-	if att.Genre != "" {
-		cmd += " | " + att.Genre
-	}
 	return a, func() tea.Msg { return screens.SetComposeValueMsg{Value: cmd} }
 }
 
@@ -5136,22 +5109,9 @@ func (a *App) loadTopicThreadCmd(postID string) tea.Cmd {
 	}
 }
 
-// createReplyCmd resolves at most one pending attachment (image/gif URL, or
-// an already-built audio one — SetReplyAttachmentURL/SetReplyAudioAttachment
-// each clear the other, so only one is ever non-empty/non-nil) and sends it
-// with the reply. Confirmed live 2026-08-27 that POST /v1/replies accepts an
-// attachments array identically to posts — see docs/00-api-backlog.md.
-func (a *App) createReplyCmd(postID, content, parentReplyID, attachmentURL string, audioAttachment *model.Attachment) tea.Cmd {
+func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	return func() tea.Msg {
-		attachment := audioAttachment
-		if attachmentURL != "" {
-			resolved, err := resolveAttachment(attachmentURL)
-			if err != nil {
-				return actionErrMsg{err}
-			}
-			attachment = resolved
-		}
-		reply, err := a.client.CreateReply(postID, content, parentReplyID, attachment)
+		reply, err := a.client.CreateReply(postID, content, parentReplyID)
 		if err != nil {
 			return actionErrMsg{err}
 		}
@@ -5181,46 +5141,35 @@ func attachmentTypeForURL(rawURL string) string {
 	return "image"
 }
 
-// resolveAttachment builds the model.Attachment CreatePost/EditPost/
-// CreateReply send. Returns nil, nil for an empty URL (no attachment).
-//
-// EXPERIMENTAL, at user's request (2026-08-27): always declares
-// maxAttachmentDim x maxAttachmentDim instead of fetching the image to
-// determine and honestly report its real dimensions. Confirmed live
-// (docs/00-api-backlog.md, "Attachments — shape & validation") that the API
-// only validates the *declared* width/height are integers in [1, 640] —
-// it never fetches src to check them against the real file — so this
-// deliberately sends a false but always-valid declaration to test whether
-// cyberspace.online's website (or other clients) autoscale/render based on
-// the real image regardless of declared size, or actually trust the
-// declared dimensions for layout. No network fetch means this also no
-// longer rejects (or can reject) an oversized image client-side.
-//
-// To revert to honest dimension reporting (fetch the real image, reject
-// anything over maxAttachmentDim with a clear error): restore the version
-// of this function from before this comment — it called
-// imgview.Dimensions(ctx, attachmentURL) with a 20s timeout and compared the
-// real width/height against maxAttachmentDim, erroring with "attach image:
-// %dx%d exceeds the site's %dx%d limit..." when either was too large.
+// resolveAttachment fetches attachmentURL's declared dimensions and builds
+// the model.Attachment CreatePost/EditPost send. Returns nil, nil for an
+// empty URL (no attachment). Returns an error — surfaced to the user like any
+// other actionErrMsg/editErrorMsg — when the image can't be fetched or
+// exceeds maxAttachmentDim; this app has no way to resize it (no upload
+// endpoint to host the result), so the accurate move is to fail clearly here
+// rather than let the server reject a request the user already spent an
+// interaction composing.
 func resolveAttachment(attachmentURL string) (*model.Attachment, error) {
 	if attachmentURL == "" {
 		return nil, nil
 	}
-	return &model.Attachment{Type: attachmentTypeForURL(attachmentURL), Src: attachmentURL, Width: maxAttachmentDim, Height: maxAttachmentDim}, nil
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	width, height, err := imgview.Dimensions(ctx, attachmentURL)
+	if err != nil {
+		return nil, fmt.Errorf("attach image: %w", err)
+	}
+	if width > maxAttachmentDim || height > maxAttachmentDim {
+		return nil, fmt.Errorf("attach image: %dx%d exceeds the site's %dx%d limit for post attachments — try a smaller image, or paste the link in the body text instead", width, height, maxAttachmentDim, maxAttachmentDim)
+	}
+	return &model.Attachment{Type: attachmentTypeForURL(attachmentURL), Src: attachmentURL, Width: width, Height: height}, nil
 }
 
-// createPostCmd resolves at most one pending attachment (image/gif URL, or
-// an already-built audio one — PostComposePanel's SetAttachmentURL/
-// SetPendingAudio each clear the other, so only one is ever non-empty/nil).
-func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool, attachmentURL string, audioAttachment *model.Attachment) tea.Cmd {
+func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool, attachmentURL string) tea.Cmd {
 	return func() tea.Msg {
-		attachment := audioAttachment
-		if attachmentURL != "" {
-			resolved, err := resolveAttachment(attachmentURL)
-			if err != nil {
-				return actionErrMsg{err}
-			}
-			attachment = resolved
+		attachment, err := resolveAttachment(attachmentURL)
+		if err != nil {
+			return actionErrMsg{err}
 		}
 		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, attachment)
 		if err != nil {
@@ -5883,21 +5832,17 @@ func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 // panel found on the post but doesn't manage (e.g. an audio one) — when
 // attachmentTouched, they're resent alongside the resolved attachmentURL
 // since EditPost replaces the whole attachments array wholesale.
-func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool, attachmentURL string, attachmentTouched bool, audioAttachment *model.Attachment, otherAttachments []model.Attachment) tea.Cmd {
+func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool, attachmentURL string, attachmentTouched bool, otherAttachments []model.Attachment) tea.Cmd {
 	return func() tea.Msg {
 		var attachments []model.Attachment
 		if attachmentTouched {
+			attachment, err := resolveAttachment(attachmentURL)
+			if err != nil {
+				return editErrorMsg(err)
+			}
 			attachments = append(attachments, otherAttachments...)
-			if attachmentURL != "" {
-				resolved, err := resolveAttachment(attachmentURL)
-				if err != nil {
-					return editErrorMsg(err)
-				}
-				if resolved != nil {
-					attachments = append(attachments, *resolved)
-				}
-			} else if audioAttachment != nil {
-				attachments = append(attachments, *audioAttachment)
+			if attachment != nil {
+				attachments = append(attachments, *attachment)
 			}
 		}
 		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW, attachments, attachmentTouched); err != nil {

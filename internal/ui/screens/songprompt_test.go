@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/ragnar/cyber-tui/internal/model"
 )
 
 func typeInto(m SongPromptModel, s string) SongPromptModel {
@@ -117,50 +116,6 @@ func TestSongPromptModel_BuildCommand(t *testing.T) {
 				t.Errorf("BuildCommand() = %q, want %q", cmd, tt.wantCmd)
 			}
 		})
-	}
-}
-
-// TestSongPromptModel_BuildAttachment_ShapeMatchesLiveAPIConfirmation guards
-// the model.Attachment shape BuildAttachment builds for posts/replies against
-// what was live-confirmed 2026-08-27 (docs/00-api-backlog.md): a "audio"-type
-// attachment needs exactly {src, origin: "youtube", artist, title, genre} —
-// no width/height required or sent, unlike an image attachment.
-func TestSongPromptModel_BuildAttachment_ShapeMatchesLiveAPIConfirmation(t *testing.T) {
-	m, _ := NewSongPromptModel().Open()
-	m = typeInto(m, "https://youtu.be/dQw4w9WgXcQ")
-	m, _ = m.NextField()
-	m = typeInto(m, "Rick Astley")
-	m, _ = m.NextField()
-	m = typeInto(m, "Never Gonna Give You Up")
-	m, _ = m.NextField()
-	m = typeInto(m, "pop")
-
-	att, ok := m.BuildAttachment()
-	if !ok {
-		t.Fatal("BuildAttachment() ok = false, want true")
-	}
-	want := model.Attachment{
-		Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Origin: "youtube",
-		Artist: "Rick Astley", Title: "Never Gonna Give You Up", Genre: "pop",
-	}
-	if att != want {
-		t.Errorf("BuildAttachment() = %+v, want %+v", att, want)
-	}
-}
-
-// TestSongPromptModel_BuildAttachment_InvalidFieldsFail mirrors
-// TestSongPromptModel_BuildCommand's failure cases for the shared
-// validation BuildAttachment now performs.
-func TestSongPromptModel_BuildAttachment_InvalidFieldsFail(t *testing.T) {
-	m, _ := NewSongPromptModel().Open()
-	m = typeInto(m, "https://vimeo.com/12345")
-	m, _ = m.NextField()
-	m = typeInto(m, "Artist")
-	m, _ = m.NextField()
-	m = typeInto(m, "Title")
-
-	if _, ok := m.BuildAttachment(); ok {
-		t.Error("BuildAttachment() ok = true for a non-YouTube URL, want false")
 	}
 }
 

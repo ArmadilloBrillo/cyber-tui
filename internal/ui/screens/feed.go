@@ -69,14 +69,13 @@ const feedMergeAnimDelay = 200 * time.Millisecond
 
 // SubmitNewPostMsg is emitted when the user submits a new post from the Feed.
 type SubmitNewPostMsg struct {
-	Content         string
-	Title           string // empty = no title
-	Slug            string // empty = server-generated
-	Topics          []string
-	IsPublic        bool
-	IsNSFW          bool
-	AttachmentURL   string            // empty = no image/gif attachment
-	AudioAttachment *model.Attachment // nil = no audio attachment
+	Content       string
+	Title         string // empty = no title
+	Slug          string // empty = server-generated
+	Topics        []string
+	IsPublic      bool
+	IsNSFW        bool
+	AttachmentURL string // empty = no attachment
 }
 
 // SubmitPostEditMsg is emitted when the user submits an edit to an existing
@@ -91,13 +90,9 @@ type SubmitPostEditMsg struct {
 	IsNSFW            bool
 	AttachmentURL     string // only meaningful when AttachmentTouched
 	AttachmentTouched bool   // false = leave existing attachments alone
-	// AudioAttachment is the pending audio (YouTube) attachment, set via
-	// ctrl+j — sent alongside AttachmentURL when AttachmentTouched.
-	AudioAttachment *model.Attachment
 	// OtherAttachments are attachments the edit panel found on the post but
-	// doesn't manage (any type besides the one image/gif slot and the one
-	// audio slot) — re-sent alongside AttachmentURL/AudioAttachment when
-	// AttachmentTouched, since the API replaces the whole array.
+	// doesn't manage (e.g. an audio one) — re-sent alongside AttachmentURL
+	// when AttachmentTouched, since the API replaces the whole array.
 	OtherAttachments []model.Attachment
 }
 
@@ -510,15 +505,6 @@ func (m FeedModel) SetPanelAttachment(url string) FeedModel {
 	return m
 }
 
-// SetPanelAudioAttachment sets the panel's pending audio (YouTube) attachment.
-func (m FeedModel) SetPanelAudioAttachment(a model.Attachment) FeedModel {
-	m.panel = m.panel.SetPendingAudio(&a)
-	return m
-}
-
-// PanelAudioAttachment returns the panel's pending audio attachment, if any.
-func (m FeedModel) PanelAudioAttachment() *model.Attachment { return m.panel.PendingAudio() }
-
 func (m FeedModel) Init() tea.Cmd { return nil }
 
 func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
@@ -621,19 +607,18 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		isNSFW := m.panel.IsNSFW()
 		attachmentURL := m.panel.AttachmentURL()
 		attachmentTouched := m.panel.AttachmentTouched()
-		audioAttachment := m.panel.PendingAudio()
 		otherAttachments := m.panel.OtherAttachments()
 		if m.editingPostID != "" {
 			postID := m.editingPostID
 			m = m.closeCompose()
 			return m, func() tea.Msg {
-				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentURL: attachmentURL, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
+				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentURL: attachmentURL, AttachmentTouched: attachmentTouched, OtherAttachments: otherAttachments}
 			}
 		}
 		slug := m.panel.SlugValue()
 		m = m.closeCompose()
 		return m, func() tea.Msg {
-			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentURL: attachmentURL, AudioAttachment: audioAttachment}
+			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentURL: attachmentURL}
 		}
 
 	case ComposeCancelMsg:

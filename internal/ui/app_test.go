@@ -1,11 +1,15 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
+	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -908,7 +912,7 @@ func TestShowSearchReplyMsg_NavigatesToPostDetailAndScrollsToReply(t *testing.T)
 func TestCreateReplyCmd_ReturnsReplyID(t *testing.T) {
 	a := loggedInApp()
 
-	cmd := a.createReplyCmd("p1", "nice post", "", "", nil)
+	cmd := a.createReplyCmd("p1", "nice post", "")
 	msg := cmd()
 
 	created, ok := msg.(replyCreatedMsg)
@@ -2367,7 +2371,7 @@ func (c *tooSoonPostClient) GetPost(postID string) (model.Post, error) {
 func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testing.T) {
 	a := NewApp(&tooSoonPostClient{MockClient: api.NewMockClient()})
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, "", nil)()
+	msg := a.createPostCmd("hello", "", "", nil, true, false, "")()
 	if _, ok := msg.(postConvertedToNoteMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postConvertedToNoteMsg", msg)
 	}
@@ -2376,13 +2380,27 @@ func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testin
 func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
 	a := NewApp(api.NewMockClient())
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, "", nil)()
+	msg := a.createPostCmd("hello", "", "", nil, true, false, "")()
 	if _, ok := msg.(postCreatedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
 	}
 }
 
-// --- resolveAttachment ---
+// --- resolveAttachment: dimension fetch + the API's 640px cap ---
+
+func testPNGServer(t *testing.T, w, h int) *httptest.Server {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Write(buf.Bytes())
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
 
 func TestResolveAttachment_EmptyURL_ReturnsNil(t *testing.T) {
 	attachment, err := resolveAttachment("")
@@ -2391,17 +2409,14 @@ func TestResolveAttachment_EmptyURL_ReturnsNil(t *testing.T) {
 	}
 }
 
-// TestResolveAttachment_AlwaysReportsMaxDim guards the current EXPERIMENTAL
-// behavior (see resolveAttachment's doc comment, app.go): no network fetch,
-// always declares maxAttachmentDim x maxAttachmentDim regardless of the
-// image's real size — the URL doesn't even need to point at a real image.
-func TestResolveAttachment_AlwaysReportsMaxDim(t *testing.T) {
-	attachment, err := resolveAttachment("https://example.com/huge-4000x3000.png")
+func TestResolveAttachment_WithinLimit_SetsTypeAndDimensions(t *testing.T) {
+	srv := testPNGServer(t, 100, 50)
+	attachment, err := resolveAttachment(srv.URL + "/pic.png")
 	if err != nil {
 		t.Fatalf("resolveAttachment: %v", err)
 	}
-	if attachment.Type != "image" || attachment.Width != maxAttachmentDim || attachment.Height != maxAttachmentDim {
-		t.Errorf("attachment = %+v, want type=image width=%d height=%d", attachment, maxAttachmentDim, maxAttachmentDim)
+	if attachment.Type != "image" || attachment.Width != 100 || attachment.Height != 50 {
+		t.Errorf("attachment = %+v, want type=image width=100 height=50", attachment)
 	}
 }
 
@@ -2409,12 +2424,29 @@ func TestResolveAttachment_AlwaysReportsMaxDim(t *testing.T) {
 // extension-based inference, which the caller (createPostCmd/editPostCmd)
 // relies on since the API distinguishes "image" from "gif" attachments.
 func TestResolveAttachment_GIFExtension_SetsGIFType(t *testing.T) {
-	attachment, err := resolveAttachment("https://example.com/pic.gif")
+	srv := testPNGServer(t, 10, 10) // content doesn't need to actually be a gif — only the URL suffix is inspected
+	attachment, err := resolveAttachment(srv.URL + "/pic.gif")
 	if err != nil {
 		t.Fatalf("resolveAttachment: %v", err)
 	}
 	if attachment.Type != "gif" {
 		t.Errorf("attachment.Type = %q, want gif", attachment.Type)
+	}
+}
+
+// TestResolveAttachment_ExceedsLimit_ReturnsClearError guards the one thing
+// this app has no way to fix automatically: there's no upload endpoint to
+// host a resized copy, so an oversized image must fail here with a message
+// that explains why, rather than as a raw 400 from the API (confirmed live:
+// POST /v1/posts rejects width/height above 640px).
+func TestResolveAttachment_ExceedsLimit_ReturnsClearError(t *testing.T) {
+	srv := testPNGServer(t, 1200, 480)
+	attachment, err := resolveAttachment(srv.URL + "/pic.png")
+	if attachment != nil {
+		t.Errorf("attachment = %+v, want nil on an oversized image", attachment)
+	}
+	if err == nil || !strings.Contains(err.Error(), "640") {
+		t.Errorf("err = %v, want a message mentioning the 640px limit", err)
 	}
 }
 
@@ -2439,87 +2471,21 @@ func (c *editPostRecordingClient) EditPost(postID, content, title string, topics
 // here would silently delete them server-side, since EditPost replaces the
 // whole array.
 func TestEditPostCmd_MergesOtherAttachmentsWithResolvedAttachment(t *testing.T) {
+	srv := testPNGServer(t, 10, 10)
 	client := &editPostRecordingClient{MockClient: api.NewMockClient()}
 	a := NewApp(client)
 	audio := model.Attachment{Type: "audio", Src: "https://youtu.be/old"}
 
-	msg := a.editPostCmd("p1", "content", "title", nil, false, false, "https://example.com/pic.png", true, nil, []model.Attachment{audio})()
+	msg := a.editPostCmd("p1", "content", "title", nil, false, false, srv.URL+"/pic.png", true, []model.Attachment{audio})()
 	if _, ok := msg.(postEditedMsg); !ok {
 		t.Fatalf("editPostCmd() = %T, want postEditedMsg", msg)
 	}
 	if !client.gotTouched {
 		t.Fatal("expected EditPost to be called with attachmentTouched = true")
 	}
-	want := []model.Attachment{audio, {Type: "image", Src: "https://example.com/pic.png", Width: maxAttachmentDim, Height: maxAttachmentDim}}
+	want := []model.Attachment{audio, {Type: "image", Src: srv.URL + "/pic.png", Width: 10, Height: 10}}
 	if !slices.Equal(client.gotAttachments, want) {
 		t.Errorf("EditPost attachments = %+v, want %+v (other attachment first, then the resolved one)", client.gotAttachments, want)
-	}
-}
-
-// TestEditPostCmd_SendsAudioAttachmentWhenNoImageURL guards the ctrl+j path
-// for Post Detail's edit panel: when there's no pending image URL, the
-// pending audio attachment (already fully built — no dimension fetch needed)
-// must be sent instead, alongside any otherAttachments.
-func TestEditPostCmd_SendsAudioAttachmentWhenNoImageURL(t *testing.T) {
-	client := &editPostRecordingClient{MockClient: api.NewMockClient()}
-	a := NewApp(client)
-	audio := model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Origin: "youtube", Artist: "a", Title: "t"}
-
-	msg := a.editPostCmd("p1", "content", "title", nil, false, false, "", true, &audio, nil)()
-	if _, ok := msg.(postEditedMsg); !ok {
-		t.Fatalf("editPostCmd() = %T, want postEditedMsg", msg)
-	}
-	want := []model.Attachment{audio}
-	if !slices.Equal(client.gotAttachments, want) {
-		t.Errorf("EditPost attachments = %+v, want %+v", client.gotAttachments, want)
-	}
-}
-
-// createReplyRecordingClient captures CreateReply's arguments so a test can
-// inspect exactly what was sent without a real API.
-type createReplyRecordingClient struct {
-	*api.MockClient
-	gotAttachment *model.Attachment
-}
-
-func (c *createReplyRecordingClient) CreateReply(postID, content, parentReplyID string, attachment *model.Attachment) (model.Reply, error) {
-	c.gotAttachment = attachment
-	return c.MockClient.CreateReply(postID, content, parentReplyID, attachment)
-}
-
-// TestCreateReplyCmd_ResolvesImageAttachmentURL guards the new reply
-// attachment path end to end: an AttachmentURL must be resolved (dimensions
-// fetched) the same way createPostCmd does, and sent as the reply's
-// attachment — confirmed live 2026-08-27 that POST /v1/replies accepts this
-// (docs/00-api-backlog.md).
-func TestCreateReplyCmd_ResolvesImageAttachmentURL(t *testing.T) {
-	client := &createReplyRecordingClient{MockClient: api.NewMockClient()}
-	a := NewApp(client)
-
-	msg := a.createReplyCmd("p1", "nice", "", "https://example.com/pic.png", nil)()
-	if _, ok := msg.(replyCreatedMsg); !ok {
-		t.Fatalf("createReplyCmd() = %T, want replyCreatedMsg", msg)
-	}
-	want := &model.Attachment{Type: "image", Src: "https://example.com/pic.png", Width: maxAttachmentDim, Height: maxAttachmentDim}
-	if client.gotAttachment == nil || *client.gotAttachment != *want {
-		t.Errorf("CreateReply attachment = %+v, want %+v", client.gotAttachment, want)
-	}
-}
-
-// TestCreateReplyCmd_SendsAudioAttachmentDirectly guards the ctrl+j path for
-// a reply: an already-built audio attachment needs no dimension fetch and
-// must be passed straight through to CreateReply.
-func TestCreateReplyCmd_SendsAudioAttachmentDirectly(t *testing.T) {
-	client := &createReplyRecordingClient{MockClient: api.NewMockClient()}
-	a := NewApp(client)
-	audio := &model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Origin: "youtube", Artist: "a", Title: "t"}
-
-	msg := a.createReplyCmd("p1", "check this out", "", "", audio)()
-	if _, ok := msg.(replyCreatedMsg); !ok {
-		t.Fatalf("createReplyCmd() = %T, want replyCreatedMsg", msg)
-	}
-	if client.gotAttachment == nil || *client.gotAttachment != *audio {
-		t.Errorf("CreateReply attachment = %+v, want %+v", client.gotAttachment, audio)
 	}
 }
 
@@ -2979,11 +2945,10 @@ func TestApplyAttachURL_CMailNonGIF_WarnsInsteadOfInserting(t *testing.T) {
 	}
 }
 
-// TestApplyAttachURL_ReplyCompose_SetsAttachmentURL: confirmed live 2026-08-27
-// that the reply API does accept an attachments field (docs.md just never
-// mentions it) — ctrl+g sets a pending image/gif attachment for the reply
-// the same way it does for Feed's compose panel, instead of the old warning.
-func TestApplyAttachURL_ReplyCompose_SetsAttachmentURL(t *testing.T) {
+// TestApplyAttachURL_ReplyCompose_WarnsInsteadOfInserting: the reply API has
+// no attachments field at all, so ctrl+g must not silently insert markdown
+// that (per the same live evidence as the chat case) won't render anywhere.
+func TestApplyAttachURL_ReplyCompose_WarnsInsteadOfInserting(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenPostDetail
 	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
@@ -2994,8 +2959,8 @@ func TestApplyAttachURL_ReplyCompose_SetsAttachmentURL(t *testing.T) {
 	}
 
 	a2, _ := a.applyAttachURL("https://example.com/pic.png")
-	if a2.notifyText != "" {
-		t.Errorf("expected no warning notification, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
+		t.Errorf("expected a warning notification for a reply attachment, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
 	}
 }
 
@@ -3063,102 +3028,6 @@ func TestHandleKeys_CtrlJ_NotConsumed_OutsideChatrooms(t *testing.T) {
 	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
 	if consumed {
 		t.Error("expected ctrl+j to be unconsumed (and not open the song prompt) outside cIRC")
-	}
-}
-
-// TestHandleKeys_CtrlJ_OpensSongPrompt_FromFeedPanel guards the broadened
-// scope confirmed live 2026-08-27: posts (not just cIRC) accept an audio
-// attachment, so ctrl+j must also open from Feed's new-post panel.
-func TestHandleKeys_CtrlJ_OpensSongPrompt_FromFeedPanel(t *testing.T) {
-	a := loggedInApp()
-	a.currentUser = model.User{IsSupporter: true}
-	m, _ := a.feed.Update(keyMsg("n"))
-	a.feed = m
-	if !a.feed.PanelActive() {
-		t.Fatal("setup: expected Feed's new-post panel open after 'n'")
-	}
-
-	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
-	if !consumed {
-		t.Fatal("expected ctrl+j to be consumed while Feed's compose panel is open")
-	}
-	if !a2.songPromptOpen {
-		t.Error("expected songPromptOpen = true after ctrl+j from Feed's panel")
-	}
-}
-
-// TestHandleKeys_CtrlJ_OpensSongPrompt_FromReplyCompose guards the same
-// broadened scope for Post Detail's reply compose box.
-func TestHandleKeys_CtrlJ_OpensSongPrompt_FromReplyCompose(t *testing.T) {
-	a := loggedInApp()
-	a.currentUser = model.User{IsSupporter: true}
-	a.active = screenPostDetail
-	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
-	pd, _ := a.postDetail.OpenCompose()
-	a.postDetail = pd
-	if !a.postDetail.ReplyComposeActive() {
-		t.Fatal("setup: expected the reply compose box open")
-	}
-
-	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
-	if !consumed {
-		t.Fatal("expected ctrl+j to be consumed while the reply compose box is open")
-	}
-	if !a2.songPromptOpen {
-		t.Error("expected songPromptOpen = true after ctrl+j from the reply compose box")
-	}
-}
-
-// TestSubmitSongPrompt_ReplyCompose_SetsAudioAttachmentNotComposeText guards
-// the dispatch that makes this feature work: submitting from a reply compose
-// target must build a native model.Attachment and hand it to PostDetail,
-// not fall through to the chat-only "/song ..." SetComposeValueMsg path.
-func TestSubmitSongPrompt_ReplyCompose_SetsAudioAttachmentNotComposeText(t *testing.T) {
-	a := loggedInApp()
-	a.active = screenPostDetail
-	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
-	pd, _ := a.postDetail.OpenCompose()
-	a.postDetail = pd
-	a.songPromptOpen = true
-	a.songPrompt, _ = a.songPrompt.Open()
-	fillSongPrompt(&a, "https://youtu.be/dQw4w9WgXcQ", "Rick Astley", "Never Gonna Give You Up", "")
-
-	a2, cmd := a.submitSongPrompt()
-	if a2.songPromptOpen {
-		t.Error("expected songPromptOpen = false after a valid submit")
-	}
-	if cmd != nil {
-		if msg := cmd(); msg != nil {
-			if _, ok := msg.(screens.SetComposeValueMsg); ok {
-				t.Error("expected no SetComposeValueMsg for a reply-compose target — that's the chat-only path")
-			}
-		}
-	}
-}
-
-// TestSubmitSongPrompt_FeedPanel_SetsAudioAttachmentNotComposeText mirrors
-// the reply-compose case for Feed's new-post panel.
-func TestSubmitSongPrompt_FeedPanel_SetsAudioAttachmentNotComposeText(t *testing.T) {
-	a := loggedInApp()
-	m, _ := a.feed.Update(keyMsg("n"))
-	a.feed = m
-	a.songPromptOpen = true
-	a.songPrompt, _ = a.songPrompt.Open()
-	fillSongPrompt(&a, "https://youtu.be/dQw4w9WgXcQ", "Rick Astley", "Never Gonna Give You Up", "")
-
-	a2, cmd := a.submitSongPrompt()
-	if a2.songPromptOpen {
-		t.Error("expected songPromptOpen = false after a valid submit")
-	}
-	if got := a2.feed.PanelAudioAttachment(); got == nil || got.Title != "Never Gonna Give You Up" {
-		t.Errorf("expected Feed's panel to hold the submitted audio attachment, got %v", got)
-	}
-	if cmd != nil {
-		if msg := cmd(); msg != nil {
-			if _, ok := msg.(screens.SetComposeValueMsg); ok {
-				t.Error("expected no SetComposeValueMsg for a Feed-panel target — that's the chat-only path")
-			}
-		}
 	}
 }
 

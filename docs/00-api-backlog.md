@@ -65,38 +65,6 @@ Ordered roughly by implementation effort / priority.
 | `POST /v1/posts` — optional `slug` field (v0.7) | Custom slug (`a-z0-9-`, max 60 chars); server generates one if omitted. Compose panel (`PostComposePanel`) now includes a slug field with inline validation; empty slug is silently omitted from the wire. Same applies to `POST /v1/guilds/:slug/posts`. | **Done** — v0.7 alignment |
 | Post/reply objects — no author badge fields | Confirmed (docs + live) that a post/reply carries only `authorId`/`authorUsername` — no `authorIsSupporter`/`authorSupporterIcon`/`authorGuildIcon`. Badge icons (feature 48, `docs/48-badge-icons.md`) render on Profile/C-Mail, where the full author `model.User` is already available, but can't extend to Feed/Post Detail/Search/Topics/Bookmarks without either a per-author `GET /v1/users/:username` fetch-and-cache layer or the API adding these fields directly to post/reply payloads. | Feature request to API maintainer — not blocking |
 
-### Attachments — shape & validation, posts and replies (confirmed live, 2026-08-27)
-
-`docs.md`'s prose never documents the `attachments` object shape, and never mentions `attachments` at all under Replies (only under Posts, and only as "replaces the existing attachments" on `PATCH`). `GET /types.d.ts` (published since v0.8.4, previously logged below as "not applicable to this Go client" and never actually pulled for content until now) fills the gap:
-
-```typescript
-export interface Attachment {
-  type: 'audio' | 'image'
-  src: string
-  origin?: 'youtube'
-  artist?: string
-  title?: string
-  genre?: string
-  width?: number
-  height?: number
-}
-```
-
-Matches `wireAttachment` (`internal/api/client.go:76-83`) field-for-field — that shape was reverse-engineered correctly by this client via live testing before this type file was ever checked.
-
-Live-tested via `apifetch` against throwaway posts/replies (all created, tested, deleted within the same session):
-
-| Finding | Confirmed behavior |
-|---|---|
-| **Replies accept `attachments`** | `POST /v1/replies` with an `attachments` array succeeds and `GET` echoes it back intact, despite zero mention in `docs.md`'s Replies section. `internal/ui/app.go`'s `applyAttachURL` (line ~4132) currently hard-rejects `ctrl+g` image attach on Post Detail's reply compose with *"replies don't support image attachments — there's no attachments field in the reply API"* — that message is now known to be factually wrong; the API supports it, only the client doesn't wire it up. |
-| **640px cap is real, inclusive, per-dimension** | `width`/`height` > 640 → `400`: `"Image width must be an integer between 1 and 640px"` / `"Image height must be an integer between 1 and 640px"` (checked independently, own message each). Exactly `640` is accepted. Confirmed identical on both `PATCH /v1/posts/:id` and `POST /v1/replies` (create). |
-| **`width`/`height` are required for `type: "image"`, despite the `?` in `/types.d.ts`** | Omitting either field entirely (not just setting it small) produces the same `400` as an out-of-range value. The type file's optionality marker is inaccurate — both dimensions are mandatory on the wire for a `type: "image"` attachment. |
-| **`width`/`height` are ignored (and unchecked) for `type: "audio"`** | A `type: "audio"` attachment (`{src, origin: "youtube", artist, title, genre}`) with **no** `width`/`height` keys at all was accepted and stored cleanly — the 640px dimension validation is `type`-conditional, image-only. Also confirmed live in the same test: `hasAudioAttachment: true` and `audioAttachmentGenre` (both undocumented in `docs.md`, present in `/types.d.ts`) round-tripped correctly on `GET`. |
-| **The 640px check is metadata-only — the server never fetches the image** | Sent `width: 10, height: 10` with `src` pointing at a real 2000×2000 image → accepted with no error, and `GET` echoed the lied-about `10x10` dimensions next to the real (much larger) URL. The cap is honesty-based: a client that declares small dimensions bypasses it entirely, since nothing server-side verifies the claim against the actual file. **As of 2026-08-27, `resolveAttachment` (`internal/ui/app.go`) deliberately exploits this** — see the `⚠ EXPERIMENTAL` section of `docs/50-post-reply-attachments.md` — always declaring `640x640` regardless of the real image, at the user's explicit request, rather than the honest fetch-and-report behavior this row originally described. |
-| **`type` union is `'audio' \| 'image'` only — no `'gif'`** | `attachmentTypeForURL` (`internal/ui/app.go:5137`) currently sends the literal string `"gif"` as an attachment's `type` for post/reply attachments with a `.gif`-extension URL. Not spot-checked against the live server (no test posted a `.gif` URL as a post/reply attachment this session) — worth confirming whether the server accepts `"gif"` as an undocumented extension of the union or silently coerces/rejects it. |
-| **`hasImageAttachment`/`hasAudioAttachment` are computed for posts, not replies** | Confirmed live 2026-08-27: a post with a real `attachments` entry returns `hasImageAttachment: true` (or `hasAudioAttachment: true`) automatically — never sent by the client, so it's server-derived at write time. A reply with an identical `attachments` entry returns *neither* flag, and explicitly sending `hasImageAttachment: true` in the `POST /v1/replies` body is silently ignored (not present in the response either — confirmed the field isn't just omitted-when-false, it's genuinely absent). `/types.d.ts` declares both flags on `Reply` too, so this looks like the derivation step was simply never wired up for the reply write path. **Likely explains a live report**: an image attached to a reply via `ctrl+g` (feature 50) was stored correctly (`attachments` populated, confirmed via `apifetch`) but did not render on the website — if the site's reply view keys off `hasImageAttachment` rather than checking `attachments` directly, it would never fire for a reply. Unconfirmed whether that's the actual website mechanism; the flag gap itself is confirmed. |
-| **Reply permalink shows `undefined` in place of username** | Observed 2026-08-27 on a reply detail URL (`https://cyberspace.online/undefined/<post-slug>?reply=<id>`) — the reply's own `authorUsername` was populated correctly server-side (confirmed via `apifetch`), so this looks like a website-side link-building bug (a JS template picking up a missing value at render time) rather than anything server- or cyber-tui-side. Not investigated further — cyber-tui has no website code to inspect. |
-
 ### Guilds (new in v0.4)
 
 Guilds are member groups with their own forum of threads. A user can belong to one guild at a time. `Guild` model type added; read-only browsing implemented in feature 29.
@@ -225,7 +193,7 @@ cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAt
 | `gifUrl`, `audioAttachment`, `style`, chained styles | Render/decode in message view; `style: "art"` needs base64 decode | **Done** — wire/model fields across all four message shapes, attachment badges reusing `renderAttachments`, and a middle-fidelity style pipeline (ANSI attributes for blink/quiet/rainbow, Unicode substitution for l33t/cursive/flip, ASCII-safe jitter for glitch, `tea.Tick`-driven slow/wave/glitch animation, select-to-reveal spoiler in cIRC only — see `internal/ui/screens/chatstyle.go`) |
 | `/mute` family + `mutedUsersByRoom` | Client-side message filtering by muted user | **Done** — cIRC only (C-Mail 400s per API spec); see `docs/37-circ-mute.md` |
 | Empty `content` with attachment-only messages | Message rendering must not assume non-empty `content` | **Done** — covered by the same change; `messageDisplayBody` skips duplicate URL text and empty bodies render without assuming non-empty `content` |
-| `/song` composer UI | A guided way to build the `/song <url> \| <artist> \| <title> [\| <genre>]` command instead of hand-typing it | **Done** — `ctrl+j` Song Prompt modal in cIRC (supporter-gated client-side ahead of the server's 403), artist/title auto-filled via YouTube's public oEmbed endpoint (`internal/youtube`); see `docs/49-song-attach.md`. Extended to Feed/Post Detail's native audio attachment (feature 50, `docs/50-post-reply-attachments.md`). C-Mail's own composer still not covered (out of scope, though the API accepts `/song` there too) |
+| `/song` composer UI | A guided way to build the `/song <url> \| <artist> \| <title> [\| <genre>]` command instead of hand-typing it | **Done** — `ctrl+j` Song Prompt modal in cIRC (supporter-gated client-side ahead of the server's 403), artist/title auto-filled via YouTube's public oEmbed endpoint (`internal/youtube`); see `docs/49-song-attach.md`. C-Mail not covered (out of this feature's scope, though the API accepts `/song` there too) |
 
 ### cIRC idle presence (new in v0.8.1)
 
@@ -237,7 +205,7 @@ cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAt
 
 ### TypeScript definitions (new in v0.8.4)
 
-`/types.d.ts` now publishes TypeScript types for every documented response shape. Not consumed programmatically by this Go client, but proved genuinely useful as a documentation source on 2026-08-27: `docs.md`'s prose never spells out the `attachments` object shape or mentions it on Replies at all, while `/types.d.ts`'s `Attachment`/`Entry`/`Reply` interfaces filled both gaps (and turned up two fields — `hasImageAttachment`/`hasAudioAttachment`/`audioAttachmentGenre` — not yet modeled client-side; see the Attachments section above). Worth checking again whenever a field's real shape is undocumented in prose.
+`/types.d.ts` now publishes TypeScript types for every documented response shape. Not applicable to this Go client — noted for reference only.
 
 ### Auth (new in v0.8)
 
@@ -286,7 +254,6 @@ Notes:
 | Endpoint | Method | Description | Priority |
 |---|---|---|---|
 | `/v1/posts/:postId/replies` | GET | Cursor-paginated replies (oldest-first by reply ID) | Deferred — replies are rendered as a tree grouped by `parentReplyId`; paginated loads arrive interleaved across parent/child, requiring tree re-parenting and a full re-render on each page. Cost outweighs benefit at current network scale. |
-| `POST /v1/replies` — `attachments` field | Live-confirmed 2026-08-27 (see Attachments section above): replies accept an `attachments` array identically to posts, undocumented in `docs.md` but present in `/types.d.ts` and functional. `ctrl+g` (image/gif) and `ctrl+j` (audio/song) both now attach natively on the reply compose box — feature 50, `docs/50-post-reply-attachments.md`. | **Done** — feature 50 |
 
 ### Follows
 
