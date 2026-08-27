@@ -397,9 +397,10 @@ type editReplyRequest struct {
 }
 
 type createReplyRequest struct {
-	PostID        string `json:"postId"`
-	Content       string `json:"content"`
-	ParentReplyID string `json:"parentReplyId,omitempty"`
+	PostID        string           `json:"postId"`
+	Content       string           `json:"content"`
+	ParentReplyID string           `json:"parentReplyId,omitempty"`
+	Attachments   []wireAttachment `json:"attachments,omitempty"`
 }
 
 type createReplyResponseData struct {
@@ -1435,11 +1436,16 @@ func (c *HTTPClient) GetReply(replyID string) (model.Reply, error) {
 	return wireReplyToModel(wire), nil
 }
 
-func (c *HTTPClient) CreateReply(postID, content, parentReplyID string) (model.Reply, error) {
+func (c *HTTPClient) CreateReply(postID, content, parentReplyID string, attachment *model.Attachment) (model.Reply, error) {
+	var attachments []wireAttachment
+	if attachment != nil {
+		attachments = []wireAttachment{wireAttachmentFromModel(*attachment)}
+	}
 	env, err := c.doJSON("POST", "/v1/replies", createReplyRequest{
 		PostID:        postID,
 		Content:       content,
 		ParentReplyID: parentReplyID,
+		Attachments:   attachments,
 	})
 	if err != nil {
 		return model.Reply{}, err
@@ -1448,7 +1454,11 @@ func (c *HTTPClient) CreateReply(postID, content, parentReplyID string) (model.R
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return model.Reply{}, err
 	}
-	return model.Reply{ID: data.ReplyID, PostID: postID, Content: content, ParentReplyID: parentReplyID}, nil
+	reply := model.Reply{ID: data.ReplyID, PostID: postID, Content: content, ParentReplyID: parentReplyID}
+	if attachment != nil {
+		reply.Attachments = []model.Attachment{*attachment}
+	}
+	return reply, nil
 }
 
 func (c *HTTPClient) GetPost(postID string) (model.Post, error) {
