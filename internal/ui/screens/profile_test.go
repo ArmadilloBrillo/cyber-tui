@@ -282,6 +282,18 @@ func TestProfileEditForm_PrepopulatesFields(t *testing.T) {
 	}
 }
 
+// TestProfileEditForm_NoWebsiteImageUrlField guards API v0.8.7's removal of
+// websiteImageUrl from PATCH /v1/users/me — the website's own upload flow
+// sets it now, so the edit form must not offer a (permanently dead) input
+// for it, even though the value is still read and displayed elsewhere.
+func TestProfileEditForm_NoWebsiteImageUrlField(t *testing.T) {
+	m := openEditForm(t)
+	view := m.View()
+	if strings.Contains(view, "Website Img URL") {
+		t.Errorf("Edit form should not offer a Website Img URL field, got:\n%s", view)
+	}
+}
+
 func TestProfileEditForm_TabCyclesFields(t *testing.T) {
 	m := openEditForm(t)
 	// e opens focused on bio (field 1); tab should move to field 2

@@ -16,16 +16,19 @@ import (
 
 const bioCharLimit = 640
 
-// Field indices for the profile edit form.
+// Field indices for the profile edit form. websiteImageUrl was removed from
+// PATCH /v1/users/me in API v0.8.7 — the website's own upload flow sets it
+// now, so there's no longer an editable field for it here (still displayed
+// read-only elsewhere from the fetched profile — see WebsiteImageUrl usages
+// in View()).
 const (
-	fieldBio           = 0
-	fieldWebsiteName   = 1
-	fieldWebsiteUrl    = 2
-	fieldWebsiteImgUrl = 3
-	fieldLocationName  = 4
-	fieldLatitude      = 5
-	fieldLongitude     = 6
-	numProfileFields   = 7
+	fieldBio          = 0
+	fieldWebsiteName  = 1
+	fieldWebsiteUrl   = 2
+	fieldLocationName = 3
+	fieldLatitude     = 4
+	fieldLongitude    = 5
+	numProfileFields  = 6
 )
 
 // inputIdx converts a focusedField value (excluding fieldBio=0) to the
@@ -38,7 +41,6 @@ var profileFieldLabels = [numProfileFields]string{
 	"Bio",
 	"Website Name",
 	"Website URL",
-	"Website Img URL",
 	"Location",
 	"Latitude",
 	"Longitude",
@@ -119,13 +121,12 @@ type ProfileModel struct {
 
 // SaveProfileMsg carries all editable profile fields.
 type SaveProfileMsg struct {
-	Bio             string
-	WebsiteName     string
-	WebsiteUrl      string
-	WebsiteImageUrl string
-	LocationName    string
-	Latitude        string // empty or numeric string; parsed in app.go
-	Longitude       string
+	Bio          string
+	WebsiteName  string
+	WebsiteUrl   string
+	LocationName string
+	Latitude     string // empty or numeric string; parsed in app.go
+	Longitude    string
 }
 
 func (m ProfileModel) visibleProfilePosts() []model.Post {
@@ -145,7 +146,6 @@ func newProfileInputs() []textinput.Model {
 	placeholders := [numProfileFields - 1]string{
 		"website name (e.g. My Blog)",
 		"https://…",
-		"https://… (image url)",
 		"city, country",
 		"e.g. 48.8566",
 		"e.g. 2.3522",
@@ -332,7 +332,6 @@ func (m ProfileModel) openEditForm() (ProfileModel, tea.Cmd) {
 	// Populate textinputs from user fields.
 	m.inputs[inputIdx(fieldWebsiteName)].SetValue(m.user.WebsiteName)
 	m.inputs[inputIdx(fieldWebsiteUrl)].SetValue(m.user.WebsiteUrl)
-	m.inputs[inputIdx(fieldWebsiteImgUrl)].SetValue(m.user.WebsiteImageUrl)
 	m.inputs[inputIdx(fieldLocationName)].SetValue(m.user.LocationName)
 	if m.user.LocationLatitude != 0 {
 		m.inputs[inputIdx(fieldLatitude)].SetValue(fmt.Sprintf("%g", m.user.LocationLatitude))
@@ -389,13 +388,12 @@ func (m ProfileModel) moveFocus(delta int) (ProfileModel, tea.Cmd) {
 // buildSaveMsg collects all current field values into a SaveProfileMsg.
 func (m ProfileModel) buildSaveMsg() SaveProfileMsg {
 	return SaveProfileMsg{
-		Bio:             m.compose.Content(),
-		WebsiteName:     m.inputs[inputIdx(fieldWebsiteName)].Value(),
-		WebsiteUrl:      m.inputs[inputIdx(fieldWebsiteUrl)].Value(),
-		WebsiteImageUrl: m.inputs[inputIdx(fieldWebsiteImgUrl)].Value(),
-		LocationName:    m.inputs[inputIdx(fieldLocationName)].Value(),
-		Latitude:        m.inputs[inputIdx(fieldLatitude)].Value(),
-		Longitude:       m.inputs[inputIdx(fieldLongitude)].Value(),
+		Bio:          m.compose.Content(),
+		WebsiteName:  m.inputs[inputIdx(fieldWebsiteName)].Value(),
+		WebsiteUrl:   m.inputs[inputIdx(fieldWebsiteUrl)].Value(),
+		LocationName: m.inputs[inputIdx(fieldLocationName)].Value(),
+		Latitude:     m.inputs[inputIdx(fieldLatitude)].Value(),
+		Longitude:    m.inputs[inputIdx(fieldLongitude)].Value(),
 	}
 }
 

@@ -75,7 +75,6 @@ type SubmitNewPostMsg struct {
 	Topics          []string
 	IsPublic        bool
 	IsNSFW          bool
-	AttachmentURL   string            // empty = no image/gif attachment
 	AudioAttachment *model.Attachment // nil = no audio attachment
 }
 
@@ -89,14 +88,13 @@ type SubmitPostEditMsg struct {
 	Topics            []string
 	IsPublic          bool
 	IsNSFW            bool
-	AttachmentURL     string // only meaningful when AttachmentTouched
-	AttachmentTouched bool   // false = leave existing attachments alone
+	AttachmentTouched bool // false = leave existing attachments alone
 	// AudioAttachment is the pending audio (YouTube) attachment, set via
-	// ctrl+j — sent alongside AttachmentURL when AttachmentTouched.
+	// ctrl+j — sent when AttachmentTouched.
 	AudioAttachment *model.Attachment
 	// OtherAttachments are attachments the edit panel found on the post but
-	// doesn't manage (any type besides the one image/gif slot and the one
-	// audio slot) — re-sent alongside AttachmentURL/AudioAttachment when
+	// doesn't manage (any type besides the one audio slot — e.g. a legacy
+	// image attachment) — re-sent alongside AudioAttachment when
 	// AttachmentTouched, since the API replaces the whole array.
 	OtherAttachments []model.Attachment
 }
@@ -500,15 +498,9 @@ func (m FeedModel) ComposeHeight() int           { return m.panel.PanelHeight() 
 func (m FeedModel) ComposeView(width int) string { return m.panel.SetWidth(width).View() }
 
 // PanelActive reports whether the new-post/edit-post panel is open, for
-// app.go to decide whether ctrl+g should set a native post attachment
-// instead of inserting markdown into whatever's focused.
+// app.go to decide whether ctrl+g should warn (posts/replies no longer take
+// a native image attachment) or ctrl+j should set a native song attachment.
 func (m FeedModel) PanelActive() bool { return m.panel.IsActive() }
-
-// SetPanelAttachment sets the panel's pending image/gif attachment URL.
-func (m FeedModel) SetPanelAttachment(url string) FeedModel {
-	m.panel = m.panel.SetAttachmentURL(url)
-	return m
-}
 
 // SetPanelAudioAttachment sets the panel's pending audio (YouTube) attachment.
 func (m FeedModel) SetPanelAudioAttachment(a model.Attachment) FeedModel {
@@ -619,7 +611,6 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		topics := ParseTopics(m.panel.TopicsRaw())
 		isPublic := m.panel.IsPublic()
 		isNSFW := m.panel.IsNSFW()
-		attachmentURL := m.panel.AttachmentURL()
 		attachmentTouched := m.panel.AttachmentTouched()
 		audioAttachment := m.panel.PendingAudio()
 		otherAttachments := m.panel.OtherAttachments()
@@ -627,13 +618,13 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			postID := m.editingPostID
 			m = m.closeCompose()
 			return m, func() tea.Msg {
-				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentURL: attachmentURL, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
+				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
 			}
 		}
 		slug := m.panel.SlugValue()
 		m = m.closeCompose()
 		return m, func() tea.Msg {
-			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentURL: attachmentURL, AudioAttachment: audioAttachment}
+			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AudioAttachment: audioAttachment}
 		}
 
 	case ComposeCancelMsg:

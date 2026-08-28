@@ -102,13 +102,14 @@ type Reply struct {
 
 // ProfileUpdate carries the fields accepted by PATCH /v1/users/me.
 // Pointer fields: only non-nil values are sent in the real HTTP client.
+// websiteImageUrl was removed from this endpoint in API v0.8.7 — the
+// website's own upload flow sets it now, so it isn't here.
 type ProfileUpdate struct {
 	Bio               *string
 	DisplayName       *string
 	PinnedPostID      *string
 	WebsiteUrl        *string
 	WebsiteName       *string
-	WebsiteImageUrl   *string
 	LocationName      *string
 	LocationLatitude  *float64
 	LocationLongitude *float64

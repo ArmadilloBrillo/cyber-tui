@@ -23,6 +23,15 @@ const (
 	songFieldCount
 )
 
+// Field limits mirror the API's documented constraints (v0.8.7) for a
+// post/reply audio attachment — see docs/00-latest-api-reference.md
+// ("Create Entry" → attachments).
+const (
+	songArtistCharLimit = 100
+	songTitleCharLimit  = 150
+	songGenreCharLimit  = 50
+)
+
 // SongPromptModel is the ctrl+j "attach song" modal for cIRC: a YouTube URL
 // plus artist/title/genre, the latter two auto-filled (best-effort, via
 // internal/youtube's oEmbed lookup — triggered by App, not this model, same
@@ -47,11 +56,17 @@ func NewSongPromptModel() SongPromptModel {
 		ti.Width = 40
 		return ti
 	}
+	artist := newField("artist")
+	artist.CharLimit = songArtistCharLimit
+	title := newField("title")
+	title.CharLimit = songTitleCharLimit
+	genre := newField("genre (max 50, lowercase)")
+	genre.CharLimit = songGenreCharLimit
 	return SongPromptModel{
 		urlInput:    newField("https://youtube.com/watch?v=..."),
-		artistInput: newField("artist"),
-		titleInput:  newField("title"),
-		genreInput:  newField("genre (optional)"),
+		artistInput: artist,
+		titleInput:  title,
+		genreInput:  genre,
 	}
 }
 
@@ -73,7 +88,9 @@ func (m SongPromptModel) Open() (SongPromptModel, tea.Cmd) {
 func (m SongPromptModel) URLValue() string    { return strings.TrimSpace(m.urlInput.Value()) }
 func (m SongPromptModel) ArtistValue() string { return strings.TrimSpace(m.artistInput.Value()) }
 func (m SongPromptModel) TitleValue() string  { return strings.TrimSpace(m.titleInput.Value()) }
-func (m SongPromptModel) GenreValue() string  { return strings.TrimSpace(m.genreInput.Value()) }
+func (m SongPromptModel) GenreValue() string {
+	return strings.ToLower(strings.TrimSpace(m.genreInput.Value()))
+}
 
 // OnURLField reports whether the URL field currently has focus — App uses
 // this to decide whether Enter should trigger a metadata fetch (URL field)
@@ -121,34 +138,35 @@ func (m SongPromptModel) FetchFailed() SongPromptModel {
 // BuildAttachment validates the current field values and, if valid, returns
 // a model.Attachment ready to send as a post/reply's native audio attachment
 // — the same shape the API's chat audioAttachment field uses (type "audio",
-// origin "youtube"). Genre is the only optional field, matching the server's
-// own /song syntax (see docs/00-latest-api-reference.md). Shared validation
-// for both this and BuildCommand.
+// origin "youtube"). artist/title/genre are all required per the API's
+// documented attachment shape (docs/00-latest-api-reference.md); length and
+// case are enforced upstream via textinput.CharLimit and GenreValue's
+// lowercasing. Shared validation for both this and BuildCommand — so the
+// chat /song modal also requires genre now, even though its own text syntax
+// still shows it bracketed as optional.
 func (m SongPromptModel) BuildAttachment() (model.Attachment, bool) {
 	url := m.URLValue()
 	artist := m.ArtistValue()
 	title := m.TitleValue()
+	genre := m.GenreValue()
 	if _, ok := youtube.ExtractVideoID(url); !ok {
 		return model.Attachment{}, false
 	}
-	if artist == "" || title == "" {
+	if artist == "" || title == "" || genre == "" {
 		return model.Attachment{}, false
 	}
-	return model.Attachment{Type: "audio", Src: url, Origin: "youtube", Artist: artist, Title: title, Genre: m.GenreValue()}, true
+	return model.Attachment{Type: "audio", Src: url, Origin: "youtube", Artist: artist, Title: title, Genre: genre}, true
 }
 
 // BuildCommand validates the current field values and, if valid, returns the
-// "/song <url> | <artist> | <title> [| <genre>]" string ready to hand to the
+// "/song <url> | <artist> | <title> | <genre>" string ready to hand to the
 // chat composer.
 func (m SongPromptModel) BuildCommand() (string, bool) {
 	att, ok := m.BuildAttachment()
 	if !ok {
 		return "", false
 	}
-	cmd := "/song " + att.Src + " | " + att.Artist + " | " + att.Title
-	if att.Genre != "" {
-		cmd += " | " + att.Genre
-	}
+	cmd := "/song " + att.Src + " | " + att.Artist + " | " + att.Title + " | " + att.Genre
 	return cmd, true
 }
 

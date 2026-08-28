@@ -88,15 +88,16 @@ func TestSongPromptModel_BuildCommand(t *testing.T) {
 			wantOK:  true,
 		},
 		{
-			name: "genre omitted when blank", url: "https://youtu.be/dQw4w9WgXcQ", artist: "Rick Astley",
-			title:   "Never Gonna Give You Up",
-			wantCmd: "/song https://youtu.be/dQw4w9WgXcQ | Rick Astley | Never Gonna Give You Up",
+			name: "genre lowercased on read", url: "https://youtu.be/dQw4w9WgXcQ", artist: "Rick Astley",
+			title: "Never Gonna Give You Up", genre: "POP",
+			wantCmd: "/song https://youtu.be/dQw4w9WgXcQ | Rick Astley | Never Gonna Give You Up | pop",
 			wantOK:  true,
 		},
-		{name: "missing artist", url: "https://youtu.be/dQw4w9WgXcQ", title: "Title", wantOK: false},
-		{name: "missing title", url: "https://youtu.be/dQw4w9WgXcQ", artist: "Artist", wantOK: false},
-		{name: "invalid url", url: "https://vimeo.com/12345", artist: "Artist", title: "Title", wantOK: false},
-		{name: "empty url", artist: "Artist", title: "Title", wantOK: false},
+		{name: "missing artist", url: "https://youtu.be/dQw4w9WgXcQ", title: "Title", genre: "pop", wantOK: false},
+		{name: "missing title", url: "https://youtu.be/dQw4w9WgXcQ", artist: "Artist", genre: "pop", wantOK: false},
+		{name: "missing genre", url: "https://youtu.be/dQw4w9WgXcQ", artist: "Artist", title: "Title", wantOK: false},
+		{name: "invalid url", url: "https://vimeo.com/12345", artist: "Artist", title: "Title", genre: "pop", wantOK: false},
+		{name: "empty url", artist: "Artist", title: "Title", genre: "pop", wantOK: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -158,9 +159,36 @@ func TestSongPromptModel_BuildAttachment_InvalidFieldsFail(t *testing.T) {
 	m = typeInto(m, "Artist")
 	m, _ = m.NextField()
 	m = typeInto(m, "Title")
+	m, _ = m.NextField()
+	m = typeInto(m, "pop")
 
 	if _, ok := m.BuildAttachment(); ok {
 		t.Error("BuildAttachment() ok = true for a non-YouTube URL, want false")
+	}
+}
+
+func TestSongPromptModel_BuildAttachment_MissingGenreFails(t *testing.T) {
+	m, _ := NewSongPromptModel().Open()
+	m = typeInto(m, "https://youtu.be/dQw4w9WgXcQ")
+	m, _ = m.NextField()
+	m = typeInto(m, "Artist")
+	m, _ = m.NextField()
+	m = typeInto(m, "Title")
+
+	if _, ok := m.BuildAttachment(); ok {
+		t.Error("BuildAttachment() ok = true with no genre, want false")
+	}
+}
+
+func TestSongPromptModel_GenreValue_LowercasesOnRead(t *testing.T) {
+	m, _ := NewSongPromptModel().Open()
+	m, _ = m.NextField()
+	m, _ = m.NextField()
+	m, _ = m.NextField()
+	m = typeInto(m, "SynthWave")
+
+	if got := m.GenreValue(); got != "synthwave" {
+		t.Errorf("GenreValue() = %q, want lowercased %q", got, "synthwave")
 	}
 }
 
