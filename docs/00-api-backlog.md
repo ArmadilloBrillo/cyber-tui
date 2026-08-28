@@ -244,6 +244,11 @@ cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAt
 
 ### Programs (new in v0.8.7)
 
+Feasibility notes and a tiered scope (registry browse/publish vs. running `wasm`
+programs locally vs. `web`/`term`, which isn't realistically supportable —
+their `ctx`/`p` runtime-contract shape is undocumented) are written up in
+`docs/plan-programs-integration.md`. Not started; revisit if prioritized.
+
 | Endpoint | Method | Description | Priority |
 |---|---|---|---|
 | `/v1/programs` | GET, POST | New terminal program registry — `web`/`term`/`wasm` runtimes, backs the website `/terminal`'s `publish`/`browse` gallery. Browse (with `runtime`/`author`/`name`/`mine` filters), publish (tiered size/count limits by account tier), recall/purge. | Not evaluated — no `cmd/`-side terminal-program concept exists in cyber-tui today; unclear whether this is in scope for a TUI social client at all. Revisit if a user asks. |
