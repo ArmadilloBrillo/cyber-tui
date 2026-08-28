@@ -331,7 +331,14 @@ func (l TabsLayout) screenHints(a App) []hint {
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			return []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
+			if a.feed.ComposePanelActive() && a.feed.ComposeSubmitting() {
+				return []hint{{"…", "posting"}}
+			}
+			h := []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}}
+			if a.feed.ComposePanelActive() && !a.feed.ComposeEditing() {
+				h = append(h, hint{"Ctrl+d", "to journal"})
+			}
+			return append(h, hint{"Esc", "cancel"})
 		}
 		hints := []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, {"l", "copy link"}, {"c", "message"}}
 		if a.feed.CanEditSelected() {
@@ -362,6 +369,9 @@ func (l TabsLayout) screenHints(a App) []hint {
 		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, {"f", "filter"}, {"c", "message"}, more}
 	case screenJournal:
 		if a.journal.ComposeActive() {
+			if a.journal.IsPublishing() {
+				return []hint{{"…", "publishing"}}
+			}
 			return []hint{{"tab", "cycle"}, {"Ctrl+s", "save"}, {"Ctrl+p", "publish"}, {"Esc", "cancel"}}
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "edit"}, {"n", "new"}, {"d", "delete"}, more}

@@ -622,9 +622,27 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			}
 		}
 		slug := m.panel.SlugValue()
-		m = m.closeCompose()
+		// Keep the panel open and populated until App reports the outcome — a
+		// rate-limited / failed publish then drops the user straight back into
+		// their work (see postSubmitFailedMsg in app.go).
+		m.panel = m.panel.MarkSubmitting()
 		return m, func() tea.Msg {
 			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AudioAttachment: audioAttachment}
+		}
+
+	case ComposeSaveAsNoteMsg:
+		// Divert the new post into a private Journal note instead of the feed.
+		// Notes carry only content + topics, so slug / public / nsfw are
+		// dropped; a title becomes a leading markdown heading so the journal
+		// list label (markdown.FirstLine) still reads sensibly.
+		content := msg.Content
+		if title := m.panel.TitleValue(); title != "" {
+			content = "# " + title + "\n\n" + content
+		}
+		topics := ParseTopics(m.panel.TopicsRaw())
+		m.panel = m.panel.MarkSubmitting()
+		return m, func() tea.Msg {
+			return SaveNewPostAsNoteMsg{Content: content, Topics: topics}
 		}
 
 	case ComposeCancelMsg:
@@ -861,6 +879,28 @@ func (m FeedModel) closeCompose() FeedModel {
 	m.viewport.Height = m.viewportHeight()
 	return m
 }
+
+// CloseComposeAfterSuccess tears the compose panel down once App has confirmed
+// a submit landed (post created, converted to a note, or saved to the Journal).
+func (m FeedModel) CloseComposeAfterSuccess() FeedModel { return m.closeCompose() }
+
+// ClearComposeSubmitting re-enables the compose panel after a failed submit,
+// leaving every field exactly as the user left it.
+func (m FeedModel) ClearComposeSubmitting() FeedModel {
+	m.panel = m.panel.ClearSubmitting()
+	return m
+}
+
+// ComposePanelActive reports whether the new-post compose panel specifically is
+// open (unlike ComposeActive, which also covers the flag and delete overlays).
+func (m FeedModel) ComposePanelActive() bool { return m.panel.IsActive() }
+
+// ComposeEditing reports whether the open compose panel is editing an existing
+// post (vs composing a new one) — used to gate the "save to journal" hint.
+func (m FeedModel) ComposeEditing() bool { return m.editingPostID != "" }
+
+// ComposeSubmitting reports whether a compose submit is currently in flight.
+func (m FeedModel) ComposeSubmitting() bool { return m.panel.IsSubmitting() }
 
 func (m FeedModel) triggerLoadMore() (FeedModel, tea.Cmd) {
 	if m.loading || m.exhausted || m.nextCursor == "" {

@@ -37,6 +37,12 @@ const (
 // ComposeSubmitMsg is emitted when the user presses Ctrl+Enter to send.
 type ComposeSubmitMsg struct{ Content string }
 
+// ComposeSaveAsNoteMsg is emitted from the new-post composer when the user
+// presses Ctrl+D to divert what they've written into a private Journal note
+// instead of publishing it to the feed. Only fired in create mode (not when
+// editing an existing post) and only when the body is non-empty.
+type ComposeSaveAsNoteMsg struct{ Content string }
+
 // ComposeCancelMsg is emitted when the user presses Esc to cancel.
 type ComposeCancelMsg struct{}
 
@@ -333,6 +339,13 @@ type PostComposePanel struct {
 	// (attachmentTouched) re-includes them instead of dropping them, since
 	// the API replaces the whole array wholesale.
 	otherAttachments []model.Attachment
+
+	// submitting is true from the moment a submit (Ctrl+S publish or Ctrl+D
+	// save-as-note) is dispatched until the App reports success or failure.
+	// The panel stays open and populated the whole time so a failed publish
+	// drops the user back into their work; Ctrl+S/Ctrl+D/Esc are ignored
+	// while it's set to prevent a double-submit.
+	submitting bool
 }
 
 func NewPostComposePanel(width int) PostComposePanel {
@@ -367,6 +380,7 @@ func NewPostComposePanel(width int) PostComposePanel {
 // Open resets all fields and opens the panel with focus on the title input.
 func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.active = true
+	m.submitting = false
 	m.focus = postFieldTitle
 	m.isPublic = defaultPublic
 	m.isNSFW = false
@@ -392,6 +406,7 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 // thing to be corrected.
 func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cmd) {
 	m.active = true
+	m.submitting = false
 	m.editing = true
 	m.focus = postFieldBody
 	m.isPublic = post.IsPublic
@@ -429,6 +444,7 @@ func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cm
 // Close blurs all inputs and marks the panel inactive.
 func (m PostComposePanel) Close() PostComposePanel {
 	m.active = false
+	m.submitting = false
 	m.editing = false
 	m.focus = postFieldTitle
 	m.titleInput.SetValue("")
@@ -449,6 +465,13 @@ func (m PostComposePanel) IsActive() bool  { return m.active }
 func (m PostComposePanel) Content() string { return m.textarea.Value() }
 
 func (m PostComposePanel) AttachmentTouched() bool { return m.attachmentTouched }
+
+// MarkSubmitting / ClearSubmitting / IsSubmitting track the in-flight window
+// between dispatching a submit and the App reporting the outcome — see the
+// submitting field.
+func (m PostComposePanel) MarkSubmitting() PostComposePanel  { m.submitting = true; return m }
+func (m PostComposePanel) ClearSubmitting() PostComposePanel { m.submitting = false; return m }
+func (m PostComposePanel) IsSubmitting() bool                { return m.submitting }
 
 // SetPendingAudio sets (or, given nil, clears) the pending audio (YouTube)
 // attachment built by the ctrl+j song prompt, and marks attachments touched
@@ -588,6 +611,15 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 		return m, nil
 	}
 	if key, ok := msg.(tea.KeyMsg); ok {
+		// While a submit is in flight the panel stays open and populated, but
+		// the keys that would start another one (or throw the work away) are
+		// inert until the App reports the outcome.
+		if m.submitting {
+			switch key.String() {
+			case "ctrl+s", "ctrl+d", "esc":
+				return m, nil
+			}
+		}
 		switch key.String() {
 		case "ctrl+s":
 			if !m.editing {
@@ -603,6 +635,14 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 			}
 			content := m.textarea.Value()
 			return m, func() tea.Msg { return ComposeSubmitMsg{Content: content} }
+		case "ctrl+d":
+			// Divert a new post into a private Journal note. Not offered when
+			// editing an existing post, or with nothing written yet.
+			if m.editing || strings.TrimSpace(m.textarea.Value()) == "" {
+				return m, nil
+			}
+			content := m.textarea.Value()
+			return m, func() tea.Msg { return ComposeSaveAsNoteMsg{Content: content} }
 		case "esc":
 			return m, func() tea.Msg { return ComposeCancelMsg{} }
 		case "tab":

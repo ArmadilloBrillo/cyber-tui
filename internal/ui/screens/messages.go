@@ -193,6 +193,14 @@ type SubmitPublishNoteMsg struct {
 // SubmitDeleteNoteMsg is emitted by JournalModel when the user confirms deletion.
 type SubmitDeleteNoteMsg struct{ NoteID string }
 
+// SaveNewPostAsNoteMsg is emitted by FeedModel when the user presses Ctrl+D in
+// the new-post composer to store what they've written as a private Journal
+// note instead of publishing it. App creates the note via POST /v1/notes.
+type SaveNewPostAsNoteMsg struct {
+	Content string
+	Topics  []string
+}
+
 // DeletePostMsg is emitted by FeedModel or PostDetailModel when the user confirms
 // deleting their own post.
 type DeletePostMsg struct{ PostID string }

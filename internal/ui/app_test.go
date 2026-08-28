@@ -2382,6 +2382,66 @@ func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
 	}
 }
 
+// createPostErrClient returns a fixed error from CreatePost and CreateNote so
+// the failure branches of createPostCmd / saveNewPostAsNoteCmd / publishNoteCmd
+// can be exercised.
+type createPostErrClient struct {
+	*api.MockClient
+	err error
+}
+
+func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error) {
+	return model.Post{}, c.err
+}
+func (c *createPostErrClient) CreateNote(content string, topics []string) (model.Note, error) {
+	return model.Note{}, c.err
+}
+
+func TestCreatePostCmd_RateLimited_ReturnsPostSubmitFailedMsg(t *testing.T) {
+	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrRateLimited})
+
+	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	if _, ok := msg.(postSubmitFailedMsg); !ok {
+		t.Fatalf("createPostCmd() = %T, want postSubmitFailedMsg (editor must stay open)", msg)
+	}
+}
+
+func TestCreatePostCmd_Unauthorized_ReturnsActionErrMsg(t *testing.T) {
+	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrUnauthorized})
+
+	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	if _, ok := msg.(actionErrMsg); !ok {
+		t.Fatalf("createPostCmd() = %T, want actionErrMsg so handleUnauthorized redirects to login", msg)
+	}
+}
+
+func TestSaveNewPostAsNoteCmd_Success_ReturnsNoteFromComposeSavedMsg(t *testing.T) {
+	a := NewApp(api.NewMockClient())
+
+	msg := a.saveNewPostAsNoteCmd("# Title\n\nbody", nil)()
+	if _, ok := msg.(noteFromComposeSavedMsg); !ok {
+		t.Fatalf("saveNewPostAsNoteCmd() = %T, want noteFromComposeSavedMsg", msg)
+	}
+}
+
+func TestSaveNewPostAsNoteCmd_Error_ReturnsPostSubmitFailedMsg(t *testing.T) {
+	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrRateLimited})
+
+	msg := a.saveNewPostAsNoteCmd("body", nil)()
+	if _, ok := msg.(postSubmitFailedMsg); !ok {
+		t.Fatalf("saveNewPostAsNoteCmd() = %T, want postSubmitFailedMsg", msg)
+	}
+}
+
+func TestPublishNoteCmd_Error_ReturnsNotePublishFailedMsg(t *testing.T) {
+	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrRateLimited})
+
+	msg := a.publishNoteCmd("note text", nil)()
+	if _, ok := msg.(notePublishFailedMsg); !ok {
+		t.Fatalf("publishNoteCmd() = %T, want notePublishFailedMsg (editor must stay open)", msg)
+	}
+}
+
 // editPostRecordingClient captures the arguments EditPost was called with,
 // so a test can inspect exactly what editPostCmd sent without a real API.
 type editPostRecordingClient struct {

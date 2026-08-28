@@ -106,3 +106,13 @@ signal any REST client, including this one, can actually act on.
 warning banner ("posted too soon after your last entry — saved to your
 Journal instead") rather than the compose overlay closing as if the post
 went through normally.
+
+## Update (feature 51): keep the composer open on a genuine failure
+
+A `429`/`5xx`/network failure from `POST /v1/posts` (as opposed to the
+too-soon success sub-case above) previously wiped the composer before the
+banner appeared. `createPostCmd` now returns `postSubmitFailedMsg` (not
+`actionErrMsg`) on non-401 errors, and Feed's new-post panel stays open and
+populated until App reports the outcome — so the typed text survives a
+rate-limited post. The panel also gains `Ctrl+D` to divert the draft into the
+Journal instead of publishing. See `docs/51-compose-to-journal.md`.
