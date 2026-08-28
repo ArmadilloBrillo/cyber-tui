@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.8.6
+# ᑕ¥βєяรקค¢є API v0.8.7
 
 ## Access
 
@@ -189,6 +189,15 @@ POST /v1/posts
 - `topics` -- optional, max 3, must be lowercase
 - `isPublic` -- optional, makes entry visible without login
 - `isNSFW` -- optional, content warning flag
+- `attachments` -- optional, max 1. Audio only:
+  `{ "type": "audio", "src": "<YouTube URL>", "origin": "youtube", "artist": "...", "title": "...", "genre": "..." }`.
+  `artist` (max 100), `title` (max 150) and `genre` (max 50, lowercase) are all required.
+
+**Images are posted on the website.** They travel as inline markdown in `content` --
+`![alt](https://bunker.cyberspace.online/...)` -- and the URL has to be one the site is
+already hosting, so an image has to be uploaded there first. An image pointing anywhere
+else returns `400`, and `"type": "image"` in `attachments` returns `400`. Entries that
+already carry an image attachment keep it, and still return it.
 
 Returns `{ "data": { "postId": "...", "slug": "...", "title": "..." } }` (201). The `slug` field reflects the final stored slug, which may differ from what you submitted (collision suffix) or be derived from your content if omitted. `title` is only returned when set.
 
@@ -219,7 +228,7 @@ Every field is optional; only what you send changes. Send at least one, or you g
 - `topics` -- max 3, must be lowercase. Replaces the existing list.
 - `isPublic` -- boolean
 - `isNSFW` -- boolean
-- `attachments` -- replaces the existing attachments. Send `[]` to remove them.
+- `attachments` -- replaces the existing attachments. Audio only, same shape as [Create Entry](#create-entry). Send `[]` to remove them.
 
 The `slug` is fixed once an entry is published, so share links keep working; sending one returns `400`. `createdAt` never changes, and an edit sends no notifications -- the people who were notified when you published aren't notified again.
 
@@ -286,6 +295,7 @@ POST /v1/replies
 - `content` -- required, max 32,768 characters
 - `postId` -- required, must reference an existing entry
 - `parentReplyId` -- optional, ID of the reply you're responding to (must belong to the same entry)
+- `attachments` -- optional, max 1, audio only. Same shape and same image rule as [Create Entry](#create-entry).
 
 Returns `{ "data": { "replyId": "..." } }` (201).
 
@@ -481,7 +491,6 @@ PATCH /v1/users/me
   "displayName": "Display Name",
   "websiteUrl": "https://example.com",
   "websiteName": "My Website",
-  "websiteImageUrl": "https://example.com/button.png",
   "locationLatitude": 51.5074,
   "locationLongitude": -0.1278,
   "locationName": "London, UK"
@@ -493,10 +502,13 @@ PATCH /v1/users/me
 - `displayName` -- max 64 characters, or `null` to clear
 - `websiteUrl` -- must start with `http://` or `https://`, max 2048 characters, or `null` to clear
 - `websiteName` -- max 64 characters, or `null` to clear
-- `websiteImageUrl` -- must start with `http://` or `https://`, max 2048 characters, or `null` to clear
 - `locationLatitude` -- number between -90 and 90, or `null` to clear (requires `locationLongitude`)
 - `locationLongitude` -- number between -180 and 180, or `null` to clear (requires `locationLatitude`)
 - `locationName` -- max 64 characters, or `null` to clear
+
+`websiteImageUrl` -- the 88x31 button on your profile and in the webring -- is set on the
+website, which uploads the image for you. It's returned on profiles here but can't be set
+here.
 
 Rate limit: 2/min, 15/day.
 
@@ -1280,6 +1292,87 @@ To keep the room's user list live without polling `GET /v1/circ/:roomId/users`, 
 
 ---
 
+## Programs
+
+The terminal's program registry — what `publish` and `browse` speak. A program is a file a member wrote on one of the terminals. The gallery lists every published program; the source of a published program is readable by any member. Versions are machine-assigned and the release history is append-only.
+
+Two machines share this registry and they run different program formats, so every program declares a `runtime`:
+
+| `runtime` | Shape | Runs on |
+| --- | --- | --- |
+| `web` | `export default { name, description, run(ctx, args) }` | the website's `/terminal` |
+| `term` | `export default async (p) => number` | the terminal machine |
+| `wasm` | a wasm32-wasi binary, stdio only | the terminal machine |
+
+**A program with no `runtime` field is `web`.** Everything published before the field existed came from the website. Ask for the kinds you can run with `?runtime=`; a request without it gets every kind.
+
+### Browse the Gallery
+
+```
+GET /v1/programs?limit=30&before=<timestamp>
+```
+
+Published programs, newest first. Each entry: `id`, `name`, `ownerUsername`, `description`, `runtime`, `release`, `publishedAt` (ms epoch). `limit` is 1-50 (default 30); for older pages pass `before` = the `cursor` from the previous response.
+
+Keep only the kinds you can run — this applies to every listing form below as well:
+
+```
+GET /v1/programs?runtime=web,term
+```
+
+A filtered page can come back shorter than `limit`, or empty, and still have a `cursor`. Follow the cursor until it is null rather than stopping at the first short page.
+
+Look one program up by author and name:
+
+```
+GET /v1/programs?author=<username>&name=<name>
+```
+
+List your own programs — drafts and recalled ones included — with `isPublished`, `takenDown` and `hash` on each row. `hash` is the SHA-256 of the source the current release was published from, so a client can tell an edited working copy from a clean one without fetching the release back:
+
+```
+GET /v1/programs?mine=1
+```
+
+### Read the Source
+
+```
+GET /v1/programs/:id/source
+GET /v1/programs/:id/source?release=2
+```
+
+The current release's source, or an earlier one by number — release objects are immutable, so an old version is still exactly what went out. Returns `id`, `name`, `ownerUsername`, `description`, `runtime`, `release`, `encoding`, `source`. `encoding` is `utf8` for `web` and `term`, and `base64` for `wasm` — decode before writing the file. You can always read your own; anyone else's only while it is published. Read the source before you run it — publishing is open to every member.
+
+### Publish
+
+```
+POST /v1/programs
+```
+
+```json
+{ "name": "hello", "description": "One line on what it does", "source": "...", "runtime": "term", "note": "optional release note" }
+```
+
+Publishes a program under your account, one program per `name` (letters, digits, `. _ -`, max 32 chars). Publishing an existing name releases the next version; publishing unchanged source is a no-op (`unchanged: true`), or puts a recalled program back as the same version (`restored: true`). `description` is required, max 256 characters. Returns `{ "data": { "id": "...", "name": "...", "release": n } }` (`201`).
+
+`runtime` defaults to `web` and is fixed at the first release: republishing a name under a different kind is refused, because everyone holding a copy installed the old one. Publish a `wasm` binary as base64 with `"encoding": "base64"` — the two go together, and the decoded bytes must start with `\0asm`.
+
+Size and count ceilings by tier: members 20 programs of 128 KB each; supporters 100 of 1 MB; staff unlimited count, 10 MB. The ceiling is checked against the decoded bytes, so a 2 MB Go binary needs the staff tier. Programs published here appear in the website terminal's gallery too — it is the same registry, and one count for both.
+
+### Recall
+
+```
+DELETE /v1/programs/:id
+```
+
+Takes your program out of the gallery. The release history stays, and publishing again resumes from the next version. Returns `{ "data": { "id": "...", "name": "...", "recalled": true } }`.
+
+```
+DELETE /v1/programs/:id?purge=1
+```
+
+Deletes the record instead, which is what frees the slot it holds against your program count. Irreversible, and refused on a program a moderator has taken down. Copies other members installed are unaffected. Returns `{ "data": { "id": "...", "name": "...", "deleted": true } }`.
+
 ## Search
 
 Full-text search across users, entries, and replies.
@@ -1440,6 +1533,8 @@ All responses follow this structure:
 | Pokes | — | 8 |
 | Notes | 3 | 30 |
 | Bookmarks | 5 | 75 |
+| Program publishes | 3 | 40 |
+| Program recalls | 5 | — |
 | Guild threads | 2 | 15 |
 | Guild join | 3 | 15 |
 | Guild leave | 3 | 15 |

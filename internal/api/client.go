@@ -439,7 +439,6 @@ type updateProfileRequest struct {
 	PinnedPostID      *string  `json:"pinnedPostId,omitempty"`
 	WebsiteUrl        *string  `json:"websiteUrl,omitempty"`
 	WebsiteName       *string  `json:"websiteName,omitempty"`
-	WebsiteImageUrl   *string  `json:"websiteImageUrl,omitempty"`
 	LocationName      *string  `json:"locationName,omitempty"`
 	LocationLatitude  *float64 `json:"locationLatitude,omitempty"`
 	LocationLongitude *float64 `json:"locationLongitude,omitempty"`
@@ -1516,7 +1515,6 @@ func (c *HTTPClient) UpdateProfile(update model.ProfileUpdate) error {
 		PinnedPostID:      update.PinnedPostID,
 		WebsiteUrl:        update.WebsiteUrl,
 		WebsiteName:       update.WebsiteName,
-		WebsiteImageUrl:   update.WebsiteImageUrl,
 		LocationName:      update.LocationName,
 		LocationLatitude:  update.LocationLatitude,
 		LocationLongitude: update.LocationLongitude,

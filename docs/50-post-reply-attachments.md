@@ -1,4 +1,17 @@
-# 50 — Post/reply attachments: image on replies, audio (song) everywhere
+# 50 — Post/reply attachments: audio (song) everywhere
+
+> **SUPERSEDED 2026-08-28 (API v0.8.7):** image/gif attachment support
+> described below has been removed. `POST`/`PATCH /v1/posts` and
+> `POST /v1/replies` now reject `type: "image"` in `attachments` with `400`
+> — and reject an inline markdown image in `content` too, unless its URL
+> points at `bunker.cyberspace.online` (uploaded via the website first).
+> `ctrl+g` on Feed's new-post panel, Post Detail's edit panel, and the reply
+> compose box now warns instead of attaching or inserting markdown, since no
+> URL cyber-tui can produce will ever be accepted there. The "⚠
+> EXPERIMENTAL: image dimensions are currently faked" section that used to
+> follow this note is gone along with the feature it described. Everything
+> about audio (`ctrl+j`) below is still current, plus new artist/title/genre
+> limits added the same day — see "Attachment shape" below.
 
 ## Purpose
 
@@ -20,53 +33,54 @@ section for the full research):
    `ctrl+j` now also opens from Feed's new-post panel, Post Detail's edit
    panel, and Post Detail's reply compose box.
 
-## Attachment shape (confirmed live)
+## Attachment shape
 
 ```typescript
 export interface Attachment {
-  type: 'audio' | 'image'
+  type: 'audio'
   src: string
-  origin?: 'youtube'   // audio only
-  artist?: string      // audio only
-  title?: string       // audio only
-  genre?: string       // audio only
-  width?: number       // image only, required despite the "?"
-  height?: number      // image only, required despite the "?"
+  origin: 'youtube'
+  artist: string  // required, max 100 chars
+  title: string   // required, max 150 chars
+  genre: string   // required, max 50 chars, lowercase
 }
 ```
 
+`type: 'image'` is no longer accepted — see the superseded note at the top of
+this doc.
+
+Per docs.md v0.8.7, artist/title/genre are all required and length-capped.
+`SongPromptModel` (`internal/ui/screens/songprompt.go`) enforces this
+client-side: `textinput.CharLimit` caps each field at input time
+(`songArtistCharLimit`/`songTitleCharLimit`/`songGenreCharLimit`), `GenreValue()`
+lowercases on read (same convention as `SlugValue`/`ParseTopics`), and
+`BuildAttachment()` requires all three non-empty before returning a usable
+attachment — shared by both post/reply targets and the cIRC/C-Mail `/song`
+command, so the modal now requires genre everywhere even though the `/song`
+text syntax still shows it bracketed as optional.
+
 `CreatePost`/`EditPost`/`CreateReply` each accept **at most one** native
 attachment — the wire request supports an array, but every screen's compose
-UI offers exactly one image/gif slot and one audio slot, and setting one
-clears the other (`PostComposePanel.SetAttachmentURL`/`SetPendingAudio`,
-`PostDetailModel.SetReplyAttachmentURL`/`SetReplyAudioAttachment`). Nobody
-asked for "attach both an image and a song to the same post," so this stays
-simple rather than widening every command's signature to a slice for a case
-that's never been requested.
+UI offers exactly one audio slot (`PostComposePanel.SetPendingAudio`,
+`PostDetailModel.SetReplyAudioAttachment`).
 
 ## Reply attachments (`internal/ui/screens/postdetail.go`)
 
-`PostDetailModel` gains `replyAttachmentURL`/`replyAudioAttachment` (mutually
-exclusive, set via `SetReplyAttachmentURL`/`SetReplyAudioAttachment`) and
-`replyContextBase` — the compose box's context label ("replying to @user")
-before an attachment note is appended. `setReplyComposeContext` rebuilds that
-label live via `ComposeModel.SetContext` (new — the label was previously
-fixed at `Open()` time) so the user sees "replying to @user · attach
-<url>" or "· song <artist> — <title>" before submitting.
+`PostDetailModel` has `replyAudioAttachment` and `replyContextBase` — the
+compose box's context label ("replying to @user") before an attachment note
+is appended. `setReplyComposeContext` rebuilds that label live via
+`ComposeModel.SetContext` so the user sees "replying to @user · song
+<artist> — <title>" before submitting.
 
-`SubmitReplyMsg` gained `AttachmentURL`/`Attachment` fields, populated on
-submit and cleared on both submit and cancel so nothing leaks into the next
-reply. `App.createReplyCmd` (`internal/ui/app.go`) resolves the image URL's
-real dimensions via the existing `resolveAttachment` (same 640px client-side
-guard as posts) or passes the already-built audio attachment straight
-through — `CreateReply` itself gained an `attachment *model.Attachment`
-param (`internal/api/client.go`, `internal/api/interface.go`,
+`SubmitReplyMsg` carries an `Attachment *model.Attachment` field, populated
+on submit and cleared on both submit and cancel so nothing leaks into the
+next reply. `App.createReplyCmd` (`internal/ui/app.go`) passes the
+already-built audio attachment straight through to `CreateReply`
+(`internal/api/client.go`, `internal/api/interface.go`,
 `internal/api/mock.go`).
 
-`applyAttachURL`'s reply-compose branch (`internal/ui/app.go`) now routes to
-`SetReplyAttachmentURL` instead of warning "replies don't support image
-attachments" — that message was accurate against `docs.md`'s prose but wrong
-against the live API.
+Native image attachment on replies (added here, then removed the same day by
+API v0.8.7) is described in the superseded note at the top of this doc.
 
 ## Song attach on posts/replies (`internal/ui/app.go`)
 
@@ -91,35 +105,12 @@ validation.
 
 ## Panel rendering (`internal/ui/screens/compose.go`)
 
-`PostComposePanel` gained a `pendingAudio *model.Attachment` field alongside
-the existing `attachmentURL`, rendered as a `song   <artist> — <title>` row
-directly below the existing `attach <url>` row (same truncation/width
-handling), adding one row to `PanelHeight()` when set. `OpenForEdit`'s
-attachment-sorting loop now splits three ways: image/gif → `attachmentURL`,
-audio → `pendingAudio`, anything else → `otherAttachments` (unchanged
-fallback, now effectively unreachable given the API's closed `type` union,
-kept as a defensive catch-all).
-
-## ⚠ EXPERIMENTAL: image dimensions are currently faked (2026-08-27)
-
-`resolveAttachment` (`internal/ui/app.go`) no longer fetches an attached
-image to determine its real size — it always declares `640x640`
-(`maxAttachmentDim`), at the user's explicit request, to test whether the
-API's declared-dimension check is meaningfully enforced anywhere beyond the
-create/edit request itself (confirmed it's never checked against the real
-file — see `docs/00-api-backlog.md`'s "Attachments — shape & validation").
-This means:
-
-- Any image attached through cyber-tui right now is declared as 640×640
-  regardless of its real resolution — a false statement sent to the API and
-  stored on the post/reply, visible to every viewer on every client.
-- The client no longer rejects (or can detect) an oversized image before
-  posting — the honest-dimension guard and its clear error message are gone
-  along with the fetch.
-- This is explicitly temporary, tracked here so it isn't mistaken for
-  finished behavior. `resolveAttachment`'s doc comment in `app.go` has the
-  exact revert instructions (restore the `imgview.Dimensions` fetch + the
-  `maxAttachmentDim` comparison it replaced).
+`PostComposePanel` has a `pendingAudio *model.Attachment` field, rendered as
+a `song   <artist> — <title>` row, adding one row to `PanelHeight()` when
+set. `OpenForEdit`'s attachment-sorting loop splits two ways: audio →
+`pendingAudio`, anything else (including a legacy `type: "image"`
+attachment from before API v0.8.7) → `otherAttachments`, carried through
+untouched so an edit that touches attachments doesn't silently drop it.
 
 ## Scope / known gaps
 
@@ -132,25 +123,33 @@ This means:
   `docs.md` — no attachment editing on an existing reply, only at creation.
   `OpenCompose`'s edit-reply path explicitly resets any pending reply
   attachment state before opening.
-- The `attachmentTypeForURL`-assigned string `"gif"` (not in the API's
-  documented `'audio' | 'image'` union) is a pre-existing, separate gap not
-  touched by this feature — see `docs/00-api-backlog.md`.
+- ~~Post Detail's edit panel doesn't send its pending audio attachment~~ —
+  **fixed 2026-08-28.** The `ComposeSubmitMsg` handler for the edit panel
+  (`postdetail.go`) never set `SubmitPostEditMsg.AudioAttachment`, unlike
+  Feed's equivalent — a song attached via `SetEditPanelAudioAttachment` on
+  Post Detail's edit panel was silently dropped on submit
+  (`attachments: []` sent instead). Pre-existing, discovered while removing
+  image-attach support in this same area; one-line fix, guarded by
+  `TestPostDetail_EditPanelSubmit_CarriesAudioAttachment`.
+- Image/gif attachment support (this doc's original subject) was removed
+  2026-08-28 — see the superseded note at the top.
 
 ## Verification
 
 - `go test ./...`, `go vet ./...`, `staticcheck ./...` — no warnings.
-- `internal/ui/screens/songprompt_test.go`: `BuildAttachment`'s shape and
-  shared validation failure cases.
-- `internal/ui/screens/compose_test.go`: `OpenForEdit` prefilling both slots,
-  image/audio mutual exclusivity, `PanelHeight` growth.
-- `internal/ui/screens/postdetail_test.go`: reply attachment mutual
-  exclusivity, `SubmitReplyMsg` carrying/clearing the attachment across
-  submit and cancel.
-- `internal/ui/app_test.go`: `applyAttachURL` on reply compose no longer
-  warns; `ctrl+j` opens from Feed panel and reply compose; `submitSongPrompt`
-  routes to the right target instead of `SetComposeValueMsg`;
-  `createReplyCmd`/`editPostCmd` resolve/forward the right attachment.
-- Manual: run the TUI, `ctrl+g` on a reply — attach an image, post it, confirm
-  it renders. `ctrl+j` on Feed's new-post panel and a reply — paste a
-  YouTube URL, confirm the `song` row appears, post, confirm the audio
-  attachment shows up on the created post/reply via `apifetch`.
+- `internal/ui/screens/songprompt_test.go`: `BuildAttachment`'s required-field
+  and shape checks (now including genre), `GenreValue` lowercasing.
+- `internal/ui/screens/compose_test.go`: `OpenForEdit` prefilling the audio
+  slot and carrying a legacy image attachment into `OtherAttachments`,
+  `PanelHeight` growth for audio.
+- `internal/ui/screens/postdetail_test.go`: `SubmitReplyMsg` carrying/clearing
+  the audio attachment across submit and cancel.
+- `internal/ui/app_test.go`: `applyAttachURL` warns on Feed/Post Detail
+  targets instead of attaching or inserting markdown; `ctrl+j` opens from
+  Feed panel and reply compose; `submitSongPrompt` routes to the right
+  target instead of `SetComposeValueMsg`; `createReplyCmd`/`editPostCmd`
+  forward the audio attachment.
+- Manual: run the TUI, `ctrl+g` on Feed/a reply — confirm a warning, not an
+  attach. `ctrl+j` on Feed's new-post panel and a reply — paste a YouTube
+  URL with artist/title/genre, confirm the `song` row appears, post, confirm
+  the audio attachment shows up on the created post/reply via `apifetch`.

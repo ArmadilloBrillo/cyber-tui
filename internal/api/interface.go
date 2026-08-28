@@ -27,9 +27,9 @@ type Client interface {
 	// Feed — pass empty cursor for first page; use returned cursor for next page.
 	// Returns empty next-cursor when there are no more pages.
 	GetFeed(cursor string) ([]model.Post, string, error)
-	// attachment, if non-nil, attaches an image/gif by URL — the caller must
-	// resolve Type/Width/Height itself (the API requires width/height on the
-	// request and does not compute them server-side).
+	// attachment, if non-nil, attaches an audio (YouTube) track — the only
+	// native attachment type the API still accepts on posts as of v0.8.7
+	// (type:"image" now returns 400; images are website-upload-only).
 	CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error)
 	// GetPost fetches a single post by ID (used when jumping from a notification).
 	GetPost(postID string) (model.Post, error)
@@ -42,9 +42,8 @@ type Client interface {
 	// GetReply fetches a single reply by ID (used when opening a reply bookmark).
 	GetReply(replyID string) (model.Reply, error)
 	// CreateReply posts a reply to postID. Pass empty parentReplyID for
-	// top-level replies. attachment, if non-nil, attaches an image/gif or
-	// audio (YouTube) URL — same shape and width/height rules as CreatePost's
-	// attachment param.
+	// top-level replies. attachment, if non-nil, attaches an audio (YouTube)
+	// track — same rules as CreatePost's attachment param.
 	CreateReply(postID, content, parentReplyID string, attachment *model.Attachment) (model.Reply, error)
 
 	// Profile

@@ -41,8 +41,11 @@ simpler — no textarea, no toggles. It never talks to the network itself;
   (`FetchFailed`) without blocking anything.
 - **Enter on Artist/Title**: behaves like Tab (advance focus).
 - **Enter on Genre (last field), or ctrl+s from any field**: attempt
-  submit — requires a valid URL plus non-empty Artist and Title (Genre is
-  optional, matching the server's own `/song` syntax). On success the built
+  submit — requires a valid URL plus non-empty Artist, Title, **and Genre**
+  (all three are required as of API v0.8.7, plus length/case limits — see
+  `docs/50-post-reply-attachments.md`'s "Attachment shape" for the canonical
+  reference; this modal enforces genre everywhere, even though the `/song`
+  text syntax below still shows it bracketed as optional). On success the built
   `/song ...` string is handed to the cIRC composer via the existing
   `screens.SetComposeValueMsg` — the same mechanism `ctrl+g`'s GIF-attach
   flow already uses (`applyAttachURL`) — so the user sees the exact command
@@ -91,8 +94,8 @@ allow `screenCMail`.
   success, non-200, malformed-JSON, and missing-title paths.
 - `internal/ui/screens/songprompt_test.go`: `Open` resets/focuses, Tab/
   Shift+Tab cycling and wrapping, typing routes to the focused field only,
-  `BuildCommand` validation (full, genre omitted, missing artist/title,
-  invalid/empty URL), `ApplyMetadata`/`FetchFailed`/`SetLoading`, and the
+  `BuildCommand` validation (full, genre lowercased, missing artist/title/
+  genre, invalid/empty URL), `ApplyMetadata`/`FetchFailed`/`SetLoading`, and the
   keystroke-clears-status behavior.
 - `internal/ui/app_test.go`: `ctrl+j` opens the modal for a supporter with
   cIRC's composer focused, rejects locally (system message, no modal) for a

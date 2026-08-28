@@ -316,13 +316,10 @@ type PostComposePanel struct {
 	width       int
 	bodyLines   int
 
-	// attachmentURL is a pending image/gif URL attachment, set via ctrl+g
-	// (see app.go). attachmentTouched distinguishes "never touched this
-	// session" from "explicitly cleared" so an edit submit can tell whether
-	// to send the attachments field at all (see SubmitPostEditMsg) — an
-	// edit that never touches attachments must not silently wipe an
-	// existing one (e.g. an audio attachment this panel knows nothing about).
-	attachmentURL     string
+	// attachmentTouched distinguishes "never touched this session" from
+	// "explicitly cleared" so an edit submit can tell whether to send the
+	// attachments field at all (see SubmitPostEditMsg) — an edit that never
+	// touches attachments must not silently wipe an existing one.
 	attachmentTouched bool
 	// pendingAudio is a pending audio (YouTube) attachment, set via ctrl+j
 	// (see app.go's submitSongPrompt) — the post/reply equivalent of cIRC's
@@ -330,8 +327,9 @@ type PostComposePanel struct {
 	// on posts/replies with no width/height (docs/00-api-backlog.md).
 	pendingAudio *model.Attachment
 	// otherAttachments holds every attachment OpenForEdit found on the post
-	// besides the ones it loaded into attachmentURL/pendingAudio — carried
-	// through untouched so a submit that sends the attachments field
+	// besides the one it loaded into pendingAudio (e.g. a legacy image
+	// attachment from before API v0.8.7 removed image-attach support) —
+	// carried through untouched so a submit that sends the attachments field
 	// (attachmentTouched) re-includes them instead of dropping them, since
 	// the API replaces the whole array wholesale.
 	otherAttachments []model.Attachment
@@ -379,7 +377,6 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.textarea.SetValue("")
 	m.bodyLines = composeMinLines
 	m.textarea.SetHeight(composeMinLines)
-	m.attachmentURL = ""
 	m.attachmentTouched = false
 	m.pendingAudio = nil
 	m.otherAttachments = nil
@@ -404,20 +401,16 @@ func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cm
 	m.slugError = ""
 	m.topicsInput.SetValue(strings.Join(post.Topics, ", "))
 	m.textarea.SetValue(post.Content)
-	m.attachmentURL = ""
 	m.attachmentTouched = false
 	m.pendingAudio = nil
 	m.otherAttachments = nil
 	for _, a := range post.Attachments {
-		switch {
-		case m.attachmentURL == "" && (a.Type == "image" || a.Type == "gif"):
-			m.attachmentURL = a.Src
-		case m.pendingAudio == nil && a.Type == "audio":
+		if m.pendingAudio == nil && a.Type == "audio" {
 			attCopy := a
 			m.pendingAudio = &attCopy
-		default:
-			m.otherAttachments = append(m.otherAttachments, a)
+			continue
 		}
+		m.otherAttachments = append(m.otherAttachments, a)
 	}
 	m.titleInput.Blur()
 	m.slugInput.Blur()
@@ -446,7 +439,6 @@ func (m PostComposePanel) Close() PostComposePanel {
 	m.textarea.SetValue("")
 	m.textarea.Blur()
 	m.topicsInput.Blur()
-	m.attachmentURL = ""
 	m.attachmentTouched = false
 	m.pendingAudio = nil
 	m.otherAttachments = nil
@@ -456,42 +448,22 @@ func (m PostComposePanel) Close() PostComposePanel {
 func (m PostComposePanel) IsActive() bool  { return m.active }
 func (m PostComposePanel) Content() string { return m.textarea.Value() }
 
-// SetAttachmentURL sets (or, given "", clears) the pending image/gif
-// attachment and marks it touched — see the struct's attachmentTouched doc.
-// Setting a non-empty URL clears any pending audio attachment: CreatePost
-// only accepts one native attachment per post, so the two slots are
-// mutually exclusive (matching how EditPost/CreateReply's equivalent panels
-// behave too).
-func (m PostComposePanel) SetAttachmentURL(url string) PostComposePanel {
-	m.attachmentURL = url
-	m.attachmentTouched = true
-	if url != "" {
-		m.pendingAudio = nil
-	}
-	return m
-}
-
-func (m PostComposePanel) AttachmentURL() string   { return m.attachmentURL }
 func (m PostComposePanel) AttachmentTouched() bool { return m.attachmentTouched }
 
 // SetPendingAudio sets (or, given nil, clears) the pending audio (YouTube)
 // attachment built by the ctrl+j song prompt, and marks attachments touched
-// — see the struct's attachmentTouched doc. Setting one clears a pending
-// image/gif — see SetAttachmentURL's doc for why the two are exclusive.
+// — see the struct's attachmentTouched doc.
 func (m PostComposePanel) SetPendingAudio(a *model.Attachment) PostComposePanel {
 	m.pendingAudio = a
 	m.attachmentTouched = true
-	if a != nil {
-		m.attachmentURL = ""
-	}
 	return m
 }
 
 func (m PostComposePanel) PendingAudio() *model.Attachment { return m.pendingAudio }
 
 // OtherAttachments returns every attachment OpenForEdit found on the post
-// besides the image/gif one tracked by AttachmentURL — see the struct's
-// otherAttachments doc.
+// besides the one tracked by PendingAudio — see the struct's otherAttachments
+// doc.
 func (m PostComposePanel) OtherAttachments() []model.Attachment { return m.otherAttachments }
 
 // InsertText inserts s (e.g. an icon picked from the Ctrl+] icon picker) at
@@ -521,9 +493,6 @@ func (m PostComposePanel) PanelHeight() int {
 	h := m.bodyLines + 7
 	if m.editing {
 		h = m.bodyLines + 6
-	}
-	if m.attachmentURL != "" {
-		h++
 	}
 	if m.pendingAudio != nil {
 		h++
@@ -788,14 +757,6 @@ func (m PostComposePanel) View() string {
 		rows = append(rows, slugRow)
 	}
 	rows = append(rows, sep, m.textarea.View(), sep, topicsRow)
-	if m.attachmentURL != "" {
-		const attachLabelW = 7 // "attach " — matches labelW used for title/slug/topics rows
-		url := m.attachmentURL
-		if remaining := innerW - attachLabelW; remaining > 1 {
-			url = ansiTruncate(url, remaining)
-		}
-		rows = append(rows, theme.Subtle.Render("attach ")+theme.Base.Render(url))
-	}
 	if m.pendingAudio != nil {
 		const songLabelW = 7 // "song   " — matches attachLabelW
 		label := m.pendingAudio.Artist + " — " + m.pendingAudio.Title
