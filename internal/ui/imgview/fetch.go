@@ -10,6 +10,7 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	_ "golang.org/x/image/webp"
@@ -85,6 +86,9 @@ func fetchBody(ctx context.Context, rawURL string) ([]byte, error) {
 // Fetch downloads the image at rawURL and decodes it. Supports JPEG, PNG, GIF, and WebP.
 // GIFs are decoded to their first frame only — use FetchGIF for all frames.
 func Fetch(ctx context.Context, rawURL string) (image.Image, error) {
+	if code, ok := strings.CutPrefix(rawURL, BadgeURLPrefix); ok {
+		return FetchBadgeIcon(ctx, code)
+	}
 	body, err := fetchBody(ctx, rawURL)
 	if err != nil {
 		return nil, err

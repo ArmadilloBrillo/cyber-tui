@@ -1,15 +1,11 @@
 package ui
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
-	"image/png"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +15,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/config"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -439,6 +436,52 @@ func setupCMailDetail(a App) App {
 	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	a.cmail = cm
 	return a
+}
+
+// --- CMailConvSelectedMsg: other-participant profile fetch for the header badge ---
+
+// TestHandleCMail_ConvSelected_FetchesAndCachesOtherProfile confirms opening
+// a conversation with a non-empty OtherUsername fires a profile fetch
+// (loadCMailOtherProfileCmd) whose result, once fed back through Update,
+// populates CMailModel's otherProfiles cache — the data the header badge
+// reads from (conversation data alone never carries SupporterIcon).
+func TestHandleCMail_ConvSelected_FetchesAndCachesOtherProfile(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+
+	m, cmd := a.Update(screens.CMailConvSelectedMsg{ConversationID: "c1", OtherUsername: "trinity"})
+	a2 := m.(App)
+	if a2.cmail.HasOtherProfile("trinity") {
+		t.Fatal("expected the fetch to only happen via the returned cmd, not synchronously")
+	}
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	loaded := findBatchedMsg[cmailOtherProfileLoadedMsg](t, cmd())
+
+	m2, _ := a2.Update(loaded)
+	a3 := m2.(App)
+	if !a3.cmail.HasOtherProfile("trinity") {
+		t.Error("expected trinity's profile to be cached after cmailOtherProfileLoadedMsg is applied")
+	}
+}
+
+// TestHandleCMail_ConvSelected_NoFetchWhenOtherUsernameEmpty confirms no
+// profile-fetch cmd fires when OtherUsername is empty (already cached, or
+// unresolvable) — only the read-marking cmd should be in the batch.
+func TestHandleCMail_ConvSelected_NoFetchWhenOtherUsernameEmpty(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenCMail
+
+	_, cmd := a.Update(screens.CMailConvSelectedMsg{ConversationID: "c1", OtherUsername: ""})
+	if cmd == nil {
+		t.Fatal("expected the read-marking cmd still present")
+	}
+	for _, msg := range resolveMsgs(cmd) {
+		if _, ok := msg.(cmailOtherProfileLoadedMsg); ok {
+			t.Error("expected no profile-fetch cmd when OtherUsername is empty")
+		}
+	}
 }
 
 func TestHandleKeys_CtrlO_ReachesOpenLink_WhileChatroomsInputFocused(t *testing.T) {
@@ -865,7 +908,7 @@ func TestShowSearchReplyMsg_NavigatesToPostDetailAndScrollsToReply(t *testing.T)
 func TestCreateReplyCmd_ReturnsReplyID(t *testing.T) {
 	a := loggedInApp()
 
-	cmd := a.createReplyCmd("p1", "nice post", "")
+	cmd := a.createReplyCmd("p1", "nice post", "", nil)
 	msg := cmd()
 
 	created, ok := msg.(replyCreatedMsg)
@@ -1529,6 +1572,110 @@ func TestRouteURL_PostPermalink_BlogForm(t *testing.T) {
 	}
 }
 
+// slugIDFallbackClient simulates a post permalink with no custom slug: the
+// website falls back to /{username}/{postId}, so GetPostBySlug 404s for
+// that segment while GetPost (treating it as a raw ID) succeeds.
+type slugIDFallbackClient struct {
+	*api.MockClient
+	post model.Post
+}
+
+func (c *slugIDFallbackClient) GetPostBySlug(username, slug string) (model.Post, error) {
+	return model.Post{}, &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "post not found"}
+}
+
+func (c *slugIDFallbackClient) GetPost(postID string) (model.Post, error) {
+	return c.post, nil
+}
+
+// TestLoadPostBySlugCmd_SlugLookup404_FallsBackToIDLookup is the regression
+// test for a real bug: a post link like
+// https://cyberspace.online/dragor/vVIgcSbI9CHYsIxjTNsC (no custom slug, so
+// the second path segment is really the raw post ID) 404'd on the
+// slug-lookup endpoint and was reported as "deleted" even though the post
+// existed — confirmed live via GET /v1/posts/:id succeeding for the same
+// segment.
+func TestLoadPostBySlugCmd_SlugLookup404_FallsBackToIDLookup(t *testing.T) {
+	client := &slugIDFallbackClient{
+		MockClient: api.NewMockClient(),
+		post:       model.Post{ID: "vVIgcSbI9CHYsIxjTNsC", AuthorUsername: "dragor", Content: "hello"},
+	}
+	a := NewApp(client)
+
+	msg := a.loadPostBySlugCmd("dragor", "vVIgcSbI9CHYsIxjTNsC", screenFeed)()
+	loaded, ok := msg.(urlPostLoadedMsg)
+	if !ok {
+		t.Fatalf("loadPostBySlugCmd()() = %T, want urlPostLoadedMsg", msg)
+	}
+	if loaded.post.ID != "vVIgcSbI9CHYsIxjTNsC" {
+		t.Errorf("post.ID = %q, want the ID-lookup result", loaded.post.ID)
+	}
+	if loaded.origin != screenFeed {
+		t.Errorf("origin = %v, want screenFeed", loaded.origin)
+	}
+}
+
+// doubleNotFoundClient simulates a genuinely broken/deleted post link:
+// neither the slug lookup nor the ID-lookup fallback finds anything.
+type doubleNotFoundClient struct {
+	*api.MockClient
+}
+
+func (c *doubleNotFoundClient) GetPostBySlug(username, slug string) (model.Post, error) {
+	return model.Post{}, &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "post not found"}
+}
+
+func (c *doubleNotFoundClient) GetPost(postID string) (model.Post, error) {
+	return model.Post{}, &api.APIError{Code: "NOT_FOUND", Status: 404, Message: "post not found"}
+}
+
+// TestLoadPostBySlugCmd_BothLookupsFail_ReturnsErr guards that a genuinely
+// broken link still reports as unreachable instead of the ID-lookup
+// fallback masking every 404.
+func TestLoadPostBySlugCmd_BothLookupsFail_ReturnsErr(t *testing.T) {
+	a := NewApp(&doubleNotFoundClient{MockClient: api.NewMockClient()})
+
+	msg := a.loadPostBySlugCmd("dragor", "does-not-exist", screenFeed)()
+	if _, ok := msg.(urlPostLoadErrMsg); !ok {
+		t.Fatalf("loadPostBySlugCmd()() = %T, want urlPostLoadErrMsg", msg)
+	}
+}
+
+// nonNotFoundSpyClient tracks whether GetPost was called, to guard that the
+// ID-lookup fallback only triggers on a 404 — retrying on a network/5xx
+// error would just mask or duplicate an unrelated failure.
+type nonNotFoundSpyClient struct {
+	*api.MockClient
+	getPostCalled bool
+}
+
+func (c *nonNotFoundSpyClient) GetPostBySlug(username, slug string) (model.Post, error) {
+	return model.Post{}, &api.APIError{Code: "INTERNAL", Status: 500, Message: "server error"}
+}
+
+func (c *nonNotFoundSpyClient) GetPost(postID string) (model.Post, error) {
+	c.getPostCalled = true
+	return model.Post{}, nil
+}
+
+func TestLoadPostBySlugCmd_NonNotFoundError_DoesNotRetryAsID(t *testing.T) {
+	client := &nonNotFoundSpyClient{MockClient: api.NewMockClient()}
+	a := NewApp(client)
+
+	msg := a.loadPostBySlugCmd("dragor", "some-slug", screenFeed)()
+	if client.getPostCalled {
+		t.Error("expected GetPost not to be called for a non-404 error")
+	}
+	errMsg, ok := msg.(urlPostLoadErrMsg)
+	if !ok {
+		t.Fatalf("loadPostBySlugCmd()() = %T, want urlPostLoadErrMsg", msg)
+	}
+	var apiErr *api.APIError
+	if !errors.As(errMsg.err, &apiErr) || apiErr.Status != 500 {
+		t.Errorf("expected the original 500 error to surface unchanged, got %v", errMsg.err)
+	}
+}
+
 // TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack is the
 // regression test for the "Esc does nothing after following an in-post link"
 // bug: opening a post-permalink link while already viewing a post used to
@@ -1775,11 +1922,27 @@ func TestHandleUnauthorized_InvalidatesPendingTickers(t *testing.T) {
 	if _, cmd, ok := a2.handleSettings(wanderTickMsg{gen: genBefore}); !ok || cmd != nil {
 		t.Errorf("wanderTickMsg{gen: %d} (stale) handled=%v cmd=%v, want handled=true cmd=nil", genBefore, ok, cmd)
 	}
+	if _, cmd, ok := a2.handleRelativeTimeTick(relativeTimeTickMsg{gen: genBefore}); !ok || cmd != nil {
+		t.Errorf("relativeTimeTickMsg{gen: %d} (stale) handled=%v cmd=%v, want handled=true cmd=nil", genBefore, ok, cmd)
+	}
 
 	// A tick stamped with the current (post-expiry) gen — e.g. one scheduled
 	// by a fresh login — must still do real work, not be dropped too.
 	if _, cmd, ok := a2.handleNotifications(pollUnreadTickMsg{gen: a2.sessionGen}); !ok || cmd == nil {
 		t.Errorf("pollUnreadTickMsg{gen: current} handled=%v cmd=%v, want handled=true cmd=non-nil", ok, cmd)
+	}
+}
+
+// TestHandleRelativeTimeTick_AlwaysReschedules guards the tick's
+// self-perpetuating chain: since RefreshRelativeTimestamps is a no-op on any
+// screen other than cIRC/C-Mail (or in a non-"relative" display format), the
+// tick must still reschedule itself regardless of which screen is active —
+// otherwise switching away from cIRC/C-Mail even briefly would let the whole
+// chain die instead of merely idling.
+func TestHandleRelativeTimeTick_AlwaysReschedules(t *testing.T) {
+	a := loggedInApp() // a.active == screenFeed
+	if _, cmd, ok := a.handleRelativeTimeTick(relativeTimeTickMsg{gen: a.sessionGen}); !ok || cmd == nil {
+		t.Errorf("relativeTimeTickMsg on screenFeed: handled=%v cmd=%v, want handled=true cmd=non-nil (reschedule)", ok, cmd)
 	}
 }
 
@@ -1814,7 +1977,7 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 
 	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		FeedManualRefreshOnly: false,
-		ImageViewer:            "terminal",
+		ImageViewer:           "terminal",
 	})
 	if !ok || cmd == nil {
 		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
@@ -2204,7 +2367,7 @@ func (c *tooSoonPostClient) GetPost(postID string) (model.Post, error) {
 func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testing.T) {
 	a := NewApp(&tooSoonPostClient{MockClient: api.NewMockClient()})
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, "")()
+	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
 	if _, ok := msg.(postConvertedToNoteMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postConvertedToNoteMsg", msg)
 	}
@@ -2213,73 +2376,9 @@ func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testin
 func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
 	a := NewApp(api.NewMockClient())
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, "")()
+	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
 	if _, ok := msg.(postCreatedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
-	}
-}
-
-// --- resolveAttachment: dimension fetch + the API's 640px cap ---
-
-func testPNGServer(t *testing.T, w, h int) *httptest.Server {
-	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		t.Fatalf("encode png: %v", err)
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		rw.Write(buf.Bytes())
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-func TestResolveAttachment_EmptyURL_ReturnsNil(t *testing.T) {
-	attachment, err := resolveAttachment("")
-	if err != nil || attachment != nil {
-		t.Errorf("resolveAttachment(\"\") = %v, %v, want nil, nil", attachment, err)
-	}
-}
-
-func TestResolveAttachment_WithinLimit_SetsTypeAndDimensions(t *testing.T) {
-	srv := testPNGServer(t, 100, 50)
-	attachment, err := resolveAttachment(srv.URL + "/pic.png")
-	if err != nil {
-		t.Fatalf("resolveAttachment: %v", err)
-	}
-	if attachment.Type != "image" || attachment.Width != 100 || attachment.Height != 50 {
-		t.Errorf("attachment = %+v, want type=image width=100 height=50", attachment)
-	}
-}
-
-// TestResolveAttachment_GIFExtension_SetsGIFType guards attachmentTypeForURL's
-// extension-based inference, which the caller (createPostCmd/editPostCmd)
-// relies on since the API distinguishes "image" from "gif" attachments.
-func TestResolveAttachment_GIFExtension_SetsGIFType(t *testing.T) {
-	srv := testPNGServer(t, 10, 10) // content doesn't need to actually be a gif — only the URL suffix is inspected
-	attachment, err := resolveAttachment(srv.URL + "/pic.gif")
-	if err != nil {
-		t.Fatalf("resolveAttachment: %v", err)
-	}
-	if attachment.Type != "gif" {
-		t.Errorf("attachment.Type = %q, want gif", attachment.Type)
-	}
-}
-
-// TestResolveAttachment_ExceedsLimit_ReturnsClearError guards the one thing
-// this app has no way to fix automatically: there's no upload endpoint to
-// host a resized copy, so an oversized image must fail here with a message
-// that explains why, rather than as a raw 400 from the API (confirmed live:
-// POST /v1/posts rejects width/height above 640px).
-func TestResolveAttachment_ExceedsLimit_ReturnsClearError(t *testing.T) {
-	srv := testPNGServer(t, 1200, 480)
-	attachment, err := resolveAttachment(srv.URL + "/pic.png")
-	if attachment != nil {
-		t.Errorf("attachment = %+v, want nil on an oversized image", attachment)
-	}
-	if err == nil || !strings.Contains(err.Error(), "640") {
-		t.Errorf("err = %v, want a message mentioning the 640px limit", err)
 	}
 }
 
@@ -2297,28 +2396,57 @@ func (c *editPostRecordingClient) EditPost(postID, content, title string, topics
 	return nil
 }
 
-// TestEditPostCmd_MergesOtherAttachmentsWithResolvedAttachment guards the
-// merge editPostCmd is responsible for: the attachments array it sends must
-// combine otherAttachments (e.g. an audio one the edit panel doesn't manage)
-// with the newly resolved image, in that order — dropping otherAttachments
-// here would silently delete them server-side, since EditPost replaces the
-// whole array.
-func TestEditPostCmd_MergesOtherAttachmentsWithResolvedAttachment(t *testing.T) {
-	srv := testPNGServer(t, 10, 10)
+// TestEditPostCmd_SendsAudioAttachment guards the ctrl+j path for Post
+// Detail's edit panel: the pending audio attachment (already fully built —
+// no dimension fetch needed) is sent alongside any otherAttachments (e.g. a
+// legacy image attachment the edit panel doesn't manage), combined in that
+// order — dropping otherAttachments here would silently delete them
+// server-side, since EditPost replaces the whole array.
+func TestEditPostCmd_SendsAudioAttachment(t *testing.T) {
 	client := &editPostRecordingClient{MockClient: api.NewMockClient()}
 	a := NewApp(client)
-	audio := model.Attachment{Type: "audio", Src: "https://youtu.be/old"}
+	audio := model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Origin: "youtube", Artist: "a", Title: "t"}
+	legacyImage := model.Attachment{Type: "image", Src: "https://example.com/pic.png"}
 
-	msg := a.editPostCmd("p1", "content", "title", nil, false, false, srv.URL+"/pic.png", true, []model.Attachment{audio})()
+	msg := a.editPostCmd("p1", "content", "title", nil, false, false, true, &audio, []model.Attachment{legacyImage})()
 	if _, ok := msg.(postEditedMsg); !ok {
 		t.Fatalf("editPostCmd() = %T, want postEditedMsg", msg)
 	}
 	if !client.gotTouched {
 		t.Fatal("expected EditPost to be called with attachmentTouched = true")
 	}
-	want := []model.Attachment{audio, {Type: "image", Src: srv.URL + "/pic.png", Width: 10, Height: 10}}
+	want := []model.Attachment{legacyImage, audio}
 	if !slices.Equal(client.gotAttachments, want) {
-		t.Errorf("EditPost attachments = %+v, want %+v (other attachment first, then the resolved one)", client.gotAttachments, want)
+		t.Errorf("EditPost attachments = %+v, want %+v (other attachment first, then audio)", client.gotAttachments, want)
+	}
+}
+
+// createReplyRecordingClient captures CreateReply's arguments so a test can
+// inspect exactly what was sent without a real API.
+type createReplyRecordingClient struct {
+	*api.MockClient
+	gotAttachment *model.Attachment
+}
+
+func (c *createReplyRecordingClient) CreateReply(postID, content, parentReplyID string, attachment *model.Attachment) (model.Reply, error) {
+	c.gotAttachment = attachment
+	return c.MockClient.CreateReply(postID, content, parentReplyID, attachment)
+}
+
+// TestCreateReplyCmd_SendsAudioAttachmentDirectly guards the ctrl+j path for
+// a reply: an already-built audio attachment needs no dimension fetch and
+// must be passed straight through to CreateReply.
+func TestCreateReplyCmd_SendsAudioAttachmentDirectly(t *testing.T) {
+	client := &createReplyRecordingClient{MockClient: api.NewMockClient()}
+	a := NewApp(client)
+	audio := &model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Origin: "youtube", Artist: "a", Title: "t"}
+
+	msg := a.createReplyCmd("p1", "check this out", "", audio)()
+	if _, ok := msg.(replyCreatedMsg); !ok {
+		t.Fatalf("createReplyCmd() = %T, want replyCreatedMsg", msg)
+	}
+	if client.gotAttachment == nil || *client.gotAttachment != *audio {
+		t.Errorf("CreateReply attachment = %+v, want %+v", client.gotAttachment, audio)
 	}
 }
 
@@ -2638,12 +2766,14 @@ func TestPostEditedMsg_AttachmentsTouched_UpdatesPostDetailCache(t *testing.T) {
 	}
 }
 
-// --- applyAttachURL: ctrl+g dispatch (native post attachment vs markdown insert) ---
+// --- applyAttachURL: ctrl+g dispatch (posts/replies warn, chat /gif, else markdown insert) ---
 
-// TestApplyAttachURL_FeedPanelActive_SetsNativeAttachment covers the branch
-// that must win when the Feed new-post panel is open: a native attachment on
-// the panel, not markdown text inserted into whatever's focused.
-func TestApplyAttachURL_FeedPanelActive_SetsNativeAttachment(t *testing.T) {
+// TestApplyAttachURL_FeedPanelActive_Warns covers the branch that must win
+// when the Feed new-post panel is open: API v0.8.7 rejects type:"image" in a
+// post's attachments array (and inline markdown pointing anywhere but
+// bunker.cyberspace.online), so ctrl+g here warns instead of attaching or
+// inserting markdown that would only fail later at submit.
+func TestApplyAttachURL_FeedPanelActive_Warns(t *testing.T) {
 	a := loggedInApp()
 	m, _ := a.feed.Update(keyMsg("n"))
 	a.feed = m
@@ -2651,19 +2781,22 @@ func TestApplyAttachURL_FeedPanelActive_SetsNativeAttachment(t *testing.T) {
 		t.Fatal("setup: expected Feed's new-post panel open after 'n'")
 	}
 
-	a, cmd := a.applyAttachURL("https://example.com/pic.png")
-	if cmd != nil {
-		t.Error("expected no cmd for the native-attachment branch")
+	a2, cmd := a.applyAttachURL("https://example.com/pic.png")
+	if cmd == nil {
+		t.Error("expected a cmd (the warning notification's expiry tick)")
 	}
-	if got := a.feed.ComposeView(80); !strings.Contains(got, "https://example.com/pic.png") {
-		t.Errorf("ComposeView() = %q, want it to contain the attached URL", got)
+	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
+		t.Errorf("expected a warning notification, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+	}
+	if got := a2.feed.ComposeView(80); strings.Contains(got, "https://example.com/pic.png") {
+		t.Errorf("ComposeView() = %q, should not contain the URL — no native attachment set", got)
 	}
 }
 
-// TestApplyAttachURL_PostDetailEditPanelActive_SetsNativeAttachment mirrors
-// the Feed case for PostDetail's edit panel (opened via 'e', separate from
-// the Feed instance).
-func TestApplyAttachURL_PostDetailEditPanelActive_SetsNativeAttachment(t *testing.T) {
+// TestApplyAttachURL_PostDetailEditPanelActive_Warns mirrors the Feed case
+// for PostDetail's edit panel (opened via 'e', separate from the Feed
+// instance).
+func TestApplyAttachURL_PostDetailEditPanelActive_Warns(t *testing.T) {
 	a := loggedInApp()
 	a.currentUser = model.User{Username: "op", IsSupporter: true}
 	a.active = screenPostDetail
@@ -2679,12 +2812,12 @@ func TestApplyAttachURL_PostDetailEditPanelActive_SetsNativeAttachment(t *testin
 		t.Fatal("setup: expected PostDetail's edit panel open after 'e'")
 	}
 
-	a, cmd := a.applyAttachURL("https://example.com/pic.png")
-	if cmd != nil {
-		t.Error("expected no cmd for the native-attachment branch")
+	a2, cmd := a.applyAttachURL("https://example.com/pic.png")
+	if cmd == nil {
+		t.Error("expected a cmd (the warning notification's expiry tick)")
 	}
-	if got := a.View(); !strings.Contains(got, "https://example.com/pic.png") {
-		t.Errorf("full render doesn't contain the attached URL")
+	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
+		t.Errorf("expected a warning notification, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
 	}
 }
 
@@ -2778,10 +2911,10 @@ func TestApplyAttachURL_CMailNonGIF_WarnsInsteadOfInserting(t *testing.T) {
 	}
 }
 
-// TestApplyAttachURL_ReplyCompose_WarnsInsteadOfInserting: the reply API has
-// no attachments field at all, so ctrl+g must not silently insert markdown
-// that (per the same live evidence as the chat case) won't render anywhere.
-func TestApplyAttachURL_ReplyCompose_WarnsInsteadOfInserting(t *testing.T) {
+// TestApplyAttachURL_ReplyCompose_Warns: API v0.8.7 rejects type:"image" in a
+// reply's attachments array the same as posts, so ctrl+g on the reply
+// compose box warns rather than attaching or inserting markdown.
+func TestApplyAttachURL_ReplyCompose_Warns(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenPostDetail
 	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
@@ -2793,7 +2926,7 @@ func TestApplyAttachURL_ReplyCompose_WarnsInsteadOfInserting(t *testing.T) {
 
 	a2, _ := a.applyAttachURL("https://example.com/pic.png")
 	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
-		t.Errorf("expected a warning notification for a reply attachment, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+		t.Errorf("expected a warning notification, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
 	}
 }
 
@@ -2810,6 +2943,351 @@ func TestHandleKeys_CtrlG_OpensAttachURLPrompt_WhenInputFocused(t *testing.T) {
 	}
 	if !a2.attachURLPromptOpen {
 		t.Error("expected attachURLPromptOpen = true after ctrl+g")
+	}
+}
+
+// --- ctrl+j / song prompt ---
+
+func TestHandleKeys_CtrlJ_OpensSongPrompt_WhenSupporterAndChatroomsFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	a.currentUser = model.User{IsSupporter: true}
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if !consumed {
+		t.Fatal("expected ctrl+j to be consumed while cIRC's compose field is focused")
+	}
+	if !a2.songPromptOpen {
+		t.Error("expected songPromptOpen = true after ctrl+j for a supporter")
+	}
+}
+
+// TestHandleKeys_CtrlJ_NonSupporter_RejectsLocally_DoesNotOpenModal guards
+// the client-side supporter gate: /song is 403 server-side for a
+// non-supporter, so ctrl+j should reject instantly with a local system
+// message instead of opening a modal whose submit would just fail later.
+func TestHandleKeys_CtrlJ_NonSupporter_RejectsLocally_DoesNotOpenModal(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	a.currentUser = model.User{IsSupporter: false}
+
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if !consumed {
+		t.Fatal("expected ctrl+j to be consumed even when rejected locally")
+	}
+	if a2.songPromptOpen {
+		t.Error("expected songPromptOpen to stay false for a non-supporter")
+	}
+	if !strings.Contains(ansi.Strip(a2.chatrooms.View()), "supporter status") {
+		t.Error("expected a local system message explaining the supporter requirement")
+	}
+}
+
+// TestHandleKeys_CtrlJ_NotConsumed_OutsideChatrooms guards the scoping to
+// cIRC only — /song is technically accepted server-side in C-Mail too
+// (baseSlashCommands), but this modal is cIRC-only per the feature's scope.
+func TestHandleKeys_CtrlJ_NotConsumed_OutsideChatrooms(t *testing.T) {
+	a := setupCMailDetail(loggedInApp())
+	a.currentUser = model.User{IsSupporter: true}
+
+	_, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if consumed {
+		t.Error("expected ctrl+j to be unconsumed (and not open the song prompt) outside cIRC")
+	}
+}
+
+// TestHandleKeys_CtrlJ_OpensSongPrompt_FromFeedPanel guards the broadened
+// scope confirmed live 2026-08-27: posts (not just cIRC) accept an audio
+// attachment, so ctrl+j must also open from Feed's new-post panel.
+func TestHandleKeys_CtrlJ_OpensSongPrompt_FromFeedPanel(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{IsSupporter: true}
+	m, _ := a.feed.Update(keyMsg("n"))
+	a.feed = m
+	if !a.feed.PanelActive() {
+		t.Fatal("setup: expected Feed's new-post panel open after 'n'")
+	}
+
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if !consumed {
+		t.Fatal("expected ctrl+j to be consumed while Feed's compose panel is open")
+	}
+	if !a2.songPromptOpen {
+		t.Error("expected songPromptOpen = true after ctrl+j from Feed's panel")
+	}
+}
+
+// TestHandleKeys_CtrlJ_OpensSongPrompt_FromReplyCompose guards the same
+// broadened scope for Post Detail's reply compose box.
+func TestHandleKeys_CtrlJ_OpensSongPrompt_FromReplyCompose(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{IsSupporter: true}
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
+	pd, _ := a.postDetail.OpenCompose()
+	a.postDetail = pd
+	if !a.postDetail.ReplyComposeActive() {
+		t.Fatal("setup: expected the reply compose box open")
+	}
+
+	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if !consumed {
+		t.Fatal("expected ctrl+j to be consumed while the reply compose box is open")
+	}
+	if !a2.songPromptOpen {
+		t.Error("expected songPromptOpen = true after ctrl+j from the reply compose box")
+	}
+}
+
+// TestSubmitSongPrompt_ReplyCompose_SetsAudioAttachmentNotComposeText guards
+// the dispatch that makes this feature work: submitting from a reply compose
+// target must build a native model.Attachment and hand it to PostDetail,
+// not fall through to the chat-only "/song ..." SetComposeValueMsg path.
+func TestSubmitSongPrompt_ReplyCompose_SetsAudioAttachmentNotComposeText(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
+	pd, _ := a.postDetail.OpenCompose()
+	a.postDetail = pd
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	fillSongPrompt(&a, "https://youtu.be/dQw4w9WgXcQ", "Rick Astley", "Never Gonna Give You Up", "pop")
+
+	a2, cmd := a.submitSongPrompt()
+	if a2.songPromptOpen {
+		t.Error("expected songPromptOpen = false after a valid submit")
+	}
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(screens.SetComposeValueMsg); ok {
+				t.Error("expected no SetComposeValueMsg for a reply-compose target — that's the chat-only path")
+			}
+		}
+	}
+}
+
+// TestSubmitSongPrompt_FeedPanel_SetsAudioAttachmentNotComposeText mirrors
+// the reply-compose case for Feed's new-post panel.
+func TestSubmitSongPrompt_FeedPanel_SetsAudioAttachmentNotComposeText(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.feed.Update(keyMsg("n"))
+	a.feed = m
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	fillSongPrompt(&a, "https://youtu.be/dQw4w9WgXcQ", "Rick Astley", "Never Gonna Give You Up", "pop")
+
+	a2, cmd := a.submitSongPrompt()
+	if a2.songPromptOpen {
+		t.Error("expected songPromptOpen = false after a valid submit")
+	}
+	if got := a2.feed.PanelAudioAttachment(); got == nil || got.Title != "Never Gonna Give You Up" {
+		t.Errorf("expected Feed's panel to hold the submitted audio attachment, got %v", got)
+	}
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(screens.SetComposeValueMsg); ok {
+				t.Error("expected no SetComposeValueMsg for a Feed-panel target — that's the chat-only path")
+			}
+		}
+	}
+}
+
+// TestHandleSongPromptKey_Esc_ClosesWithoutSubmitting guards cancellation.
+func TestHandleSongPromptKey_Esc_ClosesWithoutSubmitting(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+
+	model, cmd := a.handleSongPromptKey(tea.KeyMsg{Type: tea.KeyEsc})
+	a2 := model.(App)
+	if a2.songPromptOpen {
+		t.Error("expected songPromptOpen = false after esc")
+	}
+	if cmd != nil {
+		t.Error("expected esc to return no cmd")
+	}
+}
+
+// TestHandleSongPromptKey_EnterOnURL_ValidURL_FetchesAndAdvancesFocus guards
+// the url-field Enter behavior: a valid YouTube URL should trigger the
+// metadata fetch and move focus to artist, not submit.
+func TestHandleSongPromptKey_EnterOnURL_ValidURL_FetchesAndAdvancesFocus(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	for _, r := range "https://youtu.be/dQw4w9WgXcQ" {
+		a.songPrompt, _ = a.songPrompt.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	model, cmd := a.handleSongPromptKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a2 := model.(App)
+	if a2.songPrompt.OnURLField() {
+		t.Error("expected enter on a valid url to advance focus off the url field")
+	}
+	if !a2.songPromptOpen {
+		t.Error("expected the prompt to stay open while the fetch is in flight")
+	}
+	if cmd == nil {
+		t.Fatal("expected enter on a valid url to return a cmd (the metadata fetch)")
+	}
+}
+
+// TestHandleSongPromptKey_EnterOnURL_InvalidURL_ShowsWarning guards the
+// client-side validation short-circuit — no fetch, no focus change.
+func TestHandleSongPromptKey_EnterOnURL_InvalidURL_ShowsWarning(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	for _, r := range "not a youtube url" {
+		a.songPrompt, _ = a.songPrompt.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	model, _ := a.handleSongPromptKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a2 := model.(App)
+	if !a2.songPrompt.OnURLField() {
+		t.Error("expected focus to stay on the url field after an invalid url")
+	}
+}
+
+// TestSubmitSongPrompt_ValidFields_ClosesAndSetsComposeValue guards the
+// submit handoff mirroring applyAttachURL's ctrl+g GIF handoff.
+func TestSubmitSongPrompt_ValidFields_ClosesAndSetsComposeValue(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	fillSongPrompt(&a, "https://youtu.be/dQw4w9WgXcQ", "Rick Astley", "Never Gonna Give You Up", "pop")
+
+	a2, cmd := a.submitSongPrompt()
+	if a2.songPromptOpen {
+		t.Error("expected songPromptOpen = false after a valid submit")
+	}
+	if cmd == nil {
+		t.Fatal("expected a cmd emitting SetComposeValueMsg")
+	}
+	msg, ok := cmd().(screens.SetComposeValueMsg)
+	if !ok {
+		t.Fatalf("cmd() = %T, want screens.SetComposeValueMsg", cmd())
+	}
+	want := "/song https://youtu.be/dQw4w9WgXcQ | Rick Astley | Never Gonna Give You Up | pop"
+	if msg.Value != want {
+		t.Errorf("SetComposeValueMsg.Value = %q, want %q", msg.Value, want)
+	}
+}
+
+// TestSubmitSongPrompt_MissingTitle_StaysOpenWithWarning guards that an
+// incomplete submit never hands a malformed /song command to the composer.
+func TestSubmitSongPrompt_MissingTitle_StaysOpenWithWarning(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	fillSongPrompt(&a, "https://youtu.be/dQw4w9WgXcQ", "Rick Astley", "", "")
+
+	a2, cmd := a.submitSongPrompt()
+	if !a2.songPromptOpen {
+		t.Error("expected the prompt to stay open when a required field is missing")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd when submit is rejected")
+	}
+}
+
+// TestHandleSongMetadataFetched_Success_AppliesToOpenPrompt guards the async
+// fetch result being applied while the modal is still open.
+func TestHandleSongMetadataFetched_Success_AppliesToOpenPrompt(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = true
+	a.songPrompt, _ = a.songPrompt.Open()
+	a.songPrompt = a.songPrompt.SetLoading(true)
+
+	a2, _, ok := a.handleSongMetadataFetched(songMetadataFetchedMsg{title: "Never Gonna Give You Up", artist: "Rick Astley"})
+	if !ok {
+		t.Fatal("expected handleSongMetadataFetched to claim its own message type")
+	}
+	if a2.songPrompt.TitleValue() != "Never Gonna Give You Up" || a2.songPrompt.ArtistValue() != "Rick Astley" {
+		t.Errorf("got title=%q artist=%q, want the fetched values", a2.songPrompt.TitleValue(), a2.songPrompt.ArtistValue())
+	}
+}
+
+// TestHandleSongMetadataFetched_PromptClosed_Dropped guards against a stale
+// fetch (from a cancelled prompt) reopening or mutating a fresh one.
+func TestHandleSongMetadataFetched_PromptClosed_Dropped(t *testing.T) {
+	a := loggedInApp()
+	a.songPromptOpen = false
+
+	a2, cmd, ok := a.handleSongMetadataFetched(songMetadataFetchedMsg{title: "t", artist: "a"})
+	if !ok {
+		t.Fatal("expected handleSongMetadataFetched to claim its own message type even when dropped")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd for a dropped fetch result")
+	}
+	if a2.songPromptOpen {
+		t.Error("expected songPromptOpen to remain false")
+	}
+}
+
+// fillSongPrompt types url/artist/title/genre into a.songPrompt's four
+// fields in order, tabbing between them.
+func fillSongPrompt(a *App, url, artist, title, genre string) {
+	type_ := func(s string) {
+		for _, r := range s {
+			a.songPrompt, _ = a.songPrompt.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+	}
+	type_(url)
+	a.songPrompt, _ = a.songPrompt.NextField()
+	type_(artist)
+	a.songPrompt, _ = a.songPrompt.NextField()
+	type_(title)
+	a.songPrompt, _ = a.songPrompt.NextField()
+	type_(genre)
+}
+
+// --- ctrl+n / icon picker insert-and-stay ---
+
+// TestHandleIconPickerKey_CtrlN_InsertsWithoutClosing guards the whole point
+// of ctrl+n: unlike enter, it must leave iconPickerOpen true so several
+// icons can be picked in a row.
+func TestHandleIconPickerKey_CtrlN_InsertsWithoutClosing(t *testing.T) {
+	a := loggedInApp()
+	a.iconPickerOpen = true
+	a.iconPicker, _ = a.iconPicker.Open()
+
+	model, cmd := a.handleIconPickerKey(tea.KeyMsg{Type: tea.KeyCtrlN})
+	a2 := model.(App)
+	if !a2.iconPickerOpen {
+		t.Error("expected iconPickerOpen to remain true after ctrl+n")
+	}
+	if cmd == nil {
+		t.Fatal("expected ctrl+n to return a cmd emitting InsertIconMsg")
+	}
+	msg, ok := cmd().(screens.InsertIconMsg)
+	if !ok {
+		t.Fatalf("expected InsertIconMsg, got %T", cmd())
+	}
+	if msg.Icon == "" {
+		t.Error("expected a non-empty icon glyph")
+	}
+}
+
+// TestHandleIconPickerKey_Enter_ClosesPicker guards the contrast with
+// ctrl+n above — enter still closes the picker as before.
+func TestHandleIconPickerKey_Enter_ClosesPicker(t *testing.T) {
+	a := loggedInApp()
+	a.iconPickerOpen = true
+	a.iconPicker, _ = a.iconPicker.Open()
+
+	model, cmd := a.handleIconPickerKey(tea.KeyMsg{Type: tea.KeyEnter})
+	a2 := model.(App)
+	if a2.iconPickerOpen {
+		t.Error("expected iconPickerOpen to be false after enter")
+	}
+	if cmd == nil {
+		t.Fatal("expected enter to return a cmd emitting InsertIconMsg")
+	}
+	if _, ok := cmd().(screens.InsertIconMsg); !ok {
+		t.Fatalf("expected InsertIconMsg, got %T", cmd())
 	}
 }
 

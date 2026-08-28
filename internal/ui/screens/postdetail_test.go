@@ -597,6 +597,33 @@ func TestPostDetail_EKey_PostEditPanel_ActuallyRenders(t *testing.T) {
 	}
 }
 
+// TestPostDetail_EditPanelSubmit_CarriesAudioAttachment guards against a
+// regression where a song attached via SetEditPanelAudioAttachment (ctrl+j
+// on Post Detail's edit panel) never reached SubmitPostEditMsg — the field
+// was silently omitted from the struct literal, so editPostCmd would send
+// attachments: [] instead of the attached song.
+func TestPostDetail_EditPanelSubmit_CarriesAudioAttachment(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetCurrentUsername("op").SetCurrentUserIsSupporter(true)
+	m = m.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "mine", CreatedAt: time.Now()})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+
+	audio := model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Origin: "youtube", Artist: "a", Title: "t", Genre: "pop"}
+	m = m.SetEditPanelAudioAttachment(audio)
+
+	_, cmd := m.Update(screens.ComposeSubmitMsg{Content: "edited"})
+	if cmd == nil {
+		t.Fatal("expected a cmd from ComposeSubmitMsg")
+	}
+	msg, ok := cmd().(screens.SubmitPostEditMsg)
+	if !ok {
+		t.Fatalf("expected SubmitPostEditMsg, got %T", cmd())
+	}
+	if msg.AudioAttachment == nil || *msg.AudioAttachment != audio {
+		t.Errorf("AudioAttachment = %v, want %v", msg.AudioAttachment, audio)
+	}
+}
+
 func TestPostDetail_EKey_NoOp_WhenNotEligible(t *testing.T) {
 	m := initPostDetail()
 	m = m.SetCurrentUsername("alice").SetCurrentUserIsSupporter(true)
@@ -730,5 +757,38 @@ func TestPostDetail_T_EmitsPreviewPostThemeMsg_WhenSelectedReplyHasThemeBlock(t 
 	}
 	if msg.Palette.Foreground != "#d000ff" {
 		t.Errorf("Palette.Foreground = %q, want #d000ff", msg.Palette.Foreground)
+	}
+}
+
+// TestPostDetail_ComposeSubmit_CarriesReplyAudioAttachment guards the
+// opposite direction: an audio attachment set via SetReplyAudioAttachment
+// must reach SubmitReplyMsg, and clear afterward so it can't leak into the
+// next reply.
+func TestPostDetail_ComposeSubmit_CarriesReplyAudioAttachment(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetPost(pdPost("p1"))
+	m, _ = m.OpenCompose()
+
+	audio := model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Origin: "youtube", Artist: "a", Title: "t"}
+	m = m.SetReplyAudioAttachment(audio)
+
+	m, cmd := m.Update(screens.ComposeSubmitMsg{Content: "check this out"})
+	msg, ok := cmd().(screens.SubmitReplyMsg)
+	if !ok {
+		t.Fatalf("expected SubmitReplyMsg, got %T", cmd())
+	}
+	if msg.Attachment == nil || *msg.Attachment != audio {
+		t.Errorf("Attachment = %v, want %v", msg.Attachment, audio)
+	}
+
+	// Reopening for a new reply must not carry the previous one's attachment.
+	m, _ = m.OpenCompose()
+	_, cmd2 := m.Update(screens.ComposeSubmitMsg{Content: "another reply"})
+	msg2, ok := cmd2().(screens.SubmitReplyMsg)
+	if !ok {
+		t.Fatalf("expected SubmitReplyMsg, got %T", cmd2())
+	}
+	if msg2.Attachment != nil {
+		t.Errorf("expected the next reply to start with no attachment, got Attachment=%v", msg2.Attachment)
 	}
 }

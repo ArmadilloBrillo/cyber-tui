@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.8.5) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.8.7) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -30,6 +30,8 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `POST /v1/posts` | POST | **Open — undocumented, client-side mitigation shipped** | Posting too soon after a previous post is not rejected with `429`. The response still returns a normal `{ postId, slug }` success shape, but the ID doesn't resolve (`GET /v1/posts/:id` → 404) — the content was silently saved as a journal/note entry instead. Confirmed live via `apifetch` (two posts seconds apart): the second call's `postId` 404s on `GET`, and the same content appears via `GET /v1/notes`. The orphaned note record itself is also malformed: it's missing the `noteId` field every other note in the list has, so it can't be fetched, edited, or deleted individually via `GET/PATCH/DELETE /v1/notes/:id` — a dead, un-cleanable entry sitting in the account's journal. Client-side, `createPostCmd` (`internal/ui/app.go`) now follows every `CreatePost` success with a `GetPost(id)` check; a 404 there surfaces a warning banner instead of the silent-success flow. See `docs/28-extended-posts.md`. | 2026-08-12 |
 | `GET /v1/notifications` vs `/v1/notifications/unread-count` | GET | **Narrowed — reachable via `type` filter, still excluded from the default list** | Originally logged as totally unreachable via REST. Now that the `type`-filter `500` bug is fixed (2026-08-13), re-tested: `?type=post_cooldown&limit=5` returns real live entries — confirming the mystery type is exactly `post_cooldown` (`docs/15-notifications.md` guessed this from the v0.8.5 docs description; now confirmed with a real payload). Each has `actorUsername: "system"` and a populated `reason` (e.g. `"You can only post once per 10 minutes. Your draft was saved as a private Note."`), matching the client's `hasActor`/`Reason` handling exactly. But `GET /v1/notifications` with no filter, or `?read=false`, still omits these entries from the page — so the type-filtered fetch is the only way to see them; the default list continues to silently exclude the whole type. No client-side fix needed beyond what's already built (the `post_cooldown` icon/summary is now confirmed correct against a real payload); a future type-filter UI (see Notifications v0.4.1 above) would let a user opt into seeing these. | 2026-08-13 |
 | `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.8.5 live. `docs/00-latest-api-reference.md` re-fetched and diffed (previous file was also mojibake-corrupted at rest — non-ASCII bytes double-encoded — re-saved clean as part of this fetch). Real content changes are all in Notifications: 8 new types (`graffiti_mention`, `moderator_granted`/`removed`, `api_access_granted`/`removed`, `system_ban_lifted`, `post_cooldown`, `rate_limit_warning`); `GET /v1/notifications` now documented as excluding muted/blocked/off types (list can come back shorter than `limit` — must paginate on non-null `cursor`, not short-page length); `actorId`/`actorUsername` now documented optional (absent or literal `"system"` for account-level notifications); `unread-count` gains `exact` (`false` once unread > 100, count caps at 100 — render "99+"); `read-all` gains `hasMore` (caps at 5,000/call, loop until false). None of this is implemented client-side yet — see the new Notifications v0.8.5 row below. | 2026-08-13 |
+| `GET /v1/guilds` | GET | **Open (by design?) — not a bug, a naming-scheme mismatch** | `icon` values are never the Lucide/Lucide-Lab/Phosphor scheme `SupporterIcon` uses (confirmed separately live, e.g. `"pi"`, `"ph:crown"`). Confirmed live via `apifetch` across all 20 real guilds: 18/20 are bare kebab-case Unicode/CLDR character names (`crown`, `rocket`, `crab`, `black-sun-with-rays` — literally ☀️'s official Unicode 1.1 name — `beer-mug`, `four-leaf-clover`, `cat-face`, etc.), and 2/20 use an unidentified `dinkie-icons:`-prefixed set (an obscure pixel-art icon pack, no confirmed hosting/CDN). Not documented anywhere which icon-naming scheme(s) `icon` draws from. `GuildIcon` on `model.User` is a direct copy of the member's guild's own `icon`, so this is the same data everywhere it appears (Guilds list, Profile's guild badge). Attempted as real inline images in feature 48 and reverted client-side — see `docs/48-badge-icons.md`. A real fix needs either a curated CLDR-name→emoji text lookup (covers 18/20, no image fetch needed) or identifying the `dinkie-icons` source; neither attempted. | 2026-08-25 |
+| `/docs.md` | GET | **Resolved — client updated same day** | `docs.md` now reports v0.8.7 live (previous snapshot on file was v0.8.6, one version behind — that jump wasn't separately logged here). `docs/00-latest-api-reference.md` re-fetched and diffed. Real content changes: (1) `attachments` on `POST`/`PATCH /v1/posts` and `POST /v1/replies` now rejects `type: "image"` with `400` — images are website-upload-only, travelling as inline markdown (`![alt](https://bunker.cyberspace.online/...)`), and even that markdown 400s if the URL isn't bunker-hosted; `artist`/`title`/`genre` on a `type: "audio"` attachment are now documented as all required (max 100/150/50 chars, genre lowercase) — client updated same day, see `docs/50-post-reply-attachments.md`. (2) `websiteImageUrl` removed from `PATCH /v1/users/me` — the profile's 88×31 button is now website-set only (still returned on reads) — **client updated same day**: `updateProfileRequest`/`ProfileUpdate` no longer send it, and the profile edit form's now-dead input field was removed entirely (`internal/ui/screens/profile.go`), guarded by `TestProfileEditForm_NoWebsiteImageUrlField`. (3) New "Programs" section (`GET`/`POST`/`DELETE /v1/programs`, `GET /v1/programs/:id/source`) — a terminal program registry (`web`/`term`/`wasm` runtimes) for the website's `/terminal` gallery; entirely new surface, not evaluated for cyber-tui relevance yet — see Unimplemented API Features below for a placeholder if prioritized. | 2026-08-28 |
 
 ---
 
@@ -60,7 +62,43 @@ Ordered roughly by implementation effort / priority.
 | `model.Post` fields | `Title`, `Slug`, `GuildID`, `GuildSlug`, `IsGuildThread` | **Done** — feature 28 |
 | `POST /v1/posts` signature | Extended: `CreatePost(content, title, topics, isPublic, isNSFW)` | **Done** — feature 28 |
 | `GET /v1/users/:username/posts/:slug` | Slug-based post lookup not in Client interface. Useful for deep-linking; not needed for core navigation. | Low |
+| `GET /v1/users/:username/posts/:slug` — no ID fallback | Server bug/gap: when a post has no custom/generated slug, its website permalink is `/{username}/{postId}` — a raw post ID in the slug position, indistinguishable from a real slug on the wire. The slug-lookup endpoint 404s for that shape rather than also matching by ID (confirmed live: same segment 404s here, succeeds against `GET /v1/posts/:id`). Client-side workaround shipped — see `docs/27-url-opener.md`. | Client-side fixed; server could also just accept an ID in this endpoint |
 | `POST /v1/posts` — optional `slug` field (v0.7) | Custom slug (`a-z0-9-`, max 60 chars); server generates one if omitted. Compose panel (`PostComposePanel`) now includes a slug field with inline validation; empty slug is silently omitted from the wire. Same applies to `POST /v1/guilds/:slug/posts`. | **Done** — v0.7 alignment |
+| Post/reply objects — no author badge fields | Confirmed (docs + live) that a post/reply carries only `authorId`/`authorUsername` — no `authorIsSupporter`/`authorSupporterIcon`/`authorGuildIcon`. Badge icons (feature 48, `docs/48-badge-icons.md`) render on Profile/C-Mail, where the full author `model.User` is already available, but can't extend to Feed/Post Detail/Search/Topics/Bookmarks without either a per-author `GET /v1/users/:username` fetch-and-cache layer or the API adding these fields directly to post/reply payloads. | Feature request to API maintainer — not blocking |
+
+### Attachments — shape & validation, posts and replies (confirmed live, 2026-08-27)
+
+> **2026-08-28 (API v0.8.7):** `docs.md` now documents `type: "image"` in a post/reply's `attachments` as a `400` — image attachment is website-upload-only (inline markdown pointing at `bunker.cyberspace.online`), and `type: "image"` in `attachments` is rejected outright. This closes several rows below as **moot rather than resolved**: the `⚠ EXPERIMENTAL` faked-dimensions behavior (row below referencing `resolveAttachment`) no longer applies — that code path was removed from cyber-tui — and the `"gif"`-not-in-the-`type`-union question is moot for the same reason (no client-constructed image/gif attachment exists anymore). `docs.md` also now documents `artist`/`title`/`genre` as all **required** (max 100/150/50 chars, genre lowercase) for a `type: "audio"` attachment — cyber-tui's `SongPromptModel` now enforces this (`docs/50-post-reply-attachments.md`). The rows below are left as a historical record of the pre-v0.8.7 investigation.
+
+`docs.md`'s prose never documents the `attachments` object shape, and never mentions `attachments` at all under Replies (only under Posts, and only as "replaces the existing attachments" on `PATCH`). `GET /types.d.ts` (published since v0.8.4, previously logged below as "not applicable to this Go client" and never actually pulled for content until now) fills the gap:
+
+```typescript
+export interface Attachment {
+  type: 'audio' | 'image'
+  src: string
+  origin?: 'youtube'
+  artist?: string
+  title?: string
+  genre?: string
+  width?: number
+  height?: number
+}
+```
+
+Matches `wireAttachment` (`internal/api/client.go:76-83`) field-for-field — that shape was reverse-engineered correctly by this client via live testing before this type file was ever checked.
+
+Live-tested via `apifetch` against throwaway posts/replies (all created, tested, deleted within the same session):
+
+| Finding | Confirmed behavior |
+|---|---|
+| **Replies accept `attachments`** | `POST /v1/replies` with an `attachments` array succeeds and `GET` echoes it back intact, despite zero mention in `docs.md`'s Replies section. `internal/ui/app.go`'s `applyAttachURL` (line ~4132) currently hard-rejects `ctrl+g` image attach on Post Detail's reply compose with *"replies don't support image attachments — there's no attachments field in the reply API"* — that message is now known to be factually wrong; the API supports it, only the client doesn't wire it up. |
+| **640px cap is real, inclusive, per-dimension** | `width`/`height` > 640 → `400`: `"Image width must be an integer between 1 and 640px"` / `"Image height must be an integer between 1 and 640px"` (checked independently, own message each). Exactly `640` is accepted. Confirmed identical on both `PATCH /v1/posts/:id` and `POST /v1/replies` (create). |
+| **`width`/`height` are required for `type: "image"`, despite the `?` in `/types.d.ts`** | Omitting either field entirely (not just setting it small) produces the same `400` as an out-of-range value. The type file's optionality marker is inaccurate — both dimensions are mandatory on the wire for a `type: "image"` attachment. |
+| **`width`/`height` are ignored (and unchecked) for `type: "audio"`** | A `type: "audio"` attachment (`{src, origin: "youtube", artist, title, genre}`) with **no** `width`/`height` keys at all was accepted and stored cleanly — the 640px dimension validation is `type`-conditional, image-only. Also confirmed live in the same test: `hasAudioAttachment: true` and `audioAttachmentGenre` (both undocumented in `docs.md`, present in `/types.d.ts`) round-tripped correctly on `GET`. |
+| **The 640px check is metadata-only — the server never fetches the image** | Sent `width: 10, height: 10` with `src` pointing at a real 2000×2000 image → accepted with no error, and `GET` echoed the lied-about `10x10` dimensions next to the real (much larger) URL. The cap is honesty-based: a client that declares small dimensions bypasses it entirely, since nothing server-side verifies the claim against the actual file. **As of 2026-08-27, `resolveAttachment` (`internal/ui/app.go`) deliberately exploits this** — see the `⚠ EXPERIMENTAL` section of `docs/50-post-reply-attachments.md` — always declaring `640x640` regardless of the real image, at the user's explicit request, rather than the honest fetch-and-report behavior this row originally described. |
+| **`type` union is `'audio' \| 'image'` only — no `'gif'`** | `attachmentTypeForURL` (`internal/ui/app.go:5137`) currently sends the literal string `"gif"` as an attachment's `type` for post/reply attachments with a `.gif`-extension URL. Not spot-checked against the live server (no test posted a `.gif` URL as a post/reply attachment this session) — worth confirming whether the server accepts `"gif"` as an undocumented extension of the union or silently coerces/rejects it. |
+| **`hasImageAttachment`/`hasAudioAttachment` are computed for posts, not replies** | Confirmed live 2026-08-27: a post with a real `attachments` entry returns `hasImageAttachment: true` (or `hasAudioAttachment: true`) automatically — never sent by the client, so it's server-derived at write time. A reply with an identical `attachments` entry returns *neither* flag, and explicitly sending `hasImageAttachment: true` in the `POST /v1/replies` body is silently ignored (not present in the response either — confirmed the field isn't just omitted-when-false, it's genuinely absent). `/types.d.ts` declares both flags on `Reply` too, so this looks like the derivation step was simply never wired up for the reply write path. **Likely explains a live report**: an image attached to a reply via `ctrl+g` (feature 50) was stored correctly (`attachments` populated, confirmed via `apifetch`) but did not render on the website — if the site's reply view keys off `hasImageAttachment` rather than checking `attachments` directly, it would never fire for a reply. Unconfirmed whether that's the actual website mechanism; the flag gap itself is confirmed. |
+| **Reply permalink shows `undefined` in place of username** | Observed 2026-08-27 on a reply detail URL (`https://cyberspace.online/undefined/<post-slug>?reply=<id>`) — the reply's own `authorUsername` was populated correctly server-side (confirmed via `apifetch`), so this looks like a website-side link-building bug (a JS template picking up a missing value at render time) rather than anything server- or cyber-tui-side. Not investigated further — cyber-tui has no website code to inspect. |
 
 ### Guilds (new in v0.4)
 
@@ -190,6 +228,7 @@ cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAt
 | `gifUrl`, `audioAttachment`, `style`, chained styles | Render/decode in message view; `style: "art"` needs base64 decode | **Done** — wire/model fields across all four message shapes, attachment badges reusing `renderAttachments`, and a middle-fidelity style pipeline (ANSI attributes for blink/quiet/rainbow, Unicode substitution for l33t/cursive/flip, ASCII-safe jitter for glitch, `tea.Tick`-driven slow/wave/glitch animation, select-to-reveal spoiler in cIRC only — see `internal/ui/screens/chatstyle.go`) |
 | `/mute` family + `mutedUsersByRoom` | Client-side message filtering by muted user | **Done** — cIRC only (C-Mail 400s per API spec); see `docs/37-circ-mute.md` |
 | Empty `content` with attachment-only messages | Message rendering must not assume non-empty `content` | **Done** — covered by the same change; `messageDisplayBody` skips duplicate URL text and empty bodies render without assuming non-empty `content` |
+| `/song` composer UI | A guided way to build the `/song <url> \| <artist> \| <title> [\| <genre>]` command instead of hand-typing it | **Done** — `ctrl+j` Song Prompt modal in cIRC (supporter-gated client-side ahead of the server's 403), artist/title auto-filled via YouTube's public oEmbed endpoint (`internal/youtube`); see `docs/49-song-attach.md`. Extended to Feed/Post Detail's native audio attachment (feature 50, `docs/50-post-reply-attachments.md`). C-Mail's own composer still not covered (out of scope, though the API accepts `/song` there too) |
 
 ### cIRC idle presence (new in v0.8.1)
 
@@ -201,7 +240,20 @@ cIRC/C-Mail messages can now carry `imageUrl`, `gifUrl` (`/gif <url>`), `audioAt
 
 ### TypeScript definitions (new in v0.8.4)
 
-`/types.d.ts` now publishes TypeScript types for every documented response shape. Not applicable to this Go client — noted for reference only.
+`/types.d.ts` now publishes TypeScript types for every documented response shape. Not consumed programmatically by this Go client, but proved genuinely useful as a documentation source on 2026-08-27: `docs.md`'s prose never spells out the `attachments` object shape or mentions it on Replies at all, while `/types.d.ts`'s `Attachment`/`Entry`/`Reply` interfaces filled both gaps (and turned up two fields — `hasImageAttachment`/`hasAudioAttachment`/`audioAttachmentGenre` — not yet modeled client-side; see the Attachments section above). Worth checking again whenever a field's real shape is undocumented in prose.
+
+### Programs (new in v0.8.7)
+
+Feasibility notes and a tiered scope (registry browse/publish vs. running `wasm`
+programs locally vs. `web`/`term`, which isn't realistically supportable —
+their `ctx`/`p` runtime-contract shape is undocumented) are written up in
+`docs/plan-programs-integration.md`. Not started; revisit if prioritized.
+
+| Endpoint | Method | Description | Priority |
+|---|---|---|---|
+| `/v1/programs` | GET, POST | New terminal program registry — `web`/`term`/`wasm` runtimes, backs the website `/terminal`'s `publish`/`browse` gallery. Browse (with `runtime`/`author`/`name`/`mine` filters), publish (tiered size/count limits by account tier), recall/purge. | Not evaluated — no `cmd/`-side terminal-program concept exists in cyber-tui today; unclear whether this is in scope for a TUI social client at all. Revisit if a user asks. |
+| `/v1/programs/:id/source` | GET | Read a program's source at its current release or an earlier one by number; `base64` encoding for `wasm`, `utf8` otherwise. | Same as above |
+| `/v1/programs/:id` | DELETE | Recall (soft) or purge (hard, frees the account's program-count slot) a published program. | Same as above |
 
 ### Auth (new in v0.8)
 
@@ -250,6 +302,7 @@ Notes:
 | Endpoint | Method | Description | Priority |
 |---|---|---|---|
 | `/v1/posts/:postId/replies` | GET | Cursor-paginated replies (oldest-first by reply ID) | Deferred — replies are rendered as a tree grouped by `parentReplyId`; paginated loads arrive interleaved across parent/child, requiring tree re-parenting and a full re-render on each page. Cost outweighs benefit at current network scale. |
+| `POST /v1/replies` — `attachments` field | Live-confirmed 2026-08-27 (see Attachments section above): replies accept an `attachments` array identically to posts, undocumented in `docs.md` but present in `/types.d.ts` and functional. `ctrl+g` (image/gif) and `ctrl+j` (audio/song) both now attach natively on the reply compose box — feature 50, `docs/50-post-reply-attachments.md`. | **Done** — feature 50 |
 
 ### Follows
 

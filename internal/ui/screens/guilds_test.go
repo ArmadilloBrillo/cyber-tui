@@ -821,3 +821,25 @@ func TestGuildsModel_VisibleInlineImages_ReportsSlotWhenEnabled(t *testing.T) {
 		t.Errorf("URL = %q, want https://example.com/a.png", slots[0].URL)
 	}
 }
+
+// TestGuildsModel_VisibleInlineImages_ListNeverBadges guards the revert: the
+// guild list must never produce a badge slot for any Icon value, even a
+// plausible-looking icon-font-style code, and even with inline images on —
+// Guild.Icon is confirmed live to use an unresolvable icon scheme (CLDR
+// emoji names / "dinkie-icons:"), not the Lucide/Phosphor scheme
+// ResolveBadgeIconURL understands. The list keeps its pre-existing
+// "◆"/★/☆ text-only fallback (renderGuildItem/guildIcon()).
+func TestGuildsModel_VisibleInlineImages_ListNeverBadges(t *testing.T) {
+	t.Helper()
+	m := screens.NewGuildsModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetGuilds([]model.Guild{
+		{ID: "g1", Name: "Alpha", Slug: "alpha", Icon: "ph:crown", MemberCount: 10},
+		{ID: "g2", Name: "Beta", Slug: "beta", Icon: "crown", MemberCount: 5},
+	}, "")
+
+	if slots := m.VisibleInlineImages(); slots != nil {
+		t.Errorf("expected no slots for the guild list, got %+v", slots)
+	}
+}

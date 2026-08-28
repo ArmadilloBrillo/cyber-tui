@@ -28,6 +28,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 	"github.com/ragnar/cyber-tui/internal/update"
 	"github.com/ragnar/cyber-tui/internal/version"
+	"github.com/ragnar/cyber-tui/internal/youtube"
 )
 
 type screen int
@@ -111,10 +112,10 @@ type App struct {
 	// tab — separate from ProfileModel's apprenticeships, which get
 	// overwritten when viewing another user's profile.
 	ownApprenticeSlugs []string
-	active      screen
-	focus       focusTarget
-	width       int
-	height      int
+	active             screen
+	focus              focusTarget
+	width              int
+	height             int
 
 	// autoEmail and autoPassword are set from the config file.
 	// When both are non-empty, Init fires loginCmd immediately.
@@ -191,6 +192,13 @@ type App struct {
 	// wherever InsertIconMsg would land — see applyAttachURL.
 	attachURLPromptOpen bool
 	attachURLPrompt     screens.PathPromptModel
+
+	// songPrompt state — open with ctrl+j from a focused cIRC composer
+	// (supporter accounts only). Submit hands off a built "/song ..."
+	// command via SetComposeValueMsg, the same mechanism ctrl+g's GIF
+	// attach uses — see applyAttachURL and submitSongPrompt.
+	songPromptOpen bool
+	songPrompt     screens.SongPromptModel
 
 	// imageCarousel state — populated when an image is opened from a picker
 	// containing more than one image, letting left/right cycle between them
@@ -605,6 +613,7 @@ func NewApp(client api.Client) App {
 		pathPrompt:         screens.NewPathPromptModel(),
 		iconPicker:         screens.NewIconPickerModel(),
 		attachURLPrompt:    screens.NewPathPromptModel(),
+		songPrompt:         screens.NewSongPromptModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -818,6 +827,9 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 	if a2, cmd, ok := a.handleCMail(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleRelativeTimeTick(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleProfile(msg); ok {
 		return a2, cmd
 	}
@@ -864,6 +876,9 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 		return a2, cmd
 	}
 	if a2, cmd, ok := a.handleInlineImageFetched(msg); ok {
+		return a2, cmd
+	}
+	if a2, cmd, ok := a.handleSongMetadataFetched(msg); ok {
 		return a2, cmd
 	}
 	if a2, cmd, ok := a.handleErr(msg); ok {
@@ -971,6 +986,10 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		model, cmd := a.handleAttachURLPromptKey(m)
 		return model.(App), cmd, true
 	}
+	if a.songPromptOpen {
+		model, cmd := a.handleSongPromptKey(m)
+		return model.(App), cmd, true
+	}
 	// When a screen has a focused text input, let it consume all keys.
 	// ctrl+c is kept as a hard escape hatch; a handful of other global
 	// shortcuts get a ctrl-prefixed twin that reaches through too, since
@@ -1003,7 +1022,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 				(a.active == screenCMail && a.cmail.ComposeEmpty()))
 		switch {
 		case m.String() == "ctrl+o", m.String() == "ctrl+q", m.String() == "ctrl+t",
-			m.String() == "ctrl+]", m.String() == "ctrl+g", m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
+			m.String() == "ctrl+]", m.String() == "ctrl+g", m.String() == "ctrl+j", m.String() == "ctrl+left", m.String() == "ctrl+right", bareArrowEscapesEmptyCompose:
 			// fall through to the global switch below
 		default:
 			return a, nil, false // fall through to delegateUpdate
@@ -1063,6 +1082,24 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.attachURLPromptOpen = true
 			var cmd tea.Cmd
 			a.attachURLPrompt, cmd = a.attachURLPrompt.Open("attach image/gif url", "")
+			return a, cmd, true
+		}
+	case "ctrl+j":
+		songTargetActive := a.active == screenChatrooms ||
+			(a.active == screenFeed && a.feed.PanelActive()) ||
+			(a.active == screenPostDetail && (a.postDetail.EditPanelActive() || a.postDetail.ReplyComposeActive()))
+		if songTargetActive && a.activeScreenHasFocusedInput() {
+			if !a.currentUser.IsSupporter {
+				if a.active == screenChatrooms {
+					a.chatrooms = a.chatrooms.AppendSystemMessage(a.chatrooms.ActiveRoomSlug(), "*** song attachments require supporter status")
+					return a, nil, true
+				}
+				a, cmd := a.notify(notifyWarn, "song attachments require supporter status")
+				return a, cmd, true
+			}
+			a.songPromptOpen = true
+			var cmd tea.Cmd
+			a.songPrompt, cmd = a.songPrompt.Open()
 			return a, cmd, true
 		}
 	case "v":
@@ -1240,14 +1277,14 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentURL), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AudioAttachment), true
 	case postCreatedMsg:
 		return a, a.loadFeedCmd(), true
 	case postConvertedToNoteMsg:
 		a, notifyCmd := a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
 		return a, tea.Batch(notifyCmd, a.loadFeedCmd()), true
 	case screens.SubmitPostEditMsg:
-		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentURL, msg.AttachmentTouched, msg.OtherAttachments), true
+		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentTouched, msg.AudioAttachment, msg.OtherAttachments), true
 	case postEditedMsg:
 		// Both Feed and PostDetail may hold their own local copy of this post;
 		// PostDetail's ApplyPostEdit has no postID param, so guard it here —
@@ -1259,7 +1296,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitReplyMsg:
-		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID), true
+		return a, a.createReplyCmd(msg.PostID, msg.Content, msg.ParentReplyID, msg.Attachment), true
 	case screens.SubmitReplyEditMsg:
 		return a, a.editReplyCmd(msg.ReplyID, msg.Content), true
 	case replyEditedMsg:
@@ -1401,7 +1438,14 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
 	case screens.CMailConvSelectedMsg:
-		return a, a.markCMailReadCmd(msg.ConversationID), true
+		cmds := []tea.Cmd{a.markCMailReadCmd(msg.ConversationID)}
+		if msg.OtherUsername != "" {
+			cmds = append(cmds, a.loadCMailOtherProfileCmd(msg.OtherUsername))
+		}
+		return a, tea.Batch(cmds...), true
+	case cmailOtherProfileLoadedMsg:
+		a.cmail = a.cmail.SetOtherProfile(msg.username, msg.user)
+		return a, nil, true
 	case screens.StartConversationMsg:
 		if msg.Username == "" || msg.Username == a.currentUser.Username {
 			return a, nil, true
@@ -1413,13 +1457,16 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.active = screenCMail
 		a.cmail = a.cmail.SetActiveConversation(msg.conv)
 		convID := msg.conv.ID
+		fetchOther := a.cmail.OtherProfileFetchTarget(msg.conv)
 		// The new conversation appears in the list via the live
 		// user_conversations subscription once the server's write reaches
 		// it — no REST refetch here (would race the subscription's own
 		// state; see OpenUserConvsSubscription's doc comment).
 		return a, tea.Batch(
 			a.cmail.ConvOpenCmds(convID),
-			func() tea.Msg { return screens.CMailConvSelectedMsg{ConversationID: convID} },
+			func() tea.Msg {
+				return screens.CMailConvSelectedMsg{ConversationID: convID, OtherUsername: fetchOther}
+			},
 		), true
 	case screens.CMailReconnectedMsg:
 		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
@@ -1449,6 +1496,28 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 	}
 	return a, nil, false
+}
+
+// handleRelativeTimeTick keeps cIRC/C-Mail's "Nm ago"-style timestamps
+// current by re-rendering whichever of the two is active — see
+// screens.ChatroomsModel.RefreshRelativeTimestamps for why this is a no-op
+// everywhere else (wrong screen active, or not in "relative" display mode).
+// Always reschedules, mirroring schedulePollCmd's shape.
+func (a App) handleRelativeTimeTick(msg tea.Msg) (App, tea.Cmd, bool) {
+	t, ok := msg.(relativeTimeTickMsg)
+	if !ok {
+		return a, nil, false
+	}
+	if t.gen != a.sessionGen {
+		return a, nil, true
+	}
+	switch a.active {
+	case screenChatrooms:
+		a.chatrooms = a.chatrooms.RefreshRelativeTimestamps()
+	case screenCMail:
+		a.cmail = a.cmail.RefreshRelativeTimestamps()
+	}
+	return a, a.scheduleRelativeTimeTickCmd(), true
 }
 
 // handleProfile processes profile load, save, and sub-tab messages.
@@ -3981,11 +4050,12 @@ func (a App) handleURLPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleIconPickerKey processes keyboard input while the icon picker overlay
-// is open. Esc and enter are handled here directly (mirrors
-// handleURLPickerKey); enter emits an InsertIconMsg that falls through to
-// delegateScreenUpdate and lands on whichever screen is currently active.
-// Every other key (tab/shift+tab/up/down/search typing) is forwarded to
-// IconPickerModel.Update.
+// is open. Esc, enter, and ctrl+n are handled here directly (mirrors
+// handleURLPickerKey); enter and ctrl+n both emit an InsertIconMsg that
+// falls through to delegateScreenUpdate and lands on whichever screen is
+// currently active — enter also closes the picker, ctrl+n leaves it open so
+// several icons can be inserted in a row. Every other key (tab/shift+tab/
+// up/down/search typing) is forwarded to IconPickerModel.Update.
 func (a App) handleIconPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -3997,6 +4067,14 @@ func (a App) handleIconPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.iconPickerOpen = false
+		return a, func() tea.Msg { return screens.InsertIconMsg{Icon: glyph} }
+	case "ctrl+n":
+		// Same as enter, but leaves the picker open so several icons can be
+		// inserted in a row without reopening it each time.
+		glyph, ok := a.iconPicker.Selected()
+		if !ok {
+			return a, nil
+		}
 		return a, func() tea.Msg { return screens.InsertIconMsg{Icon: glyph} }
 	}
 	var cmd tea.Cmd
@@ -4031,37 +4109,147 @@ func (a App) handleAttachURLPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
-// applyAttachURL dispatches a submitted attach-URL prompt result, per what
-// was confirmed live this session: posts get a native attachment (routed
-// through the create/edit request); circ/C-Mail can only embed an animated
-// GIF, via the server's own /gif command — visually confirmed on the
-// website, whereas markdown in a message's content does not render there;
-// and replies have no attachment mechanism at all (no attachments field in
-// the reply API). Where nothing can actually render, this warns instead of
+// applyAttachURL dispatches a submitted attach-URL prompt result. Posts and
+// replies no longer get a native image/gif attachment here — the API (v0.8.7)
+// now returns 400 for type:"image" in a post/reply's attachments array, and
+// 400s the same way for an inline markdown image in content that doesn't
+// point at bunker.cyberspace.online (see docs/00-latest-api-reference.md).
+// Since cyber-tui can't upload to bunker itself, no URL a user pastes here
+// will ever be accepted for a post/reply, so this warns instead of inserting
+// markdown that would only fail later at submit. circ/C-Mail can still only
+// embed an animated GIF, via the server's own /gif command — visually
+// confirmed on the website, whereas markdown in a message's content does not
+// render there. Where nothing can actually render, this warns instead of
 // silently inserting text that looks like it worked but won't show up
-// anywhere but cyber-tui's own inline-image view.
+// anywhere but cyber-tui's own inline-image view (guilds/journal/bio).
 func (a App) applyAttachURL(url string) (App, tea.Cmd) {
-	switch {
-	case a.active == screenFeed && a.feed.PanelActive():
-		a.feed = a.feed.SetPanelAttachment(url)
-		return a, nil
-	case a.active == screenPostDetail && a.postDetail.EditPanelActive():
-		a.postDetail = a.postDetail.SetEditPanelAttachment(url)
-		return a, nil
-	}
 	if url == "" {
 		return a, nil
 	}
-	switch {
-	case a.active == screenChatrooms, a.active == screenCMail:
+	if a.active == screenFeed && a.feed.PanelActive() {
+		return a.notify(notifyWarn, "cyberspace.online only accepts post/reply images uploaded via the website — attach a song instead (ctrl+j), or add the image there first")
+	}
+	if a.active == screenPostDetail && (a.postDetail.EditPanelActive() || a.postDetail.ReplyComposeActive()) {
+		return a.notify(notifyWarn, "cyberspace.online only accepts post/reply images uploaded via the website — attach a song instead (ctrl+j), or add the image there first")
+	}
+	if a.active == screenChatrooms || a.active == screenCMail {
 		if !urlutil.IsGIFURL(url) {
 			return a.notify(notifyWarn, "cyberspace.online can only embed a GIF in chat (via /gif) — a static image needs a file upload the API doesn't support")
 		}
 		return a, func() tea.Msg { return screens.SetComposeValueMsg{Value: "/gif " + url} }
-	case a.active == screenPostDetail && a.postDetail.ReplyComposeActive():
-		return a.notify(notifyWarn, "replies don't support image attachments — there's no attachments field in the reply API")
 	}
 	return a, func() tea.Msg { return screens.InsertIconMsg{Icon: "![](" + url + ")"} }
+}
+
+// handleSongPromptKey processes keyboard input while the ctrl+j song-attach
+// prompt is open. Esc/tab/shift+tab/ctrl+s are handled directly here; Enter's
+// behavior depends on which field has focus (mirrors the modal's own field
+// order): on the url field it validates and kicks off the async oEmbed
+// fetch (see fetchSongMetadataCmd), on artist/title it just advances focus
+// like tab, and on genre (the last field) it submits, same as ctrl+s. Every
+// other key is forwarded to SongPromptModel.Update.
+func (a App) handleSongPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.songPromptOpen = false
+		return a, nil
+	case "tab", "shift+tab":
+		var cmd tea.Cmd
+		a.songPrompt, cmd = a.songPrompt.Update(msg)
+		return a, cmd
+	case "ctrl+s":
+		return a.submitSongPrompt()
+	case "enter":
+		if a.songPrompt.OnURLField() {
+			url := a.songPrompt.URLValue()
+			if _, ok := youtube.ExtractVideoID(url); !ok {
+				a.songPrompt = a.songPrompt.SetWarning("not a recognized YouTube URL")
+				return a, nil
+			}
+			var advanceCmd tea.Cmd
+			a.songPrompt, advanceCmd = a.songPrompt.NextField()
+			a.songPrompt = a.songPrompt.SetLoading(true)
+			return a, tea.Batch(advanceCmd, a.fetchSongMetadataCmd(url))
+		}
+		if !a.songPrompt.OnLastField() {
+			var cmd tea.Cmd
+			a.songPrompt, cmd = a.songPrompt.NextField()
+			return a, cmd
+		}
+		return a.submitSongPrompt()
+	}
+	var cmd tea.Cmd
+	a.songPrompt, cmd = a.songPrompt.Update(msg)
+	return a, cmd
+}
+
+// submitSongPrompt validates the song prompt's fields and, if valid, closes
+// the modal and dispatches the built attachment per target: Feed's new-post
+// panel / Post Detail's edit panel / Post Detail's reply compose each get a
+// native model.Attachment (confirmed live 2026-08-27 that posts and replies
+// both accept a "audio" attachment with no width/height — see
+// docs/00-api-backlog.md); cIRC/C-Mail instead get the "/song ..." command
+// text handed to the composer via SetComposeValueMsg — the same handoff
+// applyAttachURL uses for ctrl+g's "/gif <url>" — since the user still
+// presses Enter there to actually send it.
+func (a App) submitSongPrompt() (App, tea.Cmd) {
+	att, ok := a.songPrompt.BuildAttachment()
+	if !ok {
+		a.songPrompt = a.songPrompt.SetWarning("enter a YouTube URL, artist, title, and genre")
+		return a, nil
+	}
+	a.songPromptOpen = false
+	switch {
+	case a.active == screenFeed && a.feed.PanelActive():
+		a.feed = a.feed.SetPanelAudioAttachment(att)
+		return a, nil
+	case a.active == screenPostDetail && a.postDetail.EditPanelActive():
+		a.postDetail = a.postDetail.SetEditPanelAudioAttachment(att)
+		return a, nil
+	case a.active == screenPostDetail && a.postDetail.ReplyComposeActive():
+		a.postDetail = a.postDetail.SetReplyAudioAttachment(att)
+		return a, nil
+	}
+	cmd := "/song " + att.Src + " | " + att.Artist + " | " + att.Title + " | " + att.Genre
+	return a, func() tea.Msg { return screens.SetComposeValueMsg{Value: cmd} }
+}
+
+// songMetadataFetchedMsg reports the result of one fetchSongMetadataCmd.
+type songMetadataFetchedMsg struct {
+	title  string
+	artist string
+	err    error
+}
+
+// fetchSongMetadataCmd looks up rawURL's title/channel via YouTube's public
+// oEmbed endpoint (internal/youtube) — best-effort autofill, never blocking
+// submission (see SongPromptModel.FetchFailed).
+func (a App) fetchSongMetadataCmd(rawURL string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		title, artist, err := youtube.FetchMetadata(ctx, rawURL)
+		return songMetadataFetchedMsg{title: title, artist: artist, err: err}
+	}
+}
+
+// handleSongMetadataFetched applies a resolved songMetadataFetchedMsg to the
+// still-open song prompt. If the prompt was closed (cancelled) before the
+// fetch resolved, the result is simply dropped.
+func (a App) handleSongMetadataFetched(msg tea.Msg) (App, tea.Cmd, bool) {
+	m, ok := msg.(songMetadataFetchedMsg)
+	if !ok {
+		return a, nil, false
+	}
+	if !a.songPromptOpen {
+		return a, nil, true
+	}
+	if m.err != nil {
+		a.songPrompt = a.songPrompt.FetchFailed()
+	} else {
+		a.songPrompt = a.songPrompt.ApplyMetadata(m.title, m.artist)
+	}
+	return a, nil, true
 }
 
 // --- commands ---
@@ -4206,6 +4394,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.checkAndWanderCmd(),
 		a.scheduleLogoAnimCmd(),
 		a.checkForUpdateCmd(),
+		a.scheduleRelativeTimeTickCmd(),
 	)
 }
 
@@ -4242,6 +4431,15 @@ type userProfileLoadedMsg struct {
 	user        model.User
 	isFollowing bool
 	followID    string
+}
+
+// cmailOtherProfileLoadedMsg carries a C-Mail conversation partner's full
+// profile, fetched (see loadCMailOtherProfileCmd) so their real
+// SupporterIcon is available for the detail header badge — conversation
+// data alone never carries it.
+type cmailOtherProfileLoadedMsg struct {
+	username string
+	user     model.User
 }
 type followResultMsg struct{ followID string }
 type unfollowResultMsg struct{}
@@ -4295,13 +4493,13 @@ type settingsSavedMsg struct {
 	feedManualRefreshOnly   bool
 	typingIndicatorsEnabled bool
 	maxThreadDepth          int
-	timezone         string
-	imageViewer      string
-	graphicsProtocol string
-	inlineImages     bool
-	dithering        bool
-	ditherSharpness  string
-	layoutName       string
+	timezone                string
+	imageViewer             string
+	graphicsProtocol        string
+	inlineImages            bool
+	dithering               bool
+	ditherSharpness         string
+	layoutName              string
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
@@ -4572,6 +4770,11 @@ type urlPostLoadedMsg struct {
 }
 type profilePostLoadedMsg struct{ post model.Post }
 type pollUnreadTickMsg struct{ gen int }
+
+// relativeTimeTickMsg drives the periodic re-render that keeps cIRC/C-Mail's
+// "Nm ago"-style timestamps current — see
+// screens.ChatroomsModel.RefreshRelativeTimestamps.
+type relativeTimeTickMsg struct{ gen int }
 type unreadCountMsg struct {
 	count int
 	exact bool
@@ -4679,6 +4882,21 @@ func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 			}
 		}
 		return userProfileLoadedMsg{user: user, isFollowing: isFollowing, followID: followID}
+	}
+}
+
+// loadCMailOtherProfileCmd fetches username's full profile so the C-Mail
+// detail header can show their real SupporterIcon (see
+// CMailConvSelectedMsg's doc comment — conversation data never carries it).
+// A failure just means the badge silently stays absent; that's an
+// acceptable outcome here, not worth a user-facing error toast.
+func (a *App) loadCMailOtherProfileCmd(username string) tea.Cmd {
+	return func() tea.Msg {
+		user, err := a.client.GetProfile(username)
+		if err != nil {
+			return nil
+		}
+		return cmailOtherProfileLoadedMsg{username: username, user: user}
 	}
 }
 
@@ -4913,9 +5131,12 @@ func (a *App) loadTopicThreadCmd(postID string) tea.Cmd {
 	}
 }
 
-func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
+// createReplyCmd sends a reply with its audio attachment, if any (native
+// image/reply attachments were removed — API v0.8.7 rejects type:"image" in
+// a post/reply's attachments array).
+func (a *App) createReplyCmd(postID, content, parentReplyID string, audioAttachment *model.Attachment) tea.Cmd {
 	return func() tea.Msg {
-		reply, err := a.client.CreateReply(postID, content, parentReplyID)
+		reply, err := a.client.CreateReply(postID, content, parentReplyID, audioAttachment)
 		if err != nil {
 			return actionErrMsg{err}
 		}
@@ -4923,59 +5144,12 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string) tea.Cmd {
 	}
 }
 
-// maxAttachmentDim is the width/height cap cyberspace.online enforces on a
-// post's native image/gif attachment — confirmed live (POST /v1/posts 400s
-// above it: "Image width must be an integer between 1 and 640px"). The API
-// requires the client to supply both dimensions and does not compute or
-// resize the image itself.
-const maxAttachmentDim = 640
-
-// attachmentTypeForURL infers a wireAttachment's "type" from the URL's path
-// extension (via urlutil.IsGIFURL — ignores query string/fragment, unlike a
-// raw suffix check, so a signed CDN link like ".gif?token=..." still
-// resolves correctly). This only covers native post/reply attachments,
-// which are always this client's own upload URLs with a known extension;
-// circ/C-Mail's /gif <url> accepts arbitrary user-typed URLs instead, so
-// openImageInTerminal no longer relies on extension sniffing — see
-// imgview.FetchAny.
-func attachmentTypeForURL(rawURL string) string {
-	if urlutil.IsGIFURL(rawURL) {
-		return "gif"
-	}
-	return "image"
-}
-
-// resolveAttachment fetches attachmentURL's declared dimensions and builds
-// the model.Attachment CreatePost/EditPost send. Returns nil, nil for an
-// empty URL (no attachment). Returns an error — surfaced to the user like any
-// other actionErrMsg/editErrorMsg — when the image can't be fetched or
-// exceeds maxAttachmentDim; this app has no way to resize it (no upload
-// endpoint to host the result), so the accurate move is to fail clearly here
-// rather than let the server reject a request the user already spent an
-// interaction composing.
-func resolveAttachment(attachmentURL string) (*model.Attachment, error) {
-	if attachmentURL == "" {
-		return nil, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	width, height, err := imgview.Dimensions(ctx, attachmentURL)
-	if err != nil {
-		return nil, fmt.Errorf("attach image: %w", err)
-	}
-	if width > maxAttachmentDim || height > maxAttachmentDim {
-		return nil, fmt.Errorf("attach image: %dx%d exceeds the site's %dx%d limit for post attachments — try a smaller image, or paste the link in the body text instead", width, height, maxAttachmentDim, maxAttachmentDim)
-	}
-	return &model.Attachment{Type: attachmentTypeForURL(attachmentURL), Src: attachmentURL, Width: width, Height: height}, nil
-}
-
-func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool, attachmentURL string) tea.Cmd {
+// createPostCmd sends a post with its audio attachment, if any (native
+// image/gif post attachments were removed — API v0.8.7 rejects type:"image"
+// in a post's attachments array).
+func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool, audioAttachment *model.Attachment) tea.Cmd {
 	return func() tea.Msg {
-		attachment, err := resolveAttachment(attachmentURL)
-		if err != nil {
-			return actionErrMsg{err}
-		}
-		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, attachment)
+		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, audioAttachment)
 		if err != nil {
 			return actionErrMsg{err}
 		}
@@ -5007,9 +5181,6 @@ func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
 		if msg.WebsiteUrl != "" {
 			update.WebsiteUrl = &msg.WebsiteUrl
 		}
-		if msg.WebsiteImageUrl != "" {
-			update.WebsiteImageUrl = &msg.WebsiteImageUrl
-		}
 		if msg.Latitude != "" {
 			if lat, err := strconv.ParseFloat(msg.Latitude, 64); err == nil {
 				update.LocationLatitude = &lat
@@ -5026,7 +5197,6 @@ func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
 		a.currentUser.Bio = msg.Bio
 		a.currentUser.WebsiteName = msg.WebsiteName
 		a.currentUser.WebsiteUrl = msg.WebsiteUrl
-		a.currentUser.WebsiteImageUrl = msg.WebsiteImageUrl
 		a.currentUser.LocationName = msg.LocationName
 		if update.LocationLatitude != nil {
 			a.currentUser.LocationLatitude = *update.LocationLatitude
@@ -5636,17 +5806,13 @@ func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 // panel found on the post but doesn't manage (e.g. an audio one) — when
 // attachmentTouched, they're resent alongside the resolved attachmentURL
 // since EditPost replaces the whole attachments array wholesale.
-func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool, attachmentURL string, attachmentTouched bool, otherAttachments []model.Attachment) tea.Cmd {
+func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool, attachmentTouched bool, audioAttachment *model.Attachment, otherAttachments []model.Attachment) tea.Cmd {
 	return func() tea.Msg {
 		var attachments []model.Attachment
 		if attachmentTouched {
-			attachment, err := resolveAttachment(attachmentURL)
-			if err != nil {
-				return editErrorMsg(err)
-			}
 			attachments = append(attachments, otherAttachments...)
-			if attachment != nil {
-				attachments = append(attachments, *attachment)
+			if audioAttachment != nil {
+				attachments = append(attachments, *audioAttachment)
 			}
 		}
 		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW, attachments, attachmentTouched); err != nil {
@@ -5791,6 +5957,17 @@ func (a *App) schedulePollCmd() tea.Cmd {
 	return tea.Tick(60*time.Second, func(time.Time) tea.Msg { return pollUnreadTickMsg{gen: gen} })
 }
 
+// scheduleRelativeTimeTickCmd self-reschedules every 20s, close enough to
+// relative time's coarsest visible increment ("just now" -> "1m ago") that
+// the lag is imperceptible. handleRelativeTimeTick only acts on it when the
+// active screen is cIRC or C-Mail and its time-display setting is
+// "relative" — otherwise this is a no-op tick, so it always runs rather than
+// starting/stopping around room/conversation open-close lifecycle.
+func (a *App) scheduleRelativeTimeTickCmd() tea.Cmd {
+	gen := a.sessionGen
+	return tea.Tick(20*time.Second, func(time.Time) tea.Msg { return relativeTimeTickMsg{gen: gen} })
+}
+
 func (a *App) scheduleWanderCmd() tea.Cmd {
 	gen := a.sessionGen
 	return tea.Tick(1*time.Hour, func(time.Time) tea.Msg { return wanderTickMsg{gen: gen} })
@@ -5887,10 +6064,22 @@ func (a *App) loadPostAndShowCmd(postID string) tea.Cmd {
 // username and per-author slug. origin is the screen to return to when
 // PostDetail closes; it travels through urlPostLoadedMsg rather than being
 // read from a.active when the response arrives.
+//
+// The website falls back to a raw post-ID permalink (/{username}/{postId})
+// when a post has no custom/generated slug — a shape indistinguishable from
+// a real slug on the wire (confirmed live: the slug lookup 404s for one of
+// these, GET /v1/posts/:id for the same segment succeeds). So on a 404 here,
+// retry once as an ID lookup before reporting the link as broken.
 func (a *App) loadPostBySlugCmd(username, slug string, origin screen) tea.Cmd {
 	return func() tea.Msg {
 		post, err := a.client.GetPostBySlug(username, slug)
 		if err != nil {
+			var apiErr *api.APIError
+			if errors.As(err, &apiErr) && apiErr.Status == 404 {
+				if idPost, idErr := a.client.GetPost(slug); idErr == nil {
+					return urlPostLoadedMsg{post: idPost, origin: origin}
+				}
+			}
 			return urlPostLoadErrMsg{err}
 		}
 		return urlPostLoadedMsg{post: post, origin: origin}

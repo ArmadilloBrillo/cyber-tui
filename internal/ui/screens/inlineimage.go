@@ -1,6 +1,12 @@
 package screens
 
-import "github.com/ragnar/cyber-tui/internal/ui/markdown"
+import (
+	"strings"
+
+	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/imgview"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
+)
 
 // inlineImageMaxRows is the fixed row budget reserved for one inline image
 // within a post/reply card — a thumbnail, not a hero image, since every
@@ -56,6 +62,58 @@ type InlineImageSlot struct {
 	MaxCols   int
 	MaxRows   int
 	Key       string // stable per post/reply, for placement tracking (Kitty) and caching
+}
+
+// badgeIconCols is the reserved column width for one inline badge icon (a
+// supporter/guild icon rendered next to a username) — small enough to sit
+// inline within a text line rather than reserving a row band like
+// InlineImageSlot's other uses. A trailing single space keeps it from
+// touching whatever text follows.
+const badgeIconCols = 2
+
+// badgeGap returns the literal blank space a rendered line must reserve
+// after a piece of text for n badge icons to be composited over later, in
+// left-to-right order.
+func badgeGap(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat(" "+strings.Repeat(" ", badgeIconCols), n)
+}
+
+// userBadgeCodes returns the SupporterIcon code to render next to a
+// username, skipping it if empty or the user isn't a supporter. GuildIcon
+// deliberately isn't included here: confirmed live (GET /v1/guilds, all 20
+// real guilds) that Guild.Icon/User.GuildIcon values are Unicode/CLDR emoji
+// character names (e.g. "crown", "black-sun-with-rays") or an unidentified
+// "dinkie-icons:"-prefixed set — never the Lucide/Lucide-Lab/Phosphor scheme
+// ResolveBadgeIconURL resolves, which was confirmed only against a
+// SupporterIcon value. See docs/00-api-backlog.md for the follow-up.
+func userBadgeCodes(u model.User) []string {
+	var codes []string
+	if u.IsSupporter && u.SupporterIcon != "" {
+		codes = append(codes, u.SupporterIcon)
+	}
+	return codes
+}
+
+// badgeSlot builds an InlineImageSlot for one badge icon code
+// (SupporterIcon), anchored at (row, col) in the caller's viewport
+// coordinates — col is the on-screen column immediately after the text the
+// badge follows, from badgeGap's reserved space. Returns ok=false for an
+// empty code (nothing to show).
+func badgeSlot(code string, row, col int, key string) (InlineImageSlot, bool) {
+	if code == "" {
+		return InlineImageSlot{}, false
+	}
+	return InlineImageSlot{
+		URL:       imgview.BadgeURLPrefix + code,
+		Row:       row,
+		ColIndent: col,
+		MaxCols:   badgeIconCols,
+		MaxRows:   1,
+		Key:       key,
+	}, true
 }
 
 // spliceImageBand replaces lines[at] with n blank lines, reserving room for

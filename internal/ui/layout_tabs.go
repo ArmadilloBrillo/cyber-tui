@@ -488,6 +488,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		row("o", "open url"),
 		row("ctrl+]", "icon picker"),
 		row("ctrl+g", "attach image/gif"),
+		row("ctrl+j", "attach song (circ, supporter)"),
 		row("q", "quit"),
 	)
 	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)
@@ -628,6 +629,10 @@ func (l TabsLayout) renderURLPicker(a App) string {
 
 func (l TabsLayout) renderIconPicker(a App) string {
 	return a.iconPicker.View()
+}
+
+func (l TabsLayout) renderSongPrompt(a App) string {
+	return a.songPrompt.View()
 }
 
 // renderImageModal returns the bordered text-only shell for the image overlay.

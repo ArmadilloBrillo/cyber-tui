@@ -35,50 +35,29 @@ func TestPostComposePanel_OpenForEdit_TextareaHeightMatchesBodyLines(t *testing.
 	}
 }
 
-// TestPostComposePanel_OpenForEdit_PrefillsImageAttachment guards the
+// TestPostComposePanel_OpenForEdit_PrefillsAudioAttachment guards the
 // prefill PostDetail/Feed rely on to avoid clobbering an existing attachment
-// on save: OpenForEdit must seed attachmentURL from the post's own
-// image/gif attachment (skipping any audio one), but leave it untouched so
-// a save that never calls SetAttachmentURL omits the attachments field
-// entirely (see EditPost's attachmentTouched). The audio attachment must
-// still be preserved (via OtherAttachments) rather than discarded, since a
-// touched save resends the whole attachments array and would otherwise
-// silently drop it.
-func TestPostComposePanel_OpenForEdit_PrefillsImageAttachment(t *testing.T) {
+// on save: OpenForEdit must seed pendingAudio from the post's audio
+// attachment, but leave it untouched so a save that never calls
+// SetPendingAudio omits the attachments field entirely (see EditPost's
+// attachmentTouched). A legacy (pre-v0.8.7) image attachment falls through
+// to OtherAttachments, since image attach is no longer a dedicated slot but
+// still needs to round-trip on an edit that touches other attachments.
+func TestPostComposePanel_OpenForEdit_PrefillsAudioAttachment(t *testing.T) {
 	m := NewPostComposePanel(80)
 	audio := model.Attachment{Type: "audio", Src: "https://example.com/track.mp3"}
+	legacyImage := model.Attachment{Type: "image", Src: "https://example.com/pic.png"}
 	m, _ = m.OpenForEdit(model.Post{
-		Attachments: []model.Attachment{
-			audio,
-			{Type: "image", Src: "https://example.com/pic.png"},
-		},
+		Attachments: []model.Attachment{audio, legacyImage},
 	})
-	if got := m.AttachmentURL(); got != "https://example.com/pic.png" {
-		t.Errorf("AttachmentURL() = %q, want the image attachment's src (audio skipped)", got)
+	if got := m.PendingAudio(); got == nil || *got != audio {
+		t.Errorf("PendingAudio() = %v, want %v", got, audio)
 	}
-	if got := m.OtherAttachments(); len(got) != 1 || got[0] != audio {
-		t.Errorf("OtherAttachments() = %v, want [%v] (the audio attachment, preserved)", got, audio)
+	if got := m.OtherAttachments(); len(got) != 1 || got[0] != legacyImage {
+		t.Errorf("OtherAttachments() = %v, want [%v] — legacy image attachment carried through", got, legacyImage)
 	}
 	if m.AttachmentTouched() {
 		t.Error("AttachmentTouched() = true after OpenForEdit, want false — prefilling isn't a user edit")
-	}
-}
-
-// TestPostComposePanel_SetAttachmentURL_MarksTouchedEvenWhenClearing checks
-// the touched flag flips on an explicit clear (empty string), not just a
-// set — that's what tells EditPost to actually send `attachments: []`
-// instead of silently leaving a stale attachment in place.
-func TestPostComposePanel_SetAttachmentURL_MarksTouchedEvenWhenClearing(t *testing.T) {
-	m := NewPostComposePanel(80)
-	m, _ = m.OpenForEdit(model.Post{
-		Attachments: []model.Attachment{{Type: "image", Src: "https://example.com/pic.png"}},
-	})
-	m = m.SetAttachmentURL("")
-	if got := m.AttachmentURL(); got != "" {
-		t.Errorf("AttachmentURL() = %q, want empty after clearing", got)
-	}
-	if !m.AttachmentTouched() {
-		t.Error("AttachmentTouched() = false after an explicit clear, want true")
 	}
 }
 
@@ -88,14 +67,27 @@ func TestPostComposePanel_SetAttachmentURL_MarksTouchedEvenWhenClearing(t *testi
 func TestPostComposePanel_Open_ResetsAttachment(t *testing.T) {
 	m := NewPostComposePanel(80)
 	m, _ = m.OpenForEdit(model.Post{
-		Attachments: []model.Attachment{{Type: "image", Src: "https://example.com/pic.png"}},
+		Attachments: []model.Attachment{{Type: "audio", Src: "https://example.com/track.mp3"}},
 	})
-	m = m.SetAttachmentURL("https://example.com/other.png")
+	m = m.SetPendingAudio(&model.Attachment{Type: "audio", Src: "https://example.com/other.mp3"})
 	m, _ = m.Open(false)
-	if got := m.AttachmentURL(); got != "" {
-		t.Errorf("AttachmentURL() = %q after Open(), want empty", got)
+	if got := m.PendingAudio(); got != nil {
+		t.Errorf("PendingAudio() = %v after Open(), want nil", got)
 	}
 	if m.AttachmentTouched() {
 		t.Error("AttachmentTouched() = true after Open(), want false")
+	}
+}
+
+// TestPostComposePanel_PanelHeight_GrowsForPendingAudio guards the layout
+// math: a pending audio attachment adds exactly one row, the same as an
+// image attachment does, so App's viewport-height recalculation stays in
+// sync with what View() actually renders.
+func TestPostComposePanel_PanelHeight_GrowsForPendingAudio(t *testing.T) {
+	m := NewPostComposePanel(80)
+	base := m.PanelHeight()
+	m = m.SetPendingAudio(&model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Artist: "a", Title: "t"})
+	if got := m.PanelHeight(); got != base+1 {
+		t.Errorf("PanelHeight() = %d after SetPendingAudio, want %d", got, base+1)
 	}
 }

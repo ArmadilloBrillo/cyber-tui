@@ -110,6 +110,14 @@ All fields in the `Settings` struct above. These can be modified from multiple d
 
 Timezone (UTC offset) is **not** part of API settings. It remains local-only in `~/.cyber-tui.json` and is controlled via the `z` key picker. The API field `timeDisplayFormat` controls the display format (`"datetime"`, `"relative"`, `"unix"`, or `"swatch"`), which *is* synced.
 
+### Relative time live refresh
+
+`"relative"` mode ("2m ago") is the only display format whose output depends on the current time rather than just the message's own timestamp — every other format's string is fixed once the message exists. In CIRC and C-Mail, message bodies (timestamp included) are memoized in `chatBodyCache`/`cmailBodyCacheEntry` (`internal/ui/screens/render.go`) to avoid re-running the expensive per-message render on every redraw, so nothing forced a relative string to advance once cached — it displayed whatever it said when first rendered until an unrelated field (resize, theme switch, edit) happened to invalidate it.
+
+Fixed via a 20s app-level tick (`relativeTimeTickMsg`, `internal/ui/app.go`) that calls `RefreshRelativeTimestamps()` on whichever of CIRC/C-Mail is active and in `"relative"` mode. To avoid reintroducing the full-history re-render the cache exists to prevent, the refresh is scoped to only the messages currently visible in the viewport (`visibleMessageIDs()`, mirroring `maybeStartStyleAnim`'s existing scoping for the style-animation ticker) — a message scrolled off-screen keeps its last-rendered string until it scrolls back into view, bounding the per-tick cost to viewport height regardless of room/conversation history length.
+
+**Known gap:** every other screen using `displayTime`'s `"relative"` mode (Notifications, Feed, Guilds, Journal, PostDetail, Search, Bookmarks) has the same missing-timer problem but not the caching half of it — each recomputes its content on every discrete render event rather than memoizing it, so there's no shared render entry point to hook a scoped refresh into the way CIRC/C-Mail's `chatBodyCache` allowed. Not yet fixed.
+
 ---
 
 ## Settings Screen

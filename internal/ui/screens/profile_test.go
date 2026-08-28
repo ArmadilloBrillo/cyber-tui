@@ -282,6 +282,18 @@ func TestProfileEditForm_PrepopulatesFields(t *testing.T) {
 	}
 }
 
+// TestProfileEditForm_NoWebsiteImageUrlField guards API v0.8.7's removal of
+// websiteImageUrl from PATCH /v1/users/me — the website's own upload flow
+// sets it now, so the edit form must not offer a (permanently dead) input
+// for it, even though the value is still read and displayed elsewhere.
+func TestProfileEditForm_NoWebsiteImageUrlField(t *testing.T) {
+	m := openEditForm(t)
+	view := m.View()
+	if strings.Contains(view, "Website Img URL") {
+		t.Errorf("Edit form should not offer a Website Img URL field, got:\n%s", view)
+	}
+}
+
 func TestProfileEditForm_TabCyclesFields(t *testing.T) {
 	m := openEditForm(t)
 	// e opens focused on bio (field 1); tab should move to field 2
@@ -546,5 +558,125 @@ func TestProfile_VisibleInlineImages_WebsiteImageMovesWithContentHeight(t *testi
 	}
 	if afterPosts[0].Row <= baseline[0].Row {
 		t.Errorf("expected the website image's row to move down with more tab content: Info row=%d, Posts row=%d", baseline[0].Row, afterPosts[0].Row)
+	}
+}
+
+// --- Badge icons ---
+
+func badgeSlotWithKeySuffix(slots []screens.InlineImageSlot, suffix string) *screens.InlineImageSlot {
+	for i := range slots {
+		if strings.HasSuffix(slots[i].Key, suffix) {
+			return &slots[i]
+		}
+	}
+	return nil
+}
+
+// TestProfile_VisibleInlineImages_UsernameBadges confirms the supporter
+// badge renders next to the username line (row 0), and — GuildIcon not
+// being a resolvable badge code (see userBadgeCodes' doc comment) — that a
+// set GuildIcon does NOT also produce a second username badge slot.
+func TestProfile_VisibleInlineImages_UsernameBadges(t *testing.T) {
+	u := testUser()
+	u.IsSupporter = true
+	u.SupporterIcon = "pi"
+	u.GuildIcon = "ph:crown"
+	m := screens.NewProfileModel().SetUser(u)
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40, InlineImagesEnabled: true})
+
+	slots := m.VisibleInlineImages()
+	supporter := badgeSlotWithKeySuffix(slots, "badge:username:0")
+	if supporter == nil {
+		t.Fatalf("expected the username supporter badge slot, got %+v", slots)
+	}
+	if supporter.URL != "badge:pi" {
+		t.Errorf("supporter badge URL = %q, want %q", supporter.URL, "badge:pi")
+	}
+	if supporter.Row != 0 {
+		t.Errorf("expected the username badge on row 0, got %d", supporter.Row)
+	}
+	if badgeSlotWithKeySuffix(slots, "badge:username:1") != nil {
+		t.Errorf("expected no second (guild) username badge slot, got %+v", slots)
+	}
+}
+
+// TestProfile_VisibleInlineImages_NoUsernameBadgesWithoutData confirms no
+// username badge slots appear for a plain user (no supporter, no guild).
+func TestProfile_VisibleInlineImages_NoUsernameBadgesWithoutData(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser())
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40, InlineImagesEnabled: true})
+
+	slots := m.VisibleInlineImages()
+	if badgeSlotWithKeySuffix(slots, "badge:username:0") != nil {
+		t.Errorf("expected no username badge slots, got %+v", slots)
+	}
+}
+
+// TestProfile_VisibleInlineImages_SupporterIconIgnoredWithoutIsSupporter
+// guards the isSupporter gate: a stale/unset SupporterIcon with
+// IsSupporter=false must not render a badge.
+func TestProfile_VisibleInlineImages_SupporterIconIgnoredWithoutIsSupporter(t *testing.T) {
+	u := testUser()
+	u.IsSupporter = false
+	u.SupporterIcon = "pi"
+	m := screens.NewProfileModel().SetUser(u)
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40, InlineImagesEnabled: true})
+
+	slots := m.VisibleInlineImages()
+	if badgeSlotWithKeySuffix(slots, "badge:supporter") != nil {
+		t.Errorf("expected no supporter badge slot when IsSupporter is false, got %+v", slots)
+	}
+}
+
+// TestProfile_VisibleInlineImages_NoGuildLineBadge guards the revert: the
+// Guild info-tab row must never produce a badge slot, even with a
+// plausible-looking GuildIcon set — GuildIcon values are confirmed live to
+// use an unresolvable icon scheme (CLDR emoji names / "dinkie-icons:"), not
+// the Lucide/Phosphor scheme ResolveBadgeIconURL understands.
+func TestProfile_VisibleInlineImages_NoGuildLineBadge(t *testing.T) {
+	u := testUser()
+	u.GuildName = "Night Owls"
+	u.GuildIcon = "ph:crown"
+	m := screens.NewProfileModel().SetUser(u)
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40, InlineImagesEnabled: true})
+
+	if slots := m.VisibleInlineImages(); badgeSlotWithKeySuffix(slots, "badge:guild") != nil {
+		t.Errorf("expected no Guild-line badge slot, got %+v", slots)
+	}
+}
+
+// TestProfile_VisibleInlineImages_SupporterLineBadge confirms the Supporter
+// info-tab row gets a badge slot when a supporter icon is set.
+func TestProfile_VisibleInlineImages_SupporterLineBadge(t *testing.T) {
+	u := testUser()
+	u.IsSupporter = true
+	u.SupporterIcon = "pi"
+	m := screens.NewProfileModel().SetUser(u)
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40, InlineImagesEnabled: true})
+
+	slots := m.VisibleInlineImages()
+	slot := badgeSlotWithKeySuffix(slots, "badge:supporter")
+	if slot == nil {
+		t.Fatalf("expected a Supporter-line badge slot, got %+v", slots)
+	}
+	if slot.URL != "badge:pi" {
+		t.Errorf("URL = %q, want %q", slot.URL, "badge:pi")
+	}
+}
+
+// TestProfile_VisibleInlineImages_NoBadgesWhenInlineImagesDisabled confirms
+// none of the badge slots (username, Guild line, Supporter line) appear
+// when inline images are off, matching every other inline-image field.
+func TestProfile_VisibleInlineImages_NoBadgesWhenInlineImagesDisabled(t *testing.T) {
+	u := testUser()
+	u.IsSupporter = true
+	u.SupporterIcon = "pi"
+	u.GuildName = "Night Owls"
+	u.GuildIcon = "ph:crown"
+	m := screens.NewProfileModel().SetUser(u)
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40, InlineImagesEnabled: false})
+
+	if slots := m.VisibleInlineImages(); len(slots) != 0 {
+		t.Errorf("expected no slots with inline images disabled, got %+v", slots)
 	}
 }

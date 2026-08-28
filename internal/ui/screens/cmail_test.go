@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 func TestCMailTotalUnread(t *testing.T) {
@@ -38,8 +39,8 @@ func TestOtherParticipant_EmptyUsernameFallsBackToUnknown(t *testing.T) {
 	m := NewCMailModel("me", "", nil)
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: ""}}}
 
-	if got := m.otherParticipant(conv); got != "unknown" {
-		t.Fatalf("otherParticipant() with blank username = %q, want %q", got, "unknown")
+	if got := m.OtherParticipant(conv); got != "unknown" {
+		t.Fatalf("OtherParticipant() with blank username = %q, want %q", got, "unknown")
 	}
 }
 
@@ -87,6 +88,77 @@ func TestCMailDetailView_HeaderHasDividerBeforeMessages(t *testing.T) {
 	}
 	if strings.Contains(lines[0], "─") {
 		t.Errorf("did not expect the divider character on the header line itself, got: %q", lines[0])
+	}
+}
+
+// TestVisibleMessageIDs_CMailModel mirrors
+// TestVisibleMessageIDs_ChatroomsModel — only messages whose offset/height
+// span overlaps [YOffset, YOffset+Height) should come back.
+func TestVisibleMessageIDs_CMailModel(t *testing.T) {
+	conv := model.Conversation{
+		ID: "c1",
+		Messages: []model.Message{
+			{ID: "offscreen1"}, {ID: "visible1"}, {ID: "offscreen2"},
+		},
+	}
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+	m.msgOffsets = []int{0, 5, 10}
+	m.msgHeights = []int{1, 1, 1}
+	m.viewport.YOffset = 5
+	m.viewport.Height = 1
+
+	ids := m.visibleMessageIDs()
+
+	if len(ids) != 1 || ids[0] != "visible1" {
+		t.Errorf("visibleMessageIDs() = %v, want [visible1]", ids)
+	}
+}
+
+// TestRefreshRelativeTimestamps_CMail_OnlyTouchesVisibleCacheEntries mirrors
+// TestRefreshRelativeTimestamps_OnlyTouchesVisibleCacheEntries in
+// chatrooms_test.go — see RefreshRelativeTimestamps' doc comment for why
+// this must stay bounded to the visible range.
+func TestRefreshRelativeTimestamps_CMail_OnlyTouchesVisibleCacheEntries(t *testing.T) {
+	conv := model.Conversation{
+		ID: "c1",
+		Messages: []model.Message{
+			{ID: "offscreen1", Body: "hello", From: model.User{Username: "neo"}, CreatedAt: time.Now()},
+			{ID: "visible1", Body: "world", From: model.User{Username: "neo"}, CreatedAt: time.Now()},
+		},
+	}
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+	m.timeDisplayFormat = "relative"
+	m.msgOffsets = []int{0, 5}
+	m.msgHeights = []int{1, 1}
+	m.viewport.YOffset = 5
+	m.viewport.Height = 1
+
+	seed := func(msg model.Message, rendered string) cmailBodyCacheEntry {
+		return cmailBodyCacheEntry{
+			rendered: rendered, width: m.viewport.Width, currentUser: m.currentUser,
+			timeDisplayFormat: "relative", body: msg.Body, themeName: theme.CurrentName(),
+		}
+	}
+	m.chatBodyCache = map[string]cmailBodyCacheEntry{
+		"offscreen1": seed(conv.Messages[0], "STALE_OFFSCREEN"),
+		"visible1":   seed(conv.Messages[1], "STALE_VISIBLE"),
+	}
+
+	m = m.RefreshRelativeTimestamps()
+
+	if e, ok := m.chatBodyCache["offscreen1"]; !ok || e.rendered != "STALE_OFFSCREEN" {
+		t.Errorf("expected the off-screen cache entry untouched (still a hit), got %+v, ok=%v", e, ok)
+	}
+	if e, ok := m.chatBodyCache["visible1"]; !ok || e.rendered == "STALE_VISIBLE" {
+		t.Errorf("expected the visible cache entry recomputed with a fresh timestamp, got %+v, ok=%v", e, ok)
 	}
 }
 
@@ -224,7 +296,12 @@ func TestCMail_Send_SpoilerCannotChain(t *testing.T) {
 
 // --- background-tab persistence ---
 
-func TestDMReceived_BumpsUnreadWhileUnfocused(t *testing.T) {
+// TestDMReceived_DoesNotBumpUnreadWhileUnfocused confirms dmReceivedMsg alone
+// never writes UnreadCount, even while the tab is unfocused — that field has
+// a single writer, the account-wide userConvsReceivedMsg/SetConversations
+// push (see docs/09-rtdb-cmail.md), so a local bump here would double-count
+// against it.
+func TestDMReceived_DoesNotBumpUnreadWhileUnfocused(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
 	m = m.SetConversations([]model.Conversation{{ID: "c1"}})
 	m = m.SetFocused(false)
@@ -232,8 +309,8 @@ func TestDMReceived_BumpsUnreadWhileUnfocused(t *testing.T) {
 	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
 	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey again"}})
 
-	if got := m.TotalUnread(); got != 2 {
-		t.Errorf("TotalUnread() = %d, want 2", got)
+	if got := m.TotalUnread(); got != 0 {
+		t.Errorf("TotalUnread() = %d, want 0 (dmReceivedMsg alone must not write UnreadCount)", got)
 	}
 }
 
@@ -251,9 +328,8 @@ func TestDMReceived_DoesNotBumpUnreadWhileFocused(t *testing.T) {
 
 func TestSetFocusedCMail_ClearsUnreadOnReturn(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
-	m = m.SetConversations([]model.Conversation{{ID: "c1"}})
 	m = m.SetFocused(false)
-	m, _ = m.Update(dmReceivedMsg{msg: model.Message{Body: "hey"}})
+	m = m.SetConversations([]model.Conversation{{ID: "c1", UnreadCount: 1}}) // mirrors the account-wide push reporting a new message
 	if got := m.TotalUnread(); got != 1 {
 		t.Fatalf("setup: expected TotalUnread 1, got %d", got)
 	}
@@ -570,6 +646,56 @@ func TestCMailEnterOpensConversation_TypingIndicatorsEnabled_IncludesTypingCmds(
 	batch, ok := cmd().(tea.BatchMsg)
 	if !ok || len(batch) != 5 {
 		t.Errorf("expected a 5-cmd batch (+ typing subscription + merged anim/idle tick), got %#v", cmd())
+	}
+}
+
+// TestCMailEnter_EmitsOtherUsernameWhenNotCached confirms opening a
+// conversation includes the other participant's username in
+// CMailConvSelectedMsg.OtherUsername when their profile hasn't been fetched
+// yet, so App knows to fetch it (see OtherProfileFetchTarget).
+func TestCMailEnter_EmitsOtherUsernameWhenNotCached(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}},
+	})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a batch command opening the conversation")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) < 3 {
+		t.Fatalf("expected a batch of at least 3 commands, got %T", cmd())
+	}
+	selected, ok := batch[2]().(CMailConvSelectedMsg)
+	if !ok {
+		t.Fatalf("batch[2]() = %T, want CMailConvSelectedMsg", batch[2]())
+	}
+	if selected.OtherUsername != "trinity" {
+		t.Errorf("OtherUsername = %q, want %q", selected.OtherUsername, "trinity")
+	}
+}
+
+// TestCMailEnter_OmitsOtherUsernameWhenAlreadyCached confirms no fetch is
+// requested for a conversation partner whose profile is already cached.
+func TestCMailEnter_OmitsOtherUsernameWhenAlreadyCached(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}},
+	})
+	m = m.SetOtherProfile("trinity", model.User{Username: "trinity"})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) < 3 {
+		t.Fatalf("expected a batch of at least 3 commands, got %T", cmd())
+	}
+	selected, ok := batch[2]().(CMailConvSelectedMsg)
+	if !ok {
+		t.Fatalf("batch[2]() = %T, want CMailConvSelectedMsg", batch[2]())
+	}
+	if selected.OtherUsername != "" {
+		t.Errorf("expected empty OtherUsername for an already-cached profile, got %q", selected.OtherUsername)
 	}
 }
 
@@ -893,6 +1019,58 @@ func TestCMail_VisibleInlineImages_RowAccountsForHeader(t *testing.T) {
 	}
 }
 
+// TestCMail_VisibleInlineImages_HeaderBadge confirms the other participant's
+// supporter badge renders next to the "@username" detail header (row 0)
+// once their full profile has been fetched and cached (SetOtherProfile) —
+// and only the header, not the conversation list card or per-message.
+// Conversation data (Participants) is deliberately left as the real thin
+// shape (no badge fields) here — TestCMail_VisibleInlineImages_NoHeaderBadgeBeforeFetch
+// covers the pre-fetch state. Also confirms no second (guild) badge slot —
+// GuildIcon isn't a resolvable badge code even once a full profile is cached.
+func TestCMail_VisibleInlineImages_HeaderBadge(t *testing.T) {
+	conv := model.Conversation{ID: "c1", Participants: []model.User{
+		{Username: "neo"},
+		{Username: "trinity"},
+	}}
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+	m = m.SetOtherProfile("trinity", model.User{
+		Username: "trinity", IsSupporter: true, SupporterIcon: "pi", GuildIcon: "ph:crown",
+	})
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 {
+		t.Fatalf("expected exactly 1 badge slot (supporter only), got %d: %+v", len(slots), slots)
+	}
+	if !strings.HasSuffix(slots[0].Key, "badge:0") {
+		t.Errorf("Key = %q, want a suffix of badge:0", slots[0].Key)
+	}
+	if slots[0].URL != "badge:pi" {
+		t.Errorf("URL = %q, want badge:pi", slots[0].URL)
+	}
+	if slots[0].Row != 0 {
+		t.Errorf("expected the header badge on row 0, got %d", slots[0].Row)
+	}
+}
+
+// TestCMail_VisibleInlineImages_NoHeaderBadgeBeforeFetch confirms no header
+// badge shows before the other participant's profile has been fetched —
+// conversation data (Participants) never carries SupporterIcon on its own.
+func TestCMail_VisibleInlineImages_NoHeaderBadgeBeforeFetch(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
+
+	for _, s := range m.VisibleInlineImages() {
+		if strings.Contains(s.Key, "badge:") {
+			t.Errorf("expected no badge slots before the profile fetch completes, got %+v", s)
+		}
+	}
+}
+
 // TestCMail_InlineImages_SuppressesRedundantTextOnceEnabled mirrors
 // Chatrooms' equivalent: the attachment badge and a body that's nothing but
 // the image URL disappear once inline images are enabled, reappear when
@@ -1053,12 +1231,15 @@ func TestCMail_AppendMessage_FollowsWhenAlreadyAtBottom(t *testing.T) {
 	}
 }
 
-// TestCMail_TotalUnread_IncrementsWhileFocusedButScrolledUp confirms the tab
-// badge grows even while C-Mail is the active screen, as long as the view
-// isn't at the bottom.
-func TestCMail_TotalUnread_IncrementsWhileFocusedButScrolledUp(t *testing.T) {
+// TestCMail_TotalUnread_UnaffectedByDMReceivedWhileScrolledUp confirms a
+// live dmReceivedMsg never touches UnreadCount by itself, even while
+// scrolled up away from the bottom — UnreadCount has a single writer, the
+// account-wide userConvsReceivedMsg/SetConversations push (see
+// docs/09-rtdb-cmail.md), so a second local writer here would double-count
+// against that push.
+func TestCMail_TotalUnread_UnaffectedByDMReceivedWhileScrolledUp(t *testing.T) {
 	m := cmailInConversation(api.NewMockClient(), "c1")
-	m.conversations = []model.Conversation{{ID: "c1"}} // bumpActiveConvUnread/TotalUnread read from here, not activeConv
+	m.conversations = []model.Conversation{{ID: "c1"}} // TotalUnread reads from here, not activeConv
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 12})
 	m = m.SetFocused(true)
 	m = m.SetConversationMessages("c1", manyPlainCMailMessages(10))
@@ -1069,8 +1250,15 @@ func TestCMail_TotalUnread_IncrementsWhileFocusedButScrolledUp(t *testing.T) {
 
 	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()}})
 
+	if m.TotalUnread() != 0 {
+		t.Errorf("TotalUnread() = %d, want 0 (dmReceivedMsg alone must not write UnreadCount)", m.TotalUnread())
+	}
+
+	// The account-wide push is what actually reflects the new unread state.
+	m, _ = m.Update(userConvsReceivedMsg{convs: []model.Conversation{{ID: "c1", UnreadCount: 1}}})
+
 	if m.TotalUnread() != 1 {
-		t.Errorf("TotalUnread() = %d, want 1", m.TotalUnread())
+		t.Errorf("TotalUnread() = %d, want 1 after the account-wide push", m.TotalUnread())
 	}
 }
 
@@ -1233,7 +1421,7 @@ func TestCMail_TotalUnread_ClearsWhenScrolledBackToBottom(t *testing.T) {
 	m = m.SetFocused(true)
 	m = m.SetConversationMessages("c1", manyPlainCMailMessages(10))
 	m.viewport.SetYOffset(0)
-	m, _ = m.Update(dmReceivedMsg{msg: model.Message{ID: "new", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()}})
+	m = m.SetConversations([]model.Conversation{{ID: "c1", UnreadCount: 1}}) // mirrors the account-wide push reporting a new message
 	if m.TotalUnread() == 0 {
 		t.Fatal("setup: expected TotalUnread > 0 while scrolled up")
 	}

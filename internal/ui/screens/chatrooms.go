@@ -1103,6 +1103,43 @@ func (m ChatroomsModel) maybeStartStyleAnim() (ChatroomsModel, tea.Cmd) {
 	return m, nil
 }
 
+// visibleMessageIDs returns the IDs of messages currently within the
+// viewport, using the same offset/height bounds maybeStartStyleAnim scans.
+func (m ChatroomsModel) visibleMessageIDs() []string {
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+	var ids []string
+	for i, msg := range m.messages {
+		if i >= len(m.msgOffsets) || i >= len(m.msgHeights) {
+			break
+		}
+		itemStart, itemEnd := m.msgOffsets[i], m.msgOffsets[i]+m.msgHeights[i]
+		if itemEnd <= top || itemStart >= bottom {
+			continue
+		}
+		ids = append(ids, msg.ID)
+	}
+	return ids
+}
+
+// RefreshRelativeTimestamps re-renders the "Nm ago"-style timestamps of
+// currently visible messages — called by the app-level tick that keeps them
+// current, since nothing else re-renders on time passing alone (chatBodyCache
+// serves a message's rendered body, timestamp included, forever until an
+// unrelated field changes). Scoped to the visible range like
+// maybeStartStyleAnim: evicting the whole cache on a timer would force a full
+// history re-render every tick regardless of room size, so only on-screen
+// entries are dropped and recomputed; off-screen ones keep their last
+// rendered string until they scroll into view.
+func (m ChatroomsModel) RefreshRelativeTimestamps() ChatroomsModel {
+	if !m.ready || m.timeDisplayFormat != "relative" || m.mode != chatroomModeDetail {
+		return m
+	}
+	for _, id := range m.visibleMessageIDs() {
+		delete(m.chatBodyCache, id)
+	}
+	return m.refreshMessages()
+}
+
 func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case styleAnimTickMsg:

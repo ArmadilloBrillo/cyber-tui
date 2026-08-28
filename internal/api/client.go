@@ -397,9 +397,10 @@ type editReplyRequest struct {
 }
 
 type createReplyRequest struct {
-	PostID        string `json:"postId"`
-	Content       string `json:"content"`
-	ParentReplyID string `json:"parentReplyId,omitempty"`
+	PostID        string           `json:"postId"`
+	Content       string           `json:"content"`
+	ParentReplyID string           `json:"parentReplyId,omitempty"`
+	Attachments   []wireAttachment `json:"attachments,omitempty"`
 }
 
 type createReplyResponseData struct {
@@ -438,7 +439,6 @@ type updateProfileRequest struct {
 	PinnedPostID      *string  `json:"pinnedPostId,omitempty"`
 	WebsiteUrl        *string  `json:"websiteUrl,omitempty"`
 	WebsiteName       *string  `json:"websiteName,omitempty"`
-	WebsiteImageUrl   *string  `json:"websiteImageUrl,omitempty"`
 	LocationName      *string  `json:"locationName,omitempty"`
 	LocationLatitude  *float64 `json:"locationLatitude,omitempty"`
 	LocationLongitude *float64 `json:"locationLongitude,omitempty"`
@@ -1435,11 +1435,16 @@ func (c *HTTPClient) GetReply(replyID string) (model.Reply, error) {
 	return wireReplyToModel(wire), nil
 }
 
-func (c *HTTPClient) CreateReply(postID, content, parentReplyID string) (model.Reply, error) {
+func (c *HTTPClient) CreateReply(postID, content, parentReplyID string, attachment *model.Attachment) (model.Reply, error) {
+	var attachments []wireAttachment
+	if attachment != nil {
+		attachments = []wireAttachment{wireAttachmentFromModel(*attachment)}
+	}
 	env, err := c.doJSON("POST", "/v1/replies", createReplyRequest{
 		PostID:        postID,
 		Content:       content,
 		ParentReplyID: parentReplyID,
+		Attachments:   attachments,
 	})
 	if err != nil {
 		return model.Reply{}, err
@@ -1448,7 +1453,11 @@ func (c *HTTPClient) CreateReply(postID, content, parentReplyID string) (model.R
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return model.Reply{}, err
 	}
-	return model.Reply{ID: data.ReplyID, PostID: postID, Content: content, ParentReplyID: parentReplyID}, nil
+	reply := model.Reply{ID: data.ReplyID, PostID: postID, Content: content, ParentReplyID: parentReplyID}
+	if attachment != nil {
+		reply.Attachments = []model.Attachment{*attachment}
+	}
+	return reply, nil
 }
 
 func (c *HTTPClient) GetPost(postID string) (model.Post, error) {
@@ -1506,7 +1515,6 @@ func (c *HTTPClient) UpdateProfile(update model.ProfileUpdate) error {
 		PinnedPostID:      update.PinnedPostID,
 		WebsiteUrl:        update.WebsiteUrl,
 		WebsiteName:       update.WebsiteName,
-		WebsiteImageUrl:   update.WebsiteImageUrl,
 		LocationName:      update.LocationName,
 		LocationLatitude:  update.LocationLatitude,
 		LocationLongitude: update.LocationLongitude,
