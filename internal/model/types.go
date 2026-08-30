@@ -186,17 +186,18 @@ type NotificationPrefs struct {
 // Settings maps to the fields returned by GET /v1/settings.
 // KeyboardBindings is an opaque JSON object — not modelled yet.
 type Settings struct {
-	Notifications     NotificationPrefs
-	FilterNSFW        bool
-	ShowFollowerCount bool
-	AutoWatchOnReply  bool
-	IconTheme         string
-	FollowedTopics    []string
-	MutedTopics       []string
-	ImagePixelSize    string // named preset or pixel multiplier, e.g. "sharp", "2"
-	TimeDisplayFormat string // "datetime", "relative", "unix", or "swatch"
-	DefaultPublicPost bool
-	MutedUsersByRoom  map[string][]string // roomID -> muted usernames; server-managed via /mute commands, cIRC only
+	Notifications        NotificationPrefs
+	FilterNSFW           bool
+	ShowFollowerCount    bool
+	AutoWatchOnReply     bool
+	ShowGuildPostsInFeed bool
+	IconTheme            string
+	FollowedTopics       []string
+	MutedTopics          []string
+	ImagePixelSize       string // named preset or pixel multiplier, e.g. "sharp", "2"
+	TimeDisplayFormat    string // "datetime", "relative", "unix", or "swatch"
+	DefaultPublicPost    bool
+	MutedUsersByRoom     map[string][]string // roomID -> muted usernames; server-managed via /mute commands, cIRC only
 }
 
 // Bookmark maps to the shape returned by GET /v1/bookmarks.
