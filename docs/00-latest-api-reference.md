@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.8.7
+# ᑕ¥βєяรקค¢є API v0.8.9
 
 ## Access
 
@@ -122,6 +122,8 @@ Query params:
 
 To list a specific user's entries, use `GET /v1/users/:username/posts` instead.
 
+Guild forum threads appear here only for guilds you belong to, and only while `showGuildPostsInFeed` is on (the default) — see Settings. Threads from other guilds are never returned. A page can come back shorter than `limit` for that reason; keep paginating while `cursor` is non-null.
+
 Returns:
 
 ```json
@@ -201,7 +203,7 @@ already carry an image attachment keep it, and still return it.
 
 Returns `{ "data": { "postId": "...", "slug": "...", "title": "..." } }` (201). The `slug` field reflects the final stored slug, which may differ from what you submitted (collision suffix) or be derived from your content if omitted. `title` is only returned when set.
 
-Rate limit: 2/min, 15/day.
+Rate limit: 2/min, 24/day.
 
 ### Edit Entry
 
@@ -301,7 +303,7 @@ Returns `{ "data": { "replyId": "..." } }` (201).
 
 Posting a reply auto-watches the thread (see Thread Watching) unless you've disabled `autoWatchOnReply` in Settings.
 
-Rate limit: 3/min, 15/day.
+Rate limit: 3/min, 48/day.
 
 ### Edit Reply
 
@@ -729,7 +731,7 @@ Returns `{ "data": { "postId": "...", "slug": "...", "title": "..." } }` (201).
 
 **Replying to a thread** uses the normal `POST /v1/replies` with the thread's `postId` — a guild thread is an ordinary entry. Replies posted to a guild thread inherit its `guildId`, and posting a reply bumps the thread's activity so it rises in the thread list.
 
-Rate limit: 2/min, 15/day.
+Rate limit: 2/min, 24/day.
 
 ### Join a Guild
 
@@ -998,9 +1000,11 @@ PATCH /v1/settings
 }
 ```
 
-Available fields: `notifications`, `filterNSFW`, `showFollowerCount`, `hideImagesInFeed`, `hideAudioInFeed`, `autoWatchOnReply`, `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom`, `iconTheme`, `followedTopics`, `mutedTopics`, `imagePixelSize`, `timeDisplayFormat`, `useLegacyMenuOrder`, `defaultPublicPost`.
+Available fields: `notifications`, `filterNSFW`, `showFollowerCount`, `hideImagesInFeed`, `hideAudioInFeed`, `autoWatchOnReply`, `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom`, `iconTheme`, `followedTopics`, `mutedTopics`, `imagePixelSize`, `timeDisplayFormat`, `useLegacyMenuOrder`, `defaultPublicPost`, `showGuildPostsInFeed`.
 
 `autoWatchOnReply` (default on) controls whether posting a reply auto-watches that thread (see Thread Watching). Set it to `false` to opt out.
+
+`showGuildPostsInFeed` (default on) controls whether guild forum threads from the guilds you belong to appear in the main feed (`GET /v1/posts`). Set it to `false` to keep the feed free of them.
 
 Rate limit: 2/min, 15/day.
 
@@ -1526,8 +1530,8 @@ All responses follow this structure:
 
 | Action | Per Minute | Per Day |
 |--------|-----------|---------|
-| Entries | 2 | 15 |
-| Replies | 3 | 15 |
+| Entries | 2 | 24 |
+| Replies | 3 | 48 |
 | Follows | 3 | 15 |
 | Unfollows | 3 | 15 |
 | Pokes | — | 8 |
@@ -1535,18 +1539,18 @@ All responses follow this structure:
 | Bookmarks | 5 | 75 |
 | Program publishes | 3 | 40 |
 | Program recalls | 5 | — |
-| Guild threads | 2 | 15 |
+| Guild threads | 2 | 24 |
 | Guild join | 3 | 15 |
 | Guild leave | 3 | 15 |
 | Guild promote | 3 | 15 |
 | Profile updates | 2 | 15 |
 | Settings updates | 2 | 15 |
 | Watch thread | 10 | 100 |
-| C-Mail message | 15 | 300 |
+| C-Mail message | 15 | 1000 |
 | Start C-Mail conversation | 5 | 50 |
 | Mark C-Mail read | 60 | — |
 | C-Mail typing on/off | 40 per conversation, 120 overall | — |
-| cIRC message | 15 | 300 |
+| cIRC message | 15 | 1000 |
 | Delete a cIRC message | 5 | 30 |
 | Mark cIRC room read | 60 | — |
 | cIRC presence heartbeat / leave | 15 per room, 90 overall | — |

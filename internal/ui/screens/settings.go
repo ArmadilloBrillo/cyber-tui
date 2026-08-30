@@ -72,6 +72,14 @@ var settingsGroups = []settingsGroup{
 				getBool: func(m SettingsModel) bool { return m.settings.FilterNSFW },
 				toggle:  func(m SettingsModel) SettingsModel { m.settings.FilterNSFW = !m.settings.FilterNSFW; return m },
 			},
+			{
+				label: "show guild posts in feed", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.ShowGuildPostsInFeed },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.settings.ShowGuildPostsInFeed = !m.settings.ShowGuildPostsInFeed
+					return m
+				},
+			},
 		},
 	},
 	{
@@ -276,31 +284,31 @@ var settingsGroups = []settingsGroup{
 
 // SettingsModel is the Settings screen.
 type SettingsModel struct {
-	settings                      model.Settings // live/edited values
-	original                      model.Settings // last saved baseline
-	wanderLust                    bool           // live local config value
-	originalWanderLust            bool           // last saved baseline for wanderLust
-	maxThreadDepth                int            // live local config value (1–5)
-	originalMaxThreadDepth        int            // last saved baseline
-	timezone                      string         // live local config value (UTC offset label)
-	originalTimezone              string         // last saved baseline
-	imageViewer                   string         // live local config value ("terminal" or "browser")
-	originalImageViewer           string         // last saved baseline
-	graphicsProtocol              string         // live local config value ("" auto, or "kitty"/"iterm2"/"sixel")
-	originalGraphicsProtocol      string         // last saved baseline
-	inlineImages                  bool           // live local config value
-	originalInlineImages          bool           // last saved baseline
-	dithering                     bool           // live local config value
-	originalDithering             bool           // last saved baseline
-	ditherSharpness               string         // live local config value ("rough"/"medium"/"sharp")
-	originalDitherSharpness       string         // last saved baseline
-	layoutName                    string         // live local config value ("tabs" or "miller")
-	originalLayoutName            string         // last saved baseline
-	feedManualRefreshOnly         bool           // live local config value (true = feed background poll off)
-	originalFeedManualRefreshOnly bool           // last saved baseline
-	typingIndicatorsEnabled         bool         // live local config value (positive polarity)
-	originalTypingIndicatorsEnabled bool         // last saved baseline
-	prefsSeeded                     bool         // whether the SharedConfigMsg preference fields above have been seeded once
+	settings                        model.Settings // live/edited values
+	original                        model.Settings // last saved baseline
+	wanderLust                      bool           // live local config value
+	originalWanderLust              bool           // last saved baseline for wanderLust
+	maxThreadDepth                  int            // live local config value (1–5)
+	originalMaxThreadDepth          int            // last saved baseline
+	timezone                        string         // live local config value (UTC offset label)
+	originalTimezone                string         // last saved baseline
+	imageViewer                     string         // live local config value ("terminal" or "browser")
+	originalImageViewer             string         // last saved baseline
+	graphicsProtocol                string         // live local config value ("" auto, or "kitty"/"iterm2"/"sixel")
+	originalGraphicsProtocol        string         // last saved baseline
+	inlineImages                    bool           // live local config value
+	originalInlineImages            bool           // last saved baseline
+	dithering                       bool           // live local config value
+	originalDithering               bool           // last saved baseline
+	ditherSharpness                 string         // live local config value ("rough"/"medium"/"sharp")
+	originalDitherSharpness         string         // last saved baseline
+	layoutName                      string         // live local config value ("tabs" or "miller")
+	originalLayoutName              string         // last saved baseline
+	feedManualRefreshOnly           bool           // live local config value (true = feed background poll off)
+	originalFeedManualRefreshOnly   bool           // last saved baseline
+	typingIndicatorsEnabled         bool           // live local config value (positive polarity)
+	originalTypingIndicatorsEnabled bool           // last saved baseline
+	prefsSeeded                     bool           // whether the SharedConfigMsg preference fields above have been seeded once
 	cursor                          int
 	width                           int
 	height                          int
@@ -377,6 +385,7 @@ func settingsEqual(a, b model.Settings) bool {
 		a.FilterNSFW == b.FilterNSFW &&
 		a.ShowFollowerCount == b.ShowFollowerCount &&
 		a.AutoWatchOnReply == b.AutoWatchOnReply &&
+		a.ShowGuildPostsInFeed == b.ShowGuildPostsInFeed &&
 		a.DefaultPublicPost == b.DefaultPublicPost &&
 		a.TimeDisplayFormat == b.TimeDisplayFormat
 }

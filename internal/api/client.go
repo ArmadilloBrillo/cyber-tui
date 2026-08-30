@@ -452,17 +452,18 @@ type wireNotificationPrefs struct {
 
 // wireSettings is used to decode GET /v1/settings responses — includes all fields.
 type wireSettings struct {
-	Notifications     wireNotificationPrefs `json:"notifications"`
-	FilterNSFW        bool                  `json:"filterNSFW"`
-	ShowFollowerCount bool                  `json:"showFollowerCount"`
-	AutoWatchOnReply  bool                  `json:"autoWatchOnReply"`
-	IconTheme         string                `json:"iconTheme"`
-	FollowedTopics    []string              `json:"followedTopics"`
-	MutedTopics       []string              `json:"mutedTopics"`
-	ImagePixelSize    string                `json:"imagePixelSize"`
-	TimeDisplayFormat string                `json:"timeDisplayFormat"`
-	DefaultPublicPost bool                  `json:"defaultPublicPost"`
-	MutedUsersByRoom  map[string][]string   `json:"mutedUsersByRoom"`
+	Notifications        wireNotificationPrefs `json:"notifications"`
+	FilterNSFW           bool                  `json:"filterNSFW"`
+	ShowFollowerCount    bool                  `json:"showFollowerCount"`
+	AutoWatchOnReply     bool                  `json:"autoWatchOnReply"`
+	ShowGuildPostsInFeed bool                  `json:"showGuildPostsInFeed"`
+	IconTheme            string                `json:"iconTheme"`
+	FollowedTopics       []string              `json:"followedTopics"`
+	MutedTopics          []string              `json:"mutedTopics"`
+	ImagePixelSize       string                `json:"imagePixelSize"`
+	TimeDisplayFormat    string                `json:"timeDisplayFormat"`
+	DefaultPublicPost    bool                  `json:"defaultPublicPost"`
+	MutedUsersByRoom     map[string][]string   `json:"mutedUsersByRoom"`
 }
 
 // wirePatchSettings is the PATCH /v1/settings payload — only the fields the
@@ -470,12 +471,13 @@ type wireSettings struct {
 // mutedTopics, mutedUsersByRoom) are intentionally excluded so the API never
 // receives them — mutedUsersByRoom is server-managed via /mute commands, not PATCH.
 type wirePatchSettings struct {
-	Notifications     wireNotificationPrefs `json:"notifications"`
-	FilterNSFW        bool                  `json:"filterNSFW"`
-	ShowFollowerCount bool                  `json:"showFollowerCount"`
-	AutoWatchOnReply  bool                  `json:"autoWatchOnReply"`
-	TimeDisplayFormat string                `json:"timeDisplayFormat"`
-	DefaultPublicPost bool                  `json:"defaultPublicPost"`
+	Notifications        wireNotificationPrefs `json:"notifications"`
+	FilterNSFW           bool                  `json:"filterNSFW"`
+	ShowFollowerCount    bool                  `json:"showFollowerCount"`
+	AutoWatchOnReply     bool                  `json:"autoWatchOnReply"`
+	ShowGuildPostsInFeed bool                  `json:"showGuildPostsInFeed"`
+	TimeDisplayFormat    string                `json:"timeDisplayFormat"`
+	DefaultPublicPost    bool                  `json:"defaultPublicPost"`
 }
 
 // --- CIRC wire types ---
@@ -1084,16 +1086,17 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 			Reply:    w.Notifications.Reply,
 			Poke:     w.Notifications.Poke,
 		},
-		FilterNSFW:        w.FilterNSFW,
-		ShowFollowerCount: w.ShowFollowerCount,
-		AutoWatchOnReply:  w.AutoWatchOnReply,
-		IconTheme:         w.IconTheme,
-		FollowedTopics:    w.FollowedTopics,
-		MutedTopics:       w.MutedTopics,
-		ImagePixelSize:    w.ImagePixelSize,
-		TimeDisplayFormat: w.TimeDisplayFormat,
-		DefaultPublicPost: w.DefaultPublicPost,
-		MutedUsersByRoom:  w.MutedUsersByRoom,
+		FilterNSFW:           w.FilterNSFW,
+		ShowFollowerCount:    w.ShowFollowerCount,
+		AutoWatchOnReply:     w.AutoWatchOnReply,
+		ShowGuildPostsInFeed: w.ShowGuildPostsInFeed,
+		IconTheme:            w.IconTheme,
+		FollowedTopics:       w.FollowedTopics,
+		MutedTopics:          w.MutedTopics,
+		ImagePixelSize:       w.ImagePixelSize,
+		TimeDisplayFormat:    w.TimeDisplayFormat,
+		DefaultPublicPost:    w.DefaultPublicPost,
+		MutedUsersByRoom:     w.MutedUsersByRoom,
 	}
 }
 
@@ -1543,11 +1546,12 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 			Reply:    update.Notifications.Reply,
 			Poke:     update.Notifications.Poke,
 		},
-		FilterNSFW:        update.FilterNSFW,
-		ShowFollowerCount: update.ShowFollowerCount,
-		AutoWatchOnReply:  update.AutoWatchOnReply,
-		TimeDisplayFormat: update.TimeDisplayFormat,
-		DefaultPublicPost: update.DefaultPublicPost,
+		FilterNSFW:           update.FilterNSFW,
+		ShowFollowerCount:    update.ShowFollowerCount,
+		AutoWatchOnReply:     update.AutoWatchOnReply,
+		ShowGuildPostsInFeed: update.ShowGuildPostsInFeed,
+		TimeDisplayFormat:    update.TimeDisplayFormat,
+		DefaultPublicPost:    update.DefaultPublicPost,
 	})
 	return err
 }
