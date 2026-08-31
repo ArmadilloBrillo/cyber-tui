@@ -377,12 +377,14 @@ Home feed of posts from followed users.
 - Emits `ShowPostMsg` on Enter → App navigates to PostDetail
 - Emits `SubmitNewPostMsg` on compose submit (content + topics)
 - `n` opens compose for a new post (with topics input); `r` opens compose for a reply
+- New-post panel: `Ctrl+S` publishes to the feed, **`Ctrl+D` saves it as a private Journal note instead** (emits `SaveNewPostAsNoteMsg`; title becomes a `#` heading; create-mode only, non-empty body) — `docs/51-compose-to-journal.md`
+- Compose panel stays open + populated on submit until App reports the outcome; a failed publish reopens it with the fields intact (`CloseComposeAfterSuccess`/`ClearComposeSubmitting`), a success closes it. Submit keys are inert while in flight.
 - `d` on the selected post (own posts only) shows a y/n confirmation overlay; on `y` emits `DeletePostMsg`
 - Dense/relaxed display modes; post content truncated to 4 lines in list view
 - Timezone-aware timestamps via `displayTime()`
 - Every eligible inline image in a post's body renders inline (not just the first) when the InlineImages setting is on and a graphics protocol was detected (`VisibleInlineImages()`, `internal/ui/screens/inlineimage.go`) — see the `internal/ui/imgview` package section for protocol details and `docs/plan-inline-images-improvements.md` for the iTerm2/Sixel repaint workarounds this depends on
 
-Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg` (Content, Title, Topics, IsPublic, IsNSFW), `DeletePostMsg`  
+Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg` (Content, Title, Topics, IsPublic, IsNSFW), `SaveNewPostAsNoteMsg` (Content, Topics), `DeletePostMsg`  
 Key function: `ParseTopics(s string) []string` — splits comma-separated string, caps at 3  
 Key methods: `SetCurrentUsername(username)`, `RemovePost(postID)`
 
@@ -568,14 +570,15 @@ Key methods: `SetTopics(topics, cursor)`, `AppendTopics(topics, cursor)`, `SetTo
 Private notes (Journal), cursor-paginated. Notes are visible only to the author.
 
 - List mode: `j`/`k` navigate notes; `d` prompts to delete
-- Edit mode (currently disabled): embeds `ComposeModel` (Ctrl+S saves, Ctrl+P publishes note as a post with confirmation, Esc cancels); `tab` toggles between compose and topics input
+- Edit mode: embeds `ComposeModel` (Ctrl+S saves, Ctrl+P publishes note as a post with confirmation, Esc cancels); `tab` toggles between compose and topics input
 - Confirmation overlay (y/n) for publish and delete actions
 - Viewport height dynamically adjusts when compose box grows or confirmation overlay appears
+- `Ctrl+P` → `y` no longer closes the editor synchronously: it stays open + populated (`publishing` flag; `Ctrl+P`/`Ctrl+S`/`Esc` inert, hint shows `… publishing`) until App reports the outcome. Success → `CloseEditAfterPublish()`; a non-401 failure → `ClearPublishing()` + banner, so unsaved text survives a rate-limited publish (`docs/51-compose-to-journal.md`)
 
 Note creation (`n`), editing (`enter`), deletion (`d`), and revision history (`h`) are all active. `PATCH /v1/notes/:id` was fixed server-side in API v0.4.
 
 Key types: `JournalModel`, `SubmitSaveNoteMsg`, `SubmitPublishNoteMsg`, `SubmitDeleteNoteMsg`, `LoadMoreJournalMsg`, `LoadNoteRevisionsMsg`, `LoadNoteRevisionMsg`  
-Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNoteContent(noteID, content, topics)`, `DeleteNote(noteID)`, `SetRevisions(noteID, revisions, cursor)`, `SetRevisionPreview(note)`
+Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNoteContent(noteID, content, topics)`, `DeleteNote(noteID)`, `CloseEditAfterPublish()`, `ClearPublishing()`, `IsPublishing()`, `SetRevisions(noteID, revisions, cursor)`, `SetRevisionPreview(note)`
 
 #### `search.go`
 
@@ -600,11 +603,11 @@ Reusable multi-line text editor embedded in Feed, PostDetail, Profile, and C-Mai
 - Character limit and placeholder text are configurable per embedding screen
 - Active/inactive border styling (cyan when focused, dimmed otherwise)
 
-`PostComposePanel` is a unified single-box compose panel for new posts (title, optional slug, body, topics, public/nsfw). Tab cycles through all fields. The `slug` field accepts `[a-z0-9-]` up to 60 chars; an invalid value blocks submit, focuses the slug field, and shows a red inline error. Empty slug is silently omitted from the wire (server generates one).
+`PostComposePanel` is a unified single-box compose panel for new posts (title, optional slug, body, topics, public/nsfw). Tab cycles through all fields. The `slug` field accepts `[a-z0-9-]` up to 60 chars; an invalid value blocks submit, focuses the slug field, and shows a red inline error. Empty slug is silently omitted from the wire (server generates one). `Ctrl+D` (create mode, non-empty body) emits `ComposeSaveAsNoteMsg` — the host diverts the text to the Journal. A `submitting` flag keeps the panel open + populated between submit and outcome, suppressing `Ctrl+S`/`Ctrl+D`/`Esc` (`docs/51-compose-to-journal.md`).
 
-Key types: `ComposeModel`, `ComposeSubmitMsg` (Content), `ComposeCancelMsg`, `PostComposePanel`  
+Key types: `ComposeModel`, `ComposeSubmitMsg` (Content), `ComposeSaveAsNoteMsg` (Content), `ComposeCancelMsg`, `PostComposePanel`  
 Key methods (`ComposeModel`): `Open(ctx, placeholder)`, `OpenWithContent(ctx, placeholder, content)`, `SetCharLimit(n)`, `SetWidth(w)`, `IsActive()`, `Content()`, `Close()`  
-Key methods (`PostComposePanel`): `Open(defaultPublic)`, `Close()`, `TitleValue()`, `SlugValue()`, `TopicsRaw()`, `IsPublic()`, `IsNSFW()`, `PanelHeight()`, `SetWidth(w)`  
+Key methods (`PostComposePanel`): `Open(defaultPublic)`, `Close()`, `TitleValue()`, `SlugValue()`, `TopicsRaw()`, `IsPublic()`, `IsNSFW()`, `PanelHeight()`, `SetWidth(w)`, `MarkSubmitting()`, `ClearSubmitting()`, `IsSubmitting()`  
 Key functions: `ValidateSlug(s string) error`
 
 #### `timeutil.go`
@@ -927,7 +930,10 @@ fields.
 | `tab` / `shift+tab` | Cycle fields: title → slug → body → topics → public → NSFW |
 | `space` | Toggle the focused checkbox field (public / NSFW) |
 | `ctrl+s` | Submit (validates the slug field first; invalid slug refocuses it with an inline error) |
+| `ctrl+d` | Feed only, new post only: save what's written as a private Journal note instead of publishing (`docs/51-compose-to-journal.md`) |
 | `esc` | Cancel |
+
+The panel stays open and populated between submit and outcome (`ctrl+s`/`ctrl+d`/`esc` inert, hint shows `… posting`); a failed publish reopens it with the fields intact so a rate-limited post isn't lost. Same for the Journal editor's `ctrl+p` publish.
 
 ### Icon Picker
 

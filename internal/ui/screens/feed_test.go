@@ -282,6 +282,61 @@ func TestFeed_EKey_NoOp_WhenNotEligible(t *testing.T) {
 	}
 }
 
+// --- Compose: keep the panel open until the submit lands ---
+
+func TestFeed_ComposeSubmit_KeepsPanelOpenUntilOutcome(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = m.Update(keyRune("n")) // open the new-post panel
+	if !m.ComposeActive() {
+		t.Fatal("setup: expected the compose panel open after 'n'")
+	}
+
+	m, cmd := m.Update(screens.ComposeSubmitMsg{Content: "hello world"})
+	if !m.ComposeActive() || !m.ComposeSubmitting() {
+		t.Fatalf("after submit: ComposeActive=%v ComposeSubmitting=%v, want both true (panel stays put until App reports)", m.ComposeActive(), m.ComposeSubmitting())
+	}
+	if cmd == nil {
+		t.Fatal("expected a SubmitNewPostMsg cmd from ComposeSubmitMsg")
+	}
+	if _, ok := cmd().(screens.SubmitNewPostMsg); !ok {
+		t.Fatalf("submit cmd produced %T, want screens.SubmitNewPostMsg", cmd())
+	}
+
+	// Failure: the panel comes back, still populated, ready for a retry.
+	after := m.ClearComposeSubmitting()
+	if !after.ComposeActive() || after.ComposeSubmitting() {
+		t.Errorf("after ClearComposeSubmitting: ComposeActive=%v ComposeSubmitting=%v, want true/false", after.ComposeActive(), after.ComposeSubmitting())
+	}
+
+	// Success: the panel tears down.
+	done := m.CloseComposeAfterSuccess()
+	if done.ComposeActive() {
+		t.Error("expected the panel closed after CloseComposeAfterSuccess")
+	}
+}
+
+func TestFeed_ComposeSaveAsNote_EmitsMsgWithTitleHeading(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = m.Update(keyRune("n"))            // open panel, focus starts on the title field
+	m, _ = m.Update(keyRune("H"))            // type a one-char title
+	m, cmd := m.Update(screens.ComposeSaveAsNoteMsg{Content: "the body"})
+	if cmd == nil {
+		t.Fatal("expected a cmd from ComposeSaveAsNoteMsg")
+	}
+	got, ok := cmd().(screens.SaveNewPostAsNoteMsg)
+	if !ok {
+		t.Fatalf("produced %T, want screens.SaveNewPostAsNoteMsg", cmd())
+	}
+	if got.Content != "# H\n\nthe body" {
+		t.Errorf("Content = %q, want %q (title prepended as a markdown heading)", got.Content, "# H\n\nthe body")
+	}
+	if !m.ComposeSubmitting() {
+		t.Error("expected ComposeSubmitting true while the save-as-note is in flight")
+	}
+}
+
 // --- Background poll: pending new entries ---
 
 func TestFeed_SetPendingNew_FiltersAlreadyPresentPosts(t *testing.T) {

@@ -47,6 +47,12 @@ type JournalModel struct {
 
 	confirming confirmKind
 
+	// publishing is true from the moment ctrl+p → y dispatches a
+	// publish-as-post until App reports the outcome. The editor stays open
+	// and populated the whole time so a failed publish leaves the user's
+	// text intact; ctrl+p / ctrl+s / esc are inert while it's set.
+	publishing bool
+
 	// Revision history state.
 	revisionsMode   bool // true when viewing revision history
 	revisions       []model.NoteRevision
@@ -301,7 +307,12 @@ func (m JournalModel) handleConfirmKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
 		case confirmPublish:
 			content := m.compose.Content()
 			topics := ParseTopics(m.topicsInput.Value())
-			m = m.closeEdit() // closeEdit resets viewport height
+			// Keep the editor open and populated until App reports the
+			// outcome, so a failed publish leaves the text recoverable
+			// (ctrl+s to save it as a note). The confirm overlay is already
+			// dismissed above; recompute the viewport height it vacated.
+			m.publishing = true
+			m.viewport.Height = m.viewportHeight()
 			return m, func() tea.Msg {
 				return SubmitPublishNoteMsg{Content: content, Topics: topics}
 			}
@@ -322,6 +333,15 @@ func (m JournalModel) handleConfirmKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
 // handleEditKey processes keys while the compose box is open.
 // ctrl+s and ctrl+p are intercepted here before compose sees them.
 func (m JournalModel) handleEditKey(msg tea.KeyMsg) (JournalModel, tea.Cmd) {
+	// While a publish is in flight the editor stays open and populated, but
+	// the keys that would start another action (or discard the work) are
+	// inert until App reports the outcome.
+	if m.publishing {
+		switch msg.String() {
+		case "ctrl+p", "ctrl+s", "esc":
+			return m, nil
+		}
+	}
 	switch msg.String() {
 	case "ctrl+p":
 		if m.compose.Content() != "" {
@@ -694,12 +714,28 @@ func (m JournalModel) closeEdit() JournalModel {
 	m.isNewNote = false
 	m.editingID = ""
 	m.topicsFocused = false
+	m.publishing = false
 	m.topicsInput.Blur()
 	m.compose = m.compose.Close()
 	m.viewport.Height = m.viewportHeight()
 	m = m.refreshContent()
 	return m
 }
+
+// CloseEditAfterPublish tears the editor down once App confirms a ctrl+p
+// publish-as-post landed.
+func (m JournalModel) CloseEditAfterPublish() JournalModel { return m.closeEdit() }
+
+// ClearPublishing re-enables the editor after a failed publish, leaving the
+// note text and topics exactly as the user left them.
+func (m JournalModel) ClearPublishing() JournalModel {
+	m.publishing = false
+	m.viewport.Height = m.viewportHeight()
+	return m
+}
+
+// IsPublishing reports whether a ctrl+p publish is currently in flight.
+func (m JournalModel) IsPublishing() bool { return m.publishing }
 
 // confirmBoxHeight is the number of rows consumed by the confirmation prompt box.
 const confirmBoxHeight = 3 // border-top + content + border-bottom

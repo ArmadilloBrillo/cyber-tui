@@ -1279,10 +1279,23 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SubmitNewPostMsg:
 		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AudioAttachment), true
 	case postCreatedMsg:
+		a.feed = a.feed.CloseComposeAfterSuccess()
 		return a, a.loadFeedCmd(), true
 	case postConvertedToNoteMsg:
+		a.feed = a.feed.CloseComposeAfterSuccess()
 		a, notifyCmd := a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
 		return a, tea.Batch(notifyCmd, a.loadFeedCmd()), true
+	case postSubmitFailedMsg:
+		a.feed = a.feed.ClearComposeSubmitting()
+		a, notifyCmd := a.notify(notifyError, composeFailText(msg.err, "ctrl+d"))
+		return a, notifyCmd, true
+	case screens.SaveNewPostAsNoteMsg:
+		return a, a.saveNewPostAsNoteCmd(msg.Content, msg.Topics), true
+	case noteFromComposeSavedMsg:
+		a.feed = a.feed.CloseComposeAfterSuccess()
+		a.journal = a.journal.PrependNote(msg.note)
+		a, notifyCmd := a.notify(notifyInfo, "saved to your Journal")
+		return a, notifyCmd, true
 	case screens.SubmitPostEditMsg:
 		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentTouched, msg.AudioAttachment, msg.OtherAttachments), true
 	case postEditedMsg:
@@ -2471,7 +2484,12 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SubmitPublishNoteMsg:
 		return a, a.publishNoteCmd(msg.Content, msg.Topics), true
 	case notePublishedMsg:
+		a.journal = a.journal.CloseEditAfterPublish()
 		return a, nil, true
+	case notePublishFailedMsg:
+		a.journal = a.journal.ClearPublishing()
+		a, notifyCmd := a.notify(notifyError, composeFailText(msg.err, "ctrl+s"))
+		return a, notifyCmd, true
 	case screens.LoadNoteRevisionsMsg:
 		return a, a.loadNoteRevisionsCmd(msg.NoteID, ""), true
 	case screens.LoadNoteRevisionMsg:
@@ -2716,6 +2734,18 @@ func friendlyErr(err error) string {
 		}
 	}
 	return err.Error()
+}
+
+// composeFailText is friendlyErr plus a rate-limit case: a 429 on CreatePost
+// carries the canned "rate limit exceeded" string (the server body is dropped —
+// see doRequest), so spell out the recovery the kept-open editor now offers.
+// saveKey is the key that diverts the text to the Journal in the editor that's
+// still open — "ctrl+d" for the feed composer, "ctrl+s" for the journal editor.
+func composeFailText(err error, saveKey string) string {
+	if errors.Is(err, api.ErrRateLimited) {
+		return "you're posting too fast — wait a bit, then retry or press " + saveKey + " to save it to your Journal"
+	}
+	return friendlyErr(err)
 }
 
 func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
@@ -4459,6 +4489,24 @@ type postCreatedMsg struct{}
 // postConvertedToNoteMsg is returned instead of postCreatedMsg when the server
 // silently turned a too-soon post into a journal entry — see createPostCmd.
 type postConvertedToNoteMsg struct{}
+
+// postSubmitFailedMsg is returned by createPostCmd / saveNewPostAsNoteCmd when
+// the new-post composer's submit fails for a non-401 reason (rate limit, 5xx,
+// network). The compose panel is still open and populated; handlePostDetail
+// just clears the in-flight flag and shows a friendly banner, so the user can
+// retry or press Ctrl+D to divert the text to their Journal. (A 401 still comes
+// back as actionErrMsg so handleUnauthorized can redirect to login.)
+type postSubmitFailedMsg struct{ err error }
+
+// noteFromComposeSavedMsg is returned by saveNewPostAsNoteCmd on success —
+// the new-post composer's Ctrl+D stored the text as a private note.
+type noteFromComposeSavedMsg struct{ note model.Note }
+
+// notePublishFailedMsg is the journal-editor counterpart of postSubmitFailedMsg:
+// a Ctrl+P publish-as-post failed for a non-401 reason. The editor is still
+// open and populated; handleJournal clears the in-flight flag and banners the
+// error so the user can Ctrl+S the text as a note.
+type notePublishFailedMsg struct{ err error }
 type postDeletedMsg struct {
 	postID   string
 	fromFeed bool // true = delete was triggered from the feed; false = from post detail
@@ -5151,7 +5199,10 @@ func (a *App) createPostCmd(content, title, slug string, topics []string, isPubl
 	return func() tea.Msg {
 		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, audioAttachment)
 		if err != nil {
-			return actionErrMsg{err}
+			if errors.Is(err, api.ErrUnauthorized) {
+				return actionErrMsg{err} // let handleUnauthorized redirect to login
+			}
+			return postSubmitFailedMsg{err: err}
 		}
 		// The server silently converts a post submitted too soon after a
 		// previous one into a journal entry instead of rejecting it — the
@@ -5926,9 +5977,27 @@ func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := a.client.CreatePost(content, "", "", topics, false, false, nil)
 		if err != nil {
-			return actionErrMsg{err}
+			if errors.Is(err, api.ErrUnauthorized) {
+				return actionErrMsg{err} // let handleUnauthorized redirect to login
+			}
+			return notePublishFailedMsg{err: err}
 		}
 		return notePublishedMsg{}
+	}
+}
+
+// saveNewPostAsNoteCmd stores the new-post composer's text as a private
+// Journal note (Ctrl+D) instead of publishing it to the feed.
+func (a *App) saveNewPostAsNoteCmd(content string, topics []string) tea.Cmd {
+	return func() tea.Msg {
+		note, err := a.client.CreateNote(content, topics)
+		if err != nil {
+			if errors.Is(err, api.ErrUnauthorized) {
+				return actionErrMsg{err} // let handleUnauthorized redirect to login
+			}
+			return postSubmitFailedMsg{err: err}
+		}
+		return noteFromComposeSavedMsg{note: note}
 	}
 }
 

@@ -106,6 +106,8 @@ Publish note as post?  [y]es  [n]o / esc
 
 On confirmation (`y`), the note content and topics are submitted to `POST /v1/posts`. The note itself is **not** deleted — it remains in the journal. This lets you keep a private draft alongside the published post.
 
+The editor stays open while the publish is in flight (`ctrl+p`/`ctrl+s`/`esc` inert, hint shows `… publishing`). On success it closes; on a non-401 failure (e.g. a rate limit) it stays open with your text intact and shows a banner, so you can retry or `ctrl+s` to save it as a note. See `docs/51-compose-to-journal.md`.
+
 ---
 
 ## Pagination
