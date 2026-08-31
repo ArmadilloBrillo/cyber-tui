@@ -266,6 +266,10 @@ type ChatroomsModel struct {
 	// than index since PrependMessages splices older history onto the front
 	// of m.messages, which would silently invalidate a stored index.
 	selectedMsgID       string
+	// sentHistory is a shell-style recall buffer for the compose input,
+	// keyed by room slug: ctrl+up / ctrl+down browse lines previously sent
+	// in the open room only. See inputHistory and histFor.
+	sentHistory         map[string]*inputHistory
 	msgOffsets          []int // start line of m.messages[i]'s rendered block; 1:1 with m.messages
 	msgHeights          []int // rendered line-height of m.messages[i]'s block; 1:1 with m.messages
 	msgImages           [][]postImageSlot // inline image slot(s) for m.messages[i], nil unless eligible; 1:1 with m.messages
@@ -386,6 +390,7 @@ func NewChatroomsModel(currentUser string, client api.Client) ChatroomsModel {
 		mode:          chatroomModeList,
 		flagPrompt:    NewFlagPrompt(),
 		chatBodyCache: make(map[string]chatBodyCacheEntry),
+		sentHistory:   map[string]*inputHistory{},
 	}
 }
 
@@ -640,6 +645,21 @@ func (m ChatroomsModel) loadOlderRoomMessagesCmd(roomID string, before int64) te
 	}
 }
 
+// histFor returns the sent-line recall buffer for room slug id, creating it on
+// first use. Per-room so ctrl+up only walks lines sent in the room that's
+// open. The map is small (one pointer per room visited this session) and
+// session-only. Safe on a value receiver: map values are pointers and the
+// insert lands in the shared backing map, same as chatBodyCache elsewhere in
+// this file.
+func (m ChatroomsModel) histFor(id string) *inputHistory {
+	h := m.sentHistory[id]
+	if h == nil {
+		h = &inputHistory{}
+		m.sentHistory[id] = h
+	}
+	return h
+}
+
 // InputFocused returns true in detail mode to prevent tab-navigation key capture.
 func (m ChatroomsModel) InputFocused() bool { return m.mode == chatroomModeDetail }
 
@@ -773,6 +793,7 @@ func (m ChatroomsModel) enterRoomDetail(idx int, room model.Room) (ChatroomsMode
 	m.err = nil
 	m.selectedMsgID = ""
 	m.input.Focus()
+	m.histFor(room.Slug).reset()
 	m.lastActivityAt = time.Now()
 	m.lastHeartbeatSentAt = time.Now()
 	if m.ready {
@@ -1547,10 +1568,23 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 					m.listVP.SetContent(m.renderRoomCards())
 				}
 				return m, leaveRoomPresenceCmd(m.client, leaveRoomID)
+			case "ctrl+up":
+				if v, ok := m.histFor(m.activeRoomID).prev(m.input.Value()); ok {
+					m.input.SetValue(v)
+					m.input.CursorEnd()
+				}
+				return m, nil
+			case "ctrl+down":
+				if v, ok := m.histFor(m.activeRoomID).next(); ok {
+					m.input.SetValue(v)
+					m.input.CursorEnd()
+				}
+				return m, nil
 			case "enter":
 				if m.activeRoom != nil {
 					val := m.input.Value()
 					if val != "" {
+						m.histFor(m.activeRoomID).record(val)
 						roomID := m.activeRoom.Slug
 						if strings.HasPrefix(val, "/") {
 							cmd := strings.ToLower(strings.Fields(val)[0])

@@ -227,8 +227,12 @@ type CMailModel struct {
 	// msgHeights are 1:1 with activeConv.Messages, rebuilt on every
 	// refreshMessages call.
 	selectedMsgID string
-	msgOffsets    []int
-	msgHeights    []int
+	// sentHistory is a shell-style recall buffer for the compose input,
+	// keyed by conversation ID: ctrl+up / ctrl+down browse lines previously
+	// sent in the open conversation only. See inputHistory and histFor.
+	sentHistory map[string]*inputHistory
+	msgOffsets  []int
+	msgHeights  []int
 	// msgImages is parallel to msgOffsets/msgHeights — see ChatroomsModel's
 	// field of the same name for the convention.
 	msgImages           [][]postImageSlot
@@ -359,6 +363,7 @@ func NewCMailModel(currentUser, currentUserID string, client api.Client) CMailMo
 		client:        client,
 		mode:          cmailModeList,
 		chatBodyCache: make(map[string]cmailBodyCacheEntry),
+		sentHistory:   map[string]*inputHistory{},
 	}
 }
 
@@ -728,6 +733,7 @@ func (m CMailModel) SetActiveConversation(conv model.Conversation) CMailModel {
 	m.loadingHistory = false
 	m.err = nil
 	m.input.Focus()
+	m.histFor(conv.ID).reset()
 	m.selectedMsgID = ""
 	m.imageRealRows = nil
 	if m.ready {
@@ -788,6 +794,21 @@ func (m CMailModel) HasLiveConv() bool {
 // App to let plain left/right fall through to tab-cycling instead of being
 // captured as cursor movement (see handleKeys' focused-input gate in app.go).
 func (m CMailModel) ComposeEmpty() bool { return m.input.Value() == "" }
+
+// histFor returns the sent-line recall buffer for conversation id, creating it
+// on first use. Per-conversation so ctrl+up only walks lines sent in the
+// conversation that's open. The map is small (one pointer per conversation
+// visited this session) and session-only. Safe on a value receiver: map values
+// are pointers and the insert lands in the shared backing map, same as
+// chatBodyCache elsewhere in this file.
+func (m CMailModel) histFor(id string) *inputHistory {
+	h := m.sentHistory[id]
+	if h == nil {
+		h = &inputHistory{}
+		m.sentHistory[id] = h
+	}
+	return h
+}
 
 // SelectedMessageID returns the currently browsing-selected message ID, or
 // "" while composing/typing.
@@ -1244,6 +1265,7 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 					m.loadingHistory = false
 					m.err = nil
 					m.input.Focus()
+					m.histFor(conv.ID).reset()
 					m.selectedMsgID = ""
 					if m.ready {
 						m = m.refreshMessages()
@@ -1290,10 +1312,23 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 					m.listVP.SetContent(m.renderConvCards())
 				}
 				return m, clearCmd
+			case "ctrl+up":
+				if v, ok := m.histFor(m.activeConvID).prev(m.input.Value()); ok {
+					m.input.SetValue(v)
+					m.input.CursorEnd()
+				}
+				return m, nil
+			case "ctrl+down":
+				if v, ok := m.histFor(m.activeConvID).next(); ok {
+					m.input.SetValue(v)
+					m.input.CursorEnd()
+				}
+				return m, nil
 			case "enter":
 				if m.activeConv != nil {
 					val := m.input.Value()
 					if val != "" {
+						m.histFor(m.activeConvID).record(val)
 						convID := m.activeConv.ID
 						if strings.HasPrefix(val, "/") {
 							cmd := strings.ToLower(strings.Fields(val)[0])
