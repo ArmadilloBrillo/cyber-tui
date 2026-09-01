@@ -43,16 +43,35 @@ func stripControl(s string) string {
 	}, s)
 }
 
-// shouldDesktopNotify reports whether a desktop (OSC 9) notification should be
-// emitted right now: the user enabled it, this isn't an SSH-hosted session
-// (the toast would pop on the host, not the connected client — the same reason
-// OSC 52 clipboard copy is gated on a.ephemeral), and we don't currently know
-// the terminal to be focused.
-func (a *App) shouldDesktopNotify() bool {
+// shouldDesktopNotify reports whether a desktop (OSC 9) toast should fire for an
+// event whose "home" tab is source: the user enabled notifications, this isn't
+// an SSH-hosted session (the toast would pop on the host, not the connected
+// client — the same reason OSC 52 clipboard copy is gated on a.ephemeral), and
+// either the terminal window isn't the focused one, or it is but the user is
+// looking at a different tab than the one the event belongs to.
+func (a *App) shouldDesktopNotify(source screen) bool {
 	if a.ephemeral || !a.desktopNotifications {
 		return false
 	}
-	return !(a.focusReported && a.focused)
+	if !a.focusReported || !a.focused {
+		return true // window not focused (or focus unknowable) → always notify
+	}
+	return a.active != source // focused → only if not already on that tab
+}
+
+// notifScreen maps a notification Type to the tab it belongs to for the focus
+// gate. ok is false for types that must NOT toast from the notifications path:
+// dm_message is owned by the C-Mail / RTDB path (see maybeNotifyNewCMail) so
+// routing it here too would double-toast.
+func notifScreen(typ string) (s screen, ok bool) {
+	switch typ {
+	case "dm_message":
+		return 0, false
+	case "chat_mention":
+		return screenChatrooms, true
+	default:
+		return screenNotifications, true
+	}
 }
 
 // desktopNotifyCmd returns a tea.Cmd that writes an OSC 9 desktop-notification
