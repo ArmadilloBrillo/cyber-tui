@@ -79,6 +79,10 @@ type SharedConfigMsg struct {
 	// subscription, announce/clear calls, and the merged anim/idle-check
 	// tick — see docs/00-battery-audit.md item #6.
 	TypingIndicatorsEnabled bool
+	// DesktopNotifications is the user's raw preference
+	// (config.Config.DesktopNotifications), used by the settings screen to
+	// display/edit the toggle — see docs/53-desktop-notifications.md.
+	DesktopNotifications bool
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -147,6 +151,7 @@ type SaveSettingsMsg struct {
 	WanderLust              bool
 	FeedManualRefreshOnly   bool
 	TypingIndicatorsEnabled bool
+	DesktopNotifications    bool
 	MaxThreadDepth          int
 	Timezone                string
 	ImageViewer             string

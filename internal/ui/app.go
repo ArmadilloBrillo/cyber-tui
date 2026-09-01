@@ -482,6 +482,29 @@ type App struct {
 	// until WithSavedPreferences runs (then true unless the user opted out),
 	// same zero-value-before-hydration window every local preference has.
 	typingIndicatorsEnabled bool
+	// desktopNotifications is the local config value
+	// (config.Config.DesktopNotifications) enabling OS desktop notifications
+	// (an OSC 9 escape to stdout) for new C-Mail / activity while backgrounded
+	// — see docs/53-desktop-notifications.md. Off by default.
+	desktopNotifications bool
+	// focused / focusReported track terminal focus via tea.FocusMsg /
+	// tea.BlurMsg (enabled with tea.WithReportFocus). A desktop notification
+	// is suppressed only when we positively know the terminal is focused —
+	// terminals report focus on change, not on startup, so focusReported
+	// stays false (and notifications still fire) until the first blur/focus.
+	focused       bool
+	focusReported bool
+	// notifCountBaselined guards the first post-login unreadCountMsg so the
+	// existing unread backlog doesn't trigger a desktop notification.
+	notifCountBaselined bool
+	// cmailUnreadSeen / cmailUnreadBaselined do the same for C-Mail: the
+	// account-wide conversation-list subscription delivers current unread
+	// totals shortly after login, and only a later increase should notify.
+	// ponytail: naive TotalUnread() delta — the baseline isn't refreshed
+	// while C-Mail is the active tab, so the first new message right after
+	// leaving that tab may not notify. Acceptable for a best-effort ping.
+	cmailUnreadSeen      int
+	cmailUnreadBaselined bool
 
 	// graphicsProtocol is the terminal image display protocol detected at startup.
 	// ProtocolNone means no image display is available and URLs open in a browser.
@@ -653,6 +676,7 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	a.wanderLust = s.WanderLust
 	a.feedManualRefreshOnly = s.FeedManualRefreshOnly
 	a.typingIndicatorsEnabled = !s.TypingIndicatorsDisabled
+	a.desktopNotifications = s.DesktopNotifications
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
 	a.graphicsProtocolName = s.GraphicsProtocol
@@ -765,6 +789,18 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 		a = a.applyWindowSize(m)
 		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
 		return a, a.delegateUpdate(contentMsg)
+	}
+	// Terminal focus tracking for desktop notifications (tea.WithReportFocus).
+	// No screen consumes these, so they stop here.
+	switch msg.(type) {
+	case tea.FocusMsg:
+		a.focused = true
+		a.focusReported = true
+		return a, nil
+	case tea.BlurMsg:
+		a.focused = false
+		a.focusReported = true
+		return a, nil
 	}
 	// Any keypress dismisses a visible notification early. We do NOT return here,
 	// so the key still flows on to do its normal job; bumping notifyGen neutralizes
@@ -909,7 +945,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -1505,6 +1541,12 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenCMail && screens.IsDMStreamMsg(msg) {
 			var cmd tea.Cmd
 			a.cmail, cmd = a.cmail.Update(msg)
+			n := a.cmail.TotalUnread()
+			if a.cmailUnreadBaselined && n > a.cmailUnreadSeen && a.shouldDesktopNotify() {
+				cmd = tea.Batch(cmd, desktopNotifyCmd("C-Mail", "new message"))
+			}
+			a.cmailUnreadSeen = n
+			a.cmailUnreadBaselined = true
 			return a, cmd, true
 		}
 	}
@@ -1666,6 +1708,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		wl := msg.WanderLust
 		fmro := msg.FeedManualRefreshOnly
 		tie := msg.TypingIndicatorsEnabled
+		dn := msg.DesktopNotifications
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
@@ -1682,7 +1725,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -1709,6 +1752,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		// (broadcastConfig below) to start/stop its own typing-indicator
 		// subsystem, see cmail.go's SharedConfigMsg handler.
 		a.typingIndicatorsEnabled = msg.typingIndicatorsEnabled
+		a.desktopNotifications = msg.desktopNotifications
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
@@ -1738,17 +1782,18 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "settings saved")
-		wl, fmro, tie, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
+		wl, fmro, tie, dn, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
 				cfg.FeedManualRefreshOnly = fmro
 				cfg.TypingIndicatorsDisabled = !tie
+				cfg.DesktopNotifications = dn
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
@@ -4540,6 +4585,7 @@ type settingsSavedMsg struct {
 	wanderLust              bool
 	feedManualRefreshOnly   bool
 	typingIndicatorsEnabled bool
+	desktopNotifications    bool
 	maxThreadDepth          int
 	timezone                string
 	imageViewer             string
@@ -5357,10 +5403,15 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count
 		a.polledUnreadCountExact = msg.exact
-		if msg.count > prev && !a.notifications.HasPaginated() {
-			return a, a.loadNotifsCmd(), true
+		var dnCmd tea.Cmd
+		if a.notifCountBaselined && msg.count > prev && a.shouldDesktopNotify() {
+			dnCmd = desktopNotifyCmd("cyberspace", fmt.Sprintf("%d new notification(s)", msg.count-prev))
 		}
-		return a, nil, true
+		a.notifCountBaselined = true
+		if msg.count > prev && !a.notifications.HasPaginated() {
+			return a, tea.Batch(dnCmd, a.loadNotifsCmd()), true
+		}
+		return a, dnCmd, true
 	case feedPollTickMsg:
 		if msg.gen != a.sessionGen {
 			return a, nil, true
