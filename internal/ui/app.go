@@ -4485,6 +4485,12 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.loadProfileCmd(),
 		cmailCmd,
 		a.fetchUnreadCountCmd(),
+		// Load the notification list once at login so desktopNotifyForNewNotifs
+		// baselines its high-water mark from server time immediately — otherwise,
+		// with zero unread at login, the first activity notification of the
+		// session only sets the baseline and never toasts. See
+		// docs/53-desktop-notifications.md.
+		a.loadNotifsCmd(),
 		a.schedulePollCmd(),
 		feedPollCmd,
 		a.loadSettingsCmd(),

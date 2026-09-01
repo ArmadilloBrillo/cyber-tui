@@ -52,6 +52,15 @@ moves the cursor, so it can't corrupt the frame.
 So: focused on the Feed, mentioned in cIRC → toast. Focused on the cIRC tab,
 mentioned in cIRC → silent. Window unfocused → toast, whatever tab.
 
+> **Focused-window toasts are terminal-dependent.** A desktop notification
+> emitted while the terminal window itself is focused is at the mercy of the
+> terminal's own policy: Ghostty (macOS) shows the banner for ~3s then
+> auto-dismisses it, and some terminals don't banner a focused-window
+> notification at all. So the "focused, but on a different tab" toast is
+> best-effort — the reliable signal in that case is the live tab badge (which
+> updates in the background regardless). Unfocused-window toasts are shown
+> normally by every terminal that supports OSC 9.
+
 ### Activity notifications — content mirrors the Notifications tab
 The activity toast carries the **same one-line text a Notifications-tab row
 shows** ("@alice replied to your post.", "@bob mentioned you in #lobby — <first
@@ -68,7 +77,10 @@ refresh (as it already did) and updates the badge.
 - A `time.Time` high-water mark, `lastNotifiedAt`, tracks the newest handled
   notification (`model.Notification.CreatedAt`). Items newer than it, still
   unread, are toasted. `notifBaselined` swallows the first list after login so
-  the backlog doesn't toast.
+  the backlog doesn't toast — and `afterLoginCmd` batches `loadNotifsCmd()` so
+  that baseline is set from server time immediately at login, not lazily on the
+  first poll (otherwise, with zero unread at login, the first notification of
+  the session would only set the baseline and never toast).
 - `notifScreen(type)` routes the focus gate per type: `chat_mention` →
   `screenChatrooms`, `dm_message` → **skipped** (owned by the C-Mail path
   below; routing it here too would double-toast), everything else →
@@ -117,6 +129,7 @@ App.updateInner
   → tea.FocusMsg / tea.BlurMsg → set a.focused / a.focusReported, stop here
 
 --- activity ---
+afterLoginCmd                    batches loadNotifsCmd()  // first notifsLoadedMsg baselines
 App.Update (unreadCountMsg)      badge + (count rose & !HasPaginated) → loadNotifsCmd()
 App.Update (notifsLoadedMsg)
   → suppressActiveRoomMentions(msg.notifs)      // marks active-room mentions Read
