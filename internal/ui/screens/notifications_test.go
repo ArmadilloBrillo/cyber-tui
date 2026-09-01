@@ -1501,3 +1501,49 @@ func TestNotifs_C_NoActor_IsNoop(t *testing.T) {
 		t.Errorf("expected no message for c on actorless notification, got %T", msg)
 	}
 }
+
+func TestNotifToastText_ReplyWithActor(t *testing.T) {
+	got := NotifToastText(model.Notification{
+		Type: "reply", Actor: model.NotificationActor{Username: "alice"},
+	})
+	if got != "@alice replied to your post." {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestNotifToastText_MentionAppendsPreview(t *testing.T) {
+	got := NotifToastText(model.Notification{
+		Type:        "post_mention",
+		Actor:       model.NotificationActor{Username: "bob"},
+		PostContent: "hey @you\ncheck this out",
+	})
+	want := "@bob mentioned you in a post. — hey @you check this out"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestNotifToastText_ActorlessSystem(t *testing.T) {
+	got := NotifToastText(model.Notification{
+		Type: "post_cooldown", Actor: model.NotificationActor{Username: "system"},
+		Reason: "You can only post once per 10 minutes.",
+	})
+	// No leading "@", summary then the reason preview.
+	if strings.HasPrefix(got, "@") {
+		t.Errorf("actorless notification should not start with @: %q", got)
+	}
+	if !strings.Contains(got, "once per 10 minutes") {
+		t.Errorf("expected the Reason preview appended: %q", got)
+	}
+}
+
+func TestNotifPreview_TruncatesToMax(t *testing.T) {
+	n := model.Notification{PostContent: strings.Repeat("x", 200)}
+	got := notifPreview(n, 60)
+	if len([]rune(got)) != 60 {
+		t.Errorf("len = %d, want 60", len([]rune(got)))
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("want ellipsis suffix: %q", got)
+	}
+}

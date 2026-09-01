@@ -494,16 +494,18 @@ type App struct {
 	// stays false (and notifications still fire) until the first blur/focus.
 	focused       bool
 	focusReported bool
-	// notifCountBaselined guards the first post-login unreadCountMsg so the
-	// existing unread backlog doesn't trigger a desktop notification.
-	notifCountBaselined bool
-	// cmailUnreadSeen / cmailUnreadBaselined do the same for C-Mail: the
-	// account-wide conversation-list subscription delivers current unread
-	// totals shortly after login, and only a later increase should notify.
-	// ponytail: naive TotalUnread() delta — the baseline isn't refreshed
-	// while C-Mail is the active tab, so the first new message right after
-	// leaving that tab may not notify. Acceptable for a best-effort ping.
-	cmailUnreadSeen      int
+	// notifBaselined / lastNotifiedAt drive per-notification desktop toasts:
+	// desktopNotifyForNewNotifs toasts every item in a freshly-loaded list
+	// newer than lastNotifiedAt (a high-water mark on model.Notification's
+	// CreatedAt). The first list after login only sets the mark, so the
+	// pre-existing backlog doesn't toast.
+	notifBaselined bool
+	lastNotifiedAt time.Time
+	// cmailUnreadBaselined guards the first C-Mail unread observation after
+	// login so the account-wide conversation-list snapshot's existing unread
+	// totals don't toast. The increase itself is detected by a before/after
+	// TotalUnread() snapshot around updateInner (see maybeNotifyNewCMail),
+	// which is exact and independent of which tab is active.
 	cmailUnreadBaselined bool
 
 	// graphicsProtocol is the terminal image display protocol detected at startup.
@@ -770,7 +772,18 @@ func (a App) Init() tea.Cmd {
 // whatever updateInner returned.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	prevActive := a.active
+	// C-Mail unread is RTDB-driven and never reaches the notifications list, so
+	// its desktop toast is detected here by an exact before/after TotalUnread()
+	// snapshot around updateInner — catching new mail whether or not the C-Mail
+	// tab is the active one (rule 2: an unfocused window always notifies).
+	cmailUnreadBefore := -1
+	if screens.IsDMStreamMsg(msg) {
+		cmailUnreadBefore = a.cmail.TotalUnread()
+	}
 	a2, cmd := a.updateInner(msg)
+	if cmailUnreadBefore >= 0 {
+		a2, cmd = a2.maybeNotifyNewCMail(cmailUnreadBefore, cmd)
+	}
 	if a2.active != prevActive {
 		// See screenSwitchedAt's doc comment (App struct) and
 		// inlineImageSwitchSettleDelay's — injectInlineImages uses this to
@@ -782,6 +795,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a3, cmd
 	}
 	return a3, tea.Batch(cmd, syncCmd)
+}
+
+// maybeNotifyNewCMail fires a "C-Mail: new message" desktop toast when the total
+// C-Mail unread count rose while handling a DM-stream message and the focus/tab
+// gate for screenCMail allows it. before is TotalUnread() captured before
+// updateInner ran. The first observation after login only arms the baseline so
+// the account-wide conversation-list snapshot's existing unread doesn't toast.
+func (a App) maybeNotifyNewCMail(before int, cmd tea.Cmd) (App, tea.Cmd) {
+	if a.cmailUnreadBaselined && a.cmail.TotalUnread() > before && a.shouldDesktopNotify(screenCMail) {
+		cmd = tea.Batch(cmd, desktopNotifyCmd("C-Mail", "new message"))
+	}
+	a.cmailUnreadBaselined = true
+	return a, cmd
 }
 
 func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
@@ -1541,12 +1567,9 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenCMail && screens.IsDMStreamMsg(msg) {
 			var cmd tea.Cmd
 			a.cmail, cmd = a.cmail.Update(msg)
-			n := a.cmail.TotalUnread()
-			if a.cmailUnreadBaselined && n > a.cmailUnreadSeen && a.shouldDesktopNotify() {
-				cmd = tea.Batch(cmd, desktopNotifyCmd("C-Mail", "new message"))
-			}
-			a.cmailUnreadSeen = n
-			a.cmailUnreadBaselined = true
+			// The desktop toast for new C-Mail is handled centrally in
+			// App.Update (maybeNotifyNewCMail), which wraps both this
+			// background path and the active-tab path.
 			return a, cmd, true
 		}
 	}
@@ -5312,8 +5335,9 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case notifsLoadedMsg:
 		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
+		a, dnCmd := a.desktopNotifyForNewNotifs(msg.notifs)
 		a.notifications = a.notifications.SetNotifs(msg.notifs, msg.cursor)
-		return a, cmd, true
+		return a, tea.Batch(cmd, dnCmd), true
 	case notifsPageMsg:
 		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
 		a.notifications = a.notifications.AppendNotifs(msg.notifs, msg.cursor)
@@ -5403,15 +5427,13 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count
 		a.polledUnreadCountExact = msg.exact
-		var dnCmd tea.Cmd
-		if a.notifCountBaselined && msg.count > prev && a.shouldDesktopNotify() {
-			dnCmd = desktopNotifyCmd("cyberspace", fmt.Sprintf("%d new notification(s)", msg.count-prev))
-		}
-		a.notifCountBaselined = true
+		// The desktop toast for new activity fires from the notifsLoadedMsg
+		// handler (desktopNotifyForNewNotifs) so it can carry the real
+		// per-notification text; this poll just triggers that list refresh.
 		if msg.count > prev && !a.notifications.HasPaginated() {
-			return a, tea.Batch(dnCmd, a.loadNotifsCmd()), true
+			return a, a.loadNotifsCmd(), true
 		}
-		return a, dnCmd, true
+		return a, nil, true
 	case feedPollTickMsg:
 		if msg.gen != a.sessionGen {
 			return a, nil, true
@@ -5449,6 +5471,49 @@ func (a App) suppressActiveRoomMentions(notifs []model.Notification) (App, tea.C
 		}
 	}
 	return a, tea.Batch(cmds...)
+}
+
+// desktopNotifyForNewNotifs fires a desktop toast for every notification in the
+// freshly-loaded list that is newer than the last one already handled, unread,
+// and passes the focus/tab gate for its type. notifs is newest-first, as the
+// server returns it. The first list after login only sets the high-water mark
+// (lastNotifiedAt) so the pre-existing backlog doesn't toast. suppressActive-
+// RoomMentions has already run on notifs, so a mention in the room the user is
+// viewing arrives here already marked Read and is skipped. More than three new
+// items collapse to a single "N new notifications" toast.
+func (a App) desktopNotifyForNewNotifs(notifs []model.Notification) (App, tea.Cmd) {
+	if len(notifs) == 0 {
+		return a, nil
+	}
+	if !a.notifBaselined {
+		a.notifBaselined = true
+		a.lastNotifiedAt = notifs[0].CreatedAt
+		return a, nil
+	}
+	newest := notifs[0].CreatedAt
+	var toasts []tea.Cmd
+	for _, n := range notifs {
+		if !n.CreatedAt.After(a.lastNotifiedAt) {
+			break
+		}
+		if n.Read {
+			continue
+		}
+		src, ok := notifScreen(n.Type)
+		if !ok || !a.shouldDesktopNotify(src) {
+			continue
+		}
+		toasts = append(toasts, desktopNotifyCmd("cyberspace", screens.NotifToastText(n)))
+	}
+	a.lastNotifiedAt = newest
+	switch {
+	case len(toasts) == 0:
+		return a, nil
+	case len(toasts) <= 3:
+		return a, tea.Batch(toasts...)
+	default:
+		return a, desktopNotifyCmd("cyberspace", fmt.Sprintf("%d new notifications", len(toasts)))
+	}
 }
 
 func (a *App) loadNotifsCmd() tea.Cmd {
