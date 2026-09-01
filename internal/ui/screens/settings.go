@@ -280,6 +280,23 @@ var settingsGroups = []settingsGroup{
 			},
 		},
 	},
+	{
+		title: "desktop",
+		items: []settingsItem{
+			{
+				// OS desktop notification (OSC 9 escape) for new C-Mail /
+				// activity while backgrounded — see
+				// docs/53-desktop-notifications.md. Silently does nothing on
+				// terminals without OSC 9 support.
+				label: "notifications (OSC 9 terminals)", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.desktopNotifications },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.desktopNotifications = !m.desktopNotifications
+					return m
+				},
+			},
+		},
+	},
 }
 
 // SettingsModel is the Settings screen.
@@ -308,6 +325,8 @@ type SettingsModel struct {
 	originalFeedManualRefreshOnly   bool           // last saved baseline
 	typingIndicatorsEnabled         bool           // live local config value (positive polarity)
 	originalTypingIndicatorsEnabled bool           // last saved baseline
+	desktopNotifications            bool           // live local config value (OSC 9 desktop notifications)
+	originalDesktopNotifications    bool           // last saved baseline
 	prefsSeeded                     bool           // whether the SharedConfigMsg preference fields above have been seeded once
 	cursor                          int
 	width                           int
@@ -329,7 +348,7 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typingIndicatorsEnabled bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, ditherSharpness string, layoutName string) SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typingIndicatorsEnabled bool, desktopNotifications bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, ditherSharpness string, layoutName string) SettingsModel {
 	m.err = nil
 	m.original = m.settings
 	m.wanderLust = wanderLust
@@ -338,6 +357,8 @@ func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typ
 	m.originalFeedManualRefreshOnly = feedManualRefreshOnly
 	m.typingIndicatorsEnabled = typingIndicatorsEnabled
 	m.originalTypingIndicatorsEnabled = typingIndicatorsEnabled
+	m.desktopNotifications = desktopNotifications
+	m.originalDesktopNotifications = desktopNotifications
 	m.maxThreadDepth = maxThreadDepth
 	m.originalMaxThreadDepth = maxThreadDepth
 	m.timezone = timezone
@@ -369,6 +390,7 @@ func (m SettingsModel) IsDirty() bool {
 		m.wanderLust != m.originalWanderLust ||
 		m.feedManualRefreshOnly != m.originalFeedManualRefreshOnly ||
 		m.typingIndicatorsEnabled != m.originalTypingIndicatorsEnabled ||
+		m.desktopNotifications != m.originalDesktopNotifications ||
 		m.maxThreadDepth != m.originalMaxThreadDepth ||
 		m.timezone != m.originalTimezone ||
 		m.imageViewer != m.originalImageViewer ||
@@ -465,6 +487,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.originalFeedManualRefreshOnly = msg.FeedManualRefreshOnly
 			m.typingIndicatorsEnabled = msg.TypingIndicatorsEnabled
 			m.originalTypingIndicatorsEnabled = msg.TypingIndicatorsEnabled
+			m.desktopNotifications = msg.DesktopNotifications
+			m.originalDesktopNotifications = msg.DesktopNotifications
 			m.maxThreadDepth = msg.MaxThreadDepth
 			m.originalMaxThreadDepth = msg.MaxThreadDepth
 			tz := msg.Timezone
@@ -536,6 +560,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				wl := m.wanderLust
 				fmro := m.feedManualRefreshOnly
 				tie := m.typingIndicatorsEnabled
+				dn := m.desktopNotifications
 				td := m.maxThreadDepth
 				tz := m.timezone
 				iv := m.imageViewer
@@ -546,7 +571,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				ln := m.layoutName
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, LayoutName: ln, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, LayoutName: ln, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -557,6 +582,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.wanderLust = m.originalWanderLust
 			m.feedManualRefreshOnly = m.originalFeedManualRefreshOnly
 			m.typingIndicatorsEnabled = m.originalTypingIndicatorsEnabled
+			m.desktopNotifications = m.originalDesktopNotifications
 			m.maxThreadDepth = m.originalMaxThreadDepth
 			m.timezone = m.originalTimezone
 			m.imageViewer = m.originalImageViewer
