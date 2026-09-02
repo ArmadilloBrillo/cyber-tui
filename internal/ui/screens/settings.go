@@ -474,6 +474,13 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		if m.original.TimeDisplayFormat == "" && (m.original.Notifications == model.NotificationPrefs{}) {
 			m = m.SetSettings(msg.Settings)
 		}
+		// MutedTopics isn't editable here (it's managed on the Topics tab), so
+		// track the latest value on both the working copy and the baseline even
+		// after first load — otherwise a ctrl+s on this screen would PATCH a
+		// stale list back. settingsEqual ignores it, so dirty state is unaffected.
+		// See docs/54-blocked-topics.md.
+		m.settings.MutedTopics = msg.Settings.MutedTopics
+		m.original.MutedTopics = msg.Settings.MutedTopics
 		// prefsSeeded gates the preference fields below independently of the
 		// m.original guard above — SetSettings can run before this handler
 		// ever sees a SharedConfigMsg (see settingsLoadedMsg in app.go), which

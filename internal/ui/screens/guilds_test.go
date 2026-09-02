@@ -496,6 +496,35 @@ func TestGuildsModel_UpAtTop_GuildListEmitsNoCmd(t *testing.T) {
 	}
 }
 
+// --- Blocked topics ---
+
+func TestGuildsModel_BlockedTopics_HidesMatchingPost(t *testing.T) {
+	m := screens.NewGuildsModel()
+	m = m.SetGuilds(sampleGuilds(), "")
+	m, _ = m.Update(specialKey(tea.KeyEnter))
+	m = m.SetGuildPosts([]model.Post{
+		{ID: "g1", AuthorUsername: "alice", Content: "keep", Topics: []string{"linux"}},
+		{ID: "g2", AuthorUsername: "bob", Content: "drop", Topics: []string{"crypto"}},
+		{ID: "g3", AuthorUsername: "carol", Content: "keep too"},
+	}, "")
+	m, _ = m.Update(blockedTopicsMsg("crypto"))
+
+	m, _ = m.Update(keyMsg_g("j"))
+	m, _ = m.Update(keyMsg_g("j"))
+
+	_, cmd := m.Update(specialKey(tea.KeyEnter))
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	sp, ok := cmd().(screens.ShowGuildPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowGuildPostMsg, got %T", cmd())
+	}
+	if sp.Post.ID != "g3" {
+		t.Errorf("expected g3 (crypto post filtered), got %s", sp.Post.ID)
+	}
+}
+
 // --- FilterNSFW ---
 
 func TestGuildsModel_FilterNSFW_HidesNSFWPost(t *testing.T) {

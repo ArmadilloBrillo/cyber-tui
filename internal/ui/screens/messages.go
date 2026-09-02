@@ -167,6 +167,13 @@ type SaveSettingsMsg struct {
 // so it can show transient feedback.
 type BookmarkedMsg struct{ PostID string }
 
+// SetBlockedTopicsMsg is emitted by TopicsModel when the user presses 'b' on a
+// topic row to block or unblock it. It carries the full new blocked list. App
+// updates Settings.MutedTopics, re-broadcasts SharedConfigMsg so every screen
+// re-filters, and persists via a debounced UpdateSettings — see
+// docs/54-blocked-topics.md.
+type SetBlockedTopicsMsg struct{ Topics []string }
+
 // FollowUserMsg is emitted by ProfileModel when the user presses 'f' to follow another user.
 type FollowUserMsg struct{ UserID string }
 

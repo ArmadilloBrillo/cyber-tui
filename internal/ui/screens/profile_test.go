@@ -403,6 +403,31 @@ func TestProfile_FilterNSFW_HidesNSFWPost(t *testing.T) {
 	}
 }
 
+func TestProfile_BlockedTopics_HidesMatchingPost(t *testing.T) {
+	posts := []model.Post{
+		{ID: "pp1", AuthorUsername: "ragnar", Content: "keep", Topics: []string{"linux"}},
+		{ID: "pp2", AuthorUsername: "ragnar", Content: "drop", Topics: []string{"crypto"}},
+		{ID: "pp3", AuthorUsername: "ragnar", Content: "keep too"},
+	}
+	m := profileWithPosts(posts)
+	m, _ = m.Update(blockedTopicsMsg("crypto"))
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	sp, ok := cmd().(screens.ShowProfilePostMsg)
+	if !ok {
+		t.Fatalf("expected ShowProfilePostMsg, got %T", cmd())
+	}
+	if sp.Post.ID != "pp3" {
+		t.Errorf("expected pp3 (crypto post filtered), got %s", sp.Post.ID)
+	}
+}
+
 func TestProfile_FilterNSFW_Off_ShowsAll(t *testing.T) {
 	posts := []model.Post{
 		{ID: "pp1", AuthorUsername: "ragnar", Content: "safe"},

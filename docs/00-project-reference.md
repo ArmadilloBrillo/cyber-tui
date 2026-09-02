@@ -564,9 +564,10 @@ Browse all topics (tags) and drill into posts for a selected topic.
 - Two-mode screen: topic list → topic feed
 - Topic list sorted by post count, cursor-paginated; `enter` opens the topic feed
 - Topic feed is a standard paginated post list; `esc` returns to the topic list
+- `b` (topic list only) blocks/unblocks the highlighted topic — emits `SetBlockedTopicsMsg`, App persists `Settings.MutedTopics` via a debounced `PATCH /v1/settings`; blocked rows show a `blocked` marker. See `docs/54-blocked-topics.md`
 - Same inline-image support as `guilds.go`'s thread feed — see that section
 
-Key types: `TopicsModel`, `LoadMoreTopicsMsg`, `LoadTopicPostsMsg`, `LoadMoreTopicPostsMsg`  
+Key types: `TopicsModel`, `LoadMoreTopicsMsg`, `LoadTopicPostsMsg`, `LoadMoreTopicPostsMsg`, `SetBlockedTopicsMsg`  
 Key methods: `SetTopics(topics, cursor)`, `AppendTopics(topics, cursor)`, `SetTopicPosts(posts, cursor)`, `AppendTopicPosts(posts, cursor)`
 
 #### `journal.go`

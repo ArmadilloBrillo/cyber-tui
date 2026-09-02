@@ -468,8 +468,11 @@ type wireSettings struct {
 
 // wirePatchSettings is the PATCH /v1/settings payload — only the fields the
 // UI manages. Deferred fields (iconTheme, imagePixelSize, followedTopics,
-// mutedTopics, mutedUsersByRoom) are intentionally excluded so the API never
-// receives them — mutedUsersByRoom is server-managed via /mute commands, not PATCH.
+// mutedUsersByRoom) are intentionally excluded so the API never receives
+// them — mutedUsersByRoom is server-managed via /mute commands, not PATCH.
+// mutedTopics IS sent: the Topics tab's block/unblock (docs/54-blocked-topics.md)
+// is the only writer, and it always sends the full current list (no omitempty,
+// so unblocking the last topic reaches the server as []).
 type wirePatchSettings struct {
 	Notifications        wireNotificationPrefs `json:"notifications"`
 	FilterNSFW           bool                  `json:"filterNSFW"`
@@ -478,6 +481,7 @@ type wirePatchSettings struct {
 	ShowGuildPostsInFeed bool                  `json:"showGuildPostsInFeed"`
 	TimeDisplayFormat    string                `json:"timeDisplayFormat"`
 	DefaultPublicPost    bool                  `json:"defaultPublicPost"`
+	MutedTopics          []string              `json:"mutedTopics"`
 }
 
 // --- CIRC wire types ---
@@ -1540,6 +1544,12 @@ func (c *HTTPClient) GetSettings() (model.Settings, error) {
 }
 
 func (c *HTTPClient) UpdateSettings(update model.Settings) error {
+	// Always send an array, never JSON null, so unblocking the last topic
+	// actually clears the list server-side.
+	mutedTopics := update.MutedTopics
+	if mutedTopics == nil {
+		mutedTopics = []string{}
+	}
 	_, err := c.doJSON("PATCH", "/v1/settings", wirePatchSettings{
 		Notifications: wireNotificationPrefs{
 			Bookmark: update.Notifications.Bookmark,
@@ -1552,6 +1562,7 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 		ShowGuildPostsInFeed: update.ShowGuildPostsInFeed,
 		TimeDisplayFormat:    update.TimeDisplayFormat,
 		DefaultPublicPost:    update.DefaultPublicPost,
+		MutedTopics:          mutedTopics,
 	})
 	return err
 }

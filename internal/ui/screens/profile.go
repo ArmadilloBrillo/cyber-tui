@@ -103,6 +103,7 @@ type ProfileModel struct {
 	timeDisplayFormat   string
 	loc                 *time.Location
 	filterNSFW          bool
+	blockedTopics       map[string]struct{} // Settings.MutedTopics; Posts-tab entries tagged with any are hidden
 	showFollowerCount   bool
 	inlineImagesEnabled bool
 
@@ -130,14 +131,18 @@ type SaveProfileMsg struct {
 }
 
 func (m ProfileModel) visibleProfilePosts() []model.Post {
-	if !m.filterNSFW {
+	if !m.filterNSFW && len(m.blockedTopics) == 0 {
 		return m.posts
 	}
 	out := m.posts[:0:0]
 	for _, p := range m.posts {
-		if !p.IsNSFW {
-			out = append(out, p)
+		if m.filterNSFW && p.IsNSFW {
+			continue
 		}
+		if topicBlocked(p.Topics, m.blockedTopics) {
+			continue
+		}
+		out = append(out, p)
 	}
 	return out
 }
@@ -593,6 +598,12 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 		}
 		if msg.Settings.FilterNSFW != m.filterNSFW {
 			m.filterNSFW = msg.Settings.FilterNSFW
+			if m.activeTab == tabPosts {
+				m.tabSelected = 0
+			}
+		}
+		if !sameBlockedSet(m.blockedTopics, msg.Settings.MutedTopics) {
+			m.blockedTopics = blockedSet(msg.Settings.MutedTopics)
 			if m.activeTab == tabPosts {
 				m.tabSelected = 0
 			}
