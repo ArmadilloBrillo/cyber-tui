@@ -106,6 +106,7 @@ type TopicsModel struct {
 	relaxed           bool
 	timeDisplayFormat string
 	filterNSFW        bool
+	blockedTopics     map[string]struct{} // Settings.MutedTopics; posts tagged with any are hidden, rows show a marker
 
 	// postBodyCache/replyBodyCache memoize the Miller detail pane's post
 	// card and thread replies (cachedPostCard/cachedReplyCard, render.go) so
@@ -124,14 +125,18 @@ func NewTopicsModel() TopicsModel {
 }
 
 func (m TopicsModel) visiblePosts() []model.Post {
-	if !m.filterNSFW {
+	if !m.filterNSFW && len(m.blockedTopics) == 0 {
 		return m.posts
 	}
 	out := m.posts[:0:0]
 	for _, p := range m.posts {
-		if !p.IsNSFW {
-			out = append(out, p)
+		if m.filterNSFW && p.IsNSFW {
+			continue
 		}
+		if topicBlocked(p.Topics, m.blockedTopics) {
+			continue
+		}
+		out = append(out, p)
 	}
 	return out
 }
@@ -262,6 +267,10 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		if msg.Settings.FilterNSFW != m.filterNSFW {
 			m.filterNSFW = msg.Settings.FilterNSFW
+			m.postIndex = 0
+		}
+		if !sameBlockedSet(m.blockedTopics, msg.Settings.MutedTopics) {
+			m.blockedTopics = blockedSet(msg.Settings.MutedTopics)
 			m.postIndex = 0
 		}
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
@@ -460,6 +469,18 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			}
 			return m, nil
 
+		case "b":
+			// Block / unblock the highlighted topic. Only in the topic list —
+			// the post list has no single "current topic" to act on.
+			if m.view == viewTopicList && len(m.topics) > 0 && m.topicIndex < len(m.topics) {
+				slug := m.topics[m.topicIndex].Slug
+				next := toggleBlocked(m.blockedTopics, slug)
+				m.blockedTopics = blockedSet(next) // optimistic: marker updates now
+				m = m.refreshContent()
+				return m, func() tea.Msg { return SetBlockedTopicsMsg{Topics: next} }
+			}
+			return m, nil
+
 		case "esc":
 			if m.view == viewTopicPosts {
 				m.view = viewTopicList
@@ -578,6 +599,9 @@ func (m TopicsModel) renderTopicItem(index int) string {
 	}
 	slugStr := slugStyle.Render(topic.Slug)
 	countStr := theme.Subtle.Render(fmt.Sprintf("%d posts", topic.PostCount))
+	if _, blocked := m.blockedTopics[topic.Slug]; blocked {
+		countStr = theme.Error.Render("BLOCKED")
+	}
 
 	var line string
 	if innerWidth > 0 {

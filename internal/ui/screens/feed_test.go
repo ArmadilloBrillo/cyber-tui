@@ -77,6 +77,61 @@ func TestFeed_FilterNSFW_RefreshKeepsVisibleSelection(t *testing.T) {
 	}
 }
 
+// --- Blocked topics ---
+
+func blockedTopicsMsg(topics ...string) screens.SharedConfigMsg {
+	return screens.SharedConfigMsg{
+		Settings: model.Settings{MutedTopics: topics},
+	}
+}
+
+func TestFeed_BlockedTopics_HidesMatchingPost(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "keep", Topics: []string{"linux"}},
+		{ID: "p2", AuthorUsername: "bob", Content: "drop", Topics: []string{"crypto", "news"}},
+		{ID: "p3", AuthorUsername: "carol", Content: "keep too"},
+	}, "")
+	m, _ = m.Update(blockedTopicsMsg("crypto"))
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	sp, ok := cmd().(screens.ShowPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowPostMsg, got %T", cmd())
+	}
+	if sp.Post.ID != "p3" {
+		t.Errorf("expected p3 (crypto post filtered out), got %s", sp.Post.ID)
+	}
+}
+
+func TestFeed_BlockedTopics_Off_ShowsAll(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "a", Topics: []string{"linux"}},
+		{ID: "p2", AuthorUsername: "bob", Content: "b", Topics: []string{"crypto"}},
+	}, "")
+	m, _ = m.Update(blockedTopicsMsg()) // no blocked topics
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	sp, ok := cmd().(screens.ShowPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowPostMsg, got %T", cmd())
+	}
+	if sp.Post.ID != "p2" {
+		t.Errorf("expected p2, got %s", sp.Post.ID)
+	}
+}
+
 func TestFeed_FilterNSFW_Off_ShowsAll(t *testing.T) {
 	m := screens.NewFeedModel()
 	m = m.SetPosts([]model.Post{

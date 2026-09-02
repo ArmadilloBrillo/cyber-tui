@@ -599,6 +599,17 @@ type App struct {
 	// its own stale snapshot.
 	settingsSaveSeq int
 
+	// blockedTopicsSaveSeq is bumped on every SetBlockedTopicsMsg. Only the
+	// matching blockedTopicsFlushMsg tick persists; earlier ticks are dropped,
+	// so a burst of block/unblock presses coalesces into a single
+	// PATCH /v1/settings (rate-limited 2/min) — see docs/54-blocked-topics.md.
+	blockedTopicsSaveSeq int
+
+	// blockedTopicsSaved is the MutedTopics list the server last accepted (set
+	// on login and after each successful save). A failed save rolls the
+	// optimistic in-memory list back to this.
+	blockedTopicsSaved []string
+
 	// sessionGen is bumped in handleUnauthorized on session expiry, so the
 	// self-rescheduling poll/wander/logo-idle tea.Tick chains started by
 	// afterLoginCmd (each stamped with the gen they were scheduled under)
@@ -1722,6 +1733,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case settingsLoadedMsg:
 		a.settings = msg.settings
+		a.blockedTopicsSaved = msg.settings.MutedTopics // rollback baseline for Topics-tab block/unblock
 		a.settingsScreen = a.settingsScreen.SetSettings(msg.settings)
 		a.broadcastConfig()
 		return a, nil, true
@@ -2466,6 +2478,49 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.RefreshTopicsMsg:
 		return a, a.loadTopicsCmd(), true
 
+	case screens.SetBlockedTopicsMsg:
+		// Block / unblock a topic from the Topics tab. Apply + broadcast now so
+		// every post list re-filters immediately (optimistic); persist on a
+		// debounce tick so a rapid series of toggles becomes one PATCH. If that
+		// PATCH fails, blockedTopicsSaveResultMsg rolls the list back to
+		// blockedTopicsSaved (the last version the server accepted).
+		a.settings.MutedTopics = msg.Topics
+		// broadcastConfig re-seeds the settings screen's MutedTopics baseline too
+		// (see its SharedConfigMsg handler), so a later ctrl+s there can't PATCH
+		// a stale list back.
+		a.broadcastConfig()
+		a.blockedTopicsSaveSeq++
+		seq := a.blockedTopicsSaveSeq
+		return a, tea.Tick(blockedTopicsSaveDebounce, func(time.Time) tea.Msg {
+			return blockedTopicsFlushMsg{seq: seq}
+		}), true
+
+	case blockedTopicsFlushMsg:
+		if msg.seq != a.blockedTopicsSaveSeq {
+			return a, nil, true // superseded by a newer toggle
+		}
+		s := a.settings
+		attempted := append([]string(nil), s.MutedTopics...)
+		return a, func() tea.Msg {
+			if err := a.client.UpdateSettings(s); err != nil {
+				return blockedTopicsSaveResultMsg{err: err}
+			}
+			return blockedTopicsSaveResultMsg{topics: attempted}
+		}, true
+
+	case blockedTopicsSaveResultMsg:
+		if msg.err != nil {
+			// Roll back to the last list the server accepted and cancel any
+			// still-pending debounce tick so it can't re-PATCH the reverted state.
+			a.settings.MutedTopics = append([]string(nil), a.blockedTopicsSaved...)
+			a.blockedTopicsSaveSeq++
+			a.broadcastConfig()
+			a, cmd := a.notify(notifyError, blockedTopicsSaveFailText(msg.err))
+			return a, cmd, true
+		}
+		a.blockedTopicsSaved = msg.topics
+		return a, nil, true
+
 	case topicsLoadedMsg:
 		a.topics = a.topics.SetTopics(msg.topics, msg.cursor)
 		return a, nil, true
@@ -2802,6 +2857,22 @@ func friendlyErr(err error) string {
 		}
 	}
 	return err.Error()
+}
+
+// blockedTopicsSaveFailText explains why a block/unblock couldn't be saved, so
+// the revert banner names a cause instead of just "can't block".
+func blockedTopicsSaveFailText(err error) string {
+	reason := friendlyErr(err)
+	var apiErr *api.APIError
+	switch {
+	case errors.Is(err, api.ErrRateLimited):
+		reason = "too many settings changes just now (limit 2/min, 15/day) — wait a bit and try again"
+	case errors.Is(err, api.ErrUnauthorized):
+		reason = "your session expired — sign in again"
+	case errors.As(err, &apiErr) && apiErr.Status >= 500:
+		reason = "the server had a problem (" + strconv.Itoa(apiErr.Status) + ") — try again shortly"
+	}
+	return "couldn't save blocked topics: " + reason + " — reverted"
 }
 
 // composeFailText is friendlyErr plus a rate-limit case: a 429 on CreatePost
@@ -4817,6 +4888,23 @@ type topicPostsPageMsg struct {
 	posts  []model.Post
 	cursor string
 }
+
+// blockedTopicsFlushMsg is the debounce tick that persists a block/unblock made
+// from the Topics tab. Only the tick whose seq still matches
+// blockedTopicsSaveSeq calls UpdateSettings — see docs/54-blocked-topics.md.
+type blockedTopicsFlushMsg struct{ seq int }
+
+// blockedTopicsSaveResultMsg reports the outcome of that PATCH. On success
+// (err == nil) topics is the list now stored server-side; on failure the
+// optimistic in-memory list is rolled back to blockedTopicsSaved.
+type blockedTopicsSaveResultMsg struct {
+	topics []string
+	err    error
+}
+
+// blockedTopicsSaveDebounce coalesces a burst of block/unblock presses into one
+// PATCH /v1/settings (rate-limited 2/min, 15/day).
+const blockedTopicsSaveDebounce = 2 * time.Second
 
 type searchPreviewLoadedMsg struct {
 	preview model.SearchPreview

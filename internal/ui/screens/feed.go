@@ -139,6 +139,7 @@ type FeedModel struct {
 	bookmarkedPostIDs map[string]struct{}
 	watchedPostIDs    map[string]struct{}
 	filterNSFW        bool
+	blockedTopics     map[string]struct{} // Settings.MutedTopics; posts tagged with any are hidden
 
 	// bodyCache memoizes renderPostBody per post ID, keyed additionally by
 	// whatever else affects its output — see renderPost. Selection state
@@ -405,14 +406,18 @@ func (m FeedModel) RemovePost(postID string) FeedModel {
 }
 
 func (m FeedModel) visiblePosts() []model.Post {
-	if !m.filterNSFW {
+	if !m.filterNSFW && len(m.blockedTopics) == 0 {
 		return m.posts
 	}
 	out := m.posts[:0:0]
 	for _, p := range m.posts {
-		if !p.IsNSFW {
-			out = append(out, p)
+		if m.filterNSFW && p.IsNSFW {
+			continue
 		}
+		if topicBlocked(p.Topics, m.blockedTopics) {
+			continue
+		}
+		out = append(out, p)
 	}
 	return out
 }
@@ -528,7 +533,11 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
-		if msg.Settings.FilterNSFW != m.filterNSFW {
+		blockedChanged := !sameBlockedSet(m.blockedTopics, msg.Settings.MutedTopics)
+		if blockedChanged {
+			m.blockedTopics = blockedSet(msg.Settings.MutedTopics)
+		}
+		if msg.Settings.FilterNSFW != m.filterNSFW || blockedChanged {
 			m.filterNSFW = msg.Settings.FilterNSFW
 			m.selectedIndex = 0
 			if m.ready {

@@ -2009,6 +2009,106 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 	}
 }
 
+// TestHandleTopics_SetBlockedTopics_AppliesAndDebouncesSave verifies the
+// Topics-tab block/unblock path: SetBlockedTopicsMsg applies to a.settings
+// immediately (and bumps the save seq), a stale blockedTopicsFlushMsg is a
+// no-op, and the current one persists via UpdateSettings. See
+// docs/54-blocked-topics.md.
+func TestHandleTopics_SetBlockedTopics_AppliesAndDebouncesSave(t *testing.T) {
+	a := loggedInApp()
+
+	a, cmd, ok := a.handleTopics(screens.SetBlockedTopicsMsg{Topics: []string{"crypto"}})
+	if !ok {
+		t.Fatal("expected handleTopics to handle SetBlockedTopicsMsg")
+	}
+	if len(a.settings.MutedTopics) != 1 || a.settings.MutedTopics[0] != "crypto" {
+		t.Fatalf("a.settings.MutedTopics = %v, want [crypto]", a.settings.MutedTopics)
+	}
+	if a.blockedTopicsSaveSeq != 1 {
+		t.Fatalf("blockedTopicsSaveSeq = %d, want 1", a.blockedTopicsSaveSeq)
+	}
+	if cmd == nil {
+		t.Fatal("expected a debounce tick cmd")
+	}
+
+	// A superseded tick does nothing.
+	if _, c, ok := a.handleTopics(blockedTopicsFlushMsg{seq: 99}); !ok || c != nil {
+		t.Fatalf("stale blockedTopicsFlushMsg: ok=%v cmd=%v, want ok=true cmd=nil", ok, c)
+	}
+
+	// The current tick persists and reports success.
+	_, c, ok := a.handleTopics(blockedTopicsFlushMsg{seq: a.blockedTopicsSaveSeq})
+	if !ok || c == nil {
+		t.Fatalf("current blockedTopicsFlushMsg: ok=%v cmd=%v, want ok=true cmd!=nil", ok, c)
+	}
+	res, ok := c().(blockedTopicsSaveResultMsg)
+	if !ok || res.err != nil {
+		t.Fatalf("expected a successful blockedTopicsSaveResultMsg, got %#v", c())
+	}
+	a, _, _ = a.handleTopics(res)
+	if len(a.blockedTopicsSaved) != 1 || a.blockedTopicsSaved[0] != "crypto" {
+		t.Errorf("blockedTopicsSaved = %v, want [crypto]", a.blockedTopicsSaved)
+	}
+	got, err := a.client.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if len(got.MutedTopics) != 1 || got.MutedTopics[0] != "crypto" {
+		t.Errorf("persisted MutedTopics = %v, want [crypto]", got.MutedTopics)
+	}
+}
+
+// updateSettingsFailClient makes every UpdateSettings call fail with a 429, to
+// exercise the blocked-topics rollback path and its cause-specific banner.
+type updateSettingsFailClient struct {
+	*api.MockClient
+}
+
+func (c updateSettingsFailClient) UpdateSettings(model.Settings) error {
+	return api.ErrRateLimited
+}
+
+// A failed save rolls the optimistic MutedTopics list back to the last version
+// the server accepted (blockedTopicsSaved) and shows an error banner.
+func TestHandleTopics_SetBlockedTopics_RollsBackOnSaveFailure(t *testing.T) {
+	a := NewApp(updateSettingsFailClient{api.NewMockClient()})
+	a.active = screenFeed
+	a.focus = focusMenu
+	// Login baseline: "news" is already blocked and persisted.
+	a, _, _ = a.handleSettings(settingsLoadedMsg{settings: model.Settings{MutedTopics: []string{"news"}}})
+
+	// User blocks "crypto" too — optimistic.
+	a, _, _ = a.handleTopics(screens.SetBlockedTopicsMsg{Topics: []string{"news", "crypto"}})
+	if len(a.settings.MutedTopics) != 2 {
+		t.Fatalf("optimistic MutedTopics = %v, want [news crypto]", a.settings.MutedTopics)
+	}
+
+	// The debounced save fires and fails.
+	_, c, _ := a.handleTopics(blockedTopicsFlushMsg{seq: a.blockedTopicsSaveSeq})
+	res, ok := c().(blockedTopicsSaveResultMsg)
+	if !ok || res.err == nil {
+		t.Fatalf("expected a failed blockedTopicsSaveResultMsg, got %#v", c())
+	}
+
+	seqBefore := a.blockedTopicsSaveSeq
+	a, cmd, ok := a.handleTopics(res)
+	if !ok {
+		t.Fatal("expected handleTopics to handle the failed result")
+	}
+	if len(a.settings.MutedTopics) != 1 || a.settings.MutedTopics[0] != "news" {
+		t.Errorf("after rollback MutedTopics = %v, want [news]", a.settings.MutedTopics)
+	}
+	if a.blockedTopicsSaveSeq == seqBefore {
+		t.Error("expected blockedTopicsSaveSeq to be bumped so a pending tick is cancelled")
+	}
+	if !strings.Contains(a.notifyText, "2/min") {
+		t.Errorf("banner %q should explain the rate-limit cause", a.notifyText)
+	}
+	if cmd == nil {
+		t.Error("expected the banner's expire cmd")
+	}
+}
+
 // subscribeCancelSpyClient wraps MockClient's SubscribeDMs/SubscribeRoom
 // cancel funcs to record whether they were actually invoked — used below to
 // verify handleUnauthorized tears down a live per-conversation/per-room

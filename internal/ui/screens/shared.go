@@ -187,6 +187,66 @@ func updateTopicsInput(input textinput.Model, msg tea.Msg) (textinput.Model, tea
 	return input.Update(filtered)
 }
 
+// topicBlocked reports whether any of a post's topics is in the blocked set —
+// the blocked-topics analogue of the FilterNSFW check each post-list screen
+// applies in its visible*() helper. See docs/54-blocked-topics.md.
+func topicBlocked(topics []string, blocked map[string]struct{}) bool {
+	for _, t := range topics {
+		if _, ok := blocked[t]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// blockedSet builds the lookup set from Settings.MutedTopics; returns nil for an
+// empty list so callers can cheaply short-circuit with len() == 0.
+func blockedSet(topics []string) map[string]struct{} {
+	if len(topics) == 0 {
+		return nil
+	}
+	m := make(map[string]struct{}, len(topics))
+	for _, t := range topics {
+		m[t] = struct{}{}
+	}
+	return m
+}
+
+// sameBlockedSet reports whether set already holds exactly the slugs in list
+// (order-independent) — used by SharedConfigMsg handlers to skip a needless
+// selection reset + re-render when the blocked list hasn't changed.
+func sameBlockedSet(set map[string]struct{}, list []string) bool {
+	if len(set) != len(list) {
+		return false
+	}
+	for _, t := range list {
+		if _, ok := set[t]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// toggleBlocked returns a new slice with slug removed from the current blocked
+// set if present, or appended if not. Order of the retained entries is not
+// guaranteed (the API doesn't care).
+func toggleBlocked(set map[string]struct{}, slug string) []string {
+	if _, blocked := set[slug]; blocked {
+		out := make([]string, 0, len(set)-1)
+		for t := range set {
+			if t != slug {
+				out = append(out, t)
+			}
+		}
+		return out
+	}
+	out := make([]string, 0, len(set)+1)
+	for t := range set {
+		out = append(out, t)
+	}
+	return append(out, slug)
+}
+
 // extractURLs is a package-internal helper used by URLProvider implementations.
 // It normalizes each extracted URL so relative paths get the cyberspace.online prefix.
 func extractURLs(content string) []string {

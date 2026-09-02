@@ -407,7 +407,7 @@ func (l TabsLayout) screenHints(a App) []hint {
 		if a.topics.IsBrowsingTopic() {
 			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
 		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, {"esc", "back"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, {"b", "block"}, {"esc", "back"}, more}
 	case screenSearch:
 		if a.search.InputFocused() {
 			return []hint{{"enter", "search"}}

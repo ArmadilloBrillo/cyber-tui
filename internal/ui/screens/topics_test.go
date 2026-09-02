@@ -101,6 +101,69 @@ func TestTopics_FilterNSFW_Off_ShowsAll(t *testing.T) {
 	}
 }
 
+// --- Blocked topics ---
+
+func TestTopics_BlockedTopics_HidesMatchingPost(t *testing.T) {
+	m := screens.NewTopicsModel()
+	m = m.SetTopics(sampleTopics(), "")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m.SetTopicPosts([]model.Post{
+		{ID: "tp1", AuthorUsername: "alice", Content: "keep", Topics: []string{"art"}},
+		{ID: "tp2", AuthorUsername: "bob", Content: "drop", Topics: []string{"crypto"}},
+		{ID: "tp3", AuthorUsername: "carol", Content: "keep too"},
+	}, "")
+	m, _ = m.Update(blockedTopicsMsg("crypto"))
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	sp, ok := cmd().(screens.ShowTopicPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowTopicPostMsg, got %T", cmd())
+	}
+	if sp.Post.ID != "tp3" {
+		t.Errorf("expected tp3 (crypto post filtered), got %s", sp.Post.ID)
+	}
+}
+
+// Pressing 'b' on a topic row toggles it in/out of the blocked list carried by
+// the emitted SetBlockedTopicsMsg.
+func TestTopics_BlockKey_TogglesBlockedList(t *testing.T) {
+	m := screens.NewTopicsModel()
+	m = m.SetTopics(sampleTopics(), "") // topicIndex 0 == "tech"
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	if cmd == nil {
+		t.Fatal("expected a SetBlockedTopicsMsg cmd on first 'b'")
+	}
+	msg, ok := cmd().(screens.SetBlockedTopicsMsg)
+	if !ok {
+		t.Fatalf("expected SetBlockedTopicsMsg, got %T", cmd())
+	}
+	if len(msg.Topics) != 1 || msg.Topics[0] != "tech" {
+		t.Fatalf("first 'b' Topics = %v, want [tech]", msg.Topics)
+	}
+
+	// Feed that new list back in (as App would via broadcastConfig) and press 'b'
+	// again — "tech" should now be removed.
+	m, _ = m.Update(blockedTopicsMsg(msg.Topics...))
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	if cmd == nil {
+		t.Fatal("expected a SetBlockedTopicsMsg cmd on second 'b'")
+	}
+	msg2, ok := cmd().(screens.SetBlockedTopicsMsg)
+	if !ok {
+		t.Fatalf("expected SetBlockedTopicsMsg, got %T", cmd())
+	}
+	if len(msg2.Topics) != 0 {
+		t.Errorf("second 'b' Topics = %v, want []", msg2.Topics)
+	}
+}
+
 // --- VisibleInlineImages ---
 
 func TestTopics_VisibleInlineImages_DisabledByDefault(t *testing.T) {
