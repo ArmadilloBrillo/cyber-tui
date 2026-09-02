@@ -470,9 +470,9 @@ type wireSettings struct {
 // UI manages. Deferred fields (iconTheme, imagePixelSize, followedTopics,
 // mutedUsersByRoom) are intentionally excluded so the API never receives
 // them — mutedUsersByRoom is server-managed via /mute commands, not PATCH.
-// mutedTopics IS sent: the Topics tab's block/unblock (docs/54-blocked-topics.md)
+// mutedTopics IS sent: the Topics tab's mute/unmute (docs/54-muted-topics.md)
 // is the only writer, and it always sends the full current list (no omitempty,
-// so unblocking the last topic reaches the server as []).
+// so unmuting the last topic reaches the server as []).
 type wirePatchSettings struct {
 	Notifications        wireNotificationPrefs `json:"notifications"`
 	FilterNSFW           bool                  `json:"filterNSFW"`

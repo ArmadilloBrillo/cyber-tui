@@ -21,7 +21,7 @@ This feature aligns the codebase with API v0.3.2, which supports 13 preference f
 | `IconTheme` | string | Icon set (not yet modelled) | Device-roaming |
 | `TimeDisplayFormat` | string | Time display: `"datetime"`, `"relative"`, `"unix"`, `"swatch"` | Device-roaming |
 | `FollowedTopics` | []string | Topics subscribed to | Device-roaming |
-| `MutedTopics` | []string | Blocked topics — posts tagged with any are hidden. Managed from the Topics tab (`b`), not this screen. See `docs/54-blocked-topics.md`. | Device-roaming |
+| `MutedTopics` | []string | Muted topics — posts tagged with any are hidden. Managed from the Topics tab (`m`), not this screen. See `docs/54-muted-topics.md`. | Device-roaming |
 | `ImagePixelSize` | string | Pixel multiplier or preset (e.g., "sharp", "2") | Device-roaming |
 | `DefaultPublicPost` | bool | Posts default to public | Device-roaming |
 
@@ -164,8 +164,8 @@ The following settings require complex pickers and are deferred to a future feat
 - `FollowedTopics` — topic subscription management
 - `ImagePixelSize` — image scaling or presets
 
-`MutedTopics` (blocked topics) shipped in Feature 54 — managed from the Topics
-tab, not this screen; included in `PATCH /v1/settings`. See `docs/54-blocked-topics.md`.
+`MutedTopics` (muted topics) shipped in Feature 54 — managed from the Topics
+tab, not this screen; included in `PATCH /v1/settings`. See `docs/54-muted-topics.md`.
 
 ---
 

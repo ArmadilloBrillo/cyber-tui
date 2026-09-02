@@ -496,9 +496,9 @@ func TestGuildsModel_UpAtTop_GuildListEmitsNoCmd(t *testing.T) {
 	}
 }
 
-// --- Blocked topics ---
+// --- Muted topics ---
 
-func TestGuildsModel_BlockedTopics_HidesMatchingPost(t *testing.T) {
+func TestGuildsModel_MutedTopics_HidesMatchingPost(t *testing.T) {
 	m := screens.NewGuildsModel()
 	m = m.SetGuilds(sampleGuilds(), "")
 	m, _ = m.Update(specialKey(tea.KeyEnter))
@@ -507,7 +507,7 @@ func TestGuildsModel_BlockedTopics_HidesMatchingPost(t *testing.T) {
 		{ID: "g2", AuthorUsername: "bob", Content: "drop", Topics: []string{"crypto"}},
 		{ID: "g3", AuthorUsername: "carol", Content: "keep too"},
 	}, "")
-	m, _ = m.Update(blockedTopicsMsg("crypto"))
+	m, _ = m.Update(mutedTopicsMsg("crypto"))
 
 	m, _ = m.Update(keyMsg_g("j"))
 	m, _ = m.Update(keyMsg_g("j"))

@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -56,6 +57,16 @@ const (
 	viewTopicPosts
 )
 
+// topicFilter controls which topics the topic-list view shows. Session-only —
+// it resets to topicFilterAll on relaunch, like scroll position. 'f' cycles it.
+type topicFilter int
+
+const (
+	topicFilterAll topicFilter = iota
+	topicFilterHideMuted
+	topicFilterOnlyMuted
+)
+
 type TopicsModel struct {
 	view topicsView
 
@@ -64,6 +75,7 @@ type TopicsModel struct {
 	topicIndex       int
 	topicsNextCursor string
 	topicsExhausted  bool
+	topicFilter      topicFilter // 'f' cycles all -> hide muted -> only muted
 
 	// Topic posts state
 	activeTopic string
@@ -106,7 +118,7 @@ type TopicsModel struct {
 	relaxed           bool
 	timeDisplayFormat string
 	filterNSFW        bool
-	blockedTopics     map[string]struct{} // Settings.MutedTopics; posts tagged with any are hidden, rows show a marker
+	mutedTopics       map[string]struct{} // Settings.MutedTopics; posts tagged with any are hidden, rows show a marker
 
 	// postBodyCache/replyBodyCache memoize the Miller detail pane's post
 	// card and thread replies (cachedPostCard/cachedReplyCard, render.go) so
@@ -125,7 +137,7 @@ func NewTopicsModel() TopicsModel {
 }
 
 func (m TopicsModel) visiblePosts() []model.Post {
-	if !m.filterNSFW && len(m.blockedTopics) == 0 {
+	if !m.filterNSFW && len(m.mutedTopics) == 0 {
 		return m.posts
 	}
 	out := m.posts[:0:0]
@@ -133,12 +145,55 @@ func (m TopicsModel) visiblePosts() []model.Post {
 		if m.filterNSFW && p.IsNSFW {
 			continue
 		}
-		if topicBlocked(p.Topics, m.blockedTopics) {
+		if topicMuted(p.Topics, m.mutedTopics) {
 			continue
 		}
 		out = append(out, p)
 	}
 	return out
+}
+
+// visibleTopics returns the topic-list rows shown for the current topicFilter.
+//
+//   - topicFilterHideMuted drops muted topics from the fetched pages.
+//   - topicFilterOnlyMuted is built from m.mutedTopics (Settings.MutedTopics) —
+//     the authoritative muted set, not just whatever's on a loaded page — so it's
+//     complete even for a muted topic whose page was never fetched. The real
+//     model.Topic is reused where a page has it; the rest are synthesized as
+//     {Slug}. The muted view renders "MUTED" in place of the post count, so a
+//     zero PostCount on a synthesized entry is never shown.
+func (m TopicsModel) visibleTopics() []model.Topic {
+	switch m.topicFilter {
+	case topicFilterHideMuted:
+		out := m.topics[:0:0]
+		for _, t := range m.topics {
+			if _, muted := m.mutedTopics[t.Slug]; !muted {
+				out = append(out, t)
+			}
+		}
+		return out
+	case topicFilterOnlyMuted:
+		have := make(map[string]model.Topic, len(m.topics))
+		for _, t := range m.topics {
+			have[t.Slug] = t
+		}
+		slugs := make([]string, 0, len(m.mutedTopics))
+		for s := range m.mutedTopics {
+			slugs = append(slugs, s)
+		}
+		slices.Sort(slugs) // stable display order; map iteration is random
+		out := make([]model.Topic, len(slugs))
+		for i, s := range slugs {
+			if t, ok := have[s]; ok {
+				out[i] = t
+			} else {
+				out[i] = model.Topic{Slug: s}
+			}
+		}
+		return out
+	default:
+		return m.topics
+	}
 }
 
 func (m TopicsModel) IsLoaded() bool { return m.loaded }
@@ -269,9 +324,14 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			m.filterNSFW = msg.Settings.FilterNSFW
 			m.postIndex = 0
 		}
-		if !sameBlockedSet(m.blockedTopics, msg.Settings.MutedTopics) {
-			m.blockedTopics = blockedSet(msg.Settings.MutedTopics)
+		if !sameMutedSet(m.mutedTopics, msg.Settings.MutedTopics) {
+			m.mutedTopics = mutedSet(msg.Settings.MutedTopics)
 			m.postIndex = 0
+			// A filtered topic list can grow or shrink when the muted set
+			// changes; keep the selection in range.
+			if n := len(m.visibleTopics()); m.topicIndex >= n {
+				m.topicIndex = max(0, n-1)
+			}
 		}
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		if m.ready {
@@ -366,11 +426,11 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 
 		case "down", "j":
 			if m.view == viewTopicList {
-				if m.topicIndex < len(m.topics)-1 {
+				if m.topicIndex < len(m.visibleTopics())-1 {
 					m.topicIndex++
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-				} else if !m.topicsExhausted && !m.loading {
+				} else if m.topicFilter != topicFilterOnlyMuted && !m.topicsExhausted && !m.loading {
 					m.loading = true
 					m = m.refreshContent()
 					m.viewport.ScrollDown(1)
@@ -423,11 +483,11 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 
 		case "pgdown":
 			if m.view == viewTopicList {
-				if m.topicIndex < len(m.topics)-1 {
-					m.topicIndex = min(len(m.topics)-1, m.topicIndex+pageJumpItems)
+				if m.topicIndex < len(m.visibleTopics())-1 {
+					m.topicIndex = min(len(m.visibleTopics())-1, m.topicIndex+pageJumpItems)
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-				} else if !m.topicsExhausted && !m.loading {
+				} else if m.topicFilter != topicFilterOnlyMuted && !m.topicsExhausted && !m.loading {
 					m.loading = true
 					m = m.refreshContent()
 					m.viewport.ScrollDown(1)
@@ -456,8 +516,8 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 
 		case "enter":
 			if m.view == viewTopicList {
-				if len(m.topics) > 0 && m.topicIndex < len(m.topics) {
-					slug := m.topics[m.topicIndex].Slug
+				if visible := m.visibleTopics(); len(visible) > 0 && m.topicIndex < len(visible) {
+					slug := visible[m.topicIndex].Slug
 					m.activeTopic = slug
 					return m, func() tea.Msg { return LoadTopicPostsMsg{Slug: slug} }
 				}
@@ -469,15 +529,30 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			}
 			return m, nil
 
-		case "b":
-			// Block / unblock the highlighted topic. Only in the topic list —
-			// the post list has no single "current topic" to act on.
-			if m.view == viewTopicList && len(m.topics) > 0 && m.topicIndex < len(m.topics) {
-				slug := m.topics[m.topicIndex].Slug
-				next := toggleBlocked(m.blockedTopics, slug)
-				m.blockedTopics = blockedSet(next) // optimistic: marker updates now
+		case "f":
+			// Cycle the topic-list filter: all -> hide muted -> only muted.
+			if m.view == viewTopicList {
+				m.topicFilter = (m.topicFilter + 1) % 3
+				m.topicIndex = 0
 				m = m.refreshContent()
-				return m, func() tea.Msg { return SetBlockedTopicsMsg{Topics: next} }
+				m.viewport.GotoTop()
+			}
+			return m, nil
+
+		case "m":
+			// Mute / unmute the highlighted topic. Only in the topic list — the
+			// post list has no single "current topic" to act on.
+			if visible := m.visibleTopics(); m.view == viewTopicList && len(visible) > 0 && m.topicIndex < len(visible) {
+				slug := visible[m.topicIndex].Slug
+				next := toggleMuted(m.mutedTopics, slug)
+				m.mutedTopics = mutedSet(next) // optimistic: marker updates now
+				// A hide/only filter can drop the row we just toggled.
+				if n := len(m.visibleTopics()); m.topicIndex >= n {
+					m.topicIndex = max(0, n-1)
+				}
+				m = m.refreshContent()
+				m = m.ensureSelectedVisible()
+				return m, func() tea.Msg { return SetMutedTopicsMsg{Topics: next} }
 			}
 			return m, nil
 
@@ -536,25 +611,37 @@ func (m TopicsModel) buildContent() (string, []int, [][]postImageSlot) {
 		prefix = theme.Subtle.Render("  refreshing…") + "\n"
 		startLine++
 	}
+	if m.view == viewTopicList && m.topicFilter != topicFilterAll {
+		label := "  filter: hiding muted"
+		if m.topicFilter == topicFilterOnlyMuted {
+			label = "  filter: muted only"
+		}
+		prefix += theme.Subtle.Render(label) + "\n"
+		startLine++
+	}
 
 	if m.view == viewTopicList {
-		if len(m.topics) == 0 {
+		visible := m.visibleTopics()
+		if len(visible) == 0 {
 			if m.err != nil {
 				return prefix + theme.Subtle.Render("  couldn't load topics"), nil, nil
 			}
+			if len(m.topics) > 0 && m.topicFilter != topicFilterAll {
+				return prefix + theme.Subtle.Render("  no topics match this filter"), nil, nil
+			}
 			return prefix + theme.Subtle.Render("  no topics yet"), nil, nil
 		}
-		offsets := make([]int, len(m.topics))
+		offsets := make([]int, len(visible))
 		currentLine := startLine
 		var out string
-		for i := range m.topics {
+		for i, t := range visible {
 			offsets[i] = currentLine
-			rendered := m.renderTopicItem(i)
+			rendered := m.renderTopicItem(t, i == m.topicIndex)
 			out += rendered + sep
 			currentLine += lipgloss.Height(rendered) + lineInc - 1
 		}
-		// Footer
-		out += listFooter(m.loading, m.topicsExhausted && len(m.topics) > 0)
+		// Footer — only-muted is fully synthesized, so it's always "exhausted".
+		out += listFooter(m.loading, (m.topicsExhausted || m.topicFilter == topicFilterOnlyMuted) && len(visible) > 0)
 		return prefix + strings.TrimRight(out, "\n"), offsets, nil
 	}
 
@@ -582,13 +669,8 @@ func (m TopicsModel) buildContent() (string, []int, [][]postImageSlot) {
 	return prefix + strings.TrimRight(out, "\n"), offsets, postImages
 }
 
-func (m TopicsModel) renderTopicItem(index int) string {
-	if index < 0 || index >= len(m.topics) {
-		return ""
-	}
-
-	topic := m.topics[index]
-	isSelected := (m.view == viewTopicList && index == m.topicIndex)
+func (m TopicsModel) renderTopicItem(topic model.Topic, isSelected bool) string {
+	isSelected = isSelected && m.view == viewTopicList
 
 	innerWidth := m.width - 4
 
@@ -599,8 +681,8 @@ func (m TopicsModel) renderTopicItem(index int) string {
 	}
 	slugStr := slugStyle.Render(topic.Slug)
 	countStr := theme.Subtle.Render(fmt.Sprintf("%d posts", topic.PostCount))
-	if _, blocked := m.blockedTopics[topic.Slug]; blocked {
-		countStr = theme.Error.Render("BLOCKED")
+	if _, muted := m.mutedTopics[topic.Slug]; muted {
+		countStr = theme.Error.Render("MUTED")
 	}
 
 	var line string
@@ -735,11 +817,12 @@ func (m TopicsModel) ensureSelectedVisible() TopicsModel {
 	var selectedIndex int
 	var itemHeight int
 	if m.view == viewTopicList {
+		visible := m.visibleTopics()
 		selectedIndex = m.topicIndex
-		if selectedIndex >= len(m.topics) {
+		if selectedIndex >= len(visible) {
 			return m
 		}
-		itemHeight = lipgloss.Height(m.renderTopicItem(selectedIndex))
+		itemHeight = lipgloss.Height(m.renderTopicItem(visible[selectedIndex], true))
 	} else {
 		visible := m.visiblePosts()
 		selectedIndex = m.postIndex
@@ -815,7 +898,7 @@ func (m TopicsModel) OpenTopic(slug string) TopicsModel {
 }
 
 func (m TopicsModel) IsCompactListActive() bool { return m.IsViewingTopicPosts() }
-func (m TopicsModel) ListTitle() string          { return "posts (# " + m.ActiveTopicName() + ")" }
+func (m TopicsModel) ListTitle() string         { return "posts (# " + m.ActiveTopicName() + ")" }
 
 // IsAtTop reports whether the first post is selected.
 func (m TopicsModel) IsAtTop() bool { return m.postIndex == 0 }
