@@ -403,14 +403,14 @@ func TestProfile_FilterNSFW_HidesNSFWPost(t *testing.T) {
 	}
 }
 
-func TestProfile_BlockedTopics_HidesMatchingPost(t *testing.T) {
+func TestProfile_MutedTopics_HidesMatchingPost(t *testing.T) {
 	posts := []model.Post{
 		{ID: "pp1", AuthorUsername: "ragnar", Content: "keep", Topics: []string{"linux"}},
 		{ID: "pp2", AuthorUsername: "ragnar", Content: "drop", Topics: []string{"crypto"}},
 		{ID: "pp3", AuthorUsername: "ragnar", Content: "keep too"},
 	}
 	m := profileWithPosts(posts)
-	m, _ = m.Update(blockedTopicsMsg("crypto"))
+	m, _ = m.Update(mutedTopicsMsg("crypto"))
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})

@@ -478,7 +478,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		// track the latest value on both the working copy and the baseline even
 		// after first load — otherwise a ctrl+s on this screen would PATCH a
 		// stale list back. settingsEqual ignores it, so dirty state is unaffected.
-		// See docs/54-blocked-topics.md.
+		// See docs/54-muted-topics.md.
 		m.settings.MutedTopics = msg.Settings.MutedTopics
 		m.original.MutedTopics = msg.Settings.MutedTopics
 		// prefsSeeded gates the preference fields below independently of the

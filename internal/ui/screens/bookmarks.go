@@ -55,18 +55,18 @@ type BookmarksModel struct {
 	loc           *time.Location
 	relaxed       bool
 	filterNSFW    bool
-	blockedTopics map[string]struct{} // Settings.MutedTopics; bookmarked posts tagged with any are hidden
+	mutedTopics   map[string]struct{} // Settings.MutedTopics; bookmarked posts tagged with any are hidden
 }
 
 func NewBookmarksModel() BookmarksModel {
 	return BookmarksModel{}
 }
 
-// visibleItems returns the bookmarks shown given the FilterNSFW and blocked-topics
+// visibleItems returns the bookmarks shown given the FilterNSFW and muted-topics
 // settings. Only bookmarked posts carry an NSFW flag and topics; bookmarked
 // replies have neither and are always shown.
 func (m BookmarksModel) visibleItems() []model.Bookmark {
-	if !m.filterNSFW && len(m.blockedTopics) == 0 {
+	if !m.filterNSFW && len(m.mutedTopics) == 0 {
 		return m.items
 	}
 	out := m.items[:0:0]
@@ -74,7 +74,7 @@ func (m BookmarksModel) visibleItems() []model.Bookmark {
 		if b.Post != nil && m.filterNSFW && b.Post.IsNSFW {
 			continue
 		}
-		if b.Post != nil && topicBlocked(b.Post.Topics, m.blockedTopics) {
+		if b.Post != nil && topicMuted(b.Post.Topics, m.mutedTopics) {
 			continue
 		}
 		out = append(out, b)
@@ -163,8 +163,8 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 			m.filterNSFW = msg.Settings.FilterNSFW
 			m.selectedIndex = 0
 		}
-		if !sameBlockedSet(m.blockedTopics, msg.Settings.MutedTopics) {
-			m.blockedTopics = blockedSet(msg.Settings.MutedTopics)
+		if !sameMutedSet(m.mutedTopics, msg.Settings.MutedTopics) {
+			m.mutedTopics = mutedSet(msg.Settings.MutedTopics)
 			m.selectedIndex = 0
 		}
 		if m.ready {

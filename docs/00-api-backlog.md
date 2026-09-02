@@ -327,7 +327,7 @@ Notes:
 | --------------- | ------------------------------------- | -------------------------------------------------------------------- |
 | Notes (Journal) | List, create, edit, delete, revision history | — |
 | Profile         | View and edit all fields              | —                                                                    |
-| Settings        | All TUI-relevant fields editable; `mutedUsersByRoom` read and enforced (feature 37); `mutedTopics` (blocked topics) managed from the Topics tab and filtered everywhere (feature 54) | `keyboardBindings`, `keyboardPreset` — web UI concepts with no TUI equivalent; intentionally omitted; `followedTopics`, `iconTheme`, `imagePixelSize` still deferred |
+| Settings        | All TUI-relevant fields editable; `mutedUsersByRoom` read and enforced (feature 37); `mutedTopics` (muted topics) managed from the Topics tab and filtered everywhere (feature 54) | `keyboardBindings`, `keyboardPreset` — web UI concepts with no TUI equivalent; intentionally omitted; `followedTopics`, `iconTheme`, `imagePixelSize` still deferred |
 | Follows         | Follow, unfollow, list following and followers | — |
 | Notifications   | All v0.4 types received and displayed with dedicated text and icons; unread-only toggle (`u`); category filter panel (`f`) | — |
 

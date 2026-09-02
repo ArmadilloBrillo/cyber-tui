@@ -77,22 +77,22 @@ func TestFeed_FilterNSFW_RefreshKeepsVisibleSelection(t *testing.T) {
 	}
 }
 
-// --- Blocked topics ---
+// --- Muted topics ---
 
-func blockedTopicsMsg(topics ...string) screens.SharedConfigMsg {
+func mutedTopicsMsg(topics ...string) screens.SharedConfigMsg {
 	return screens.SharedConfigMsg{
 		Settings: model.Settings{MutedTopics: topics},
 	}
 }
 
-func TestFeed_BlockedTopics_HidesMatchingPost(t *testing.T) {
+func TestFeed_MutedTopics_HidesMatchingPost(t *testing.T) {
 	m := screens.NewFeedModel()
 	m = m.SetPosts([]model.Post{
 		{ID: "p1", AuthorUsername: "alice", Content: "keep", Topics: []string{"linux"}},
 		{ID: "p2", AuthorUsername: "bob", Content: "drop", Topics: []string{"crypto", "news"}},
 		{ID: "p3", AuthorUsername: "carol", Content: "keep too"},
 	}, "")
-	m, _ = m.Update(blockedTopicsMsg("crypto"))
+	m, _ = m.Update(mutedTopicsMsg("crypto"))
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
@@ -110,13 +110,13 @@ func TestFeed_BlockedTopics_HidesMatchingPost(t *testing.T) {
 	}
 }
 
-func TestFeed_BlockedTopics_Off_ShowsAll(t *testing.T) {
+func TestFeed_MutedTopics_Off_ShowsAll(t *testing.T) {
 	m := screens.NewFeedModel()
 	m = m.SetPosts([]model.Post{
 		{ID: "p1", AuthorUsername: "alice", Content: "a", Topics: []string{"linux"}},
 		{ID: "p2", AuthorUsername: "bob", Content: "b", Topics: []string{"crypto"}},
 	}, "")
-	m, _ = m.Update(blockedTopicsMsg()) // no blocked topics
+	m, _ = m.Update(mutedTopicsMsg()) // no muted topics
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})

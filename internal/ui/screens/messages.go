@@ -35,12 +35,12 @@ type ToggleWatchPostMsg struct {
 // Adding a new screen only requires handling this message in that screen's Update —
 // no App call sites need changing.
 type SharedConfigMsg struct {
-	Width          int
-	Height         int
-	Loc            *time.Location
-	Relaxed        bool
-	Settings       model.Settings
-	WanderLust     bool
+	Width      int
+	Height     int
+	Loc        *time.Location
+	Relaxed    bool
+	Settings   model.Settings
+	WanderLust bool
 	// FeedManualRefreshOnly is the user's raw preference
 	// (config.Config.FeedManualRefreshOnly), used by the settings screen to
 	// display/edit the toggle — see docs/39-feed-background-poll.md.
@@ -167,12 +167,12 @@ type SaveSettingsMsg struct {
 // so it can show transient feedback.
 type BookmarkedMsg struct{ PostID string }
 
-// SetBlockedTopicsMsg is emitted by TopicsModel when the user presses 'b' on a
-// topic row to block or unblock it. It carries the full new blocked list. App
+// SetMutedTopicsMsg is emitted by TopicsModel when the user presses 'm' on a
+// topic row to mute or unmute it. It carries the full new muted list. App
 // updates Settings.MutedTopics, re-broadcasts SharedConfigMsg so every screen
 // re-filters, and persists via a debounced UpdateSettings — see
-// docs/54-blocked-topics.md.
-type SetBlockedTopicsMsg struct{ Topics []string }
+// docs/54-muted-topics.md.
+type SetMutedTopicsMsg struct{ Topics []string }
 
 // FollowUserMsg is emitted by ProfileModel when the user presses 'f' to follow another user.
 type FollowUserMsg struct{ UserID string }

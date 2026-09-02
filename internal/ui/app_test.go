@@ -2009,45 +2009,45 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 	}
 }
 
-// TestHandleTopics_SetBlockedTopics_AppliesAndDebouncesSave verifies the
-// Topics-tab block/unblock path: SetBlockedTopicsMsg applies to a.settings
-// immediately (and bumps the save seq), a stale blockedTopicsFlushMsg is a
+// TestHandleTopics_SetMutedTopics_AppliesAndDebouncesSave verifies the
+// Topics-tab mute/unmute path: SetMutedTopicsMsg applies to a.settings
+// immediately (and bumps the save seq), a stale mutedTopicsFlushMsg is a
 // no-op, and the current one persists via UpdateSettings. See
-// docs/54-blocked-topics.md.
-func TestHandleTopics_SetBlockedTopics_AppliesAndDebouncesSave(t *testing.T) {
+// docs/54-muted-topics.md.
+func TestHandleTopics_SetMutedTopics_AppliesAndDebouncesSave(t *testing.T) {
 	a := loggedInApp()
 
-	a, cmd, ok := a.handleTopics(screens.SetBlockedTopicsMsg{Topics: []string{"crypto"}})
+	a, cmd, ok := a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"crypto"}})
 	if !ok {
-		t.Fatal("expected handleTopics to handle SetBlockedTopicsMsg")
+		t.Fatal("expected handleTopics to handle SetMutedTopicsMsg")
 	}
 	if len(a.settings.MutedTopics) != 1 || a.settings.MutedTopics[0] != "crypto" {
 		t.Fatalf("a.settings.MutedTopics = %v, want [crypto]", a.settings.MutedTopics)
 	}
-	if a.blockedTopicsSaveSeq != 1 {
-		t.Fatalf("blockedTopicsSaveSeq = %d, want 1", a.blockedTopicsSaveSeq)
+	if a.mutedTopicsSaveSeq != 1 {
+		t.Fatalf("mutedTopicsSaveSeq = %d, want 1", a.mutedTopicsSaveSeq)
 	}
 	if cmd == nil {
 		t.Fatal("expected a debounce tick cmd")
 	}
 
 	// A superseded tick does nothing.
-	if _, c, ok := a.handleTopics(blockedTopicsFlushMsg{seq: 99}); !ok || c != nil {
-		t.Fatalf("stale blockedTopicsFlushMsg: ok=%v cmd=%v, want ok=true cmd=nil", ok, c)
+	if _, c, ok := a.handleTopics(mutedTopicsFlushMsg{seq: 99}); !ok || c != nil {
+		t.Fatalf("stale mutedTopicsFlushMsg: ok=%v cmd=%v, want ok=true cmd=nil", ok, c)
 	}
 
 	// The current tick persists and reports success.
-	_, c, ok := a.handleTopics(blockedTopicsFlushMsg{seq: a.blockedTopicsSaveSeq})
+	_, c, ok := a.handleTopics(mutedTopicsFlushMsg{seq: a.mutedTopicsSaveSeq})
 	if !ok || c == nil {
-		t.Fatalf("current blockedTopicsFlushMsg: ok=%v cmd=%v, want ok=true cmd!=nil", ok, c)
+		t.Fatalf("current mutedTopicsFlushMsg: ok=%v cmd=%v, want ok=true cmd!=nil", ok, c)
 	}
-	res, ok := c().(blockedTopicsSaveResultMsg)
+	res, ok := c().(mutedTopicsSaveResultMsg)
 	if !ok || res.err != nil {
-		t.Fatalf("expected a successful blockedTopicsSaveResultMsg, got %#v", c())
+		t.Fatalf("expected a successful mutedTopicsSaveResultMsg, got %#v", c())
 	}
 	a, _, _ = a.handleTopics(res)
-	if len(a.blockedTopicsSaved) != 1 || a.blockedTopicsSaved[0] != "crypto" {
-		t.Errorf("blockedTopicsSaved = %v, want [crypto]", a.blockedTopicsSaved)
+	if len(a.mutedTopicsSaved) != 1 || a.mutedTopicsSaved[0] != "crypto" {
+		t.Errorf("mutedTopicsSaved = %v, want [crypto]", a.mutedTopicsSaved)
 	}
 	got, err := a.client.GetSettings()
 	if err != nil {
@@ -2059,7 +2059,7 @@ func TestHandleTopics_SetBlockedTopics_AppliesAndDebouncesSave(t *testing.T) {
 }
 
 // updateSettingsFailClient makes every UpdateSettings call fail with a 429, to
-// exercise the blocked-topics rollback path and its cause-specific banner.
+// exercise the muted-topics rollback path and its cause-specific banner.
 type updateSettingsFailClient struct {
 	*api.MockClient
 }
@@ -2069,28 +2069,28 @@ func (c updateSettingsFailClient) UpdateSettings(model.Settings) error {
 }
 
 // A failed save rolls the optimistic MutedTopics list back to the last version
-// the server accepted (blockedTopicsSaved) and shows an error banner.
-func TestHandleTopics_SetBlockedTopics_RollsBackOnSaveFailure(t *testing.T) {
+// the server accepted (mutedTopicsSaved) and shows an error banner.
+func TestHandleTopics_SetMutedTopics_RollsBackOnSaveFailure(t *testing.T) {
 	a := NewApp(updateSettingsFailClient{api.NewMockClient()})
 	a.active = screenFeed
 	a.focus = focusMenu
-	// Login baseline: "news" is already blocked and persisted.
+	// Login baseline: "news" is already muted and persisted.
 	a, _, _ = a.handleSettings(settingsLoadedMsg{settings: model.Settings{MutedTopics: []string{"news"}}})
 
-	// User blocks "crypto" too — optimistic.
-	a, _, _ = a.handleTopics(screens.SetBlockedTopicsMsg{Topics: []string{"news", "crypto"}})
+	// User mutes "crypto" too — optimistic.
+	a, _, _ = a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"news", "crypto"}})
 	if len(a.settings.MutedTopics) != 2 {
 		t.Fatalf("optimistic MutedTopics = %v, want [news crypto]", a.settings.MutedTopics)
 	}
 
 	// The debounced save fires and fails.
-	_, c, _ := a.handleTopics(blockedTopicsFlushMsg{seq: a.blockedTopicsSaveSeq})
-	res, ok := c().(blockedTopicsSaveResultMsg)
+	_, c, _ := a.handleTopics(mutedTopicsFlushMsg{seq: a.mutedTopicsSaveSeq})
+	res, ok := c().(mutedTopicsSaveResultMsg)
 	if !ok || res.err == nil {
-		t.Fatalf("expected a failed blockedTopicsSaveResultMsg, got %#v", c())
+		t.Fatalf("expected a failed mutedTopicsSaveResultMsg, got %#v", c())
 	}
 
-	seqBefore := a.blockedTopicsSaveSeq
+	seqBefore := a.mutedTopicsSaveSeq
 	a, cmd, ok := a.handleTopics(res)
 	if !ok {
 		t.Fatal("expected handleTopics to handle the failed result")
@@ -2098,8 +2098,8 @@ func TestHandleTopics_SetBlockedTopics_RollsBackOnSaveFailure(t *testing.T) {
 	if len(a.settings.MutedTopics) != 1 || a.settings.MutedTopics[0] != "news" {
 		t.Errorf("after rollback MutedTopics = %v, want [news]", a.settings.MutedTopics)
 	}
-	if a.blockedTopicsSaveSeq == seqBefore {
-		t.Error("expected blockedTopicsSaveSeq to be bumped so a pending tick is cancelled")
+	if a.mutedTopicsSaveSeq == seqBefore {
+		t.Error("expected mutedTopicsSaveSeq to be bumped so a pending tick is cancelled")
 	}
 	if !strings.Contains(a.notifyText, "2/min") {
 		t.Errorf("banner %q should explain the rate-limit cause", a.notifyText)

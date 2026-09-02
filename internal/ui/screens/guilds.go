@@ -159,7 +159,7 @@ type GuildsModel struct {
 	relaxed           bool
 	timeDisplayFormat string
 	filterNSFW        bool
-	blockedTopics     map[string]struct{} // Settings.MutedTopics; threads tagged with any are hidden
+	mutedTopics       map[string]struct{} // Settings.MutedTopics; threads tagged with any are hidden
 
 	// postImages is parallel to itemOffsets when view == viewGuildPosts —
 	// see TopicsModel's field of the same name for the convention.
@@ -185,7 +185,7 @@ func NewGuildsModel() GuildsModel {
 }
 
 func (m GuildsModel) visiblePosts() []model.Post {
-	if !m.filterNSFW && len(m.blockedTopics) == 0 {
+	if !m.filterNSFW && len(m.mutedTopics) == 0 {
 		return m.posts
 	}
 	out := m.posts[:0:0]
@@ -193,7 +193,7 @@ func (m GuildsModel) visiblePosts() []model.Post {
 		if m.filterNSFW && p.IsNSFW {
 			continue
 		}
-		if topicBlocked(p.Topics, m.blockedTopics) {
+		if topicMuted(p.Topics, m.mutedTopics) {
 			continue
 		}
 		out = append(out, p)
@@ -512,8 +512,8 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 			m.filterNSFW = msg.Settings.FilterNSFW
 			m.postIndex = 0
 		}
-		if !sameBlockedSet(m.blockedTopics, msg.Settings.MutedTopics) {
-			m.blockedTopics = blockedSet(msg.Settings.MutedTopics)
+		if !sameMutedSet(m.mutedTopics, msg.Settings.MutedTopics) {
+			m.mutedTopics = mutedSet(msg.Settings.MutedTopics)
 			m.postIndex = 0
 		}
 		m.ownGuildSlug = msg.OwnGuildSlug

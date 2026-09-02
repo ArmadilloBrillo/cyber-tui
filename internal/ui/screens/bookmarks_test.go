@@ -36,8 +36,8 @@ func TestBookmarks_FilterNSFW_HidesNSFWPostKeepsReply(t *testing.T) {
 	}
 }
 
-// A blocked topic hides matching bookmarked posts; replies (no topics) stay.
-func TestBookmarks_BlockedTopics_HidesMatchingPost(t *testing.T) {
+// A muted topic hides matching bookmarked posts; replies (no topics) stay.
+func TestBookmarks_MutedTopics_HidesMatchingPost(t *testing.T) {
 	m := screens.NewBookmarksModel()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = m.SetBookmarks([]model.Bookmark{
@@ -45,7 +45,7 @@ func TestBookmarks_BlockedTopics_HidesMatchingPost(t *testing.T) {
 		{ID: "b2", Type: "post", PostID: "p2", Post: &model.Post{ID: "p2", Content: "drop https://example.com/x", Topics: []string{"crypto"}}},
 		{ID: "b3", Type: "reply", ReplyID: "r1", Reply: &model.Reply{ID: "r1", Content: "reply https://example.com/b"}},
 	}, "")
-	m, _ = m.Update(blockedTopicsMsg("crypto"))
+	m, _ = m.Update(mutedTopicsMsg("crypto"))
 
 	// Visible list is [b1(post), b3(reply)]; the crypto post b2 is hidden.
 	if got := m.GetFocusedURLs(); len(got) != 1 || got[0] != "https://example.com/a" {

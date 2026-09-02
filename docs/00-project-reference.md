@@ -564,10 +564,11 @@ Browse all topics (tags) and drill into posts for a selected topic.
 - Two-mode screen: topic list → topic feed
 - Topic list sorted by post count, cursor-paginated; `enter` opens the topic feed
 - Topic feed is a standard paginated post list; `esc` returns to the topic list
-- `b` (topic list only) blocks/unblocks the highlighted topic — emits `SetBlockedTopicsMsg`, App persists `Settings.MutedTopics` via a debounced `PATCH /v1/settings`; blocked rows show a `blocked` marker. See `docs/54-blocked-topics.md`
+- `m` (topic list only) mutes/unmutes the highlighted topic — emits `SetMutedTopicsMsg`, App persists `Settings.MutedTopics` via a debounced `PATCH /v1/settings`; muted rows show a `MUTED` marker. See `docs/54-muted-topics.md`
+- `f` (topic list only) cycles the list filter: all → hide muted → only muted (session-only). "only muted" is sourced from `Settings.MutedTopics`, so it lists every muted topic regardless of pagination
 - Same inline-image support as `guilds.go`'s thread feed — see that section
 
-Key types: `TopicsModel`, `LoadMoreTopicsMsg`, `LoadTopicPostsMsg`, `LoadMoreTopicPostsMsg`, `SetBlockedTopicsMsg`  
+Key types: `TopicsModel`, `LoadMoreTopicsMsg`, `LoadTopicPostsMsg`, `LoadMoreTopicPostsMsg`, `SetMutedTopicsMsg`  
 Key methods: `SetTopics(topics, cursor)`, `AppendTopics(topics, cursor)`, `SetTopicPosts(posts, cursor)`, `AppendTopicPosts(posts, cursor)`
 
 #### `journal.go`
@@ -1125,7 +1126,7 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 |---|---|
 | **Chatrooms API** | UI fully built; REST integration deferred (server paths not finalized) |
 | **HTTPClient thread safety** | Resolved: `tokens` is guarded by a `sync.Mutex` (see `docs/30-security-hardening.md`) |
-| **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized. `mutedUsersByRoom` is also read but excluded from PATCH for a different reason — it's server-managed via `/mute` slash commands only (see `docs/37-circ-mute.md`), never client-patched |
+| **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized. (`mutedTopics` *is* PATCHed as of feature 54 — see `docs/54-muted-topics.md`.) `mutedUsersByRoom` is also read but excluded from PATCH for a different reason — it's server-managed via `/mute` slash commands only (see `docs/37-circ-mute.md`), never client-patched |
 | **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |
 | **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |
 | **Attachments** | Images render inline (Feed, Post Detail, Search, Topics, Guilds post lists, C-Mail, cIRC, Profile — gated by the InlineImages setting; see `docs/45-inline-images-everywhere.md`) and open in a fullscreen modal (`o`) via `internal/ui/imgview` (Kitty/iTerm2/Sixel, falling back to the OS browser when no protocol is detected or the Image Viewer setting is "browser"). YouTube audio attachments can be composed via the `ctrl+j` Song Prompt modal (`docs/49-song-attach.md`, `docs/50-post-reply-attachments.md`, supporter accounts only) in cIRC, posts, and replies — not yet available in C-Mail. artist/title/genre are all required (max 100/150/50 chars, genre lowercased). Native image/gif attachment on posts/replies (added in `docs/50-post-reply-attachments.md`) was removed 2026-08-28: API v0.8.7 rejects `type: "image"` in a post/reply's `attachments`, and rejects inline markdown images in `content` too unless the URL is `bunker.cyberspace.online`-hosted (website-upload-only) — `ctrl+g` on Feed/Post Detail now warns instead of attaching |

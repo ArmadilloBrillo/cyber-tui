@@ -60,7 +60,8 @@ Rate limits: GET /v1/topics 20/min · GET posts 30/min.
 | `j` / `↓` | Move cursor down |
 | `k` / `↑` | Move up; at top → refresh topic list |
 | `enter` | Open topic → switch to post list view |
-| `b` | Block / unblock the highlighted topic (hides its posts everywhere; see `docs/54-blocked-topics.md`) |
+| `m` | Mute / unmute the highlighted topic (hides its posts everywhere; see `docs/54-muted-topics.md`) |
+| `f` | Cycle the list filter: all → hide muted → only muted (session-only) |
 
 ### Topic posts view
 

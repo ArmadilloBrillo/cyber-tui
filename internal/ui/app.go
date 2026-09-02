@@ -599,16 +599,16 @@ type App struct {
 	// its own stale snapshot.
 	settingsSaveSeq int
 
-	// blockedTopicsSaveSeq is bumped on every SetBlockedTopicsMsg. Only the
-	// matching blockedTopicsFlushMsg tick persists; earlier ticks are dropped,
-	// so a burst of block/unblock presses coalesces into a single
-	// PATCH /v1/settings (rate-limited 2/min) — see docs/54-blocked-topics.md.
-	blockedTopicsSaveSeq int
+	// mutedTopicsSaveSeq is bumped on every SetMutedTopicsMsg. Only the
+	// matching mutedTopicsFlushMsg tick persists; earlier ticks are dropped,
+	// so a burst of mute/unmute presses coalesces into a single
+	// PATCH /v1/settings (rate-limited 2/min) — see docs/54-muted-topics.md.
+	mutedTopicsSaveSeq int
 
-	// blockedTopicsSaved is the MutedTopics list the server last accepted (set
+	// mutedTopicsSaved is the MutedTopics list the server last accepted (set
 	// on login and after each successful save). A failed save rolls the
 	// optimistic in-memory list back to this.
-	blockedTopicsSaved []string
+	mutedTopicsSaved []string
 
 	// sessionGen is bumped in handleUnauthorized on session expiry, so the
 	// self-rescheduling poll/wander/logo-idle tea.Tick chains started by
@@ -1733,7 +1733,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case settingsLoadedMsg:
 		a.settings = msg.settings
-		a.blockedTopicsSaved = msg.settings.MutedTopics // rollback baseline for Topics-tab block/unblock
+		a.mutedTopicsSaved = msg.settings.MutedTopics // rollback baseline for Topics-tab mute/unmute
 		a.settingsScreen = a.settingsScreen.SetSettings(msg.settings)
 		a.broadcastConfig()
 		return a, nil, true
@@ -2478,47 +2478,47 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.RefreshTopicsMsg:
 		return a, a.loadTopicsCmd(), true
 
-	case screens.SetBlockedTopicsMsg:
-		// Block / unblock a topic from the Topics tab. Apply + broadcast now so
+	case screens.SetMutedTopicsMsg:
+		// Mute / unmute a topic from the Topics tab. Apply + broadcast now so
 		// every post list re-filters immediately (optimistic); persist on a
 		// debounce tick so a rapid series of toggles becomes one PATCH. If that
-		// PATCH fails, blockedTopicsSaveResultMsg rolls the list back to
-		// blockedTopicsSaved (the last version the server accepted).
+		// PATCH fails, mutedTopicsSaveResultMsg rolls the list back to
+		// mutedTopicsSaved (the last version the server accepted).
 		a.settings.MutedTopics = msg.Topics
 		// broadcastConfig re-seeds the settings screen's MutedTopics baseline too
 		// (see its SharedConfigMsg handler), so a later ctrl+s there can't PATCH
 		// a stale list back.
 		a.broadcastConfig()
-		a.blockedTopicsSaveSeq++
-		seq := a.blockedTopicsSaveSeq
-		return a, tea.Tick(blockedTopicsSaveDebounce, func(time.Time) tea.Msg {
-			return blockedTopicsFlushMsg{seq: seq}
+		a.mutedTopicsSaveSeq++
+		seq := a.mutedTopicsSaveSeq
+		return a, tea.Tick(mutedTopicsSaveDebounce, func(time.Time) tea.Msg {
+			return mutedTopicsFlushMsg{seq: seq}
 		}), true
 
-	case blockedTopicsFlushMsg:
-		if msg.seq != a.blockedTopicsSaveSeq {
+	case mutedTopicsFlushMsg:
+		if msg.seq != a.mutedTopicsSaveSeq {
 			return a, nil, true // superseded by a newer toggle
 		}
 		s := a.settings
 		attempted := append([]string(nil), s.MutedTopics...)
 		return a, func() tea.Msg {
 			if err := a.client.UpdateSettings(s); err != nil {
-				return blockedTopicsSaveResultMsg{err: err}
+				return mutedTopicsSaveResultMsg{err: err}
 			}
-			return blockedTopicsSaveResultMsg{topics: attempted}
+			return mutedTopicsSaveResultMsg{topics: attempted}
 		}, true
 
-	case blockedTopicsSaveResultMsg:
+	case mutedTopicsSaveResultMsg:
 		if msg.err != nil {
 			// Roll back to the last list the server accepted and cancel any
 			// still-pending debounce tick so it can't re-PATCH the reverted state.
-			a.settings.MutedTopics = append([]string(nil), a.blockedTopicsSaved...)
-			a.blockedTopicsSaveSeq++
+			a.settings.MutedTopics = append([]string(nil), a.mutedTopicsSaved...)
+			a.mutedTopicsSaveSeq++
 			a.broadcastConfig()
-			a, cmd := a.notify(notifyError, blockedTopicsSaveFailText(msg.err))
+			a, cmd := a.notify(notifyError, mutedTopicsSaveFailText(msg.err))
 			return a, cmd, true
 		}
-		a.blockedTopicsSaved = msg.topics
+		a.mutedTopicsSaved = msg.topics
 		return a, nil, true
 
 	case topicsLoadedMsg:
@@ -2859,9 +2859,9 @@ func friendlyErr(err error) string {
 	return err.Error()
 }
 
-// blockedTopicsSaveFailText explains why a block/unblock couldn't be saved, so
-// the revert banner names a cause instead of just "can't block".
-func blockedTopicsSaveFailText(err error) string {
+// mutedTopicsSaveFailText explains why a mute/unmute couldn't be saved, so
+// the revert banner names a cause instead of just "can't mute".
+func mutedTopicsSaveFailText(err error) string {
 	reason := friendlyErr(err)
 	var apiErr *api.APIError
 	switch {
@@ -2872,7 +2872,7 @@ func blockedTopicsSaveFailText(err error) string {
 	case errors.As(err, &apiErr) && apiErr.Status >= 500:
 		reason = "the server had a problem (" + strconv.Itoa(apiErr.Status) + ") — try again shortly"
 	}
-	return "couldn't save blocked topics: " + reason + " — reverted"
+	return "couldn't save muted topics: " + reason + " — reverted"
 }
 
 // composeFailText is friendlyErr plus a rate-limit case: a 429 on CreatePost
@@ -4889,22 +4889,22 @@ type topicPostsPageMsg struct {
 	cursor string
 }
 
-// blockedTopicsFlushMsg is the debounce tick that persists a block/unblock made
+// mutedTopicsFlushMsg is the debounce tick that persists a mute/unmute made
 // from the Topics tab. Only the tick whose seq still matches
-// blockedTopicsSaveSeq calls UpdateSettings — see docs/54-blocked-topics.md.
-type blockedTopicsFlushMsg struct{ seq int }
+// mutedTopicsSaveSeq calls UpdateSettings — see docs/54-muted-topics.md.
+type mutedTopicsFlushMsg struct{ seq int }
 
-// blockedTopicsSaveResultMsg reports the outcome of that PATCH. On success
+// mutedTopicsSaveResultMsg reports the outcome of that PATCH. On success
 // (err == nil) topics is the list now stored server-side; on failure the
-// optimistic in-memory list is rolled back to blockedTopicsSaved.
-type blockedTopicsSaveResultMsg struct {
+// optimistic in-memory list is rolled back to mutedTopicsSaved.
+type mutedTopicsSaveResultMsg struct {
 	topics []string
 	err    error
 }
 
-// blockedTopicsSaveDebounce coalesces a burst of block/unblock presses into one
+// mutedTopicsSaveDebounce coalesces a burst of mute/unmute presses into one
 // PATCH /v1/settings (rate-limited 2/min, 15/day).
-const blockedTopicsSaveDebounce = 2 * time.Second
+const mutedTopicsSaveDebounce = 2 * time.Second
 
 type searchPreviewLoadedMsg struct {
 	preview model.SearchPreview
