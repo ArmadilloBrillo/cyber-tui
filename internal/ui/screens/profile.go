@@ -861,6 +861,9 @@ func (m ProfileModel) viewBodyBeforeWebsiteBand(username string) (body string, c
 	if m.inlineImagesEnabled && m.user.ProfilePictureUrl != "" {
 		headerParts = append(headerParts, strings.Repeat("\n", profileImageBandRows-1))
 	}
+	if m.readOnly && m.isFollowing {
+		headerParts = append(headerParts, theme.Highlight.Render("following"))
+	}
 	if m.showFollowerCount {
 		headerParts = append(headerParts, counts)
 	}

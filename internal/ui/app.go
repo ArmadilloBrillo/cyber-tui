@@ -5068,6 +5068,11 @@ func (a *App) loadProfileCmd() tea.Cmd {
 	}
 }
 
+// followingScanMaxPages bounds the follow-state scan in loadUserProfileCmd in
+// case a server bug ever reports a cursor indefinitely; 40 pages covers 2,000
+// follows (GetFollowing pages at 50), far beyond any real account's following.
+const followingScanMaxPages = 40
+
 func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 	return func() tea.Msg {
 		// Skip the API call if this is the logged-in user's own profile.
@@ -5078,12 +5083,16 @@ func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		// Detect whether the logged-in user follows this profile by scanning
-		// the first page of the following list (up to 50 entries).
+		// Detect whether the logged-in user follows this profile by paging
+		// through the following list until the profile turns up.
 		var isFollowing bool
 		var followID string
-		follows, _, err := a.client.GetFollowing("")
-		if err == nil {
+		cursor := ""
+		for i := 0; i < followingScanMaxPages; i++ {
+			follows, next, ferr := a.client.GetFollowing(cursor)
+			if ferr != nil {
+				break
+			}
 			for _, f := range follows {
 				if f.FollowedID == user.ID {
 					isFollowing = true
@@ -5091,6 +5100,10 @@ func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 					break
 				}
 			}
+			if isFollowing || next == "" {
+				break
+			}
+			cursor = next
 		}
 		return userProfileLoadedMsg{user: user, isFollowing: isFollowing, followID: followID}
 	}
