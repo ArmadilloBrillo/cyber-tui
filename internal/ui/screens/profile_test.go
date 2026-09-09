@@ -74,6 +74,32 @@ func TestProfileView_CountsHidden(t *testing.T) {
 	}
 }
 
+// --- following indicator ---
+
+func TestProfileView_FollowingIndicator_ShownWhenFollowing(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true).SetFollowState(true, "fw1")
+	view := m.View()
+	if !strings.Contains(view, "following") {
+		t.Errorf("a read-only profile you follow should show a 'following' indicator, got:\n%s", view)
+	}
+}
+
+func TestProfileView_FollowingIndicator_HiddenWhenNotFollowing(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true).SetFollowState(false, "")
+	view := m.View()
+	if strings.Contains(view, "following") {
+		t.Errorf("a profile you don't follow must not show the 'following' indicator, got:\n%s", view)
+	}
+}
+
+func TestProfileView_FollowingIndicator_HiddenOnOwnProfile(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(false).SetFollowState(true, "fw1")
+	view := m.View()
+	if strings.Contains(view, "following") {
+		t.Errorf("your own profile must not show the 'following' indicator, got:\n%s", view)
+	}
+}
+
 // --- 'f' key — follow ---
 
 func TestProfileUpdate_FKey_EmitsFollowMsg_WhenNotFollowing(t *testing.T) {

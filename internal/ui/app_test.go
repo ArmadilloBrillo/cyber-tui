@@ -6158,6 +6158,67 @@ func TestHandleProfile_OwnProfileLoad_FetchesApprenticeships(t *testing.T) {
 	_ = a2
 }
 
+type paginatingFollowClient struct {
+	*api.MockClient
+	calls int
+}
+
+func (c *paginatingFollowClient) GetFollowing(cursor string) ([]model.Follow, string, error) {
+	c.calls++
+	if cursor == "" {
+		return []model.Follow{{ID: "fw-a", FollowedID: "user-someone"}}, "page2", nil
+	}
+	return []model.Follow{{ID: "fw-dixie", FollowedID: "user-dixie"}}, "", nil
+}
+
+// TestLoadUserProfileCmd_PaginatesFollowingUntilProfileFound covers the
+// follow-state scan walking past the first page: the viewed profile is only on
+// page 2 of the logged-in user's following list, and must still be detected.
+func TestLoadUserProfileCmd_PaginatesFollowingUntilProfileFound(t *testing.T) {
+	c := &paginatingFollowClient{MockClient: api.NewMockClient()}
+	a := NewApp(c)
+
+	msg := a.loadUserProfileCmd("dixie")()
+	loaded, ok := msg.(userProfileLoadedMsg)
+	if !ok {
+		t.Fatalf("expected userProfileLoadedMsg, got %T", msg)
+	}
+	if !loaded.isFollowing {
+		t.Error("expected isFollowing=true for a profile found on page 2 of the following list")
+	}
+	if loaded.followID != "fw-dixie" {
+		t.Errorf("followID = %q, want fw-dixie", loaded.followID)
+	}
+	if c.calls != 2 {
+		t.Errorf("GetFollowing calls = %d, want 2 (one per page)", c.calls)
+	}
+}
+
+type endlessFollowClient struct {
+	*api.MockClient
+	calls int
+}
+
+func (c *endlessFollowClient) GetFollowing(cursor string) ([]model.Follow, string, error) {
+	c.calls++
+	return []model.Follow{{ID: "x", FollowedID: "nobody"}}, "more", nil
+}
+
+// TestLoadUserProfileCmd_FollowingScanRespectsPageCap ensures a server that
+// reports a cursor forever can't spin the scan indefinitely.
+func TestLoadUserProfileCmd_FollowingScanRespectsPageCap(t *testing.T) {
+	c := &endlessFollowClient{MockClient: api.NewMockClient()}
+	a := NewApp(c)
+
+	loaded := a.loadUserProfileCmd("dixie")().(userProfileLoadedMsg)
+	if loaded.isFollowing {
+		t.Error("expected isFollowing=false when the profile is never in the following list")
+	}
+	if c.calls != followingScanMaxPages {
+		t.Errorf("GetFollowing calls = %d, want the page cap %d", c.calls, followingScanMaxPages)
+	}
+}
+
 func TestHandleGuilds_UserGuildsLoaded_GuardsOnUsernameMatch(t *testing.T) {
 	a := loggedInApp()
 	a.profile = a.profile.SetUser(model.User{Username: "molly"})
