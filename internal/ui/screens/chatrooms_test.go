@@ -2342,3 +2342,94 @@ func TestChatroomsModel_SetComposeValueMsg_ReplacesInput(t *testing.T) {
 		t.Errorf("input.Value() = %q, want the replaced /gif command", got)
 	}
 }
+
+// --- hidden NSFW room injection ---
+
+func roomSlugs(rooms []model.Room) []string {
+	s := make([]string, len(rooms))
+	for i, r := range rooms {
+		s[i] = r.Slug
+	}
+	return s
+}
+
+func TestChatrooms_SetRooms_AppendsNSFWRoomByDefault(t *testing.T) {
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	m = m.SetRooms([]model.Room{{Slug: "zion", Name: "Zion"}, {Slug: "sprawl", Name: "Sprawl"}})
+
+	if got := roomSlugs(m.rooms); len(got) != 3 || got[2] != "nsfw" {
+		t.Fatalf("rooms = %v, want [zion sprawl nsfw]", got)
+	}
+	if m.rooms[2].Name != "NSFW" {
+		t.Errorf("injected room Name = %q, want NSFW", m.rooms[2].Name)
+	}
+	if !m.rooms[2].LastMessageAt.IsZero() {
+		t.Errorf("injected room LastMessageAt = %v, want zero (no timestamp column)", m.rooms[2].LastMessageAt)
+	}
+}
+
+func TestChatrooms_SetRooms_OmitsNSFWRoomWhenFiltered(t *testing.T) {
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	m, _ = m.Update(SharedConfigMsg{Settings: model.Settings{FilterNSFW: true}})
+	m = m.SetRooms([]model.Room{{Slug: "zion", Name: "Zion"}, {Slug: "sprawl", Name: "Sprawl"}})
+
+	if got := roomSlugs(m.rooms); len(got) != 2 || slices.Contains(got, "nsfw") {
+		t.Fatalf("rooms = %v, want [zion sprawl] with no nsfw entry", got)
+	}
+}
+
+func TestChatrooms_SharedConfig_TogglesNSFWRoom(t *testing.T) {
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	m = m.SetRooms([]model.Room{{Slug: "zion", Name: "Zion"}})
+	if !slices.Contains(roomSlugs(m.rooms), "nsfw") {
+		t.Fatalf("setup: rooms = %v, want an nsfw entry", roomSlugs(m.rooms))
+	}
+
+	m, _ = m.Update(SharedConfigMsg{Settings: model.Settings{FilterNSFW: true}})
+	if slices.Contains(roomSlugs(m.rooms), "nsfw") {
+		t.Errorf("after FilterNSFW=true, rooms = %v, want nsfw removed", roomSlugs(m.rooms))
+	}
+
+	m, _ = m.Update(SharedConfigMsg{Settings: model.Settings{FilterNSFW: false}})
+	if !slices.Contains(roomSlugs(m.rooms), "nsfw") {
+		t.Errorf("after FilterNSFW=false, rooms = %v, want nsfw re-added", roomSlugs(m.rooms))
+	}
+}
+
+func TestChatrooms_SetRooms_NoDuplicateWhenServerReturnsNSFW(t *testing.T) {
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	m = m.SetRooms([]model.Room{{Slug: "zion", Name: "Zion"}, {Slug: "nsfw", Name: "NSFW"}})
+
+	if got := roomSlugs(m.rooms); len(got) != 2 {
+		t.Fatalf("rooms = %v, want no duplicate nsfw entry", got)
+	}
+}
+
+func TestChatrooms_SharedConfig_ClampsSelectionWhenNSFWRoomRemoved(t *testing.T) {
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = m.SetRooms([]model.Room{{Slug: "zion", Name: "Zion"}, {Slug: "sprawl", Name: "Sprawl"}})
+	m.selectedRoom = 2 // the nsfw card
+
+	m, _ = m.Update(SharedConfigMsg{Settings: model.Settings{FilterNSFW: true}})
+
+	if m.selectedRoom != 1 {
+		t.Errorf("selectedRoom = %d, want it clamped to 1 (last real room) after nsfw removed", m.selectedRoom)
+	}
+}
+
+func TestChatrooms_Enter_OpensInjectedNSFWRoomBySlug(t *testing.T) {
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = m.SetRooms([]model.Room{{Slug: "zion", Name: "Zion"}})
+	m.selectedRoom = 1 // the appended nsfw card
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if !m.IsShowingDetail() {
+		t.Fatal("expected enter on the nsfw card to open detail mode")
+	}
+	if m.ActiveRoomSlug() != "nsfw" {
+		t.Errorf("ActiveRoomSlug() = %q, want nsfw", m.ActiveRoomSlug())
+	}
+}
