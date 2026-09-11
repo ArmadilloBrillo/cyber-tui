@@ -2378,6 +2378,22 @@ func TestChatrooms_SetRooms_OmitsNSFWRoomWhenFiltered(t *testing.T) {
 	}
 }
 
+func TestChatrooms_SharedConfigBeforeSetRooms_DoesNotFlashNSFWRoomAlone(t *testing.T) {
+	m := NewChatroomsModel("neo", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m, _ = m.Update(SharedConfigMsg{Settings: model.Settings{FilterNSFW: false}})
+
+	if got := roomSlugs(m.rooms); len(got) != 0 {
+		t.Fatalf("rooms = %v, want empty list before the real fetch completes (no NSFW-only flash)", got)
+	}
+
+	m = m.SetRooms([]model.Room{{Slug: "zion", Name: "Zion"}, {Slug: "sprawl", Name: "Sprawl"}})
+
+	if got := roomSlugs(m.rooms); len(got) != 3 || got[2] != "nsfw" {
+		t.Fatalf("rooms after SetRooms = %v, want [zion sprawl nsfw]", got)
+	}
+}
+
 func TestChatrooms_SharedConfig_TogglesNSFWRoom(t *testing.T) {
 	m := NewChatroomsModel("neo", api.NewMockClient())
 	m = m.SetRooms([]model.Room{{Slug: "zion", Name: "Zion"}})
