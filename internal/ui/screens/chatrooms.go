@@ -217,6 +217,7 @@ type ChatroomsModel struct {
 	mutedUsersByRoom map[string][]string // roomID -> muted usernames, from Settings
 
 	serverRooms []model.Room // rooms from GET /v1/circ, before nsfwRoom injection
+	roomsLoaded bool         // true once SetRooms has been called with a real fetch result
 	filterNSFW  bool         // from Settings; when true, nsfwRoom is left out of the list
 
 	// canGoBack is true when the active room was opened via a deep link
@@ -722,15 +723,18 @@ func (m ChatroomsModel) GetFocusedURLs() []string {
 // SetRooms replaces the room list with a freshly fetched server list.
 func (m ChatroomsModel) SetRooms(rooms []model.Room) ChatroomsModel {
 	m.serverRooms = rooms
+	m.roomsLoaded = true
 	return m.rebuildRoomList()
 }
 
 // rebuildRoomList derives m.rooms from m.serverRooms, appending nsfwRoom unless
-// filterNSFW is set (or the server has started returning it itself). Called
-// whenever the server list or the filterNSFW setting changes.
+// filterNSFW is set (or the server has started returning it itself). nsfwRoom
+// is withheld until the real list has loaded (roomsLoaded), so it doesn't
+// flash on screen alone before the fetch completes. Called whenever the
+// server list or the filterNSFW setting changes.
 func (m ChatroomsModel) rebuildRoomList() ChatroomsModel {
 	rooms := m.serverRooms
-	if !m.filterNSFW && !slices.ContainsFunc(rooms, func(r model.Room) bool { return r.Slug == nsfwRoom.Slug }) {
+	if m.roomsLoaded && !m.filterNSFW && !slices.ContainsFunc(rooms, func(r model.Room) bool { return r.Slug == nsfwRoom.Slug }) {
 		rooms = append(append([]model.Room(nil), rooms...), nsfwRoom)
 	}
 	m.rooms = rooms
