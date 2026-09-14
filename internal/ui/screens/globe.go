@@ -39,7 +39,6 @@ const (
 	cellOcean
 	cellLand
 	cellTerrain
-	cellFollow
 	cellGuild
 	cellSelf
 )
@@ -50,8 +49,6 @@ func globeCellStyle(k globeCellKind) lipgloss.Style {
 		return lipgloss.NewStyle().Foreground(theme.ColorGreen)
 	case cellTerrain:
 		return lipgloss.NewStyle().Foreground(theme.ColorGreen).Background(theme.ColorMuted)
-	case cellFollow:
-		return lipgloss.NewStyle().Foreground(theme.ColorMeta).Bold(true)
 	case cellGuild:
 		return lipgloss.NewStyle().Foreground(theme.ColorCyan).Bold(true)
 	case cellSelf:
@@ -166,11 +163,11 @@ func hasLocation(u model.User) bool {
 }
 
 // GlobeModel renders a rotating ASCII globe plotting the caller's own
-// location plus their guild members' and follow network's locations —
-// see docs/55-globe.md. App owns all API calls; this is a pure state
-// machine (current rotation/zoom, which marker sets are toggled on, the
-// resolved-profile cache, and the paced fetch queue for profiles not yet
-// resolved).
+// location plus the locations of every guild they belong to (their guild
+// plus any apprenticeships) — see docs/55-globe.md. App owns all API calls;
+// this is a pure state machine (current rotation/zoom, whether guild markers
+// are toggled on, the resolved-profile cache, and the paced fetch queue for
+// profiles not yet resolved).
 type GlobeModel struct {
 	width, height int
 
@@ -178,16 +175,13 @@ type GlobeModel struct {
 	zoom   float64
 	paused bool
 
-	showGuild   bool
-	showFollows bool
+	showGuild bool
 
 	self    model.User
 	hasSelf bool
 
-	guildUsernames  []string
-	guildLoaded     bool
-	followUsernames []string
-	followsLoaded   bool
+	guildUsernames []string
+	guildLoaded    bool
 
 	// profiles caches resolved locations for the session, keyed by username —
 	// only entries with hasLocation are kept (see SetProfile), since a
@@ -206,11 +200,10 @@ type GlobeModel struct {
 
 func NewGlobeModel() GlobeModel {
 	return GlobeModel{
-		zoom:        1,
-		showGuild:   true,
-		showFollows: true,
-		profiles:    make(map[string]model.User),
-		pendingSet:  make(map[string]struct{}),
+		zoom:       1,
+		showGuild:  true,
+		profiles:   make(map[string]model.User),
+		pendingSet: make(map[string]struct{}),
 	}
 }
 
@@ -250,18 +243,9 @@ func (m GlobeModel) SetGuildMembers(usernames []string) GlobeModel {
 	return m.enqueue(usernames)
 }
 
-// SetFollowUsernames records the caller's combined follow-network usernames
-// (following + followers, deduplicated) and enqueues any not yet resolved.
-func (m GlobeModel) SetFollowUsernames(usernames []string) GlobeModel {
-	m.followsLoaded = true
-	m.followUsernames = usernames
-	return m.enqueue(usernames)
-}
-
-func (m GlobeModel) GuildLoaded() bool   { return m.guildLoaded }
-func (m GlobeModel) FollowsLoaded() bool { return m.followsLoaded }
-func (m GlobeModel) HasPending() bool    { return len(m.pending) > 0 }
-func (m GlobeModel) IsFetching() bool    { return m.fetching }
+func (m GlobeModel) GuildLoaded() bool { return m.guildLoaded }
+func (m GlobeModel) HasPending() bool  { return len(m.pending) > 0 }
+func (m GlobeModel) IsFetching() bool  { return m.fetching }
 
 func (m GlobeModel) SetFetching(v bool) GlobeModel {
 	m.fetching = v
@@ -300,8 +284,7 @@ func (m GlobeModel) SetProfile(username string, u model.User) GlobeModel {
 	return m
 }
 
-func (m GlobeModel) guildMarkers() []model.User  { return m.resolvedProfiles(m.guildUsernames) }
-func (m GlobeModel) followMarkers() []model.User { return m.resolvedProfiles(m.followUsernames) }
+func (m GlobeModel) guildMarkers() []model.User { return m.resolvedProfiles(m.guildUsernames) }
 
 func (m GlobeModel) resolvedProfiles(usernames []string) []model.User {
 	var out []model.User
@@ -342,8 +325,6 @@ func (m GlobeModel) Update(msg tea.Msg) (GlobeModel, tea.Cmd) {
 			m.zoom = max(globeZoomMin, m.zoom-globeZoomStep)
 		case "m":
 			m.showGuild = !m.showGuild
-		case "f":
-			m.showFollows = !m.showFollows
 		case " ":
 			m.paused = !m.paused
 		}
@@ -437,11 +418,6 @@ func (m GlobeModel) View() string {
 	}
 
 	// Draw lowest-priority markers first so self always wins a shared cell.
-	if m.showFollows {
-		for _, u := range m.followMarkers() {
-			plot(u, '*', cellFollow)
-		}
-	}
 	if m.showGuild {
 		for _, u := range m.guildMarkers() {
 			plot(u, '#', cellGuild)

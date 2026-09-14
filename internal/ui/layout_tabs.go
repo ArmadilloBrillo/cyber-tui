@@ -419,7 +419,7 @@ func (l TabsLayout) screenHints(a App) []hint {
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "open / see all"}, {"esc", "edit query"}, more}
 	case screenGlobe:
-		return []hint{{"+/-", "zoom"}, {"m", "guild"}, {"f", "follows"}, {"space", "pause"}}
+		return []hint{{"+/-", "zoom"}, {"m", "guild"}, {"space", "pause"}}
 	case screenSettings:
 		base := []hint{{"↑↓", "navigate"}, {"space", "toggle"}, {"tab", "cycle"}, more}
 		if a.settingsScreen.IsDirty() {

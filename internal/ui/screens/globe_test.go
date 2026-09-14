@@ -111,7 +111,7 @@ func TestViewOrientationNorthAtTop(t *testing.T) {
 	m := NewGlobeModel()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 40})
 	m = m.SetSelf(model.User{Username: "north", LocationLatitude: 89, LocationLongitude: 0})
-	m = m.SetFollowUsernames([]string{"south"})
+	m = m.SetGuildMembers([]string{"south"})
 	m = m.SetProfile("south", model.User{Username: "south", LocationLatitude: -89, LocationLongitude: 0})
 
 	lines := strings.Split(stripANSIForTest(m.View()), "\n")
@@ -128,7 +128,7 @@ func TestViewOrientationNorthAtTop(t *testing.T) {
 		return -1
 	}
 
-	northRow, southRow := rowOf('@'), rowOf('*')
+	northRow, southRow := rowOf('@'), rowOf('#')
 	if northRow < 0 || southRow < 0 {
 		t.Fatalf("expected to find both markers; north row=%d south row=%d", northRow, southRow)
 	}
@@ -258,16 +258,12 @@ func TestGlobeZoomClamps(t *testing.T) {
 
 func TestGlobeToggleKeys(t *testing.T) {
 	m := NewGlobeModel()
-	if !m.showGuild || !m.showFollows {
-		t.Fatal("both marker sets should default on")
+	if !m.showGuild {
+		t.Fatal("guild markers should default on")
 	}
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
 	if m.showGuild {
 		t.Error("'m' should toggle guild markers off")
-	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
-	if m.showFollows {
-		t.Error("'f' should toggle follow markers off")
 	}
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	if !m.paused {

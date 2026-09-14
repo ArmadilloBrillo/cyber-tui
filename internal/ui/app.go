@@ -5861,16 +5861,15 @@ func (a *App) loadTopicPostsPageCmd(slug, cursor string) tea.Cmd {
 
 // globeAngleTickInterval drives the rotation animation while screenGlobe is
 // active; globeFetchInterval paces the per-user profile fetches the guild
-// and follow marker sets need (GET /v1/users/:username is rate-limited to
-// 30/min — this keeps well under that even if several screens' worth of
-// usernames are queued at once).
+// marker set needs (GET /v1/users/:username is rate-limited to 30/min —
+// this keeps well under that even if several guilds' worth of usernames are
+// queued at once).
 const globeAngleTickInterval = 150 * time.Millisecond
 const globeFetchInterval = 2500 * time.Millisecond
 
 type globeAngleTickMsg struct{ gen int }
 type globeFetchTickMsg struct{ gen int }
 type globeGuildMembersMsg struct{ usernames []string }
-type globeFollowsMsg struct{ usernames []string }
 type globeProfileLoadedMsg struct {
 	username string
 	user     model.User
@@ -5888,59 +5887,38 @@ func (a *App) scheduleGlobeFetchTickCmd() tea.Cmd {
 	return tea.Tick(globeFetchInterval, func(time.Time) tea.Msg { return globeFetchTickMsg{gen: gen} })
 }
 
-// loadGlobeGuildMembersCmd loads the first page of slug's members (ponytail:
-// first page only, add auto-pagination if globes for large guilds look
-// sparse) and excludes the caller — the self marker is drawn separately.
-func (a *App) loadGlobeGuildMembersCmd(slug string) tea.Cmd {
-	self := a.currentUser.Username
+// loadGlobeGuildMembersCmd loads the first page of members from every guild
+// the caller belongs to — their guild plus up to five apprenticeships
+// (GET /v1/users/:username/guilds) — deduplicated and excluding the caller
+// (the self marker is drawn separately). Ponytail: first page per guild
+// only, add auto-pagination if globes for large guilds look sparse; one
+// guild's member fetch failing doesn't block the others.
+func (a *App) loadGlobeGuildMembersCmd(username string) tea.Cmd {
+	self := username
 	return func() tea.Msg {
-		members, _, err := a.client.GetGuildMembers(slug, "")
+		memberships, err := a.client.GetUserGuilds(username)
 		if err != nil {
 			return errMsg{err}
 		}
-		usernames := make([]string, 0, len(members))
-		for _, gm := range members {
-			if gm.Username != "" && gm.Username != self {
-				usernames = append(usernames, gm.Username)
+		seen := make(map[string]struct{})
+		var usernames []string
+		for _, gm := range memberships {
+			members, _, err := a.client.GetGuildMembers(gm.Slug, "")
+			if err != nil {
+				continue
+			}
+			for _, member := range members {
+				if member.Username == "" || member.Username == self {
+					continue
+				}
+				if _, ok := seen[member.Username]; ok {
+					continue
+				}
+				seen[member.Username] = struct{}{}
+				usernames = append(usernames, member.Username)
 			}
 		}
 		return globeGuildMembersMsg{usernames: usernames}
-	}
-}
-
-// loadGlobeFollowsCmd loads the first page of following+followers (ponytail:
-// first page only; combined into one deduplicated set rather than two
-// separately toggleable ones) and excludes the caller.
-func (a *App) loadGlobeFollowsCmd() tea.Cmd {
-	self := a.currentUser.Username
-	return func() tea.Msg {
-		following, _, err := a.client.GetFollowing("")
-		if err != nil {
-			return errMsg{err}
-		}
-		followers, _, err := a.client.GetFollowers("")
-		if err != nil {
-			return errMsg{err}
-		}
-		seen := make(map[string]struct{}, len(following)+len(followers))
-		var usernames []string
-		add := func(username string) {
-			if username == "" || username == self {
-				return
-			}
-			if _, ok := seen[username]; ok {
-				return
-			}
-			seen[username] = struct{}{}
-			usernames = append(usernames, username)
-		}
-		for _, f := range following {
-			add(f.FollowedUsername)
-		}
-		for _, f := range followers {
-			add(f.FollowerUsername)
-		}
-		return globeFollowsMsg{usernames: usernames}
 	}
 }
 
@@ -5976,11 +5954,6 @@ func (a App) handleGlobe(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case globeGuildMembersMsg:
 		a.globe = a.globe.SetGuildMembers(msg.usernames)
-		a, cmd := a.maybeStartGlobeFetch()
-		return a, cmd, true
-
-	case globeFollowsMsg:
-		a.globe = a.globe.SetFollowUsernames(msg.usernames)
 		a, cmd := a.maybeStartGlobeFetch()
 		return a, cmd, true
 

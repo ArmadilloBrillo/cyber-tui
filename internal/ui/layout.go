@@ -786,14 +786,11 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 		a.globe = a.globe.SetSelf(a.currentUser)
 		var cmds []tea.Cmd
 		if !a.globe.GuildLoaded() {
-			if slug := a.currentUser.GuildSlug; slug != "" {
-				cmds = append(cmds, a.loadGlobeGuildMembersCmd(slug))
+			if a.currentUser.GuildSlug != "" {
+				cmds = append(cmds, a.loadGlobeGuildMembersCmd(a.currentUser.Username))
 			} else {
 				a.globe = a.globe.SetGuildMembers(nil)
 			}
-		}
-		if !a.globe.FollowsLoaded() {
-			cmds = append(cmds, a.loadGlobeFollowsCmd())
 		}
 		var fetchCmd tea.Cmd
 		a, fetchCmd = a.maybeStartGlobeFetch()

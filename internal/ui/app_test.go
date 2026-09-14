@@ -6131,6 +6131,55 @@ func TestHandleGuilds_GuildJoinedAsApprentice_RefreshesOwnApprenticeSlugs(t *tes
 	}
 }
 
+// globeGuildsStubClient overrides GetUserGuilds/GetGuildMembers to test
+// loadGlobeGuildMembersCmd's multi-guild aggregation (badge guild plus
+// apprenticeships) without a real API.
+type globeGuildsStubClient struct {
+	*api.MockClient
+	memberships   []model.GuildMembership
+	membersBySlug map[string][]model.GuildMember
+}
+
+func (c *globeGuildsStubClient) GetUserGuilds(username string) ([]model.GuildMembership, error) {
+	return c.memberships, nil
+}
+
+func (c *globeGuildsStubClient) GetGuildMembers(slug, cursor string) ([]model.GuildMember, string, error) {
+	return c.membersBySlug[slug], "", nil
+}
+
+// TestLoadGlobeGuildMembersCmd_IncludesApprenticeshipGuilds locks in that the
+// Globe screen's guild markers come from every guild the caller belongs to,
+// not just their badge guild: members from an apprenticeship guild are
+// merged in, a username appearing in more than one guild is deduped, and the
+// caller's own username is excluded regardless of which guild it comes from.
+func TestLoadGlobeGuildMembersCmd_IncludesApprenticeshipGuilds(t *testing.T) {
+	client := &globeGuildsStubClient{
+		MockClient: api.NewMockClient(),
+		memberships: []model.GuildMembership{
+			{Slug: "night-owls", Role: "member"},
+			{Slug: "deep-divers", Role: "apprentice"},
+		},
+		membersBySlug: map[string][]model.GuildMember{
+			"night-owls":  {{Username: "case"}, {Username: "molly"}, {Username: "shared"}},
+			"deep-divers": {{Username: "wintermute"}, {Username: "shared"}},
+		},
+	}
+	a := NewApp(client)
+
+	msg, ok := a.loadGlobeGuildMembersCmd("case")().(globeGuildMembersMsg)
+	if !ok {
+		t.Fatalf("expected globeGuildMembersMsg, got %T", msg)
+	}
+
+	got := slices.Clone(msg.usernames)
+	slices.Sort(got)
+	want := []string{"molly", "shared", "wintermute"}
+	if !slices.Equal(got, want) {
+		t.Errorf("usernames = %v, want %v (self excluded, cross-guild duplicate deduped)", got, want)
+	}
+}
+
 // TestHandleProfile_OwnProfileLoad_FetchesApprenticeships is the regression
 // test for a real bug: navigating to your own profile via the tab bar goes
 // through loadProfileCmd/profileLoadedMsg (activateScreen in layout.go), a

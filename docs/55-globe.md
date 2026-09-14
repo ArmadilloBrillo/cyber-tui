@@ -3,15 +3,16 @@
 ## Overview
 
 A rotating globe, rendered in Unicode quadrant block characters, plotting the
-caller's own location plus two marker sets they can toggle: their guild's
-members, and their combined follow network (following + followers, one set —
-not two). Reached via `g l` or arrow-cycling (it has no numeric alias — it's
-the 12th tab).
+caller's own location plus a toggleable marker set for every guild they
+belong to — their guild plus up to five apprenticeships. Reached via `g l` or
+arrow-cycling (it has no numeric alias — it's the 12th tab).
 
 There is no global user directory in the cyberspace.online API — only
-per-username profile lookup, a follows list, and a guild-members list — so
-"everyone on cyberspace" was never an option. The three sets above are the
-only ones the API lets a client enumerate.
+per-username profile lookup and a guild-members list — so "everyone on
+cyberspace" was never an option. Follow-network markers (following/followers)
+were tried and removed: `GET /v1/follows` doesn't return usernames (see
+Data flow), so the marker set could never populate. Guild members are the
+only enumerable set the API actually supports resolving a location for.
 
 Rendering technique adapted from
 [gh-firehose](https://github.com/leereilly/gh-firehose): an equirectangular
@@ -33,7 +34,6 @@ outer edge) rather than reusing gh-firehose's own copy, whose provenance
 | `+` / `=` | zoom in |
 | `-` / `_` | zoom out |
 | `m` | toggle guild-member markers |
-| `f` | toggle follow-network markers (currently always empty — see Data flow) |
 | `space` | pause / resume rotation |
 
 Rotation is automatic-only — there's no manual spin control. Every other
@@ -41,11 +41,11 @@ single-pane screen in this app already avoids claiming bare arrow keys/`h`/`l`
 (they're swallowed by tab-cycling or list navigation depending on layout), so
 Globe follows that same convention rather than carving out an exception.
 
-Markers: `@` self, `#` guild member, `*` follow network, each followed by the
-user's username as a label — all three are non-alphanumeric symbols so a
-label never reads as part of the username itself (e.g. `oragnar` would be
-ambiguous; `#ragnar` isn't). Self is drawn last so it always wins a cell (and
-any label overlap) shared with another marker.
+Markers: `@` self, `#` guild member, each followed by the user's username as a
+label — both are non-alphanumeric symbols so a label never reads as part of
+the username itself (e.g. `oragnar` would be ambiguous; `#ragnar` isn't).
+Self is drawn last so it always wins a cell (and any label overlap) shared
+with a guild marker.
 
 ---
 
@@ -56,32 +56,44 @@ any label overlap) shared with another marker.
 geocoding needed. On entering the tab (`activateScreen`, `layout.go`):
 
 1. `GlobeModel.SetSelf(a.currentUser)` — the self marker needs no fetch.
-2. If not already loaded this session: `GetGuildMembers(a.currentUser.GuildSlug, "")`
-   (skipped if the caller isn't in a guild) and
-   `GetFollowing("")` + `GetFollowers("")` (deduplicated into one list,
-   excluding the caller) each resolve to a username list.
-3. Each username list is enqueued for a profile fetch
-   (`GlobeModel.enqueue`), deduplicated against already-cached profiles and
-   the queue itself.
+2. If not already loaded this session and the caller is in a guild
+   (`a.currentUser.GuildSlug != ""`): `loadGlobeGuildMembersCmd` calls
+   `GetUserGuilds(username)` for the caller's full guild list — their guild
+   plus up to five apprenticeships, at most six, never paginated — then
+   `GetGuildMembers(slug, "")` for each one. Members are merged across all
+   of them into one deduplicated, self-excluded username list; one guild's
+   member fetch failing doesn't block the others. A user with no badge guild
+   can't have apprenticeships either (joining any guild before your first
+   makes it your badge guild), so the `GuildSlug != ""` check alone is
+   enough to skip the whole fetch for a guildless caller.
+3. That username list is enqueued for a profile fetch (`GlobeModel.enqueue`),
+   deduplicated against already-cached profiles and the queue itself.
 
-**Known limitation: follow markers never populate.** `GET /v1/follows`
-doesn't return `followerUsername`/`followedUsername` — only IDs (server-side
-bug, `docs/00-api-backlog.md`). `loadGlobeFollowsCmd`'s `add()` silently
-drops every empty username, so the follow-network queue in step 3 is always
-empty; the `f`/follows toggle has nothing to show until the API fixes this.
-Guild markers are unaffected — `GET /v1/guilds/:slug/members` does return
-`username`.
+**Why there's no follow-network marker set.** It existed briefly and was
+removed: `GET /v1/follows` doesn't return `followerUsername`/`followedUsername`
+— only IDs (server-side bug, `docs/00-api-backlog.md`, open since
+2026-04-17, re-confirmed live 2026-09-14). Unlike the profile
+Following/Followers tabs (which can fall back to showing a truncated user
+ID), Globe had no usable fallback: plotting a marker requires a location,
+which requires `GET /v1/users/:username`, and there's no by-ID equivalent.
+Guild markers don't have this problem — `GET /v1/guilds/:slug/members`
+does return `username`.
 
 `GET /v1/users/:username` — the only way to learn a *listed* user's
-location, since the follows/guild-members list responses don't include it —
-is rate-limited to 30/min. A guild or follow list can easily exceed that, so
-`App` paces the queue at one fetch every 2.5 s
+location, since the guild-members list response doesn't include it — is
+rate-limited to 30/min. A caller in several sizeable guilds can easily
+exceed that, so `App` paces the queue at one fetch every 2.5 s
 (`globeFetchInterval`/`globeFetchTickMsg`) rather than bursting requests.
 A 429 requeues the username at the front of the queue and retries forever at
 the same fixed interval (no backoff bookkeeping — ponytail: ok for a screen
 nobody is forced to sit on). Any other failure is silently dropped. Markers
 pop in progressively as profiles resolve; there is no loading spinner for
 this — the landmask and self marker render immediately regardless.
+
+The `GetUserGuilds` + per-guild `GetGuildMembers` burst in step 2 is a
+separate, much smaller rate limit ("List guilds / members / a user's guilds",
+30/min) and isn't paced — up to six calls once per tab entry is well within
+budget, unlike the potentially much longer per-profile queue in step 3.
 
 The fetch chain and the rotation-tick chain (`globeAngleTickMsg`, 150 ms)
 both stop rescheduling themselves as soon as `a.active != screenGlobe`, so
@@ -124,7 +136,7 @@ and color:
   a dot-based glyph couldn't represent, since braille dots don't blend into a
   color the way a block character's solid fill does.
 
-Markers (`@`/`#`/`*`, each followed by the user's username as a text label)
+Markers (`@`/`#`, each followed by the user's username as a text label)
 are plotted using the inverse function, `markerScreenPos`, at the same
 sub-pixel resolution as terrain (so a marker aligns with the coastline under
 it) before collapsing to the character cell that sub-pixel belongs to — where
@@ -146,17 +158,16 @@ each tested separately (`TestBrailleDotBit`, `TestQuadrantBlockBit`,
 
 ## Ponytail simplifications
 
-- Following + followers combined into one toggle, not two.
-- Guild-members/follows lists use the API's default first page only — no
-  exhaustive auto-pagination. A guild or follow network larger than one page
-  will show a subset of members until this is revisited.
+- Guild-members lists use the API's default first page only per guild — no
+  exhaustive auto-pagination. A guild larger than one page will show a
+  subset of members until this is revisited.
 - 429s on the per-profile fetch retry forever at a fixed interval; no
   exponential backoff.
 - No `View()` golden-output tests — cosmetic rendering, not logic.
 - Username labels have no collision avoidance: markers close together on
-  screen just overwrite each other's labels in draw order (follows, then
-  guild, then self last) — acceptable for a screen with at most a handful of
-  markers visible at once, revisit if that stops being true.
+  screen just overwrite each other's labels in draw order (guild, then self
+  last) — acceptable for a screen with at most a handful of markers visible
+  at once, revisit if that stops being true.
 
 ---
 
@@ -165,4 +176,4 @@ each tested separately (`TestBrailleDotBit`, `TestQuadrantBlockBit`,
 | File | Tests |
 |------|-------|
 | `internal/ui/screens/globe_test.go` | `TestBrailleDotBit`, `TestQuadrantBlockBit`, `TestQuadrantGlyph`, `TestClassifyGlobeCell`, `TestViewOrientationNorthAtTop`, `TestViewMarkerLabelsUsername`, `TestSphereProjectCenter`, `TestSphereProjectOutsideDisc`, `TestSphereProjectMarkerRoundTrip`, `TestMarkerScreenPosFarSide`, `TestLandAt` (synthetic fixture bitmap, incl. longitude wraparound), `TestGlobeZoomClamps`, `TestGlobeToggleKeys`, `TestGlobeSetProfileOnlyKeepsLocated`, `TestGlobeEnqueueDedup`, `TestGlobeNextPendingAndRequeue`, `TestGlobeAdvancePausable` |
-| `internal/ui/app_test.go` | `TestNavigateTab_*` updated for the 12th tab (Globe wraps left from Feed, sits last in the cycle) |
+| `internal/ui/app_test.go` | `TestNavigateTab_*` updated for the 12th tab (Globe wraps left from Feed, sits last in the cycle); `TestLoadGlobeGuildMembersCmd_IncludesApprenticeshipGuilds` (badge guild + apprenticeship merging, cross-guild dedup, self excluded) |
