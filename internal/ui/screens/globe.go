@@ -11,9 +11,9 @@ import (
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
-// globeSubCols/globeSubRows subdivide each terminal character cell into a
-// braille dot matrix (Unicode Braille Patterns, U+2800 base) for 8x the
-// addressable resolution of one character per cell.
+// globeSubCols/globeSubRows subdivide each terminal character cell into an
+// 8-position sub-pixel sampling grid (brailleDotBit numbering), collapsed to
+// a 2x2 quadrant block glyph per cell — see classifyGlobeCell.
 const globeSubCols = 2
 const globeSubRows = 4
 
@@ -38,7 +38,7 @@ const (
 	cellBlank globeCellKind = iota
 	cellOcean
 	cellLand
-	cellCoastal
+	cellTerrain
 	cellFollow
 	cellGuild
 	cellSelf
@@ -48,7 +48,7 @@ func globeCellStyle(k globeCellKind) lipgloss.Style {
 	switch k {
 	case cellLand:
 		return lipgloss.NewStyle().Foreground(theme.ColorGreen)
-	case cellCoastal:
+	case cellTerrain:
 		return lipgloss.NewStyle().Foreground(theme.ColorGreen).Background(theme.ColorMuted)
 	case cellFollow:
 		return lipgloss.NewStyle().Foreground(theme.ColorMeta).Bold(true)
@@ -94,11 +94,9 @@ func brailleDotBit(subRow, subCol int) byte {
 	}
 }
 
-const brailleBase = 0x2800
-
-// quadrantBlockBit returns the coastal-quadrant bit for a 2x2 split of a
-// character cell (quadRow/quadCol each 0-1): 1=top-left, 2=top-right,
-// 4=bottom-left, 8=bottom-right.
+// quadrantBlockBit returns the quadrant bit for a 2x2 split of a character
+// cell (quadRow/quadCol each 0-1): 1=top-left, 2=top-right, 4=bottom-left,
+// 8=bottom-right.
 func quadrantBlockBit(quadRow, quadCol int) byte {
 	return 1 << byte(quadRow*2+quadCol)
 }
@@ -112,50 +110,52 @@ var quadrantGlyphs = [16]rune{
 	12: '▄', 13: '▙', 14: '▟', 15: '█',
 }
 
+// quadrantOnBits collapses an 8-bit sub-pixel set (brailleDotBit convention)
+// into a 4-bit quadrant pattern: each quadrant covers 2 sub-positions, and is
+// "on" if either is set.
+func quadrantOnBits(bitset byte) byte {
+	var quadBits byte
+	for quadRow := 0; quadRow < 2; quadRow++ {
+		for quadCol := 0; quadCol < 2; quadCol++ {
+			for i := 0; i < 2; i++ {
+				if bitset&brailleDotBit(quadRow*2+i, quadCol) != 0 {
+					quadBits |= quadrantBlockBit(quadRow, quadCol)
+					break
+				}
+			}
+		}
+	}
+	return quadBits
+}
+
 // classifyGlobeCell decides one cell's glyph and color kind from its sampled
 // sub-pixels: okBits marks which of the 8 sub-positions (brailleDotBit
 // convention) fall inside the visible disc; landBits marks, among those,
-// which sampled land.
+// which sampled land. Every visible cell renders as a Unicode quadrant block
+// glyph — one consistent character set for the globe's silhouette, solid
+// terrain, and coastlines alike, rather than switching techniques per case.
 //
-// Rim cells (the disc clips some sub-pixels — the globe's outer silhouette)
-// and solid-interior cells (uniformly land or ocean) keep the original
-// braille dot glyph, since braille's sparse dots are the right tool for a
-// curve against blank space. Coastal cells (fully inside the disc, but a
-// genuine land/ocean mix) switch to a two-tone quadrant block glyph instead:
-// braille dots don't blend into a fill, so a partially-dotted glyph there
-// would just look sparse rather than smoothing the color boundary.
+// Cells fully inside the disc use the land/ocean split itself as the
+// quadrant shape, with a two-tone land(fg)/ocean(bg) style (cellTerrain):
+// this degrades correctly at the extremes — solid ocean (quadBits=0) renders
+// as a space with the ocean background showing through, solid land
+// (quadBits=0xF) as a full block, and a real coastline as a genuine split
+// glyph. Rim cells (the disc clips some sub-pixels) instead shape the glyph
+// from disc membership and pick a single flat land/ocean-majority color,
+// same as before — only the glyph technique changed, not the rim's
+// one-color-per-cell approximation.
 func classifyGlobeCell(okBits, landBits byte) (rune, globeCellKind) {
 	if okBits == 0 {
 		return ' ', cellBlank
 	}
-	if okBits != 0xFF {
-		kind := cellOcean
-		if bits.OnesCount8(landBits)*2 >= bits.OnesCount8(okBits) {
-			kind = cellLand
-		}
-		return rune(brailleBase + int(okBits)), kind
+	if okBits == 0xFF {
+		return quadrantGlyphs[quadrantOnBits(landBits)], cellTerrain
 	}
-	if landBits == 0 {
-		return rune(brailleBase + 0xFF), cellOcean
+	kind := cellOcean
+	if bits.OnesCount8(landBits)*2 >= bits.OnesCount8(okBits) {
+		kind = cellLand
 	}
-	if landBits == 0xFF {
-		return rune(brailleBase + 0xFF), cellLand
-	}
-	var quadBits byte
-	for quadRow := 0; quadRow < 2; quadRow++ {
-		for quadCol := 0; quadCol < 2; quadCol++ {
-			landCount := 0
-			for i := 0; i < 2; i++ {
-				if landBits&brailleDotBit(quadRow*2+i, quadCol) != 0 {
-					landCount++
-				}
-			}
-			if landCount >= 1 { // tie (1 of 2) favors land, matching the whole-cell vote
-				quadBits |= quadrantBlockBit(quadRow, quadCol)
-			}
-		}
-	}
-	return quadrantGlyphs[quadBits], cellCoastal
+	return quadrantGlyphs[quadrantOnBits(okBits)], kind
 }
 
 // hasLocation reports whether u has a coordinate set — mirrors the

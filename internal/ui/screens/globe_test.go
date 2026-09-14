@@ -73,19 +73,22 @@ func TestQuadrantGlyph(t *testing.T) {
 
 func TestClassifyGlobeCell(t *testing.T) {
 	tests := []struct {
-		name        string
-		okBits      byte
-		landBits    byte
-		wantKind    globeCellKind
-		wantBraille bool // true: expect rune in braille range; false: expect quadrant glyph
+		name     string
+		okBits   byte
+		landBits byte
+		wantRune rune
+		wantKind globeCellKind
 	}{
-		{"blank", 0x00, 0x00, cellBlank, true}, // ' ' isn't in brailleBase range but is checked separately below
-		{"rim all ocean", 0x0F, 0x00, cellOcean, true},
-		{"rim all land", 0x0F, 0x0F, cellLand, true},
-		{"rim tied favors land", 0x03, 0x01, cellLand, true},
-		{"solid interior ocean", 0xFF, 0x00, cellOcean, true},
-		{"solid interior land", 0xFF, 0xFF, cellLand, true},
-		{"coastal mix", 0xFF, 0x0F, cellCoastal, false},
+		{"blank", 0x00, 0x00, ' ', cellBlank},
+		// rim: shape from disc membership (sr0,sc0 only -> top-left quadrant on).
+		{"rim ocean", brailleDotBit(0, 0), 0x00, '▘', cellOcean},
+		{"rim land", brailleDotBit(0, 0), brailleDotBit(0, 0), '▘', cellLand},
+		// rim tie (1 land sub-pixel of 2 ok) favors land; shape covers both quadrants touched.
+		{"rim tied favors land", brailleDotBit(0, 0) | brailleDotBit(0, 1), brailleDotBit(0, 0), '▀', cellLand},
+		// fully inside the disc: shape+color both come from the land/ocean split.
+		{"solid interior ocean", 0xFF, 0x00, ' ', cellTerrain},
+		{"solid interior land", 0xFF, 0xFF, '█', cellTerrain},
+		{"coastal mix", 0xFF, brailleDotBit(0, 0) | brailleDotBit(1, 0) | brailleDotBit(2, 0) | brailleDotBit(0, 1), '▛', cellTerrain},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,18 +96,8 @@ func TestClassifyGlobeCell(t *testing.T) {
 			if kind != tc.wantKind {
 				t.Errorf("classifyGlobeCell(%#x,%#x) kind = %v, want %v", tc.okBits, tc.landBits, kind, tc.wantKind)
 			}
-			if tc.okBits == 0 {
-				if r != ' ' {
-					t.Errorf("classifyGlobeCell(0,0) rune = %q, want ' '", r)
-				}
-				return
-			}
-			inBrailleRange := r >= brailleBase && r <= brailleBase+0xFF
-			if tc.wantBraille && !inBrailleRange {
-				t.Errorf("classifyGlobeCell(%#x,%#x) rune = %q, want a braille glyph", tc.okBits, tc.landBits, r)
-			}
-			if !tc.wantBraille && inBrailleRange {
-				t.Errorf("classifyGlobeCell(%#x,%#x) rune = %q, want a quadrant block glyph, not braille", tc.okBits, tc.landBits, r)
+			if r != tc.wantRune {
+				t.Errorf("classifyGlobeCell(%#x,%#x) rune = %q, want %q", tc.okBits, tc.landBits, r, tc.wantRune)
 			}
 		})
 	}
