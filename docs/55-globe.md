@@ -33,7 +33,7 @@ outer edge) rather than reusing gh-firehose's own copy, whose provenance
 | `+` / `=` | zoom in |
 | `-` / `_` | zoom out |
 | `m` | toggle guild-member markers |
-| `f` | toggle follow-network markers |
+| `f` | toggle follow-network markers (currently always empty — see Data flow) |
 | `space` | pause / resume rotation |
 
 Rotation is automatic-only — there's no manual spin control. Every other
@@ -63,6 +63,14 @@ geocoding needed. On entering the tab (`activateScreen`, `layout.go`):
 3. Each username list is enqueued for a profile fetch
    (`GlobeModel.enqueue`), deduplicated against already-cached profiles and
    the queue itself.
+
+**Known limitation: follow markers never populate.** `GET /v1/follows`
+doesn't return `followerUsername`/`followedUsername` — only IDs (server-side
+bug, `docs/00-api-backlog.md`). `loadGlobeFollowsCmd`'s `add()` silently
+drops every empty username, so the follow-network queue in step 3 is always
+empty; the `f`/follows toggle has nothing to show until the API fixes this.
+Guild markers are unaffected — `GET /v1/guilds/:slug/members` does return
+`username`.
 
 `GET /v1/users/:username` — the only way to learn a *listed* user's
 location, since the follows/guild-members list responses don't include it —
