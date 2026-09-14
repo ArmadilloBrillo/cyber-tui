@@ -475,6 +475,7 @@ var menuTabs = []navTab{
 	{label: "profile", mnemonic: 'p', s: screenProfile},
 	{label: "search", mnemonic: 's', s: screenSearch, hidden: true},
 	{label: "settings", mnemonic: 'e', s: screenSettings},
+	{label: "globe", mnemonic: 'l', s: screenGlobe},
 }
 
 // visibleTabs returns the menuTabs entries shown on the tab bar/nav sidebar
@@ -781,6 +782,23 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 		// No auto-fetch: Search only has meaning once a query is submitted.
 		// Jumping in just shows whatever state it was last left in.
 		return a, nil
+	case screenGlobe:
+		a.globe = a.globe.SetSelf(a.currentUser)
+		var cmds []tea.Cmd
+		if !a.globe.GuildLoaded() {
+			if slug := a.currentUser.GuildSlug; slug != "" {
+				cmds = append(cmds, a.loadGlobeGuildMembersCmd(slug))
+			} else {
+				a.globe = a.globe.SetGuildMembers(nil)
+			}
+		}
+		if !a.globe.FollowsLoaded() {
+			cmds = append(cmds, a.loadGlobeFollowsCmd())
+		}
+		var fetchCmd tea.Cmd
+		a, fetchCmd = a.maybeStartGlobeFetch()
+		cmds = append(cmds, fetchCmd, a.scheduleGlobeAngleTickCmd())
+		return a, tea.Batch(cmds...)
 	}
 	return a, nil
 }
@@ -831,6 +849,8 @@ func delegateScreenUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
 		a.journal, cmd = a.journal.Update(msg)
 	case screenSearch:
 		a.search, cmd = a.search.Update(msg)
+	case screenGlobe:
+		a.globe, cmd = a.globe.Update(msg)
 	}
 	return a, cmd
 }

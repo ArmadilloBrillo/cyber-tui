@@ -98,8 +98,8 @@ func TestNavigateTab_LeftFromFeed_Wraps(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
 	a, _ = navigateTabBy(a, -1)
-	if a.active != screenSettings {
-		t.Errorf("expected screenSettings (wrap), got %v", a.active)
+	if a.active != screenGlobe {
+		t.Errorf("expected screenGlobe (wrap), got %v", a.active)
 	}
 }
 
@@ -124,9 +124,9 @@ func TestNavigateTab_RightFromGuilds_GoesToTopics(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// visibleTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings
+	// visibleTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings, globe
 	// (search is hidden — reachable only via "g s"/"/", never by cycling; see navigateTabBy)
-	expected := []screen{screenNotifications, screenCMail, screenChatrooms, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenFeed}
+	expected := []screen{screenNotifications, screenCMail, screenChatrooms, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenGlobe, screenFeed}
 	for i, want := range expected {
 		a, _ = navigateTabBy(a, +1)
 		if a.active != want {
@@ -138,9 +138,9 @@ func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// visibleTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings
+	// visibleTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings, globe
 	// (search is hidden — reachable only via "g s"/"/", never by cycling; see navigateTabBy)
-	expected := []screen{screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenChatrooms, screenCMail, screenNotifications, screenFeed}
+	expected := []screen{screenGlobe, screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenChatrooms, screenCMail, screenNotifications, screenFeed}
 	for i, want := range expected {
 		a, _ = navigateTabBy(a, -1)
 		if a.active != want {

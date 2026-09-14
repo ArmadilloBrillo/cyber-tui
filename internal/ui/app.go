@@ -47,6 +47,7 @@ const (
 	screenTopics
 	screenJournal
 	screenSearch
+	screenGlobe
 )
 
 type focusTarget int
@@ -424,6 +425,7 @@ type App struct {
 	topics         screens.TopicsModel
 	journal        screens.JournalModel
 	search         screens.SearchModel
+	globe          screens.GlobeModel
 
 	// postDetailReturn is the screen to go back to when ESC is pressed in PostDetail.
 	postDetailReturn screen
@@ -646,6 +648,7 @@ func NewApp(client api.Client) App {
 		topics:             screens.NewTopicsModel(),
 		journal:            screens.NewJournalModel(0),
 		search:             screens.NewSearchModel(),
+		globe:              screens.NewGlobeModel(),
 		pathPrompt:         screens.NewPathPromptModel(),
 		iconPicker:         screens.NewIconPickerModel(),
 		attachURLPrompt:    screens.NewPathPromptModel(),
@@ -936,6 +939,9 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 	if a2, cmd, ok := a.handleSearch(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleGlobe(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleUnauthorized(msg); ok {
 		return a2, cmd
 	}
@@ -975,6 +981,7 @@ func (a App) updateAll(msg tea.Msg) App {
 	a.topics, _ = a.topics.Update(msg)
 	a.journal, _ = a.journal.Update(msg)
 	a.search, _ = a.search.Update(msg)
+	a.globe, _ = a.globe.Update(msg)
 	return a
 }
 
@@ -2836,6 +2843,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.journal = a.journal.SetError(m.err)
 	case screenSearch:
 		a.search = a.search.SetError(m.err)
+	case screenGlobe:
+		a.globe = a.globe.SetError(m.err)
 	}
 	// Errors never block a screen: the per-screen SetError above only feeds an
 	// inline "couldn't load" empty-state, while the failure is announced in the
@@ -5846,6 +5855,167 @@ func (a *App) loadTopicPostsPageCmd(slug, cursor string) tea.Cmd {
 		}
 		return topicPostsPageMsg{posts: posts, cursor: nextCursor}
 	}
+}
+
+// --- Globe commands --- see docs/55-globe.md.
+
+// globeAngleTickInterval drives the rotation animation while screenGlobe is
+// active; globeFetchInterval paces the per-user profile fetches the guild
+// and follow marker sets need (GET /v1/users/:username is rate-limited to
+// 30/min — this keeps well under that even if several screens' worth of
+// usernames are queued at once).
+const globeAngleTickInterval = 150 * time.Millisecond
+const globeFetchInterval = 2500 * time.Millisecond
+
+type globeAngleTickMsg struct{ gen int }
+type globeFetchTickMsg struct{ gen int }
+type globeGuildMembersMsg struct{ usernames []string }
+type globeFollowsMsg struct{ usernames []string }
+type globeProfileLoadedMsg struct {
+	username string
+	user     model.User
+}
+type globeProfileRateLimitedMsg struct{ username string }
+type globeProfileFailedMsg struct{ username string }
+
+func (a *App) scheduleGlobeAngleTickCmd() tea.Cmd {
+	gen := a.sessionGen
+	return tea.Tick(globeAngleTickInterval, func(time.Time) tea.Msg { return globeAngleTickMsg{gen: gen} })
+}
+
+func (a *App) scheduleGlobeFetchTickCmd() tea.Cmd {
+	gen := a.sessionGen
+	return tea.Tick(globeFetchInterval, func(time.Time) tea.Msg { return globeFetchTickMsg{gen: gen} })
+}
+
+// loadGlobeGuildMembersCmd loads the first page of slug's members (ponytail:
+// first page only, add auto-pagination if globes for large guilds look
+// sparse) and excludes the caller — the self marker is drawn separately.
+func (a *App) loadGlobeGuildMembersCmd(slug string) tea.Cmd {
+	self := a.currentUser.Username
+	return func() tea.Msg {
+		members, _, err := a.client.GetGuildMembers(slug, "")
+		if err != nil {
+			return errMsg{err}
+		}
+		usernames := make([]string, 0, len(members))
+		for _, gm := range members {
+			if gm.Username != "" && gm.Username != self {
+				usernames = append(usernames, gm.Username)
+			}
+		}
+		return globeGuildMembersMsg{usernames: usernames}
+	}
+}
+
+// loadGlobeFollowsCmd loads the first page of following+followers (ponytail:
+// first page only; combined into one deduplicated set rather than two
+// separately toggleable ones) and excludes the caller.
+func (a *App) loadGlobeFollowsCmd() tea.Cmd {
+	self := a.currentUser.Username
+	return func() tea.Msg {
+		following, _, err := a.client.GetFollowing("")
+		if err != nil {
+			return errMsg{err}
+		}
+		followers, _, err := a.client.GetFollowers("")
+		if err != nil {
+			return errMsg{err}
+		}
+		seen := make(map[string]struct{}, len(following)+len(followers))
+		var usernames []string
+		add := func(username string) {
+			if username == "" || username == self {
+				return
+			}
+			if _, ok := seen[username]; ok {
+				return
+			}
+			seen[username] = struct{}{}
+			usernames = append(usernames, username)
+		}
+		for _, f := range following {
+			add(f.FollowedUsername)
+		}
+		for _, f := range followers {
+			add(f.FollowerUsername)
+		}
+		return globeFollowsMsg{usernames: usernames}
+	}
+}
+
+// loadGlobeProfileCmd resolves one username's location. A 429 requeues the
+// username (see globeProfileRateLimitedMsg) instead of surfacing the global
+// error banner; any other failure is silently dropped (ponytail: fixed
+// interval retry-forever on 429, no backoff bookkeeping — a single dead
+// account among many is not worth reporting).
+func (a *App) loadGlobeProfileCmd(username string) tea.Cmd {
+	return func() tea.Msg {
+		u, err := a.client.GetProfile(username)
+		if err != nil {
+			if errors.Is(err, api.ErrRateLimited) {
+				return globeProfileRateLimitedMsg{username: username}
+			}
+			return globeProfileFailedMsg{username: username}
+		}
+		return globeProfileLoadedMsg{username: username, user: u}
+	}
+}
+
+// maybeStartGlobeFetch begins the paced profile-fetch tick chain when the
+// pending queue is non-empty and no chain is already running.
+func (a App) maybeStartGlobeFetch() (App, tea.Cmd) {
+	if a.globe.IsFetching() || !a.globe.HasPending() {
+		return a, nil
+	}
+	a.globe = a.globe.SetFetching(true)
+	return a, a.scheduleGlobeFetchTickCmd()
+}
+
+func (a App) handleGlobe(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case globeGuildMembersMsg:
+		a.globe = a.globe.SetGuildMembers(msg.usernames)
+		a, cmd := a.maybeStartGlobeFetch()
+		return a, cmd, true
+
+	case globeFollowsMsg:
+		a.globe = a.globe.SetFollowUsernames(msg.usernames)
+		a, cmd := a.maybeStartGlobeFetch()
+		return a, cmd, true
+
+	case globeFetchTickMsg:
+		if msg.gen != a.sessionGen || a.active != screenGlobe {
+			a.globe = a.globe.SetFetching(false)
+			return a, nil, true
+		}
+		username, next, ok := a.globe.NextPending()
+		a.globe = next
+		if !ok {
+			a.globe = a.globe.SetFetching(false)
+			return a, nil, true
+		}
+		return a, tea.Batch(a.loadGlobeProfileCmd(username), a.scheduleGlobeFetchTickCmd()), true
+
+	case globeProfileLoadedMsg:
+		a.globe = a.globe.SetProfile(msg.username, msg.user)
+		return a, nil, true
+
+	case globeProfileRateLimitedMsg:
+		a.globe = a.globe.Requeue(msg.username)
+		return a, nil, true
+
+	case globeProfileFailedMsg:
+		return a, nil, true // silent drop — see loadGlobeProfileCmd
+
+	case globeAngleTickMsg:
+		if msg.gen != a.sessionGen || a.active != screenGlobe {
+			return a, nil, true // chain dies here; activateScreen restarts it on return
+		}
+		a.globe = a.globe.Advance()
+		return a, a.scheduleGlobeAngleTickCmd(), true
+	}
+	return a, nil, false
 }
 
 // --- Search commands ---

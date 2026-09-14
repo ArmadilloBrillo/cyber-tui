@@ -314,7 +314,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 | `WithAutoLogin(email, password)` | method | Pre-fills credentials for programmatic login |
 | `WithSavedEmail(email)` | method | Pre-fills email field on login screen |
 
-**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenGuilds`, `screenTopics`, `screenJournal`, `screenSearch`, `screenSettings`
+**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenGuilds`, `screenTopics`, `screenJournal`, `screenSearch`, `screenSettings`, `screenGlobe`
 
 **Responsibilities:**
 
@@ -599,6 +599,32 @@ Full-text search across users, posts, and replies — tab `search` (no number ke
 Key types: `SearchModel`, `SubmitSearchMsg`, `DrillSearchTypeMsg`, `LoadMoreSearchMsg`, `ShowSearchPostMsg`, `ShowSearchReplyMsg`, `LeaveSearchMsg`  
 Key methods: `SetPreview(preview, query)`, `SetTypeResults(hitType, posts, replies, users, cursor)`, `AppendTypeResults(...)`, `FocusQuery()`, `InputFocused()`, `IsInTypeList()`, `LastQuery()`
 
+#### `globe.go` / `globe_landmask.go`
+
+Rotating braille-dot globe plotting the caller's own location plus two
+toggleable marker sets (guild members, combined follow network) — tab
+`globe`, no numeric alias (12th tab), reached via `g l` or cycling. See
+`docs/55-globe.md`.
+
+- Pure sphere-projection math (`sphereProject`/`markerScreenPos`/`landAt`) over
+  a 720×360 (0.5°/cell) land/ocean bitmap generated from Natural Earth's
+  public-domain 1:50m dataset — no rendering dependency, no API client held
+  by the screen
+- Renders in Unicode braille dots (`brailleDotBit`, U+2800 base): each pane
+  cell is sampled as a 2×4 sub-pixel grid (`globeSubCols`/`globeSubRows`) for
+  8x the resolution of a plain block-character grid; a cell's color is
+  majority-vote between its land/ocean sub-samples, and marker glyphs
+  (`@`/`o`/`*`) fully override the braille pattern in their cell
+- `App` paces per-user profile fetches (needed for guild/follow marker
+  locations — the list endpoints don't include them) well under the
+  `GET /v1/users/:username` 30/min rate limit; markers pop in progressively
+- `+`/`-` zoom, `m`/`f` toggle guild/follow markers, `space` pauses rotation;
+  no manual spin control (matches every other single-pane screen's avoidance
+  of arrow/`h`/`l` keys, which are claimed by tab-cycling/list-nav)
+
+Key types: `GlobeModel`  
+Key methods: `SetSelf(user)`, `SetGuildMembers(usernames)`, `SetFollowUsernames(usernames)`, `SetProfile(username, user)`, `NextPending()`, `Requeue(username)`, `Advance()`
+
 #### `compose.go`
 
 Reusable multi-line text editor embedded in Feed, PostDetail, Profile, and C-Mail.
@@ -784,7 +810,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 
 ### Global
 
-Two navigation schemes reach the same 11 screens — pick whichever is faster
+Two navigation schemes reach the same 12 screens — pick whichever is faster
 for a given target. Both are derived from the single `menuTabs` slice in
 `internal/ui/layout.go`, so TabsLayout and MillerLayout can never disagree
 about what a given key does (a bug that existed before this scheme and was
@@ -806,20 +832,21 @@ tab bar:
 | `9` | Profile |
 
 **Leader key** — `g` ("go to") arms a pending state; the very next keypress
-resolves against a mnemonic map to jump directly to any of the 11 screens,
-including Search and Settings which have no numeric alias. An unmapped
-follow-up key silently cancels the pending state rather than doing anything.
-The mnemonic letter is shown highlighted inline within each tab's label on
-the tab bar / nav sidebar as a hint:
+resolves against a mnemonic map to jump directly to any of the 12 screens,
+including Search, Settings, and Globe which have no numeric alias. An
+unmapped follow-up key silently cancels the pending state rather than doing
+anything. The mnemonic letter is shown highlighted inline within each tab's
+label on the tab bar / nav sidebar as a hint:
 
 | Chord | Screen | Chord | Screen |
 |---|---|---|---|
-| `g f` | Feed | `g g` | Guilds |
-| `g n` | Notifications | `g t` | Topics |
-| `g m` | C-Mail | `g p` | Profile |
-| `g i` | CIRC | `g s` | Search |
-| `g j` | Journal | `g e` | Settings |
+| `g f` | Feed | `g t` | Topics |
+| `g n` | Notifications | `g p` | Profile |
+| `g m` | C-Mail | `g s` | Search |
+| `g i` | CIRC | `g e` | Settings |
+| `g j` | Journal | `g l` | Globe |
 | `g b` | Bookmarks | | |
+| `g g` | Guilds | | |
 
 Only plain letters are used — no `alt+`, function keys, or `ctrl+`/`shift+`
 combinations — since those are caught inconsistently by terminal emulators,
@@ -1137,6 +1164,7 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 | **Profile navigation depth** | Navigating from a Following/Followers tab to another user's profile is single-level; ESC returns to the original `profileReturn` destination, not the intermediate profile |
 | **Feed position — deep pagination** | When returning to the Feed tab, the selected post is restored by ID from the fresh first-page load. If the post was reached via pagination it will not be in page 1 and the feed falls back to the top. Fix options: re-fetch pages sequentially until found (expensive), or skip the tab-switch reload (stale data). Neither is warranted for typical usage. |
 | **Ambiguous-width character stripping** | Unicode EAW = "A" characters (kaomoji symbols, `©`, `®`, `™`, Greek letters, etc.) are stripped at two points: (1) `stripAmbiguousRunes` in `internal/ui/markdown/renderer.go` strips non-letter ones from post/reply/cIRC content at render time; (2) `filterAmbiguousKeyMsg` in `internal/ui/screens/shared.go` intercepts `tea.KeyRunes` messages before they reach any `textarea` or `textinput` component (compose, topics, profile fields, C-Mail, chatrooms). Their column width is undefined and varies by terminal/font, causing border overflow and cursor misalignment. Wide (CJK), halfwidth, zero-width, and *letter* characters (`unicode.IsLetter`) are unaffected even if ambiguous-width — this is why the icon picker's kaomoji corpus (`internal/emoji/kaomoji_data.go`) was curated to prefer letters and ASCII lookalikes (`v`, `>`/`<`, `o`, `^`, `Ɐ`, `ღ`, `口`, etc.) over the raw symbols they visually resemble: those symbols displayed fine in the picker itself (its bordered box auto-sizes to content, so a width-1/2 mismeasurement is invisible) but were silently blanked to spaces once the same text passed through `stripAmbiguousRunes` on post/cIRC render. |
+| **Globe — no global user directory, first-page-only marker lists** | The API has no endpoint listing all users, so the globe can only ever plot the caller's own location plus their guild's members and follow network (`docs/55-globe.md`). Both lists use the API's default first page only — a guild or follow network larger than one page shows a subset of members until this is revisited with auto-pagination. |
 | **C-Mail detail viewport height has no floor — potential panic on a very short terminal** | `CMailModel`'s `tea.WindowSizeMsg` handler computes `detailH := msg.Height - theme.ChromeHeight - cmailDetailChrome` with no `if detailH < 1 { detailH = 1 }` clamp, unlike `ChatroomsModel.viewportHeight()`'s equivalent. A short enough terminal height drives it negative, and bubbles' `viewport.Model.visibleLines()`/`GotoBottom()` panics on a negative `Height` (slice bounds out of range). Not hit by any real terminal size — found via an overly-aggressive test height (5 rows) while testing the inline-images sticky-bottom fix (`docs/45-inline-images-everywhere.md`) — but worth a one-line fix (mirror `ChatroomsModel`'s clamp) next time `cmail.go` is touched. |
 
 ---
