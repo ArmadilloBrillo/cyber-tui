@@ -2,10 +2,11 @@
 
 ## Overview
 
-A rotating braille-dot globe plotting the caller's own location plus two marker
-sets they can toggle: their guild's members, and their combined follow
-network (following + followers, one set — not two). Reached via `g l` or
-arrow-cycling (it has no numeric alias — it's the 12th tab).
+A rotating globe, rendered in Unicode quadrant block characters, plotting the
+caller's own location plus two marker sets they can toggle: their guild's
+members, and their combined follow network (following + followers, one set —
+not two). Reached via `g l` or arrow-cycling (it has no numeric alias — it's
+the 12th tab).
 
 There is no global user directory in the cyberspace.online API — only
 per-username profile lookup, a follows list, and a guild-members list — so
@@ -40,8 +41,9 @@ single-pane screen in this app already avoids claiming bare arrow keys/`h`/`l`
 (they're swallowed by tab-cycling or list navigation depending on layout), so
 Globe follows that same convention rather than carving out an exception.
 
-Markers: `@` self, `o` guild member, `*` follow network. Self is drawn last
-so it always wins a cell shared with another marker.
+Markers: `@` self, `o` guild member, `*` follow network, each followed by the
+user's username as a label. Self is drawn last so it always wins a cell (and
+any label overlap) shared with another marker.
 
 ---
 
@@ -81,41 +83,54 @@ looking at; both resume automatically on return.
 ## Rendering
 
 `GlobeModel.View()` (`internal/ui/screens/globe.go`) renders in Unicode
-braille dots (U+2800 base), not one character per pane cell: each terminal
-cell is subdivided into a 2-wide × 4-tall sub-pixel grid
-(`globeSubCols`/`globeSubRows`), giving 8x the addressable resolution of a
-plain `#`/`.` block grid in the same pane — a visibly rounder circle edge and
-finer coastline shape. Braille's 2×4 subdivision of a character cell (which
-is itself roughly 1-wide × 2-tall in most monospace fonts) happens to produce
-sub-pixels that are approximately square, so the aspect-correction constant
-(`globeSubCellAspect`) is ~1.0 here rather than the ~0.5 a whole-character
-grid would need.
+quadrant block characters (`▘▝▀▖▌▞▛▗▚▐▜▄▙▟█`, U+2580–259F range), not one flat
+character per pane cell: each terminal cell is subdivided into an 8-position
+sub-pixel sampling grid (2-wide × 4-tall, `globeSubCols`/`globeSubRows`,
+`brailleDotBit` numbering), collapsed down to a 2×2 quadrant pattern per cell
+for the actual glyph (`quadrantOnBits`/`quadrantGlyphs`). Braille's 2×4
+subdivision of a character cell (itself roughly 1-wide × 2-tall in most
+monospace fonts) happens to produce sub-pixels that are approximately square,
+so the aspect-correction constant (`globeSubCellAspect`) is ~1.0 here rather
+than the ~0.5 a whole-character grid would need — that geometry is the only
+thing "braille" about this anymore; no braille glyph is ever rendered.
 
 For each of a cell's 8 sub-positions, `sphereProject` inverts a normalized
 offset — through the current rotation angle — back to a lat/lon on the
 unrotated globe; positions outside the unit circle contribute nothing.
 `landAt` samples the 720×360 `globeLandmask` bitmap for land vs. ocean at each
-"on" sub-position, and the cell's braille rune is `brailleDotBit`-packed from
-every on sub-position. A terminal can only color a whole character cell one
-color, so the cell's color is decided by majority vote between its land and
-ocean sub-position counts — a cell straddling a coastline picks whichever
-had more samples.
+"on" sub-position. `classifyGlobeCell(okBits, landBits)` then picks the glyph
+and color:
+- **Rim cells** (the disc clips some sub-pixels — the outer silhouette): the
+  quadrant shape comes from which sub-positions are inside the disc, colored
+  with a single flat land/ocean-majority color (a terminal can only color a
+  whole character cell one color, so a cell straddling a coastline here picks
+  whichever had more samples).
+- **Cells fully inside the disc** (interior terrain, land or ocean or a
+  genuine coastline mix): the quadrant shape comes from the land/ocean split
+  itself, rendered two-tone — land as the glyph's foreground, ocean as its
+  background. This degrades correctly at the extremes: solid ocean is a space
+  with the ocean background showing through, solid land is a full block
+  (`█`), and a real coastline is a genuine split glyph — a proportional fill
+  a dot-based glyph couldn't represent, since braille dots don't blend into a
+  color the way a block character's solid fill does.
 
-Markers (`@`/`o`/`*`) are plotted using the inverse function,
-`markerScreenPos`, at the same sub-pixel resolution as terrain (so a marker
-aligns with the coastline under it) before collapsing to the character cell
-that sub-pixel belongs to — where they fully override whatever braille
-pattern would otherwise render there, since a marker needs to read as an
-unambiguous symbol, not dots. `ok = false` means the point is on the far side
-of the globe right now — a guild member on the other side of the world simply
-isn't visible until the globe rotates around to them, exactly like a real
-globe.
+Markers (`@`/`o`/`*`, each followed by the user's username as a text label)
+are plotted using the inverse function, `markerScreenPos`, at the same
+sub-pixel resolution as terrain (so a marker aligns with the coastline under
+it) before collapsing to the character cell that sub-pixel belongs to — where
+the glyph and label fully override whatever terrain would otherwise render
+there, since a marker needs to read as an unambiguous symbol, not blend into
+the terrain. `ok = false` means the point is on the far side of the globe
+right now — a guild member on the other side of the world simply isn't
+visible until the globe rotates around to them, exactly like a real globe.
 
 `sphereProject`/`markerScreenPos`/`landAt` are pure functions operating in
 normalized `[-1,1]` space, unaware of sub-pixel vs. whole-cell sampling, and
 are unit-tested directly, including a round-trip check between the first two
-(`globe_test.go`). `brailleDotBit`'s dot-numbering → bit mapping is tested
-separately (`TestBrailleDotBit`).
+(`globe_test.go`). `brailleDotBit`'s dot-numbering → bit mapping and
+`quadrantOnBits`/`quadrantGlyphs`/`classifyGlobeCell`'s glyph selection are
+each tested separately (`TestBrailleDotBit`, `TestQuadrantBlockBit`,
+`TestQuadrantGlyph`, `TestClassifyGlobeCell`).
 
 ---
 
@@ -128,6 +143,10 @@ separately (`TestBrailleDotBit`).
 - 429s on the per-profile fetch retry forever at a fixed interval; no
   exponential backoff.
 - No `View()` golden-output tests — cosmetic rendering, not logic.
+- Username labels have no collision avoidance: markers close together on
+  screen just overwrite each other's labels in draw order (follows, then
+  guild, then self last) — acceptable for a screen with at most a handful of
+  markers visible at once, revisit if that stops being true.
 
 ---
 
@@ -135,5 +154,5 @@ separately (`TestBrailleDotBit`).
 
 | File | Tests |
 |------|-------|
-| `internal/ui/screens/globe_test.go` | `TestBrailleDotBit`, `TestViewOrientationNorthAtTop`, `TestSphereProjectCenter`, `TestSphereProjectOutsideDisc`, `TestSphereProjectMarkerRoundTrip`, `TestMarkerScreenPosFarSide`, `TestLandAt` (synthetic fixture bitmap, incl. longitude wraparound), `TestGlobeZoomClamps`, `TestGlobeToggleKeys`, `TestGlobeSetProfileOnlyKeepsLocated`, `TestGlobeEnqueueDedup`, `TestGlobeNextPendingAndRequeue`, `TestGlobeAdvancePausable` |
+| `internal/ui/screens/globe_test.go` | `TestBrailleDotBit`, `TestQuadrantBlockBit`, `TestQuadrantGlyph`, `TestClassifyGlobeCell`, `TestViewOrientationNorthAtTop`, `TestViewMarkerLabelsUsername`, `TestSphereProjectCenter`, `TestSphereProjectOutsideDisc`, `TestSphereProjectMarkerRoundTrip`, `TestMarkerScreenPosFarSide`, `TestLandAt` (synthetic fixture bitmap, incl. longitude wraparound), `TestGlobeZoomClamps`, `TestGlobeToggleKeys`, `TestGlobeSetProfileOnlyKeepsLocated`, `TestGlobeEnqueueDedup`, `TestGlobeNextPendingAndRequeue`, `TestGlobeAdvancePausable` |
 | `internal/ui/app_test.go` | `TestNavigateTab_*` updated for the 12th tab (Globe wraps left from Feed, sits last in the cycle) |

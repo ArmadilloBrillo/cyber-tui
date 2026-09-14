@@ -140,6 +140,22 @@ func TestViewOrientationNorthAtTop(t *testing.T) {
 	}
 }
 
+// TestViewMarkerLabelsUsername locks in that a marker's username renders as
+// a label immediately following its glyph, not just the bare glyph alone.
+func TestViewMarkerLabelsUsername(t *testing.T) {
+	m := NewGlobeModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 40})
+	m = m.SetSelf(model.User{Username: "ragnar", LocationLatitude: 10, LocationLongitude: 10})
+
+	lines := strings.Split(stripANSIForTest(m.View()), "\n")
+	for _, line := range lines {
+		if i := strings.IndexByte(line, '@'); i >= 0 && strings.HasPrefix(line[i+1:], "ragnar") {
+			return
+		}
+	}
+	t.Error("expected the self marker's username label \"ragnar\" immediately after '@'")
+}
+
 func stripANSIForTest(s string) string {
 	var b strings.Builder
 	inEsc := false

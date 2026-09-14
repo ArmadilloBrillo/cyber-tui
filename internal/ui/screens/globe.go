@@ -417,9 +417,22 @@ func (m GlobeModel) View() string {
 		subCol := int(math.Round(subCx + dx*rx))
 		subRow := int(math.Round(subCy - dy*ry))
 		col, row := subCol/globeSubCols, subRow/globeSubRows
-		if row >= 0 && row < m.height && col >= 0 && col < m.width {
-			runes[row][col] = glyph
-			kinds[row][col] = kind
+		if row < 0 || row >= m.height || col < 0 || col >= m.width {
+			return
+		}
+		runes[row][col] = glyph
+		kinds[row][col] = kind
+		// Username label follows the marker glyph on the same row, clipped to
+		// the pane — ponytail: no collision avoidance between nearby labels,
+		// they just overwrite each other in draw order (self drawn last, so
+		// self always wins, same as the marker glyph itself).
+		for i, r := range []rune(u.Username) {
+			c := col + 1 + i
+			if c >= m.width {
+				break
+			}
+			runes[row][c] = r
+			kinds[row][c] = kind
 		}
 	}
 
