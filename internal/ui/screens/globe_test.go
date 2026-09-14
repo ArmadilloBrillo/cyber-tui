@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
 func TestBrailleDotBit(t *testing.T) {
@@ -109,7 +110,7 @@ func TestClassifyGlobeCell(t *testing.T) {
 // (Regression: the first implementation had this inverted.)
 func TestViewOrientationNorthAtTop(t *testing.T) {
 	m := NewGlobeModel()
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 40})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 60, Height: 40 + theme.ChromeHeight})
 	m = m.SetSelf(model.User{Username: "north", LocationLatitude: 89, LocationLongitude: 0})
 	m = m.SetGuildMembers([]string{"south"})
 	m = m.SetProfile("south", model.User{Username: "south", LocationLatitude: -89, LocationLongitude: 0})
