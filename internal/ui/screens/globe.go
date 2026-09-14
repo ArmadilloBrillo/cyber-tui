@@ -314,7 +314,7 @@ func (m GlobeModel) Update(msg tea.Msg) (GlobeModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		m.height = msg.Height
+		m.height = max(1, msg.Height-theme.ChromeHeight)
 		return m, nil
 
 	case tea.KeyMsg:
