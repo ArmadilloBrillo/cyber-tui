@@ -41,8 +41,10 @@ single-pane screen in this app already avoids claiming bare arrow keys/`h`/`l`
 (they're swallowed by tab-cycling or list navigation depending on layout), so
 Globe follows that same convention rather than carving out an exception.
 
-Markers: `@` self, `o` guild member, `*` follow network, each followed by the
-user's username as a label. Self is drawn last so it always wins a cell (and
+Markers: `@` self, `#` guild member, `*` follow network, each followed by the
+user's username as a label — all three are non-alphanumeric symbols so a
+label never reads as part of the username itself (e.g. `oragnar` would be
+ambiguous; `#ragnar` isn't). Self is drawn last so it always wins a cell (and
 any label overlap) shared with another marker.
 
 ---
@@ -114,7 +116,7 @@ and color:
   a dot-based glyph couldn't represent, since braille dots don't blend into a
   color the way a block character's solid fill does.
 
-Markers (`@`/`o`/`*`, each followed by the user's username as a text label)
+Markers (`@`/`#`/`*`, each followed by the user's username as a text label)
 are plotted using the inverse function, `markerScreenPos`, at the same
 sub-pixel resolution as terrain (so a marker aligns with the coastline under
 it) before collapsing to the character cell that sub-pixel belongs to — where

@@ -444,7 +444,7 @@ func (m GlobeModel) View() string {
 	}
 	if m.showGuild {
 		for _, u := range m.guildMarkers() {
-			plot(u, 'o', cellGuild)
+			plot(u, '#', cellGuild)
 		}
 	}
 	if m.hasSelf && hasLocation(m.self) {
