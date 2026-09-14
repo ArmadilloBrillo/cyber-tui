@@ -229,6 +229,8 @@ func (l TabsLayout) renderActiveScreen(a App) string {
 		return a.journal.View()
 	case screenSearch:
 		return a.search.View()
+	case screenGlobe:
+		return a.globe.View()
 	}
 	return ""
 }
@@ -416,6 +418,8 @@ func (l TabsLayout) screenHints(a App) []hint {
 			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "open / see all"}, {"esc", "edit query"}, more}
+	case screenGlobe:
+		return []hint{{"+/-", "zoom"}, {"m", "guild"}, {"space", "pause"}}
 	case screenSettings:
 		base := []hint{{"↑↓", "navigate"}, {"space", "toggle"}, {"tab", "cycle"}, more}
 		if a.settingsScreen.IsDirty() {

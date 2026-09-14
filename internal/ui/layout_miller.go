@@ -399,6 +399,8 @@ func (l MillerLayout) screenTitle(a App) string {
 		return "chat"
 	case screenPostDetail:
 		return "thread"
+	case screenGlobe:
+		return "globe"
 	}
 	return ""
 }
@@ -429,6 +431,8 @@ func (l MillerLayout) renderContent(a App) string {
 		return a.journal.View()
 	case screenSearch:
 		return a.search.View()
+	case screenGlobe:
+		return a.globe.View()
 	}
 	return ""
 }
