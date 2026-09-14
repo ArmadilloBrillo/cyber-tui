@@ -2,6 +2,7 @@ package screens
 
 import (
 	"math"
+	"math/bits"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,6 +38,7 @@ const (
 	cellBlank globeCellKind = iota
 	cellOcean
 	cellLand
+	cellCoastal
 	cellFollow
 	cellGuild
 	cellSelf
@@ -46,6 +48,8 @@ func globeCellStyle(k globeCellKind) lipgloss.Style {
 	switch k {
 	case cellLand:
 		return lipgloss.NewStyle().Foreground(theme.ColorGreen)
+	case cellCoastal:
+		return lipgloss.NewStyle().Foreground(theme.ColorGreen).Background(theme.ColorMuted)
 	case cellFollow:
 		return lipgloss.NewStyle().Foreground(theme.ColorMeta).Bold(true)
 	case cellGuild:
@@ -91,6 +95,68 @@ func brailleDotBit(subRow, subCol int) byte {
 }
 
 const brailleBase = 0x2800
+
+// quadrantBlockBit returns the coastal-quadrant bit for a 2x2 split of a
+// character cell (quadRow/quadCol each 0-1): 1=top-left, 2=top-right,
+// 4=bottom-left, 8=bottom-right.
+func quadrantBlockBit(quadRow, quadCol int) byte {
+	return 1 << byte(quadRow*2+quadCol)
+}
+
+// quadrantGlyphs maps a 4-bit quadrant pattern (quadrantBlockBit convention)
+// to the Unicode block element that fills exactly those quadrants.
+var quadrantGlyphs = [16]rune{
+	0: ' ', 1: '▘', 2: '▝', 3: '▀',
+	4: '▖', 5: '▌', 6: '▞', 7: '▛',
+	8: '▗', 9: '▚', 10: '▐', 11: '▜',
+	12: '▄', 13: '▙', 14: '▟', 15: '█',
+}
+
+// classifyGlobeCell decides one cell's glyph and color kind from its sampled
+// sub-pixels: okBits marks which of the 8 sub-positions (brailleDotBit
+// convention) fall inside the visible disc; landBits marks, among those,
+// which sampled land.
+//
+// Rim cells (the disc clips some sub-pixels — the globe's outer silhouette)
+// and solid-interior cells (uniformly land or ocean) keep the original
+// braille dot glyph, since braille's sparse dots are the right tool for a
+// curve against blank space. Coastal cells (fully inside the disc, but a
+// genuine land/ocean mix) switch to a two-tone quadrant block glyph instead:
+// braille dots don't blend into a fill, so a partially-dotted glyph there
+// would just look sparse rather than smoothing the color boundary.
+func classifyGlobeCell(okBits, landBits byte) (rune, globeCellKind) {
+	if okBits == 0 {
+		return ' ', cellBlank
+	}
+	if okBits != 0xFF {
+		kind := cellOcean
+		if bits.OnesCount8(landBits)*2 >= bits.OnesCount8(okBits) {
+			kind = cellLand
+		}
+		return rune(brailleBase + int(okBits)), kind
+	}
+	if landBits == 0 {
+		return rune(brailleBase + 0xFF), cellOcean
+	}
+	if landBits == 0xFF {
+		return rune(brailleBase + 0xFF), cellLand
+	}
+	var quadBits byte
+	for quadRow := 0; quadRow < 2; quadRow++ {
+		for quadCol := 0; quadCol < 2; quadCol++ {
+			landCount := 0
+			for i := 0; i < 2; i++ {
+				if landBits&brailleDotBit(quadRow*2+i, quadCol) != 0 {
+					landCount++
+				}
+			}
+			if landCount >= 1 { // tie (1 of 2) favors land, matching the whole-cell vote
+				quadBits |= quadrantBlockBit(quadRow, quadCol)
+			}
+		}
+	}
+	return quadrantGlyphs[quadBits], cellCoastal
+}
 
 // hasLocation reports whether u has a coordinate set — mirrors the
 // zero-value check profile.go already uses to decide whether to render a
@@ -315,8 +381,7 @@ func (m GlobeModel) View() string {
 		runes[row] = make([]rune, m.width)
 		kinds[row] = make([]globeCellKind, m.width)
 		for col := range runes[row] {
-			var bits byte
-			var land, ocean int
+			var okBits, landBits byte
 			for sr := 0; sr < globeSubRows; sr++ {
 				for sc := 0; sc < globeSubCols; sc++ {
 					subCol := col*globeSubCols + sc
@@ -330,25 +395,14 @@ func (m GlobeModel) View() string {
 					if !ok {
 						continue
 					}
-					bits |= brailleDotBit(sr, sc)
+					bit := brailleDotBit(sr, sc)
+					okBits |= bit
 					if landAt(lat, lon, globeLandmask[:], globeMapWidth, globeMapHeight) {
-						land++
-					} else {
-						ocean++
+						landBits |= bit
 					}
 				}
 			}
-			if bits == 0 {
-				runes[row][col] = ' '
-				kinds[row][col] = cellBlank
-				continue
-			}
-			runes[row][col] = rune(brailleBase + int(bits))
-			if land >= ocean {
-				kinds[row][col] = cellLand
-			} else {
-				kinds[row][col] = cellOcean
-			}
+			runes[row][col], kinds[row][col] = classifyGlobeCell(okBits, landBits)
 		}
 	}
 

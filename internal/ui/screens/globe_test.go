@@ -30,6 +30,86 @@ func TestBrailleDotBit(t *testing.T) {
 	}
 }
 
+func TestQuadrantBlockBit(t *testing.T) {
+	seen := make(map[byte]bool)
+	var all byte
+	for quadRow := 0; quadRow < 2; quadRow++ {
+		for quadCol := 0; quadCol < 2; quadCol++ {
+			bit := quadrantBlockBit(quadRow, quadCol)
+			if bit == 0 || bit&(bit-1) != 0 {
+				t.Fatalf("quadrantBlockBit(%d,%d) = %#x, want a single set bit", quadRow, quadCol, bit)
+			}
+			if seen[bit] {
+				t.Fatalf("quadrantBlockBit(%d,%d) = %#x, duplicate bit", quadRow, quadCol, bit)
+			}
+			seen[bit] = true
+			all |= bit
+		}
+	}
+	if all != 0x0F {
+		t.Errorf("all 4 quadrant bits OR together to %#x, want 0x0f", all)
+	}
+}
+
+func TestQuadrantGlyph(t *testing.T) {
+	want := map[byte]rune{
+		0: ' ', 1: '▘', 2: '▝', 3: '▀',
+		4: '▖', 5: '▌', 6: '▞', 7: '▛',
+		8: '▗', 9: '▚', 10: '▐', 11: '▜',
+		12: '▄', 13: '▙', 14: '▟', 15: '█',
+	}
+	seen := make(map[rune]bool)
+	for bits := 0; bits < 16; bits++ {
+		got := quadrantGlyphs[bits]
+		if got != want[byte(bits)] {
+			t.Errorf("quadrantGlyphs[%d] = %q, want %q", bits, got, want[byte(bits)])
+		}
+		if seen[got] {
+			t.Errorf("quadrantGlyphs[%d] = %q, duplicate glyph", bits, got)
+		}
+		seen[got] = true
+	}
+}
+
+func TestClassifyGlobeCell(t *testing.T) {
+	tests := []struct {
+		name        string
+		okBits      byte
+		landBits    byte
+		wantKind    globeCellKind
+		wantBraille bool // true: expect rune in braille range; false: expect quadrant glyph
+	}{
+		{"blank", 0x00, 0x00, cellBlank, true}, // ' ' isn't in brailleBase range but is checked separately below
+		{"rim all ocean", 0x0F, 0x00, cellOcean, true},
+		{"rim all land", 0x0F, 0x0F, cellLand, true},
+		{"rim tied favors land", 0x03, 0x01, cellLand, true},
+		{"solid interior ocean", 0xFF, 0x00, cellOcean, true},
+		{"solid interior land", 0xFF, 0xFF, cellLand, true},
+		{"coastal mix", 0xFF, 0x0F, cellCoastal, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, kind := classifyGlobeCell(tc.okBits, tc.landBits)
+			if kind != tc.wantKind {
+				t.Errorf("classifyGlobeCell(%#x,%#x) kind = %v, want %v", tc.okBits, tc.landBits, kind, tc.wantKind)
+			}
+			if tc.okBits == 0 {
+				if r != ' ' {
+					t.Errorf("classifyGlobeCell(0,0) rune = %q, want ' '", r)
+				}
+				return
+			}
+			inBrailleRange := r >= brailleBase && r <= brailleBase+0xFF
+			if tc.wantBraille && !inBrailleRange {
+				t.Errorf("classifyGlobeCell(%#x,%#x) rune = %q, want a braille glyph", tc.okBits, tc.landBits, r)
+			}
+			if !tc.wantBraille && inBrailleRange {
+				t.Errorf("classifyGlobeCell(%#x,%#x) rune = %q, want a quadrant block glyph, not braille", tc.okBits, tc.landBits, r)
+			}
+		})
+	}
+}
+
 // TestViewOrientationNorthAtTop locks in that increasing screen row maps to
 // decreasing latitude — the north pole renders near the top of the pane and
 // the south pole near the bottom, matching every real map/globe convention.
