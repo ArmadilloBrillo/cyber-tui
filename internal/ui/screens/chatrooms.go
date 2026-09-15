@@ -380,8 +380,16 @@ func isKnownStyleCombo(cmd string) bool {
 // isKnownSlashCommand reports whether cmd (lowercased, "/"-prefixed) is a
 // command the server accepts for the calling screen. extra carries any
 // screen-specific commands on top of the common set (e.g. circOnlySlashCommands).
+// "/dice:SIDES" / "/dice:SIDES:COUNT" is a colon-separated shorthand with no
+// space before the notation, so it arrives here as one whole token (e.g.
+// "/dice:20:2") rather than splitting into a bare "/dice" command plus
+// arguments the way "/dice 4d6kh3" does — the HasPrefix carve-out below
+// recognizes it the same way isKnownStyleCombo recognizes "+"-chained
+// styles. As with every other command, only the name is checked; malformed
+// notation still 400s server-side.
 func isKnownSlashCommand(cmd string, extra map[string]bool) bool {
-	return baseSlashCommands[cmd] || extra[cmd] || isKnownStyleCombo(cmd)
+	return baseSlashCommands[cmd] || extra[cmd] || isKnownStyleCombo(cmd) ||
+		strings.HasPrefix(cmd, "/dice:")
 }
 
 // RoomOpenedMsg is emitted when the user enters a chatroom. App uses it to call MarkRoomRead.

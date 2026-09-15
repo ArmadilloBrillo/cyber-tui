@@ -237,6 +237,8 @@ func TestCMail_Send_KnownCommandStillSends(t *testing.T) {
 		"/spoiler secret",
 		"/gif https://example.com/a.gif",
 		"/song https://youtu.be/x | artist | title",
+		"/dice 4d6kh3",
+		"/dice:20:2",
 	}
 	for _, body := range cases {
 		t.Run(body, func(t *testing.T) {

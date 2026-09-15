@@ -807,6 +807,36 @@ func TestMentionCandidatePool_SkipsSystemMessages(t *testing.T) {
 	}
 }
 
+// --- isKnownSlashCommand: "/dice:SIDES[:COUNT]" colon shorthand ---
+//
+// The shorthand has no space before its notation, so strings.Fields(val)[0]
+// (both call sites' cmd-extraction) captures the whole token, e.g.
+// "/dice:20:2" — isKnownSlashCommand must recognize it via a prefix carve-out
+// rather than the exact-match baseSlashCommands lookup /dice alone gets.
+
+func TestIsKnownSlashCommand_DiceColonShorthand(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"/dice", true},           // bare command, exact-match baseSlashCommands
+		{"/dice:6", true},         // "/dice:SIDES"
+		{"/dice:6:2", true},       // "/dice:SIDES:COUNT"
+		{"/dice:", true},          // malformed notation — server's to reject, not ours
+		{"/dicetest:1:2", false},  // must not false-positive on an unrelated command
+		{"/dicexyz", false},
+	}
+	for _, tt := range tests {
+		if got := isKnownSlashCommand(tt.cmd, nil); got != tt.want {
+			t.Errorf("isKnownSlashCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
+		}
+	}
+}
+// The actual send-path regression case ("/dice:20:2" reaching
+// SendRoomMessageMsg instead of being rejected locally) is covered by
+// TestChatrooms_Send_KnownCommandStillSends in screens_test.go, alongside
+// the other known-command cases.
+
 func TestMentionTab_CompletesUserFromHistoryNotOnline(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	m.roomUsers = []model.RoomUser{{Username: "zed"}}
