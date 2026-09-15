@@ -489,6 +489,13 @@ type App struct {
 	// (an OSC 9 escape to stdout) for new C-Mail / activity while backgrounded
 	// — see docs/53-desktop-notifications.md. Off by default.
 	desktopNotifications bool
+	// showGlobeTab is the local config value (inverted from
+	// config.Config.HideGlobeTab) controlling whether the Globe tab appears
+	// on the tab bar/nav sidebar and in arrow-key cycling and the "g l"
+	// leader chord — see visibleTabs/leaderRows in layout.go. Defaults to
+	// true (tab shown) via NewApp; WithSavedPreferences overrides it from
+	// disk on launch.
+	showGlobeTab bool
 	// focused / focusReported track terminal focus via tea.FocusMsg /
 	// tea.BlurMsg (enabled with tea.WithReportFocus). A desktop notification
 	// is suppressed only when we positively know the terminal is focused —
@@ -635,6 +642,7 @@ func NewApp(client api.Client) App {
 		focus:              focusMenu,
 		loc:                time.UTC,
 		wanderLust:         false,
+		showGlobeTab:       true,
 		login:              screens.NewLoginModel(""),
 		feed:               screens.NewFeedModel(),
 		chatrooms:          screens.NewChatroomsModel("", client),
@@ -693,6 +701,7 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	a.feedManualRefreshOnly = s.FeedManualRefreshOnly
 	a.typingIndicatorsEnabled = !s.TypingIndicatorsDisabled
 	a.desktopNotifications = s.DesktopNotifications
+	a.showGlobeTab = !s.HideGlobeTab
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
 	a.graphicsProtocolName = s.GraphicsProtocol
@@ -989,7 +998,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -1114,7 +1123,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	if a.leaderPending {
 		a.leaderPending = false
 		if a.active != screenLogin {
-			if s, ok := screenForMnemonic(m.String()); ok {
+			if s, ok := screenForMnemonic(m.String()); ok && (s != screenGlobe || a.showGlobeTab) {
 				var cmd tea.Cmd
 				a, cmd = activateScreen(a, s)
 				if s == screenSearch {
@@ -1751,6 +1760,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		fmro := msg.FeedManualRefreshOnly
 		tie := msg.TypingIndicatorsEnabled
 		dn := msg.DesktopNotifications
+		sgt := msg.ShowGlobeTab
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
@@ -1767,7 +1777,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -1795,6 +1805,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		// subsystem, see cmail.go's SharedConfigMsg handler.
 		a.typingIndicatorsEnabled = msg.typingIndicatorsEnabled
 		a.desktopNotifications = msg.desktopNotifications
+		a.showGlobeTab = msg.showGlobeTab
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
@@ -1824,18 +1835,19 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "settings saved")
-		wl, fmro, tie, dn, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
+		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
 				cfg.FeedManualRefreshOnly = fmro
 				cfg.TypingIndicatorsDisabled = !tie
 				cfg.DesktopNotifications = dn
+				cfg.HideGlobeTab = !sgt
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
@@ -4704,6 +4716,7 @@ type settingsSavedMsg struct {
 	feedManualRefreshOnly   bool
 	typingIndicatorsEnabled bool
 	desktopNotifications    bool
+	showGlobeTab            bool
 	maxThreadDepth          int
 	timezone                string
 	imageViewer             string

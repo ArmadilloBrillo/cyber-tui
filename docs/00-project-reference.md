@@ -632,6 +632,9 @@ apprenticeships) — tab `globe`, no numeric alias (12th tab), reached via
 - `+`/`-` zoom, `m` toggles guild markers, `space` pauses rotation; no manual
   spin control (matches every other single-pane screen's avoidance of
   arrow/`h`/`l` keys, which are claimed by tab-cycling/list-nav)
+- The tab itself can be hidden via Settings ("show globe tab", local-only —
+  `config.Config.HideGlobeTab`), which excludes it from `visibleTabs`,
+  `leaderRows`, and the `g l` chord, same as Search's hidden entry
 
 Key types: `GlobeModel`  
 Key methods: `SetSelf(user)`, `SetGuildMembers(usernames)`, `SetProfile(username, user)`, `NextPending()`, `Requeue(username)`, `Advance()`
@@ -782,6 +785,7 @@ Permissions: `0600` (owner read/write only)
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
 | `graphicsProtocol` | string | `""` (autodetect) | `"kitty"`, `"iterm2"`, `"sixel"`, or `"none"` — bypasses autodetection when it's unreliable (e.g. mintty/Git Bash). Also editable live from the Settings screen (nested under "image viewer", terminal-only) as `"auto"`/`"kitty"`/`"iterm2"`/`"sixel"` — `"none"` stays config-file-only. See `docs/41-graphics-protocol-override.md` |
 | `imageScale` | number | `0` (= `1.0`) | Multiplier on the fullscreen image modal's display size, relative to the image's own native (1:1 pixel) size — not the terminal window. Clamped to `[0.2, 2.0]`; upscaling past native resolution is allowed (only for the modal). Also live-adjustable with `+`/`-` while the modal is open (session-only, guaranteed at least a 1-cell step per press). See `docs/46-image-modal-scale.md` |
+| `hideGlobeTab` | bool | `false` | Removes the Globe tab from the tab bar/nav sidebar, arrow-key cycling, and the `g l` leader chord. Editable from the Settings screen ("show globe tab", inverted) |
 
 ---
 

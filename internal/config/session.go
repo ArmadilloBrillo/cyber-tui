@@ -130,6 +130,11 @@ type Config struct {
 	// "typingIndicatorsEnabled" instead of double-negating this field.
 	TypingIndicatorsDisabled bool `json:"typingIndicatorsDisabled,omitempty"`
 
+	// HideGlobeTab removes the Globe tab from the tab bar/nav sidebar and
+	// arrow-key cycling (same as Search's hidden entry) when true. Off by
+	// default (tab shown) when absent from the JSON file.
+	HideGlobeTab bool `json:"hideGlobeTab,omitempty"`
+
 	// ImageScale multiplies the fullscreen image modal's display size,
 	// relative to the image's own native (1:1 pixel) size — 1.0 shows it at
 	// native size (clamped to fit the terminal), not a fraction of the

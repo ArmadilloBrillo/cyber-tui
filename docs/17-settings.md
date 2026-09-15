@@ -167,6 +167,13 @@ The following settings require complex pickers and are deferred to a future feat
 `MutedTopics` (muted topics) shipped in Feature 54 — managed from the Topics
 tab, not this screen; included in `PATCH /v1/settings`. See `docs/54-muted-topics.md`.
 
+**Globe group (local-only, not part of the API `Settings` struct):**
+- Show globe tab (bool) — toggles `config.Config.HideGlobeTab` (inverted:
+  `App.showGlobeTab`). When off, Globe is excluded from the tab bar/nav
+  sidebar, arrow-key cycling, and the `g l` leader chord — the same
+  `visibleTabs`/`leaderRows` filtering Search's hidden entry already uses.
+  See `docs/55-globe.md`.
+
 ---
 
 ## Integration Checklist
