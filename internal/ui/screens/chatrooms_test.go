@@ -1514,6 +1514,29 @@ func TestBrowsing_P_EmitsShowUserProfileMsg(t *testing.T) {
 	}
 }
 
+func TestBrowsing_CtrlP_EmitsShowUserProfileMsg(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", []model.Message{
+		{ID: "m1", From: model.User{Username: "molly"}, Body: "hi", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	sp, ok := cmd().(ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", cmd())
+	}
+	if sp.Username != "molly" {
+		t.Errorf("Username = %q, want molly", sp.Username)
+	}
+}
+
 func TestBrowsing_P_NoSelectedMessage_IsNoop(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	m = m.SetMessages("zion", nil)

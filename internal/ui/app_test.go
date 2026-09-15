@@ -1303,6 +1303,38 @@ func TestSearch_UserHitToProfile_EscReturnsToSearchOrigin(t *testing.T) {
 	}
 }
 
+// TestBookmarks_ShowUserProfileMsg_ProfileReturnsToBookmarks mirrors
+// TestSearch_UserHitToProfile_EscReturnsToSearchOrigin: guards handleBookmarks'
+// ShowUserProfileMsg case against the same missing-active-screen-guard
+// regression handleGuilds once had (see that test's comment) — every handler
+// in App.Update's dispatch chain must ignore the message unless its own
+// screen is active, or an earlier handler could hijack profileReturn.
+func TestBookmarks_ShowUserProfileMsg_ProfileReturnsToBookmarks(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenBookmarks
+
+	m, cmd := a.Update(screens.ShowUserProfileMsg{Username: "neo"})
+	a2 := m.(App)
+	if a2.profileReturn != screenBookmarks {
+		t.Fatalf("expected profileReturn = screenBookmarks, got %v", a2.profileReturn)
+	}
+	if cmd == nil {
+		t.Fatal("expected a profile-load cmd")
+	}
+
+	m2, _ := a2.Update(cmd())
+	a3 := m2.(App)
+	if a3.active != screenProfile {
+		t.Fatalf("expected navigation to screenProfile, got %v", a3.active)
+	}
+
+	m3, _ := a3.Update(screens.BackFromProfileMsg{})
+	a4 := m3.(App)
+	if a4.active != screenBookmarks {
+		t.Errorf("expected esc from profile to return to screenBookmarks, got %v", a4.active)
+	}
+}
+
 func TestShowSearchPostMsg_NavigatesToPostDetail(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenSearch

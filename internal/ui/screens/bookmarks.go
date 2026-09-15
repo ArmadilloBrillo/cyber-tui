@@ -239,6 +239,16 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 			return m, func() tea.Msg {
 				return DeleteBookmarkMsg{BookmarkID: id, PostID: b.PostID, ReplyID: b.ReplyID}
 			}
+		case "p", "ctrl+p":
+			visible := m.visibleItems()
+			if m.selectedIndex >= len(visible) {
+				return m, nil
+			}
+			username := bookmarkAuthor(visible[m.selectedIndex])
+			if username == "" {
+				return m, nil
+			}
+			return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 		case "enter":
 			visible := m.visibleItems()
 			if m.selectedIndex >= len(visible) {
@@ -352,6 +362,18 @@ func (m BookmarksModel) buildContent() (string, []int) {
 	return sb.String(), offsets
 }
 
+// bookmarkAuthor returns the author of a bookmark's embedded post/reply
+// content, or "" if neither is populated (an unhydrated stub).
+func bookmarkAuthor(b model.Bookmark) string {
+	switch {
+	case b.Post != nil:
+		return b.Post.AuthorUsername
+	case b.Reply != nil:
+		return b.Reply.AuthorUsername
+	}
+	return ""
+}
+
 func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 	innerWidth := m.width - 4
 	now := time.Now()
@@ -369,16 +391,15 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 	var createdAt, editedAt time.Time
 	var attachments []model.Attachment
 	var topics []string
+	author = bookmarkAuthor(b)
 	switch {
 	case b.Post != nil:
-		author = b.Post.AuthorUsername
 		content = b.Post.Content
 		createdAt = b.Post.CreatedAt
 		editedAt = b.Post.EditedAt
 		attachments = b.Post.Attachments
 		topics = b.Post.Topics
 	case b.Reply != nil:
-		author = b.Reply.AuthorUsername
 		content = b.Reply.Content
 		createdAt = b.Reply.CreatedAt
 		editedAt = b.Reply.EditedAt

@@ -60,6 +60,7 @@ Key bindings:
 | `k` / `↑` | Navigate up; refreshes at top |
 | `enter` | Open bookmarked post in Post Detail |
 | `d` | Delete selected bookmark (optimistic) |
+| `p` / `ctrl+p` | View the bookmarked item's author's profile (`docs/16-view-profile.md`) |
 
 Methods: `SetBookmarks`, `AppendBookmarks`, `MarkDeleted`, `SetStatusMsg`, `SetError`.
 

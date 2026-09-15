@@ -64,7 +64,7 @@ Long bodies word-wrap to fit the terminal width; continuation lines are indented
 | `j` / `↓` | Next room (list mode) |
 | `k` / `↑` | Previous room (list mode) |
 | `Enter` | Open selected room |
-| `↑` / `↓` | Scroll messages one line (detail mode); once the top is reached, `↑` instead enters per-message browsing (selects the newest message, highlighted) — `↑`/`↓` then move message-by-message, `Esc` or `↓` past the newest exits back to typing. Browsing also has `!` (flag) and `d` (delete own message); see `ChatroomsModel.updateBrowsingKey`. |
+| `↑` / `↓` | Scroll messages one line (detail mode); once the top is reached, `↑` instead enters per-message browsing (selects the newest message, highlighted) — `↑`/`↓` then move message-by-message, `Esc` or `↓` past the newest exits back to typing. Browsing also has `!` (flag), `d` (delete own message), and `p`/`ctrl+p` (view sender's profile — `docs/16-view-profile.md`); see `ChatroomsModel.updateBrowsingKey`. |
 | `Enter` | Send message (detail mode) |
 | `Esc` | Return to room list — or, if deep-linked from a `chat_mention` notification, leave Chatrooms and return to Notifications |
 | `ctrl+↑` / `ctrl+↓` | Browse previously sent lines into the compose input, shell-style (detail mode, while typing — not while browsing messages). `ctrl+↑` steps back through the lines you've sent **in this room** this session, stashing whatever was half-typed; `ctrl+↓` steps forward and finally restores that draft. `ctrl+↓` does nothing until the first `ctrl+↑`. Per-room, per-session (keyed by room slug); the browse position resets when a room is opened. See feature 52 and `inputHistory`/`histFor`. |

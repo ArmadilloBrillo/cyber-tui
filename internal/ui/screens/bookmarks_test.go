@@ -71,3 +71,55 @@ func TestBookmarks_FilterNSFW_Off_ShowsNSFW(t *testing.T) {
 		t.Fatalf("focused URLs = %v, want [https://example.com/x]", got)
 	}
 }
+
+// --- view profile (p/ctrl+p) ---
+
+func TestBookmarks_P_EmitsShowUserProfileMsg_ForPost(t *testing.T) {
+	m := screens.NewBookmarksModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetBookmarks([]model.Bookmark{
+		{ID: "b1", Type: "post", PostID: "p1", Post: &model.Post{ID: "p1", AuthorUsername: "neo", Content: "hi"}},
+	}, "")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	sp, ok := cmd().(screens.ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", cmd())
+	}
+	if sp.Username != "neo" {
+		t.Errorf("Username = %q, want neo", sp.Username)
+	}
+}
+
+func TestBookmarks_CtrlP_EmitsShowUserProfileMsg_ForReply(t *testing.T) {
+	m := screens.NewBookmarksModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetBookmarks([]model.Bookmark{
+		{ID: "b1", Type: "reply", ReplyID: "r1", Reply: &model.Reply{ID: "r1", AuthorUsername: "trinity", Content: "hi"}},
+	}, "")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	sp, ok := cmd().(screens.ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", cmd())
+	}
+	if sp.Username != "trinity" {
+		t.Errorf("Username = %q, want trinity", sp.Username)
+	}
+}
+
+func TestBookmarks_P_NoBookmarks_IsNoop(t *testing.T) {
+	m := screens.NewBookmarksModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd != nil {
+		t.Error("expected no-op with no bookmarks")
+	}
+}

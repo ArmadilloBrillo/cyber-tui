@@ -1287,6 +1287,15 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 					return m, tea.Batch(cmds...)
 				}
 				return m, nil
+			case "p", "ctrl+p":
+				if len(m.conversations) == 0 {
+					return m, nil
+				}
+				username := m.OtherParticipant(m.conversations[m.selectedConv])
+				if username == "" || username == "unknown" {
+					return m, nil
+				}
+				return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 			}
 
 		case cmailModeDetail:
@@ -1312,6 +1321,15 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 					m.listVP.SetContent(m.renderConvCards())
 				}
 				return m, clearCmd
+			case "ctrl+p":
+				if m.activeConv == nil {
+					return m, nil
+				}
+				username := m.OtherParticipant(*m.activeConv)
+				if username == "" || username == "unknown" {
+					return m, nil
+				}
+				return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 			case "ctrl+up":
 				if v, ok := m.histFor(m.activeConvID).prev(m.input.Value()); ok {
 					m.input.SetValue(v)
@@ -1511,7 +1529,7 @@ func (m CMailModel) updateCMailBrowsingKey(msg tea.KeyMsg) (CMailModel, tea.Cmd)
 		m.selectedMsgID = m.activeConv.Messages[sel[newPos]].ID
 		m.viewport.SetYOffset(newOffset)
 		return m.refreshMessages(), nil
-	case "p":
+	case "p", "ctrl+p":
 		targetMsg, ok := findMessageByID(m.activeConv.Messages, m.selectedMsgID)
 		if !ok {
 			return m, nil
