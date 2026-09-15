@@ -365,6 +365,8 @@ func TestChatrooms_Send_KnownCommandStillSends(t *testing.T) {
 		"/gif https://example.com/a.gif",
 		"/song https://youtu.be/x | artist | title",
 		"/art",
+		"/dice 4d6kh3",
+		"/dice:20:2",
 	}
 	for _, body := range cases {
 		t.Run(body, func(t *testing.T) {
