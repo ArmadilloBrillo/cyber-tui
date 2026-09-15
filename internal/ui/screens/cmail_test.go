@@ -1513,6 +1513,99 @@ func TestCMailBrowsing_P_NoSelectedMessage_IsNoop(t *testing.T) {
 	}
 }
 
+func TestCMailBrowsing_CtrlP_EmitsShowUserProfileMsg(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversationMessages("c1", []model.Message{
+		{ID: "m1", From: model.User{Username: "trinity"}, Body: "hi", CreatedAt: time.Now()},
+	})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "m1" {
+		t.Fatalf("setup: selectedMsgID = %q, want m1", m.selectedMsgID)
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	sp, ok := cmd().(ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", cmd())
+	}
+	if sp.Username != "trinity" {
+		t.Errorf("Username = %q, want trinity", sp.Username)
+	}
+}
+
+// --- view profile from the compose box, no message selected (ctrl+p) ---
+
+func TestCMailDetail_CtrlP_ComposeFocused_EmitsShowUserProfileMsg(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	if m.selectedMsgID != "" {
+		t.Fatalf("setup: expected no message selected, got %q", m.selectedMsgID)
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	sp, ok := cmd().(ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", cmd())
+	}
+	if sp.Username != "trinity" {
+		t.Errorf("Username = %q, want trinity", sp.Username)
+	}
+}
+
+// --- view profile from the conversation list (p/ctrl+p) ---
+
+func TestCMailList_P_EmitsShowUserProfileMsg(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}},
+	})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	sp, ok := cmd().(ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", cmd())
+	}
+	if sp.Username != "trinity" {
+		t.Errorf("Username = %q, want trinity", sp.Username)
+	}
+}
+
+func TestCMailList_CtrlP_EmitsShowUserProfileMsg(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}},
+	})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if cmd == nil {
+		t.Fatal("expected a cmd")
+	}
+	sp, ok := cmd().(ShowUserProfileMsg)
+	if !ok {
+		t.Fatalf("expected ShowUserProfileMsg, got %T", cmd())
+	}
+	if sp.Username != "trinity" {
+		t.Errorf("Username = %q, want trinity", sp.Username)
+	}
+}
+
+func TestCMailList_P_NoConversations_IsNoop(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd != nil {
+		t.Error("expected no-op with no conversations")
+	}
+}
+
 // --- copy message text (see updateCMailBrowsingKey's "y" case) ---
 
 func TestCMailBrowsing_Y_EmitsCopyMessageTextMsg(t *testing.T) {

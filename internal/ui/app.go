@@ -2181,6 +2181,12 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, a.loadBookmarksCmd(""), true
 		}
 		return a, nil, true
+	case screens.ShowUserProfileMsg:
+		if a.active != screenBookmarks {
+			return a, nil, false
+		}
+		a.profileReturn = screenBookmarks
+		return a, a.loadUserProfileCmd(msg.Username), true
 	}
 	return a, nil, false
 }

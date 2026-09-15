@@ -2098,7 +2098,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		m.confirmingDeleteMsg = true
 		m.viewport.Height = m.viewportHeight()
 		return m, nil
-	case "p":
+	case "p", "ctrl+p":
 		targetMsg, ok := findMessageByID(m.messages, m.selectedMsgID)
 		if !ok {
 			return m, nil

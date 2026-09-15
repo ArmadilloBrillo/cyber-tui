@@ -75,6 +75,7 @@ Like CIRC (`docs/33-circ.md`), any `/`-prefixed input not recognized is rejected
 | `↑` / `k` | Move cursor up the conversation list |
 | `↓` / `j` | Move cursor down the conversation list |
 | `Enter` | Open selected conversation → switch to detail mode, focus input |
+| `p` / `ctrl+p` | View the highlighted conversation's other participant's profile. See `docs/16-view-profile.md`. |
 
 ### Detail mode
 
@@ -86,6 +87,8 @@ Like CIRC (`docs/33-circ.md`), any `/`-prefixed input not recognized is rejected
 | `Esc` | Browsing: clear the selection and return to typing, staying in the conversation. Not browsing: return to list mode; cancel RTDB subscription — or, if this conversation was opened via a deep link (`c` from another screen, or a `dm_message` notification), leave C-Mail entirely and return to that origin screen instead. |
 | `ctrl+↑` / `ctrl+↓` | Browse previously sent lines into the compose input, shell-style (detail mode, while typing — not while browsing messages). `ctrl+↑` steps back through the lines you've sent **in this conversation** this session, stashing whatever was half-typed; `ctrl+↓` steps forward and finally restores that draft. `ctrl+↓` does nothing until the first `ctrl+↑`. Per-conversation, per-session (keyed by conversation ID); the browse position resets when a conversation is opened. See feature 52 and `inputHistory`/`histFor`. |
 | `ctrl+o` | Open URLs/images — from just the selected message while browsing, or from the whole loaded conversation otherwise. Plain `o` can't reach this here — the compose input is focused for the entire detail view (`InputFocused()` doesn't distinguish browsing from typing), so `o` always types into the message, or is swallowed while browsing, instead; `ctrl+o` is exempted from the focused-input gate specifically for this. |
+| `ctrl+p` | Not browsing: view the open conversation's other participant's profile (reads `OtherParticipant(*activeConv)` directly — no message needs to be selected). Browsing: view the selected message's sender's profile (same as plain `p` there). Plain `p` can't reach the "not browsing" case for the same reason as `ctrl+o` above — it always types into the compose box instead. See `docs/16-view-profile.md`. |
+| `p` | Browsing only: view the selected message's sender's profile (alias for `ctrl+p`, which also works here). Not browsing: types into the compose input, same as any other letter. |
 | `ctrl+q` | Quit (same as global `q`) |
 | `ctrl+t` | Open theme picker (same as global `t`) |
 | `ctrl+←` / `ctrl+→` | Cycle tabs (same as global `←`/`→`; Tabs layout only) |
