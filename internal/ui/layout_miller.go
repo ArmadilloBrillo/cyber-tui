@@ -315,7 +315,7 @@ func (l MillerLayout) renderNav(a App) string {
 	navW := millerSidebarWidth - 1 // leave 1 col for the "│" separator
 
 	var rows []string
-	for _, t := range visibleTabs() {
+	for _, t := range visibleTabs(a) {
 		badge := ""
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			badge = " ●" + notifBadgeText(a.polledUnreadCount, a.polledUnreadCountExact)
@@ -588,7 +588,7 @@ func (l MillerLayout) renderHelpModal(a App) string {
 		row("l / enter", "enter content pane"),
 		row("h", "return to nav pane"),
 		row("1-9", "jump to section"),
-	}, leaderRows(row)...)
+	}, leaderRows(a, row)...)
 	globalRows = append(globalRows,
 		row("/", "search"),
 		row("t", "theme"),

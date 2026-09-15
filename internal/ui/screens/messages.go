@@ -83,6 +83,11 @@ type SharedConfigMsg struct {
 	// (config.Config.DesktopNotifications), used by the settings screen to
 	// display/edit the toggle — see docs/53-desktop-notifications.md.
 	DesktopNotifications bool
+	// ShowGlobeTab is the user's preference (positive polarity —
+	// config.Config.HideGlobeTab is inverted once at load time), used by the
+	// settings screen to display/edit the toggle. Consumed directly by App's
+	// visibleTabs/leaderRows (layout.go), not by any screen.
+	ShowGlobeTab bool
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -152,6 +157,7 @@ type SaveSettingsMsg struct {
 	FeedManualRefreshOnly   bool
 	TypingIndicatorsEnabled bool
 	DesktopNotifications    bool
+	ShowGlobeTab            bool
 	MaxThreadDepth          int
 	Timezone                string
 	ImageViewer             string

@@ -318,6 +318,19 @@ func TestHandleKeys_Leader_DoubleG_GoesToGuilds(t *testing.T) {
 	}
 }
 
+func TestHandleKeys_Leader_GlobeHidden_ChordDoesNothing(t *testing.T) {
+	a := loggedInApp()
+	a.showGlobeTab = false
+	a2, _, _ := a.handleKeys(keyMsg("g"))
+	a3, _, consumed := a2.handleKeys(keyMsg("l")) // g l -> Globe, but hidden
+	if !consumed {
+		t.Fatal("expected second key of the chord to be consumed even when the target tab is hidden")
+	}
+	if a3.active == screenGlobe {
+		t.Error("expected 'g l' to be a no-op when showGlobeTab is false")
+	}
+}
+
 func TestHandleKeys_Leader_NotArmed_WhileInputFocused(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
 	if !a.chatrooms.InputFocused() {

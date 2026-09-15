@@ -7,6 +7,14 @@ caller's own location plus a toggleable marker set for every guild they
 belong to — their guild plus up to five apprenticeships. Reached via `g l` or
 arrow-cycling (it has no numeric alias — it's the 12th tab).
 
+The tab can be hidden entirely from Settings ("show globe tab", under the
+"globe" group) — a local-only preference (`config.Config.HideGlobeTab`,
+inverted as `App.showGlobeTab`), not synced to the API. When hidden, it's
+excluded from `visibleTabs` (tab bar/nav sidebar + arrow-key cycling) and
+`leaderRows`/the `g l` chord itself — same treatment Search's `hidden`
+`navTab` entry already gets, just driven by a runtime setting instead of a
+compile-time flag. See `docs/17-settings.md`.
+
 There is no global user directory in the cyberspace.online API — only
 per-username profile lookup and a guild-members list — so "everyone on
 cyberspace" was never an option. Follow-network markers (following/followers)
@@ -176,4 +184,6 @@ each tested separately (`TestBrailleDotBit`, `TestQuadrantBlockBit`,
 | File | Tests |
 |------|-------|
 | `internal/ui/screens/globe_test.go` | `TestBrailleDotBit`, `TestQuadrantBlockBit`, `TestQuadrantGlyph`, `TestClassifyGlobeCell`, `TestViewOrientationNorthAtTop`, `TestViewMarkerLabelsUsername`, `TestSphereProjectCenter`, `TestSphereProjectOutsideDisc`, `TestSphereProjectMarkerRoundTrip`, `TestMarkerScreenPosFarSide`, `TestLandAt` (synthetic fixture bitmap, incl. longitude wraparound), `TestGlobeZoomClamps`, `TestGlobeToggleKeys`, `TestGlobeSetProfileOnlyKeepsLocated`, `TestGlobeEnqueueDedup`, `TestGlobeNextPendingAndRequeue`, `TestGlobeAdvancePausable` |
-| `internal/ui/app_test.go` | `TestNavigateTab_*` updated for the 12th tab (Globe wraps left from Feed, sits last in the cycle); `TestLoadGlobeGuildMembersCmd_IncludesApprenticeshipGuilds` (badge guild + apprenticeship merging, cross-guild dedup, self excluded) |
+| `internal/ui/app_test.go` | `TestNavigateTab_*` updated for the 12th tab (Globe wraps left from Feed, sits last in the cycle); `TestLoadGlobeGuildMembersCmd_IncludesApprenticeshipGuilds` (badge guild + apprenticeship merging, cross-guild dedup, self excluded); `TestHandleKeys_Leader_GlobeHidden_ChordDoesNothing` |
+| `internal/ui/layout_test.go` | `TestVisibleTabs_ExcludesGlobeWhenHidden` |
+| `internal/ui/screens/settings_test.go` | `TestSettings_ShowGlobeTabToggle`, `TestSettings_ShowGlobeTabDirty`, `TestSettings_ShowGlobeTabSaveMsg` |

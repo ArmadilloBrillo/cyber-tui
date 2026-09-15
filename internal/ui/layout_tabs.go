@@ -136,7 +136,7 @@ func (l TabsLayout) ModalMaxWidth(termWidth int) int { return termWidth }
 
 func (l TabsLayout) renderTabBar(a App) string {
 	var tabs string
-	for _, t := range visibleTabs() {
+	for _, t := range visibleTabs(a) {
 		badge := ""
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			badge = " (" + notifBadgeText(a.polledUnreadCount, a.polledUnreadCountExact) + ")"
@@ -491,7 +491,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 	globalRows := append([]string{
 		sectionStyle.Render("global"),
 		row("1-9", "feed · notifs · c-mail · circ · journal · bookmarks · guilds · topics · profile"),
-	}, leaderRows(row)...)
+	}, leaderRows(a, row)...)
 	globalRows = append(globalRows,
 		row("← →", "cycle tabs"),
 		row("/", "search"),

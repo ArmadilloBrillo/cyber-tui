@@ -297,6 +297,19 @@ var settingsGroups = []settingsGroup{
 			},
 		},
 	},
+	{
+		title: "globe",
+		items: []settingsItem{
+			{
+				label: "show globe tab", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.showGlobeTab },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.showGlobeTab = !m.showGlobeTab
+					return m
+				},
+			},
+		},
+	},
 }
 
 // SettingsModel is the Settings screen.
@@ -327,6 +340,8 @@ type SettingsModel struct {
 	originalTypingIndicatorsEnabled bool           // last saved baseline
 	desktopNotifications            bool           // live local config value (OSC 9 desktop notifications)
 	originalDesktopNotifications    bool           // last saved baseline
+	showGlobeTab                    bool           // live local config value (Globe tab shown on the tab bar/cycling)
+	originalShowGlobeTab            bool           // last saved baseline
 	prefsSeeded                     bool           // whether the SharedConfigMsg preference fields above have been seeded once
 	cursor                          int
 	width                           int
@@ -348,7 +363,7 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typingIndicatorsEnabled bool, desktopNotifications bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, ditherSharpness string, layoutName string) SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typingIndicatorsEnabled bool, desktopNotifications bool, showGlobeTab bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, ditherSharpness string, layoutName string) SettingsModel {
 	m.err = nil
 	m.original = m.settings
 	m.wanderLust = wanderLust
@@ -359,6 +374,8 @@ func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typ
 	m.originalTypingIndicatorsEnabled = typingIndicatorsEnabled
 	m.desktopNotifications = desktopNotifications
 	m.originalDesktopNotifications = desktopNotifications
+	m.showGlobeTab = showGlobeTab
+	m.originalShowGlobeTab = showGlobeTab
 	m.maxThreadDepth = maxThreadDepth
 	m.originalMaxThreadDepth = maxThreadDepth
 	m.timezone = timezone
@@ -391,6 +408,7 @@ func (m SettingsModel) IsDirty() bool {
 		m.feedManualRefreshOnly != m.originalFeedManualRefreshOnly ||
 		m.typingIndicatorsEnabled != m.originalTypingIndicatorsEnabled ||
 		m.desktopNotifications != m.originalDesktopNotifications ||
+		m.showGlobeTab != m.originalShowGlobeTab ||
 		m.maxThreadDepth != m.originalMaxThreadDepth ||
 		m.timezone != m.originalTimezone ||
 		m.imageViewer != m.originalImageViewer ||
@@ -496,6 +514,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.originalTypingIndicatorsEnabled = msg.TypingIndicatorsEnabled
 			m.desktopNotifications = msg.DesktopNotifications
 			m.originalDesktopNotifications = msg.DesktopNotifications
+			m.showGlobeTab = msg.ShowGlobeTab
+			m.originalShowGlobeTab = msg.ShowGlobeTab
 			m.maxThreadDepth = msg.MaxThreadDepth
 			m.originalMaxThreadDepth = msg.MaxThreadDepth
 			tz := msg.Timezone
@@ -568,6 +588,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				fmro := m.feedManualRefreshOnly
 				tie := m.typingIndicatorsEnabled
 				dn := m.desktopNotifications
+				sgt := m.showGlobeTab
 				td := m.maxThreadDepth
 				tz := m.timezone
 				iv := m.imageViewer
@@ -578,7 +599,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				ln := m.layoutName
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, LayoutName: ln, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, LayoutName: ln, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -590,6 +611,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.feedManualRefreshOnly = m.originalFeedManualRefreshOnly
 			m.typingIndicatorsEnabled = m.originalTypingIndicatorsEnabled
 			m.desktopNotifications = m.originalDesktopNotifications
+			m.showGlobeTab = m.originalShowGlobeTab
 			m.maxThreadDepth = m.originalMaxThreadDepth
 			m.timezone = m.originalTimezone
 			m.imageViewer = m.originalImageViewer

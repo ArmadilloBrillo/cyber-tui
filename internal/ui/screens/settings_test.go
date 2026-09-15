@@ -251,7 +251,7 @@ func TestSettings_Esc_ClearsError(t *testing.T) {
 func TestSettings_SetSaved_ClearsError(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetError(testErr)
-	m = m.SetSaved(false, false, true, false, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.err != nil {
 		t.Error("SetSaved should clear error")
 	}
@@ -263,7 +263,7 @@ func TestSettings_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty after change")
 	}
-	m = m.SetSaved(false, false, true, false, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.IsDirty() {
 		t.Error("after SetSaved, should not be dirty")
 	}
@@ -344,7 +344,7 @@ func TestSettings_Dithering_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty before SetSaved")
 	}
-	m = m.SetSaved(false, false, true, false, 3, "UTC", "terminal", "", false, true, "sharp", "tabs")
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, true, "sharp", "tabs")
 	if m.originalDithering != true || m.originalDitherSharpness != "sharp" {
 		t.Error("SetSaved should update originalDithering/originalDitherSharpness to the saved values")
 	}
@@ -510,7 +510,7 @@ func TestSettings_View_DirtyFooterHint(t *testing.T) {
 
 func TestSettings_View_SavedMessage(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m = m.SetSaved(false, false, true, false, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	view := m.View()
 	if !containsSubstring(view, "saved!") {
 		t.Error("View should show 'saved!' when saved=true")
@@ -581,7 +581,7 @@ func TestSettings_WanderSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
 	m.originalWanderLust = false // dirty
-	m = m.SetSaved(true, false, true, false, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	m = m.SetSaved(true, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.originalWanderLust != true {
 		t.Error("SetSaved should update originalWanderLust to the saved value")
 	}
@@ -662,7 +662,7 @@ func TestSettings_FeedAutoRefreshSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.feedManualRefreshOnly = true
 	m.originalFeedManualRefreshOnly = false // dirty
-	m = m.SetSaved(false, true, true, false, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	m = m.SetSaved(false, true, true, false, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.originalFeedManualRefreshOnly != true {
 		t.Error("SetSaved should update originalFeedManualRefreshOnly to the saved value")
 	}
@@ -741,12 +741,67 @@ func TestSettings_TypingIndicatorsSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.typingIndicatorsEnabled = false
 	m.originalTypingIndicatorsEnabled = true // dirty
-	m = m.SetSaved(false, false, false, false, 3, "UTC", "terminal", "", false, false, "", "tabs")
+	m = m.SetSaved(false, false, false, false, true, 3, "UTC", "terminal", "", false, false, "", "tabs")
 	if m.originalTypingIndicatorsEnabled != false {
 		t.Error("SetSaved should update originalTypingIndicatorsEnabled to the saved value")
 	}
 	if m.IsDirty() {
 		t.Error("should not be dirty after SetSaved")
+	}
+}
+
+// --- Globe tab visibility tests ---
+
+func TestSettings_ShowGlobeTabToggle(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.showGlobeTab = true
+
+	items := flatItems(m)
+	idx := -1
+	for i, it := range items {
+		if it.label == "show globe tab" {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatal("expected a show globe tab settings item")
+	}
+	m.cursor = idx
+	m, _ = m.Update(keyMsg("enter"))
+	if m.showGlobeTab {
+		t.Error("toggling show globe tab should flip showGlobeTab to false")
+	}
+}
+
+func TestSettings_ShowGlobeTabDirty(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.showGlobeTab = true
+	m.originalShowGlobeTab = true
+	if m.IsDirty() {
+		t.Error("should not be dirty before change")
+	}
+	m.showGlobeTab = false
+	if !m.IsDirty() {
+		t.Error("IsDirty should return true when showGlobeTab differs from original")
+	}
+}
+
+func TestSettings_ShowGlobeTabSaveMsg(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.showGlobeTab = false
+	m.originalShowGlobeTab = true // make it dirty
+	var got tea.Msg
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd != nil {
+		got = cmd()
+	}
+	save, ok := got.(SaveSettingsMsg)
+	if !ok {
+		t.Fatal("ctrl+s should emit SaveSettingsMsg")
+	}
+	if save.ShowGlobeTab != false {
+		t.Error("SaveSettingsMsg.ShowGlobeTab should reflect current showGlobeTab value")
 	}
 }
 
