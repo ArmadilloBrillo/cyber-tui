@@ -35,12 +35,12 @@ type ToggleWatchPostMsg struct {
 // Adding a new screen only requires handling this message in that screen's Update —
 // no App call sites need changing.
 type SharedConfigMsg struct {
-	Width          int
-	Height         int
-	Loc            *time.Location
-	Relaxed        bool
-	Settings       model.Settings
-	WanderLust     bool
+	Width      int
+	Height     int
+	Loc        *time.Location
+	Relaxed    bool
+	Settings   model.Settings
+	WanderLust bool
 	// FeedManualRefreshOnly is the user's raw preference
 	// (config.Config.FeedManualRefreshOnly), used by the settings screen to
 	// display/edit the toggle — see docs/39-feed-background-poll.md.
@@ -79,6 +79,15 @@ type SharedConfigMsg struct {
 	// subscription, announce/clear calls, and the merged anim/idle-check
 	// tick — see docs/00-battery-audit.md item #6.
 	TypingIndicatorsEnabled bool
+	// DesktopNotifications is the user's raw preference
+	// (config.Config.DesktopNotifications), used by the settings screen to
+	// display/edit the toggle — see docs/53-desktop-notifications.md.
+	DesktopNotifications bool
+	// ShowGlobeTab is the user's preference (positive polarity —
+	// config.Config.HideGlobeTab is inverted once at load time), used by the
+	// settings screen to display/edit the toggle. Consumed directly by App's
+	// visibleTabs/leaderRows (layout.go), not by any screen.
+	ShowGlobeTab bool
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -147,6 +156,8 @@ type SaveSettingsMsg struct {
 	WanderLust              bool
 	FeedManualRefreshOnly   bool
 	TypingIndicatorsEnabled bool
+	DesktopNotifications    bool
+	ShowGlobeTab            bool
 	MaxThreadDepth          int
 	Timezone                string
 	ImageViewer             string
@@ -161,6 +172,13 @@ type SaveSettingsMsg struct {
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark
 // so it can show transient feedback.
 type BookmarkedMsg struct{ PostID string }
+
+// SetMutedTopicsMsg is emitted by TopicsModel when the user presses 'm' on a
+// topic row to mute or unmute it. It carries the full new muted list. App
+// updates Settings.MutedTopics, re-broadcasts SharedConfigMsg so every screen
+// re-filters, and persists via a debounced UpdateSettings — see
+// docs/54-muted-topics.md.
+type SetMutedTopicsMsg struct{ Topics []string }
 
 // FollowUserMsg is emitted by ProfileModel when the user presses 'f' to follow another user.
 type FollowUserMsg struct{ UserID string }
@@ -192,6 +210,14 @@ type SubmitPublishNoteMsg struct {
 
 // SubmitDeleteNoteMsg is emitted by JournalModel when the user confirms deletion.
 type SubmitDeleteNoteMsg struct{ NoteID string }
+
+// SaveNewPostAsNoteMsg is emitted by FeedModel when the user presses Ctrl+D in
+// the new-post composer to store what they've written as a private Journal
+// note instead of publishing it. App creates the note via POST /v1/notes.
+type SaveNewPostAsNoteMsg struct {
+	Content string
+	Topics  []string
+}
 
 // DeletePostMsg is emitted by FeedModel or PostDetailModel when the user confirms
 // deleting their own post.

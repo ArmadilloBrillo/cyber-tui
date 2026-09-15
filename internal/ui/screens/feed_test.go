@@ -77,6 +77,61 @@ func TestFeed_FilterNSFW_RefreshKeepsVisibleSelection(t *testing.T) {
 	}
 }
 
+// --- Muted topics ---
+
+func mutedTopicsMsg(topics ...string) screens.SharedConfigMsg {
+	return screens.SharedConfigMsg{
+		Settings: model.Settings{MutedTopics: topics},
+	}
+}
+
+func TestFeed_MutedTopics_HidesMatchingPost(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "keep", Topics: []string{"linux"}},
+		{ID: "p2", AuthorUsername: "bob", Content: "drop", Topics: []string{"crypto", "news"}},
+		{ID: "p3", AuthorUsername: "carol", Content: "keep too"},
+	}, "")
+	m, _ = m.Update(mutedTopicsMsg("crypto"))
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	sp, ok := cmd().(screens.ShowPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowPostMsg, got %T", cmd())
+	}
+	if sp.Post.ID != "p3" {
+		t.Errorf("expected p3 (crypto post filtered out), got %s", sp.Post.ID)
+	}
+}
+
+func TestFeed_MutedTopics_Off_ShowsAll(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "a", Topics: []string{"linux"}},
+		{ID: "p2", AuthorUsername: "bob", Content: "b", Topics: []string{"crypto"}},
+	}, "")
+	m, _ = m.Update(mutedTopicsMsg()) // no muted topics
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	sp, ok := cmd().(screens.ShowPostMsg)
+	if !ok {
+		t.Fatalf("expected ShowPostMsg, got %T", cmd())
+	}
+	if sp.Post.ID != "p2" {
+		t.Errorf("expected p2, got %s", sp.Post.ID)
+	}
+}
+
 func TestFeed_FilterNSFW_Off_ShowsAll(t *testing.T) {
 	m := screens.NewFeedModel()
 	m = m.SetPosts([]model.Post{
@@ -279,6 +334,61 @@ func TestFeed_EKey_NoOp_WhenNotEligible(t *testing.T) {
 	m, _ = m.Update(keyRune("e"))
 	if m.ComposeActive() {
 		t.Error("expected ComposeActive to stay false pressing 'e' on another user's post")
+	}
+}
+
+// --- Compose: keep the panel open until the submit lands ---
+
+func TestFeed_ComposeSubmit_KeepsPanelOpenUntilOutcome(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = m.Update(keyRune("n")) // open the new-post panel
+	if !m.ComposeActive() {
+		t.Fatal("setup: expected the compose panel open after 'n'")
+	}
+
+	m, cmd := m.Update(screens.ComposeSubmitMsg{Content: "hello world"})
+	if !m.ComposeActive() || !m.ComposeSubmitting() {
+		t.Fatalf("after submit: ComposeActive=%v ComposeSubmitting=%v, want both true (panel stays put until App reports)", m.ComposeActive(), m.ComposeSubmitting())
+	}
+	if cmd == nil {
+		t.Fatal("expected a SubmitNewPostMsg cmd from ComposeSubmitMsg")
+	}
+	if _, ok := cmd().(screens.SubmitNewPostMsg); !ok {
+		t.Fatalf("submit cmd produced %T, want screens.SubmitNewPostMsg", cmd())
+	}
+
+	// Failure: the panel comes back, still populated, ready for a retry.
+	after := m.ClearComposeSubmitting()
+	if !after.ComposeActive() || after.ComposeSubmitting() {
+		t.Errorf("after ClearComposeSubmitting: ComposeActive=%v ComposeSubmitting=%v, want true/false", after.ComposeActive(), after.ComposeSubmitting())
+	}
+
+	// Success: the panel tears down.
+	done := m.CloseComposeAfterSuccess()
+	if done.ComposeActive() {
+		t.Error("expected the panel closed after CloseComposeAfterSuccess")
+	}
+}
+
+func TestFeed_ComposeSaveAsNote_EmitsMsgWithTitleHeading(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = m.Update(keyRune("n"))            // open panel, focus starts on the title field
+	m, _ = m.Update(keyRune("H"))            // type a one-char title
+	m, cmd := m.Update(screens.ComposeSaveAsNoteMsg{Content: "the body"})
+	if cmd == nil {
+		t.Fatal("expected a cmd from ComposeSaveAsNoteMsg")
+	}
+	got, ok := cmd().(screens.SaveNewPostAsNoteMsg)
+	if !ok {
+		t.Fatalf("produced %T, want screens.SaveNewPostAsNoteMsg", cmd())
+	}
+	if got.Content != "# H\n\nthe body" {
+		t.Errorf("Content = %q, want %q (title prepended as a markdown heading)", got.Content, "# H\n\nthe body")
+	}
+	if !m.ComposeSubmitting() {
+		t.Error("expected ComposeSubmitting true while the save-as-note is in flight")
 	}
 }
 

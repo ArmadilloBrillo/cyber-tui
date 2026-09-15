@@ -47,6 +47,7 @@ const (
 	screenTopics
 	screenJournal
 	screenSearch
+	screenGlobe
 )
 
 type focusTarget int
@@ -424,6 +425,7 @@ type App struct {
 	topics         screens.TopicsModel
 	journal        screens.JournalModel
 	search         screens.SearchModel
+	globe          screens.GlobeModel
 
 	// postDetailReturn is the screen to go back to when ESC is pressed in PostDetail.
 	postDetailReturn screen
@@ -482,6 +484,38 @@ type App struct {
 	// until WithSavedPreferences runs (then true unless the user opted out),
 	// same zero-value-before-hydration window every local preference has.
 	typingIndicatorsEnabled bool
+	// desktopNotifications is the local config value
+	// (config.Config.DesktopNotifications) enabling OS desktop notifications
+	// (an OSC 9 escape to stdout) for new C-Mail / activity while backgrounded
+	// — see docs/53-desktop-notifications.md. Off by default.
+	desktopNotifications bool
+	// showGlobeTab is the local config value (inverted from
+	// config.Config.HideGlobeTab) controlling whether the Globe tab appears
+	// on the tab bar/nav sidebar and in arrow-key cycling and the "g l"
+	// leader chord — see visibleTabs/leaderRows in layout.go. Defaults to
+	// true (tab shown) via NewApp; WithSavedPreferences overrides it from
+	// disk on launch.
+	showGlobeTab bool
+	// focused / focusReported track terminal focus via tea.FocusMsg /
+	// tea.BlurMsg (enabled with tea.WithReportFocus). A desktop notification
+	// is suppressed only when we positively know the terminal is focused —
+	// terminals report focus on change, not on startup, so focusReported
+	// stays false (and notifications still fire) until the first blur/focus.
+	focused       bool
+	focusReported bool
+	// notifBaselined / lastNotifiedAt drive per-notification desktop toasts:
+	// desktopNotifyForNewNotifs toasts every item in a freshly-loaded list
+	// newer than lastNotifiedAt (a high-water mark on model.Notification's
+	// CreatedAt). The first list after login only sets the mark, so the
+	// pre-existing backlog doesn't toast.
+	notifBaselined bool
+	lastNotifiedAt time.Time
+	// cmailUnreadBaselined guards the first C-Mail unread observation after
+	// login so the account-wide conversation-list snapshot's existing unread
+	// totals don't toast. The increase itself is detected by a before/after
+	// TotalUnread() snapshot around updateInner (see maybeNotifyNewCMail),
+	// which is exact and independent of which tab is active.
+	cmailUnreadBaselined bool
 
 	// graphicsProtocol is the terminal image display protocol detected at startup.
 	// ProtocolNone means no image display is available and URLs open in a browser.
@@ -574,6 +608,17 @@ type App struct {
 	// its own stale snapshot.
 	settingsSaveSeq int
 
+	// mutedTopicsSaveSeq is bumped on every SetMutedTopicsMsg. Only the
+	// matching mutedTopicsFlushMsg tick persists; earlier ticks are dropped,
+	// so a burst of mute/unmute presses coalesces into a single
+	// PATCH /v1/settings (rate-limited 2/min) — see docs/54-muted-topics.md.
+	mutedTopicsSaveSeq int
+
+	// mutedTopicsSaved is the MutedTopics list the server last accepted (set
+	// on login and after each successful save). A failed save rolls the
+	// optimistic in-memory list back to this.
+	mutedTopicsSaved []string
+
 	// sessionGen is bumped in handleUnauthorized on session expiry, so the
 	// self-rescheduling poll/wander/logo-idle tea.Tick chains started by
 	// afterLoginCmd (each stamped with the gen they were scheduled under)
@@ -597,6 +642,7 @@ func NewApp(client api.Client) App {
 		focus:              focusMenu,
 		loc:                time.UTC,
 		wanderLust:         false,
+		showGlobeTab:       true,
 		login:              screens.NewLoginModel(""),
 		feed:               screens.NewFeedModel(),
 		chatrooms:          screens.NewChatroomsModel("", client),
@@ -610,6 +656,7 @@ func NewApp(client api.Client) App {
 		topics:             screens.NewTopicsModel(),
 		journal:            screens.NewJournalModel(0),
 		search:             screens.NewSearchModel(),
+		globe:              screens.NewGlobeModel(),
 		pathPrompt:         screens.NewPathPromptModel(),
 		iconPicker:         screens.NewIconPickerModel(),
 		attachURLPrompt:    screens.NewPathPromptModel(),
@@ -653,6 +700,8 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	a.wanderLust = s.WanderLust
 	a.feedManualRefreshOnly = s.FeedManualRefreshOnly
 	a.typingIndicatorsEnabled = !s.TypingIndicatorsDisabled
+	a.desktopNotifications = s.DesktopNotifications
+	a.showGlobeTab = !s.HideGlobeTab
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
 	a.graphicsProtocolName = s.GraphicsProtocol
@@ -746,7 +795,18 @@ func (a App) Init() tea.Cmd {
 // whatever updateInner returned.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	prevActive := a.active
+	// C-Mail unread is RTDB-driven and never reaches the notifications list, so
+	// its desktop toast is detected here by an exact before/after TotalUnread()
+	// snapshot around updateInner — catching new mail whether or not the C-Mail
+	// tab is the active one (rule 2: an unfocused window always notifies).
+	cmailUnreadBefore := -1
+	if screens.IsDMStreamMsg(msg) {
+		cmailUnreadBefore = a.cmail.TotalUnread()
+	}
 	a2, cmd := a.updateInner(msg)
+	if cmailUnreadBefore >= 0 {
+		a2, cmd = a2.maybeNotifyNewCMail(cmailUnreadBefore, cmd)
+	}
 	if a2.active != prevActive {
 		// See screenSwitchedAt's doc comment (App struct) and
 		// inlineImageSwitchSettleDelay's — injectInlineImages uses this to
@@ -760,11 +820,36 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a3, tea.Batch(cmd, syncCmd)
 }
 
+// maybeNotifyNewCMail fires a "C-Mail: new message" desktop toast when the total
+// C-Mail unread count rose while handling a DM-stream message and the focus/tab
+// gate for screenCMail allows it. before is TotalUnread() captured before
+// updateInner ran. The first observation after login only arms the baseline so
+// the account-wide conversation-list snapshot's existing unread doesn't toast.
+func (a App) maybeNotifyNewCMail(before int, cmd tea.Cmd) (App, tea.Cmd) {
+	if a.cmailUnreadBaselined && a.cmail.TotalUnread() > before && a.shouldDesktopNotify(screenCMail) {
+		cmd = tea.Batch(cmd, desktopNotifyCmd("C-Mail", "new message"))
+	}
+	a.cmailUnreadBaselined = true
+	return a, cmd
+}
+
 func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
 		a = a.applyWindowSize(m)
 		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
 		return a, a.delegateUpdate(contentMsg)
+	}
+	// Terminal focus tracking for desktop notifications (tea.WithReportFocus).
+	// No screen consumes these, so they stop here.
+	switch msg.(type) {
+	case tea.FocusMsg:
+		a.focused = true
+		a.focusReported = true
+		return a, nil
+	case tea.BlurMsg:
+		a.focused = false
+		a.focusReported = true
+		return a, nil
 	}
 	// Any keypress dismisses a visible notification early. We do NOT return here,
 	// so the key still flows on to do its normal job; bumping notifyGen neutralizes
@@ -863,6 +948,9 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 	if a2, cmd, ok := a.handleSearch(msg); ok {
 		return a2, cmd
 	}
+	if a2, cmd, ok := a.handleGlobe(msg); ok {
+		return a2, cmd
+	}
 	if a2, cmd, ok := a.handleUnauthorized(msg); ok {
 		return a2, cmd
 	}
@@ -902,6 +990,7 @@ func (a App) updateAll(msg tea.Msg) App {
 	a.topics, _ = a.topics.Update(msg)
 	a.journal, _ = a.journal.Update(msg)
 	a.search, _ = a.search.Update(msg)
+	a.globe, _ = a.globe.Update(msg)
 	return a
 }
 
@@ -909,7 +998,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -1034,7 +1123,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	if a.leaderPending {
 		a.leaderPending = false
 		if a.active != screenLogin {
-			if s, ok := screenForMnemonic(m.String()); ok {
+			if s, ok := screenForMnemonic(m.String()); ok && (s != screenGlobe || a.showGlobeTab) {
 				var cmd tea.Cmd
 				a, cmd = activateScreen(a, s)
 				if s == screenSearch {
@@ -1279,10 +1368,23 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SubmitNewPostMsg:
 		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AudioAttachment), true
 	case postCreatedMsg:
+		a.feed = a.feed.CloseComposeAfterSuccess()
 		return a, a.loadFeedCmd(), true
 	case postConvertedToNoteMsg:
+		a.feed = a.feed.CloseComposeAfterSuccess()
 		a, notifyCmd := a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
 		return a, tea.Batch(notifyCmd, a.loadFeedCmd()), true
+	case postSubmitFailedMsg:
+		a.feed = a.feed.ClearComposeSubmitting()
+		a, notifyCmd := a.notify(notifyError, composeFailText(msg.err, "ctrl+d"))
+		return a, notifyCmd, true
+	case screens.SaveNewPostAsNoteMsg:
+		return a, a.saveNewPostAsNoteCmd(msg.Content, msg.Topics), true
+	case noteFromComposeSavedMsg:
+		a.feed = a.feed.CloseComposeAfterSuccess()
+		a.journal = a.journal.PrependNote(msg.note)
+		a, notifyCmd := a.notify(notifyInfo, "saved to your Journal")
+		return a, notifyCmd, true
 	case screens.SubmitPostEditMsg:
 		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentTouched, msg.AudioAttachment, msg.OtherAttachments), true
 	case postEditedMsg:
@@ -1492,6 +1594,9 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenCMail && screens.IsDMStreamMsg(msg) {
 			var cmd tea.Cmd
 			a.cmail, cmd = a.cmail.Update(msg)
+			// The desktop toast for new C-Mail is handled centrally in
+			// App.Update (maybeNotifyNewCMail), which wraps both this
+			// background path and the active-tab path.
 			return a, cmd, true
 		}
 	}
@@ -1644,6 +1749,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case settingsLoadedMsg:
 		a.settings = msg.settings
+		a.mutedTopicsSaved = msg.settings.MutedTopics // rollback baseline for Topics-tab mute/unmute
 		a.settingsScreen = a.settingsScreen.SetSettings(msg.settings)
 		a.broadcastConfig()
 		return a, nil, true
@@ -1653,6 +1759,8 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		wl := msg.WanderLust
 		fmro := msg.FeedManualRefreshOnly
 		tie := msg.TypingIndicatorsEnabled
+		dn := msg.DesktopNotifications
+		sgt := msg.ShowGlobeTab
 		td := msg.MaxThreadDepth
 		tz := msg.Timezone
 		iv := msg.ImageViewer
@@ -1669,7 +1777,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
 		}, true
 
 	case settingsSavedMsg:
@@ -1696,6 +1804,8 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		// (broadcastConfig below) to start/stop its own typing-indicator
 		// subsystem, see cmail.go's SharedConfigMsg handler.
 		a.typingIndicatorsEnabled = msg.typingIndicatorsEnabled
+		a.desktopNotifications = msg.desktopNotifications
+		a.showGlobeTab = msg.showGlobeTab
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
 		a.imageViewer = msg.imageViewer
@@ -1725,17 +1835,19 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "settings saved")
-		wl, fmro, tie, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
+		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
 				cfg.FeedManualRefreshOnly = fmro
 				cfg.TypingIndicatorsDisabled = !tie
+				cfg.DesktopNotifications = dn
+				cfg.HideGlobeTab = !sgt
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
 				cfg.ImageViewer = iv
@@ -2069,6 +2181,12 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, a.loadBookmarksCmd(""), true
 		}
 		return a, nil, true
+	case screens.ShowUserProfileMsg:
+		if a.active != screenBookmarks {
+			return a, nil, false
+		}
+		a.profileReturn = screenBookmarks
+		return a, a.loadUserProfileCmd(msg.Username), true
 	}
 	return a, nil, false
 }
@@ -2385,6 +2503,49 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.RefreshTopicsMsg:
 		return a, a.loadTopicsCmd(), true
 
+	case screens.SetMutedTopicsMsg:
+		// Mute / unmute a topic from the Topics tab. Apply + broadcast now so
+		// every post list re-filters immediately (optimistic); persist on a
+		// debounce tick so a rapid series of toggles becomes one PATCH. If that
+		// PATCH fails, mutedTopicsSaveResultMsg rolls the list back to
+		// mutedTopicsSaved (the last version the server accepted).
+		a.settings.MutedTopics = msg.Topics
+		// broadcastConfig re-seeds the settings screen's MutedTopics baseline too
+		// (see its SharedConfigMsg handler), so a later ctrl+s there can't PATCH
+		// a stale list back.
+		a.broadcastConfig()
+		a.mutedTopicsSaveSeq++
+		seq := a.mutedTopicsSaveSeq
+		return a, tea.Tick(mutedTopicsSaveDebounce, func(time.Time) tea.Msg {
+			return mutedTopicsFlushMsg{seq: seq}
+		}), true
+
+	case mutedTopicsFlushMsg:
+		if msg.seq != a.mutedTopicsSaveSeq {
+			return a, nil, true // superseded by a newer toggle
+		}
+		s := a.settings
+		attempted := append([]string(nil), s.MutedTopics...)
+		return a, func() tea.Msg {
+			if err := a.client.UpdateSettings(s); err != nil {
+				return mutedTopicsSaveResultMsg{err: err}
+			}
+			return mutedTopicsSaveResultMsg{topics: attempted}
+		}, true
+
+	case mutedTopicsSaveResultMsg:
+		if msg.err != nil {
+			// Roll back to the last list the server accepted and cancel any
+			// still-pending debounce tick so it can't re-PATCH the reverted state.
+			a.settings.MutedTopics = append([]string(nil), a.mutedTopicsSaved...)
+			a.mutedTopicsSaveSeq++
+			a.broadcastConfig()
+			a, cmd := a.notify(notifyError, mutedTopicsSaveFailText(msg.err))
+			return a, cmd, true
+		}
+		a.mutedTopicsSaved = msg.topics
+		return a, nil, true
+
 	case topicsLoadedMsg:
 		a.topics = a.topics.SetTopics(msg.topics, msg.cursor)
 		return a, nil, true
@@ -2471,7 +2632,12 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.SubmitPublishNoteMsg:
 		return a, a.publishNoteCmd(msg.Content, msg.Topics), true
 	case notePublishedMsg:
+		a.journal = a.journal.CloseEditAfterPublish()
 		return a, nil, true
+	case notePublishFailedMsg:
+		a.journal = a.journal.ClearPublishing()
+		a, notifyCmd := a.notify(notifyError, composeFailText(msg.err, "ctrl+s"))
+		return a, notifyCmd, true
 	case screens.LoadNoteRevisionsMsg:
 		return a, a.loadNoteRevisionsCmd(msg.NoteID, ""), true
 	case screens.LoadNoteRevisionMsg:
@@ -2532,6 +2698,15 @@ func (a App) handleSearch(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case screens.LeaveSearchMsg:
 		a.active = a.searchReturn
+		if a.active == screenGlobe {
+			// LeaveSearchMsg bypasses activateScreen (unlike ordinary tab
+			// navigation), so the angle/fetch tick chains that died on the way
+			// into Search (see handleGlobe's gen/active guards) need restarting
+			// here explicitly, same as activateScreen's screenGlobe case does.
+			var cmd tea.Cmd
+			a, cmd = a.maybeStartGlobeFetch()
+			return a, tea.Batch(cmd, a.scheduleGlobeAngleTickCmd()), true
+		}
 		return a, nil, true
 	}
 	return a, nil, false
@@ -2695,6 +2870,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.journal = a.journal.SetError(m.err)
 	case screenSearch:
 		a.search = a.search.SetError(m.err)
+	case screenGlobe:
+		a.globe = a.globe.SetError(m.err)
 	}
 	// Errors never block a screen: the per-screen SetError above only feeds an
 	// inline "couldn't load" empty-state, while the failure is announced in the
@@ -2716,6 +2893,34 @@ func friendlyErr(err error) string {
 		}
 	}
 	return err.Error()
+}
+
+// mutedTopicsSaveFailText explains why a mute/unmute couldn't be saved, so
+// the revert banner names a cause instead of just "can't mute".
+func mutedTopicsSaveFailText(err error) string {
+	reason := friendlyErr(err)
+	var apiErr *api.APIError
+	switch {
+	case errors.Is(err, api.ErrRateLimited):
+		reason = "too many settings changes just now (limit 2/min, 15/day) — wait a bit and try again"
+	case errors.Is(err, api.ErrUnauthorized):
+		reason = "your session expired — sign in again"
+	case errors.As(err, &apiErr) && apiErr.Status >= 500:
+		reason = "the server had a problem (" + strconv.Itoa(apiErr.Status) + ") — try again shortly"
+	}
+	return "couldn't save muted topics: " + reason + " — reverted"
+}
+
+// composeFailText is friendlyErr plus a rate-limit case: a 429 on CreatePost
+// carries the canned "rate limit exceeded" string (the server body is dropped —
+// see doRequest), so spell out the recovery the kept-open editor now offers.
+// saveKey is the key that diverts the text to the Journal in the editor that's
+// still open — "ctrl+d" for the feed composer, "ctrl+s" for the journal editor.
+func composeFailText(err error, saveKey string) string {
+	if errors.Is(err, api.ErrRateLimited) {
+		return "you're posting too fast — wait a bit, then retry or press " + saveKey + " to save it to your Journal"
+	}
+	return friendlyErr(err)
 }
 
 func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
@@ -4387,6 +4592,12 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.loadProfileCmd(),
 		cmailCmd,
 		a.fetchUnreadCountCmd(),
+		// Load the notification list once at login so desktopNotifyForNewNotifs
+		// baselines its high-water mark from server time immediately — otherwise,
+		// with zero unread at login, the first activity notification of the
+		// session only sets the baseline and never toasts. See
+		// docs/53-desktop-notifications.md.
+		a.loadNotifsCmd(),
 		a.schedulePollCmd(),
 		feedPollCmd,
 		a.loadSettingsCmd(),
@@ -4459,6 +4670,24 @@ type postCreatedMsg struct{}
 // postConvertedToNoteMsg is returned instead of postCreatedMsg when the server
 // silently turned a too-soon post into a journal entry — see createPostCmd.
 type postConvertedToNoteMsg struct{}
+
+// postSubmitFailedMsg is returned by createPostCmd / saveNewPostAsNoteCmd when
+// the new-post composer's submit fails for a non-401 reason (rate limit, 5xx,
+// network). The compose panel is still open and populated; handlePostDetail
+// just clears the in-flight flag and shows a friendly banner, so the user can
+// retry or press Ctrl+D to divert the text to their Journal. (A 401 still comes
+// back as actionErrMsg so handleUnauthorized can redirect to login.)
+type postSubmitFailedMsg struct{ err error }
+
+// noteFromComposeSavedMsg is returned by saveNewPostAsNoteCmd on success —
+// the new-post composer's Ctrl+D stored the text as a private note.
+type noteFromComposeSavedMsg struct{ note model.Note }
+
+// notePublishFailedMsg is the journal-editor counterpart of postSubmitFailedMsg:
+// a Ctrl+P publish-as-post failed for a non-401 reason. The editor is still
+// open and populated; handleJournal clears the in-flight flag and banners the
+// error so the user can Ctrl+S the text as a note.
+type notePublishFailedMsg struct{ err error }
 type postDeletedMsg struct {
 	postID   string
 	fromFeed bool // true = delete was triggered from the feed; false = from post detail
@@ -4492,6 +4721,8 @@ type settingsSavedMsg struct {
 	wanderLust              bool
 	feedManualRefreshOnly   bool
 	typingIndicatorsEnabled bool
+	desktopNotifications    bool
+	showGlobeTab            bool
 	maxThreadDepth          int
 	timezone                string
 	imageViewer             string
@@ -4695,6 +4926,23 @@ type topicPostsPageMsg struct {
 	cursor string
 }
 
+// mutedTopicsFlushMsg is the debounce tick that persists a mute/unmute made
+// from the Topics tab. Only the tick whose seq still matches
+// mutedTopicsSaveSeq calls UpdateSettings — see docs/54-muted-topics.md.
+type mutedTopicsFlushMsg struct{ seq int }
+
+// mutedTopicsSaveResultMsg reports the outcome of that PATCH. On success
+// (err == nil) topics is the list now stored server-side; on failure the
+// optimistic in-memory list is rolled back to mutedTopicsSaved.
+type mutedTopicsSaveResultMsg struct {
+	topics []string
+	err    error
+}
+
+// mutedTopicsSaveDebounce coalesces a burst of mute/unmute presses into one
+// PATCH /v1/settings (rate-limited 2/min, 15/day).
+const mutedTopicsSaveDebounce = 2 * time.Second
+
 type searchPreviewLoadedMsg struct {
 	preview model.SearchPreview
 	query   string
@@ -4857,6 +5105,11 @@ func (a *App) loadProfileCmd() tea.Cmd {
 	}
 }
 
+// followingScanMaxPages bounds the follow-state scan in loadUserProfileCmd in
+// case a server bug ever reports a cursor indefinitely; 40 pages covers 2,000
+// follows (GetFollowing pages at 50), far beyond any real account's following.
+const followingScanMaxPages = 40
+
 func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 	return func() tea.Msg {
 		// Skip the API call if this is the logged-in user's own profile.
@@ -4867,12 +5120,16 @@ func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
-		// Detect whether the logged-in user follows this profile by scanning
-		// the first page of the following list (up to 50 entries).
+		// Detect whether the logged-in user follows this profile by paging
+		// through the following list until the profile turns up.
 		var isFollowing bool
 		var followID string
-		follows, _, err := a.client.GetFollowing("")
-		if err == nil {
+		cursor := ""
+		for i := 0; i < followingScanMaxPages; i++ {
+			follows, next, ferr := a.client.GetFollowing(cursor)
+			if ferr != nil {
+				break
+			}
 			for _, f := range follows {
 				if f.FollowedID == user.ID {
 					isFollowing = true
@@ -4880,6 +5137,10 @@ func (a *App) loadUserProfileCmd(username string) tea.Cmd {
 					break
 				}
 			}
+			if isFollowing || next == "" {
+				break
+			}
+			cursor = next
 		}
 		return userProfileLoadedMsg{user: user, isFollowing: isFollowing, followID: followID}
 	}
@@ -5151,7 +5412,10 @@ func (a *App) createPostCmd(content, title, slug string, topics []string, isPubl
 	return func() tea.Msg {
 		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, audioAttachment)
 		if err != nil {
-			return actionErrMsg{err}
+			if errors.Is(err, api.ErrUnauthorized) {
+				return actionErrMsg{err} // let handleUnauthorized redirect to login
+			}
+			return postSubmitFailedMsg{err: err}
 		}
 		// The server silently converts a post submitted too soon after a
 		// previous one into a journal entry instead of rejecting it — the
@@ -5215,8 +5479,9 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case notifsLoadedMsg:
 		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
+		a, dnCmd := a.desktopNotifyForNewNotifs(msg.notifs)
 		a.notifications = a.notifications.SetNotifs(msg.notifs, msg.cursor)
-		return a, cmd, true
+		return a, tea.Batch(cmd, dnCmd), true
 	case notifsPageMsg:
 		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
 		a.notifications = a.notifications.AppendNotifs(msg.notifs, msg.cursor)
@@ -5306,6 +5571,9 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		prev := a.polledUnreadCount
 		a.polledUnreadCount = msg.count
 		a.polledUnreadCountExact = msg.exact
+		// The desktop toast for new activity fires from the notifsLoadedMsg
+		// handler (desktopNotifyForNewNotifs) so it can carry the real
+		// per-notification text; this poll just triggers that list refresh.
 		if msg.count > prev && !a.notifications.HasPaginated() {
 			return a, a.loadNotifsCmd(), true
 		}
@@ -5347,6 +5615,49 @@ func (a App) suppressActiveRoomMentions(notifs []model.Notification) (App, tea.C
 		}
 	}
 	return a, tea.Batch(cmds...)
+}
+
+// desktopNotifyForNewNotifs fires a desktop toast for every notification in the
+// freshly-loaded list that is newer than the last one already handled, unread,
+// and passes the focus/tab gate for its type. notifs is newest-first, as the
+// server returns it. The first list after login only sets the high-water mark
+// (lastNotifiedAt) so the pre-existing backlog doesn't toast. suppressActive-
+// RoomMentions has already run on notifs, so a mention in the room the user is
+// viewing arrives here already marked Read and is skipped. More than three new
+// items collapse to a single "N new notifications" toast.
+func (a App) desktopNotifyForNewNotifs(notifs []model.Notification) (App, tea.Cmd) {
+	if len(notifs) == 0 {
+		return a, nil
+	}
+	if !a.notifBaselined {
+		a.notifBaselined = true
+		a.lastNotifiedAt = notifs[0].CreatedAt
+		return a, nil
+	}
+	newest := notifs[0].CreatedAt
+	var toasts []tea.Cmd
+	for _, n := range notifs {
+		if !n.CreatedAt.After(a.lastNotifiedAt) {
+			break
+		}
+		if n.Read {
+			continue
+		}
+		src, ok := notifScreen(n.Type)
+		if !ok || !a.shouldDesktopNotify(src) {
+			continue
+		}
+		toasts = append(toasts, desktopNotifyCmd("cyberspace", screens.NotifToastText(n)))
+	}
+	a.lastNotifiedAt = newest
+	switch {
+	case len(toasts) == 0:
+		return a, nil
+	case len(toasts) <= 3:
+		return a, tea.Batch(toasts...)
+	default:
+		return a, desktopNotifyCmd("cyberspace", fmt.Sprintf("%d new notifications", len(toasts)))
+	}
 }
 
 func (a *App) loadNotifsCmd() tea.Cmd {
@@ -5572,6 +5883,140 @@ func (a *App) loadTopicPostsPageCmd(slug, cursor string) tea.Cmd {
 		}
 		return topicPostsPageMsg{posts: posts, cursor: nextCursor}
 	}
+}
+
+// --- Globe commands --- see docs/55-globe.md.
+
+// globeAngleTickInterval drives the rotation animation while screenGlobe is
+// active; globeFetchInterval paces the per-user profile fetches the guild
+// marker set needs (GET /v1/users/:username is rate-limited to 30/min —
+// this keeps well under that even if several guilds' worth of usernames are
+// queued at once).
+const globeAngleTickInterval = 150 * time.Millisecond
+const globeFetchInterval = 2500 * time.Millisecond
+
+type globeAngleTickMsg struct{ gen int }
+type globeFetchTickMsg struct{ gen int }
+type globeGuildMembersMsg struct{ usernames []string }
+type globeProfileLoadedMsg struct {
+	username string
+	user     model.User
+}
+type globeProfileRateLimitedMsg struct{ username string }
+type globeProfileFailedMsg struct{ username string }
+
+func (a *App) scheduleGlobeAngleTickCmd() tea.Cmd {
+	gen := a.sessionGen
+	return tea.Tick(globeAngleTickInterval, func(time.Time) tea.Msg { return globeAngleTickMsg{gen: gen} })
+}
+
+func (a *App) scheduleGlobeFetchTickCmd() tea.Cmd {
+	gen := a.sessionGen
+	return tea.Tick(globeFetchInterval, func(time.Time) tea.Msg { return globeFetchTickMsg{gen: gen} })
+}
+
+// loadGlobeGuildMembersCmd loads the first page of members from every guild
+// the caller belongs to — their guild plus up to five apprenticeships
+// (GET /v1/users/:username/guilds) — deduplicated and excluding the caller
+// (the self marker is drawn separately). Ponytail: first page per guild
+// only, add auto-pagination if globes for large guilds look sparse; one
+// guild's member fetch failing doesn't block the others.
+func (a *App) loadGlobeGuildMembersCmd(username string) tea.Cmd {
+	self := username
+	return func() tea.Msg {
+		memberships, err := a.client.GetUserGuilds(username)
+		if err != nil {
+			return errMsg{err}
+		}
+		seen := make(map[string]struct{})
+		var usernames []string
+		for _, gm := range memberships {
+			members, _, err := a.client.GetGuildMembers(gm.Slug, "")
+			if err != nil {
+				continue
+			}
+			for _, member := range members {
+				if member.Username == "" || member.Username == self {
+					continue
+				}
+				if _, ok := seen[member.Username]; ok {
+					continue
+				}
+				seen[member.Username] = struct{}{}
+				usernames = append(usernames, member.Username)
+			}
+		}
+		return globeGuildMembersMsg{usernames: usernames}
+	}
+}
+
+// loadGlobeProfileCmd resolves one username's location. A 429 requeues the
+// username (see globeProfileRateLimitedMsg) instead of surfacing the global
+// error banner; any other failure is silently dropped (ponytail: fixed
+// interval retry-forever on 429, no backoff bookkeeping — a single dead
+// account among many is not worth reporting).
+func (a *App) loadGlobeProfileCmd(username string) tea.Cmd {
+	return func() tea.Msg {
+		u, err := a.client.GetProfile(username)
+		if err != nil {
+			if errors.Is(err, api.ErrRateLimited) {
+				return globeProfileRateLimitedMsg{username: username}
+			}
+			return globeProfileFailedMsg{username: username}
+		}
+		return globeProfileLoadedMsg{username: username, user: u}
+	}
+}
+
+// maybeStartGlobeFetch begins the paced profile-fetch tick chain when the
+// pending queue is non-empty and no chain is already running.
+func (a App) maybeStartGlobeFetch() (App, tea.Cmd) {
+	if a.globe.IsFetching() || !a.globe.HasPending() {
+		return a, nil
+	}
+	a.globe = a.globe.SetFetching(true)
+	return a, a.scheduleGlobeFetchTickCmd()
+}
+
+func (a App) handleGlobe(msg tea.Msg) (App, tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case globeGuildMembersMsg:
+		a.globe = a.globe.SetGuildMembers(msg.usernames)
+		a, cmd := a.maybeStartGlobeFetch()
+		return a, cmd, true
+
+	case globeFetchTickMsg:
+		if msg.gen != a.sessionGen || a.active != screenGlobe {
+			a.globe = a.globe.SetFetching(false)
+			return a, nil, true
+		}
+		username, next, ok := a.globe.NextPending()
+		a.globe = next
+		if !ok {
+			a.globe = a.globe.SetFetching(false)
+			return a, nil, true
+		}
+		return a, tea.Batch(a.loadGlobeProfileCmd(username), a.scheduleGlobeFetchTickCmd()), true
+
+	case globeProfileLoadedMsg:
+		a.globe = a.globe.SetProfile(msg.username, msg.user)
+		return a, nil, true
+
+	case globeProfileRateLimitedMsg:
+		a.globe = a.globe.Requeue(msg.username)
+		return a, nil, true
+
+	case globeProfileFailedMsg:
+		return a, nil, true // silent drop — see loadGlobeProfileCmd
+
+	case globeAngleTickMsg:
+		if msg.gen != a.sessionGen || a.active != screenGlobe {
+			return a, nil, true // chain dies here; activateScreen restarts it on return
+		}
+		a.globe = a.globe.Advance()
+		return a, a.scheduleGlobeAngleTickCmd(), true
+	}
+	return a, nil, false
 }
 
 // --- Search commands ---
@@ -5926,9 +6371,27 @@ func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := a.client.CreatePost(content, "", "", topics, false, false, nil)
 		if err != nil {
-			return actionErrMsg{err}
+			if errors.Is(err, api.ErrUnauthorized) {
+				return actionErrMsg{err} // let handleUnauthorized redirect to login
+			}
+			return notePublishFailedMsg{err: err}
 		}
 		return notePublishedMsg{}
+	}
+}
+
+// saveNewPostAsNoteCmd stores the new-post composer's text as a private
+// Journal note (Ctrl+D) instead of publishing it to the feed.
+func (a *App) saveNewPostAsNoteCmd(content string, topics []string) tea.Cmd {
+	return func() tea.Msg {
+		note, err := a.client.CreateNote(content, topics)
+		if err != nil {
+			if errors.Is(err, api.ErrUnauthorized) {
+				return actionErrMsg{err} // let handleUnauthorized redirect to login
+			}
+			return postSubmitFailedMsg{err: err}
+		}
+		return noteFromComposeSavedMsg{note: note}
 	}
 }
 

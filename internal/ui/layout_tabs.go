@@ -136,7 +136,7 @@ func (l TabsLayout) ModalMaxWidth(termWidth int) int { return termWidth }
 
 func (l TabsLayout) renderTabBar(a App) string {
 	var tabs string
-	for _, t := range visibleTabs() {
+	for _, t := range visibleTabs(a) {
 		badge := ""
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			badge = " (" + notifBadgeText(a.polledUnreadCount, a.polledUnreadCountExact) + ")"
@@ -229,6 +229,8 @@ func (l TabsLayout) renderActiveScreen(a App) string {
 		return a.journal.View()
 	case screenSearch:
 		return a.search.View()
+	case screenGlobe:
+		return a.globe.View()
 	}
 	return ""
 }
@@ -331,7 +333,14 @@ func (l TabsLayout) screenHints(a App) []hint {
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			return []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}, {"Esc", "cancel"}}
+			if a.feed.ComposePanelActive() && a.feed.ComposeSubmitting() {
+				return []hint{{"…", "posting"}}
+			}
+			h := []hint{{"tab", "cycle"}, {"space", "toggle"}, {"Ctrl+s", "send"}}
+			if a.feed.ComposePanelActive() && !a.feed.ComposeEditing() {
+				h = append(h, hint{"Ctrl+d", "to journal"})
+			}
+			return append(h, hint{"Esc", "cancel"})
 		}
 		hints := []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, {"l", "copy link"}, {"c", "message"}}
 		if a.feed.CanEditSelected() {
@@ -362,6 +371,9 @@ func (l TabsLayout) screenHints(a App) []hint {
 		return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"m", "mark read"}, {"u", "toggle unread"}, {"f", "filter"}, {"c", "message"}, more}
 	case screenJournal:
 		if a.journal.ComposeActive() {
+			if a.journal.IsPublishing() {
+				return []hint{{"…", "publishing"}}
+			}
 			return []hint{{"tab", "cycle"}, {"Ctrl+s", "save"}, {"Ctrl+p", "publish"}, {"Esc", "cancel"}}
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "edit"}, {"n", "new"}, {"d", "delete"}, more}
@@ -397,7 +409,7 @@ func (l TabsLayout) screenHints(a App) []hint {
 		if a.topics.IsBrowsingTopic() {
 			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
 		}
-		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, {"esc", "back"}, more}
+		return []hint{{"↑↓", "navigate"}, {"enter", "browse"}, {"m", "mute"}, {"f", "filter"}, {"esc", "back"}, more}
 	case screenSearch:
 		if a.search.InputFocused() {
 			return []hint{{"enter", "search"}}
@@ -406,6 +418,8 @@ func (l TabsLayout) screenHints(a App) []hint {
 			return []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"esc", "back"}, more}
 		}
 		return []hint{{"↑↓", "navigate"}, {"enter", "open / see all"}, {"esc", "edit query"}, more}
+	case screenGlobe:
+		return []hint{{"+/-", "zoom"}, {"m", "guild"}, {"space", "pause"}}
 	case screenSettings:
 		base := []hint{{"↑↓", "navigate"}, {"space", "toggle"}, {"tab", "cycle"}, more}
 		if a.settingsScreen.IsDirty() {
@@ -477,7 +491,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 	globalRows := append([]string{
 		sectionStyle.Render("global"),
 		row("1-9", "feed · notifs · c-mail · circ · journal · bookmarks · guilds · topics · profile"),
-	}, leaderRows(row)...)
+	}, leaderRows(a, row)...)
 	globalRows = append(globalRows,
 		row("← →", "cycle tabs"),
 		row("/", "search"),

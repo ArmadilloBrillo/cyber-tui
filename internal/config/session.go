@@ -112,6 +112,14 @@ type Config struct {
 	// The manual Up-arrow-at-top refresh gesture is unaffected either way.
 	FeedManualRefreshOnly bool `json:"feedManualRefreshOnly,omitempty"`
 
+	// DesktopNotifications enables OS desktop notifications (an OSC 9 escape
+	// written to stdout) for new C-Mail and new activity notifications while
+	// the app is backgrounded — see docs/53-desktop-notifications.md. Off by
+	// default when absent from the JSON file; opt-in because it only works on
+	// terminals that support OSC 9 and would be noise otherwise. Never fires
+	// from an SSH-hosted (ephemeral) session — the toast would pop on the host.
+	DesktopNotifications bool `json:"desktopNotifications,omitempty"`
+
 	// TypingIndicatorsDisabled turns off C-Mail's whole typing-indicator
 	// subsystem (see docs/00-battery-audit.md item #6): the inbound
 	// typing-presence RTDB subscription, the outbound announce/clear calls
@@ -121,6 +129,11 @@ type Config struct {
 	// time so the rest of the app reads the positive
 	// "typingIndicatorsEnabled" instead of double-negating this field.
 	TypingIndicatorsDisabled bool `json:"typingIndicatorsDisabled,omitempty"`
+
+	// HideGlobeTab removes the Globe tab from the tab bar/nav sidebar and
+	// arrow-key cycling (same as Search's hidden entry) when true. Off by
+	// default (tab shown) when absent from the JSON file.
+	HideGlobeTab bool `json:"hideGlobeTab,omitempty"`
 
 	// ImageScale multiplies the fullscreen image modal's display size,
 	// relative to the image's own native (1:1 pixel) size — 1.0 shows it at

@@ -122,7 +122,10 @@ func main() {
 	} else if cfg.Email != "" {
 		app = app.WithSavedEmail(cfg.Email)
 	}
-	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	// WithReportFocus lets the app track terminal focus (tea.FocusMsg /
+	// tea.BlurMsg) so desktop notifications can stay quiet while the user is
+	// looking at the app — see docs/53-desktop-notifications.md.
+	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithReportFocus()}
 	// CYBERSPACE_DEBUG_KEYS logs every raw tea.KeyMsg (key + KeyType + runes) to
 	// cyber-tui-keys.log, to diagnose terminal-specific keybinding quirks (e.g.
 	// a terminal not sending the expected byte for a given ctrl-combo) without

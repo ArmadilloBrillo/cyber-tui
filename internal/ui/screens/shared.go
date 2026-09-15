@@ -187,6 +187,66 @@ func updateTopicsInput(input textinput.Model, msg tea.Msg) (textinput.Model, tea
 	return input.Update(filtered)
 }
 
+// topicMuted reports whether any of a post's topics is in the muted set —
+// the muted-topics analogue of the FilterNSFW check each post-list screen
+// applies in its visible*() helper. See docs/54-muted-topics.md.
+func topicMuted(topics []string, muted map[string]struct{}) bool {
+	for _, t := range topics {
+		if _, ok := muted[t]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// mutedSet builds the lookup set from Settings.MutedTopics; returns nil for an
+// empty list so callers can cheaply short-circuit with len() == 0.
+func mutedSet(topics []string) map[string]struct{} {
+	if len(topics) == 0 {
+		return nil
+	}
+	m := make(map[string]struct{}, len(topics))
+	for _, t := range topics {
+		m[t] = struct{}{}
+	}
+	return m
+}
+
+// sameMutedSet reports whether set already holds exactly the slugs in list
+// (order-independent) — used by SharedConfigMsg handlers to skip a needless
+// selection reset + re-render when the muted list hasn't changed.
+func sameMutedSet(set map[string]struct{}, list []string) bool {
+	if len(set) != len(list) {
+		return false
+	}
+	for _, t := range list {
+		if _, ok := set[t]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// toggleMuted returns a new slice with slug removed from the current muted
+// set if present, or appended if not. Order of the retained entries is not
+// guaranteed (the API doesn't care).
+func toggleMuted(set map[string]struct{}, slug string) []string {
+	if _, muted := set[slug]; muted {
+		out := make([]string, 0, len(set)-1)
+		for t := range set {
+			if t != slug {
+				out = append(out, t)
+			}
+		}
+		return out
+	}
+	out := make([]string, 0, len(set)+1)
+	for t := range set {
+		out = append(out, t)
+	}
+	return append(out, slug)
+}
+
 // extractURLs is a package-internal helper used by URLProvider implementations.
 // It normalizes each extracted URL so relative paths get the cyberspace.online prefix.
 func extractURLs(content string) []string {

@@ -3,8 +3,74 @@ package screens
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/model"
 )
+
+// ctrlD is the "save this new post to the Journal" key.
+var ctrlD = tea.KeyMsg{Type: tea.KeyCtrlD}
+
+// TestPostComposePanel_CtrlD_EmitsSaveAsNoteMsg: Ctrl+D in a new-post compose
+// with a non-empty body emits ComposeSaveAsNoteMsg carrying the body.
+func TestPostComposePanel_CtrlD_EmitsSaveAsNoteMsg(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.Open(false)
+	m.textarea.SetValue("a half-finished thought")
+	_, cmd := m.Update(ctrlD)
+	if cmd == nil {
+		t.Fatal("expected a cmd from Ctrl+D, got nil")
+	}
+	msg := cmd()
+	got, ok := msg.(ComposeSaveAsNoteMsg)
+	if !ok {
+		t.Fatalf("Ctrl+D produced %T, want ComposeSaveAsNoteMsg", msg)
+	}
+	if got.Content != "a half-finished thought" {
+		t.Errorf("Content = %q, want %q", got.Content, "a half-finished thought")
+	}
+}
+
+// TestPostComposePanel_CtrlD_NoOpWhenEmpty: nothing to save, no message.
+func TestPostComposePanel_CtrlD_NoOpWhenEmpty(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.Open(false)
+	m.textarea.SetValue("   \n  ")
+	if _, cmd := m.Update(ctrlD); cmd != nil {
+		t.Fatalf("expected no cmd for Ctrl+D on an empty body, got %T", cmd())
+	}
+}
+
+// TestPostComposePanel_CtrlD_NoOpWhenEditing: "save as note" is not offered
+// when correcting an already-published post.
+func TestPostComposePanel_CtrlD_NoOpWhenEditing(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.OpenForEdit(model.Post{Content: "already posted"})
+	if _, cmd := m.Update(ctrlD); cmd != nil {
+		t.Fatalf("expected no cmd for Ctrl+D while editing, got %T", cmd())
+	}
+}
+
+// TestPostComposePanel_Submitting_SuppressesSubmitKeys: while a submit is in
+// flight, Ctrl+S / Ctrl+D / Esc are inert so the user can't double-fire.
+func TestPostComposePanel_Submitting_SuppressesSubmitKeys(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.Open(false)
+	m.textarea.SetValue("in flight")
+	m = m.MarkSubmitting()
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyCtrlS},
+		{Type: tea.KeyCtrlD},
+		{Type: tea.KeyEsc},
+	} {
+		if _, cmd := m.Update(k); cmd != nil {
+			t.Errorf("key %v produced a cmd while submitting, want none", k)
+		}
+	}
+	m = m.ClearSubmitting()
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS}); cmd == nil {
+		t.Error("Ctrl+S still inert after ClearSubmitting, want a submit cmd")
+	}
+}
 
 func TestPostComposePanel_SlugValue_LowercasesOnRead(t *testing.T) {
 	m := NewPostComposePanel(80)

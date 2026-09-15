@@ -98,8 +98,8 @@ func TestNavigateTab_LeftFromFeed_Wraps(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
 	a, _ = navigateTabBy(a, -1)
-	if a.active != screenSettings {
-		t.Errorf("expected screenSettings (wrap), got %v", a.active)
+	if a.active != screenGlobe {
+		t.Errorf("expected screenGlobe (wrap), got %v", a.active)
 	}
 }
 
@@ -124,9 +124,9 @@ func TestNavigateTab_RightFromGuilds_GoesToTopics(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// visibleTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings
+	// visibleTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings, globe
 	// (search is hidden — reachable only via "g s"/"/", never by cycling; see navigateTabBy)
-	expected := []screen{screenNotifications, screenCMail, screenChatrooms, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenFeed}
+	expected := []screen{screenNotifications, screenCMail, screenChatrooms, screenJournal, screenBookmarks, screenGuilds, screenTopics, screenProfile, screenSettings, screenGlobe, screenFeed}
 	for i, want := range expected {
 		a, _ = navigateTabBy(a, +1)
 		if a.active != want {
@@ -138,9 +138,9 @@ func TestNavigateTab_CyclesAllTabsRight(t *testing.T) {
 func TestNavigateTab_CyclesAllTabsLeft(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	// visibleTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings
+	// visibleTabs order: feed, notifications, c-mail, circ, journal, bookmarks, guilds, topics, profile, settings, globe
 	// (search is hidden — reachable only via "g s"/"/", never by cycling; see navigateTabBy)
-	expected := []screen{screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenChatrooms, screenCMail, screenNotifications, screenFeed}
+	expected := []screen{screenGlobe, screenSettings, screenProfile, screenTopics, screenGuilds, screenBookmarks, screenJournal, screenChatrooms, screenCMail, screenNotifications, screenFeed}
 	for i, want := range expected {
 		a, _ = navigateTabBy(a, -1)
 		if a.active != want {
@@ -315,6 +315,19 @@ func TestHandleKeys_Leader_DoubleG_GoesToGuilds(t *testing.T) {
 	}
 	if a3.active != screenGuilds {
 		t.Errorf("expected screenGuilds, got %v", a3.active)
+	}
+}
+
+func TestHandleKeys_Leader_GlobeHidden_ChordDoesNothing(t *testing.T) {
+	a := loggedInApp()
+	a.showGlobeTab = false
+	a2, _, _ := a.handleKeys(keyMsg("g"))
+	a3, _, consumed := a2.handleKeys(keyMsg("l")) // g l -> Globe, but hidden
+	if !consumed {
+		t.Fatal("expected second key of the chord to be consumed even when the target tab is hidden")
+	}
+	if a3.active == screenGlobe {
+		t.Error("expected 'g l' to be a no-op when showGlobeTab is false")
 	}
 }
 
@@ -1290,6 +1303,38 @@ func TestSearch_UserHitToProfile_EscReturnsToSearchOrigin(t *testing.T) {
 	}
 }
 
+// TestBookmarks_ShowUserProfileMsg_ProfileReturnsToBookmarks mirrors
+// TestSearch_UserHitToProfile_EscReturnsToSearchOrigin: guards handleBookmarks'
+// ShowUserProfileMsg case against the same missing-active-screen-guard
+// regression handleGuilds once had (see that test's comment) — every handler
+// in App.Update's dispatch chain must ignore the message unless its own
+// screen is active, or an earlier handler could hijack profileReturn.
+func TestBookmarks_ShowUserProfileMsg_ProfileReturnsToBookmarks(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenBookmarks
+
+	m, cmd := a.Update(screens.ShowUserProfileMsg{Username: "neo"})
+	a2 := m.(App)
+	if a2.profileReturn != screenBookmarks {
+		t.Fatalf("expected profileReturn = screenBookmarks, got %v", a2.profileReturn)
+	}
+	if cmd == nil {
+		t.Fatal("expected a profile-load cmd")
+	}
+
+	m2, _ := a2.Update(cmd())
+	a3 := m2.(App)
+	if a3.active != screenProfile {
+		t.Fatalf("expected navigation to screenProfile, got %v", a3.active)
+	}
+
+	m3, _ := a3.Update(screens.BackFromProfileMsg{})
+	a4 := m3.(App)
+	if a4.active != screenBookmarks {
+		t.Errorf("expected esc from profile to return to screenBookmarks, got %v", a4.active)
+	}
+}
+
 func TestShowSearchPostMsg_NavigatesToPostDetail(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenSearch
@@ -2009,6 +2054,106 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 	}
 }
 
+// TestHandleTopics_SetMutedTopics_AppliesAndDebouncesSave verifies the
+// Topics-tab mute/unmute path: SetMutedTopicsMsg applies to a.settings
+// immediately (and bumps the save seq), a stale mutedTopicsFlushMsg is a
+// no-op, and the current one persists via UpdateSettings. See
+// docs/54-muted-topics.md.
+func TestHandleTopics_SetMutedTopics_AppliesAndDebouncesSave(t *testing.T) {
+	a := loggedInApp()
+
+	a, cmd, ok := a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"crypto"}})
+	if !ok {
+		t.Fatal("expected handleTopics to handle SetMutedTopicsMsg")
+	}
+	if len(a.settings.MutedTopics) != 1 || a.settings.MutedTopics[0] != "crypto" {
+		t.Fatalf("a.settings.MutedTopics = %v, want [crypto]", a.settings.MutedTopics)
+	}
+	if a.mutedTopicsSaveSeq != 1 {
+		t.Fatalf("mutedTopicsSaveSeq = %d, want 1", a.mutedTopicsSaveSeq)
+	}
+	if cmd == nil {
+		t.Fatal("expected a debounce tick cmd")
+	}
+
+	// A superseded tick does nothing.
+	if _, c, ok := a.handleTopics(mutedTopicsFlushMsg{seq: 99}); !ok || c != nil {
+		t.Fatalf("stale mutedTopicsFlushMsg: ok=%v cmd=%v, want ok=true cmd=nil", ok, c)
+	}
+
+	// The current tick persists and reports success.
+	_, c, ok := a.handleTopics(mutedTopicsFlushMsg{seq: a.mutedTopicsSaveSeq})
+	if !ok || c == nil {
+		t.Fatalf("current mutedTopicsFlushMsg: ok=%v cmd=%v, want ok=true cmd!=nil", ok, c)
+	}
+	res, ok := c().(mutedTopicsSaveResultMsg)
+	if !ok || res.err != nil {
+		t.Fatalf("expected a successful mutedTopicsSaveResultMsg, got %#v", c())
+	}
+	a, _, _ = a.handleTopics(res)
+	if len(a.mutedTopicsSaved) != 1 || a.mutedTopicsSaved[0] != "crypto" {
+		t.Errorf("mutedTopicsSaved = %v, want [crypto]", a.mutedTopicsSaved)
+	}
+	got, err := a.client.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if len(got.MutedTopics) != 1 || got.MutedTopics[0] != "crypto" {
+		t.Errorf("persisted MutedTopics = %v, want [crypto]", got.MutedTopics)
+	}
+}
+
+// updateSettingsFailClient makes every UpdateSettings call fail with a 429, to
+// exercise the muted-topics rollback path and its cause-specific banner.
+type updateSettingsFailClient struct {
+	*api.MockClient
+}
+
+func (c updateSettingsFailClient) UpdateSettings(model.Settings) error {
+	return api.ErrRateLimited
+}
+
+// A failed save rolls the optimistic MutedTopics list back to the last version
+// the server accepted (mutedTopicsSaved) and shows an error banner.
+func TestHandleTopics_SetMutedTopics_RollsBackOnSaveFailure(t *testing.T) {
+	a := NewApp(updateSettingsFailClient{api.NewMockClient()})
+	a.active = screenFeed
+	a.focus = focusMenu
+	// Login baseline: "news" is already muted and persisted.
+	a, _, _ = a.handleSettings(settingsLoadedMsg{settings: model.Settings{MutedTopics: []string{"news"}}})
+
+	// User mutes "crypto" too — optimistic.
+	a, _, _ = a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"news", "crypto"}})
+	if len(a.settings.MutedTopics) != 2 {
+		t.Fatalf("optimistic MutedTopics = %v, want [news crypto]", a.settings.MutedTopics)
+	}
+
+	// The debounced save fires and fails.
+	_, c, _ := a.handleTopics(mutedTopicsFlushMsg{seq: a.mutedTopicsSaveSeq})
+	res, ok := c().(mutedTopicsSaveResultMsg)
+	if !ok || res.err == nil {
+		t.Fatalf("expected a failed mutedTopicsSaveResultMsg, got %#v", c())
+	}
+
+	seqBefore := a.mutedTopicsSaveSeq
+	a, cmd, ok := a.handleTopics(res)
+	if !ok {
+		t.Fatal("expected handleTopics to handle the failed result")
+	}
+	if len(a.settings.MutedTopics) != 1 || a.settings.MutedTopics[0] != "news" {
+		t.Errorf("after rollback MutedTopics = %v, want [news]", a.settings.MutedTopics)
+	}
+	if a.mutedTopicsSaveSeq == seqBefore {
+		t.Error("expected mutedTopicsSaveSeq to be bumped so a pending tick is cancelled")
+	}
+	if !strings.Contains(a.notifyText, "2/min") {
+		t.Errorf("banner %q should explain the rate-limit cause", a.notifyText)
+	}
+	if cmd == nil {
+		t.Error("expected the banner's expire cmd")
+	}
+}
+
 // subscribeCancelSpyClient wraps MockClient's SubscribeDMs/SubscribeRoom
 // cancel funcs to record whether they were actually invoked — used below to
 // verify handleUnauthorized tears down a live per-conversation/per-room
@@ -2379,6 +2524,66 @@ func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
 	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
 	if _, ok := msg.(postCreatedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
+	}
+}
+
+// createPostErrClient returns a fixed error from CreatePost and CreateNote so
+// the failure branches of createPostCmd / saveNewPostAsNoteCmd / publishNoteCmd
+// can be exercised.
+type createPostErrClient struct {
+	*api.MockClient
+	err error
+}
+
+func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error) {
+	return model.Post{}, c.err
+}
+func (c *createPostErrClient) CreateNote(content string, topics []string) (model.Note, error) {
+	return model.Note{}, c.err
+}
+
+func TestCreatePostCmd_RateLimited_ReturnsPostSubmitFailedMsg(t *testing.T) {
+	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrRateLimited})
+
+	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	if _, ok := msg.(postSubmitFailedMsg); !ok {
+		t.Fatalf("createPostCmd() = %T, want postSubmitFailedMsg (editor must stay open)", msg)
+	}
+}
+
+func TestCreatePostCmd_Unauthorized_ReturnsActionErrMsg(t *testing.T) {
+	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrUnauthorized})
+
+	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	if _, ok := msg.(actionErrMsg); !ok {
+		t.Fatalf("createPostCmd() = %T, want actionErrMsg so handleUnauthorized redirects to login", msg)
+	}
+}
+
+func TestSaveNewPostAsNoteCmd_Success_ReturnsNoteFromComposeSavedMsg(t *testing.T) {
+	a := NewApp(api.NewMockClient())
+
+	msg := a.saveNewPostAsNoteCmd("# Title\n\nbody", nil)()
+	if _, ok := msg.(noteFromComposeSavedMsg); !ok {
+		t.Fatalf("saveNewPostAsNoteCmd() = %T, want noteFromComposeSavedMsg", msg)
+	}
+}
+
+func TestSaveNewPostAsNoteCmd_Error_ReturnsPostSubmitFailedMsg(t *testing.T) {
+	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrRateLimited})
+
+	msg := a.saveNewPostAsNoteCmd("body", nil)()
+	if _, ok := msg.(postSubmitFailedMsg); !ok {
+		t.Fatalf("saveNewPostAsNoteCmd() = %T, want postSubmitFailedMsg", msg)
+	}
+}
+
+func TestPublishNoteCmd_Error_ReturnsNotePublishFailedMsg(t *testing.T) {
+	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrRateLimited})
+
+	msg := a.publishNoteCmd("note text", nil)()
+	if _, ok := msg.(notePublishFailedMsg); !ok {
+		t.Fatalf("publishNoteCmd() = %T, want notePublishFailedMsg (editor must stay open)", msg)
 	}
 }
 
@@ -5971,6 +6176,55 @@ func TestHandleGuilds_GuildJoinedAsApprentice_RefreshesOwnApprenticeSlugs(t *tes
 	}
 }
 
+// globeGuildsStubClient overrides GetUserGuilds/GetGuildMembers to test
+// loadGlobeGuildMembersCmd's multi-guild aggregation (badge guild plus
+// apprenticeships) without a real API.
+type globeGuildsStubClient struct {
+	*api.MockClient
+	memberships   []model.GuildMembership
+	membersBySlug map[string][]model.GuildMember
+}
+
+func (c *globeGuildsStubClient) GetUserGuilds(username string) ([]model.GuildMembership, error) {
+	return c.memberships, nil
+}
+
+func (c *globeGuildsStubClient) GetGuildMembers(slug, cursor string) ([]model.GuildMember, string, error) {
+	return c.membersBySlug[slug], "", nil
+}
+
+// TestLoadGlobeGuildMembersCmd_IncludesApprenticeshipGuilds locks in that the
+// Globe screen's guild markers come from every guild the caller belongs to,
+// not just their badge guild: members from an apprenticeship guild are
+// merged in, a username appearing in more than one guild is deduped, and the
+// caller's own username is excluded regardless of which guild it comes from.
+func TestLoadGlobeGuildMembersCmd_IncludesApprenticeshipGuilds(t *testing.T) {
+	client := &globeGuildsStubClient{
+		MockClient: api.NewMockClient(),
+		memberships: []model.GuildMembership{
+			{Slug: "night-owls", Role: "member"},
+			{Slug: "deep-divers", Role: "apprentice"},
+		},
+		membersBySlug: map[string][]model.GuildMember{
+			"night-owls":  {{Username: "case"}, {Username: "molly"}, {Username: "shared"}},
+			"deep-divers": {{Username: "wintermute"}, {Username: "shared"}},
+		},
+	}
+	a := NewApp(client)
+
+	msg, ok := a.loadGlobeGuildMembersCmd("case")().(globeGuildMembersMsg)
+	if !ok {
+		t.Fatalf("expected globeGuildMembersMsg, got %T", msg)
+	}
+
+	got := slices.Clone(msg.usernames)
+	slices.Sort(got)
+	want := []string{"molly", "shared", "wintermute"}
+	if !slices.Equal(got, want) {
+		t.Errorf("usernames = %v, want %v (self excluded, cross-guild duplicate deduped)", got, want)
+	}
+}
+
 // TestHandleProfile_OwnProfileLoad_FetchesApprenticeships is the regression
 // test for a real bug: navigating to your own profile via the tab bar goes
 // through loadProfileCmd/profileLoadedMsg (activateScreen in layout.go), a
@@ -5996,6 +6250,67 @@ func TestHandleProfile_OwnProfileLoad_FetchesApprenticeships(t *testing.T) {
 		t.Errorf("username = %q, want case", gm.username)
 	}
 	_ = a2
+}
+
+type paginatingFollowClient struct {
+	*api.MockClient
+	calls int
+}
+
+func (c *paginatingFollowClient) GetFollowing(cursor string) ([]model.Follow, string, error) {
+	c.calls++
+	if cursor == "" {
+		return []model.Follow{{ID: "fw-a", FollowedID: "user-someone"}}, "page2", nil
+	}
+	return []model.Follow{{ID: "fw-dixie", FollowedID: "user-dixie"}}, "", nil
+}
+
+// TestLoadUserProfileCmd_PaginatesFollowingUntilProfileFound covers the
+// follow-state scan walking past the first page: the viewed profile is only on
+// page 2 of the logged-in user's following list, and must still be detected.
+func TestLoadUserProfileCmd_PaginatesFollowingUntilProfileFound(t *testing.T) {
+	c := &paginatingFollowClient{MockClient: api.NewMockClient()}
+	a := NewApp(c)
+
+	msg := a.loadUserProfileCmd("dixie")()
+	loaded, ok := msg.(userProfileLoadedMsg)
+	if !ok {
+		t.Fatalf("expected userProfileLoadedMsg, got %T", msg)
+	}
+	if !loaded.isFollowing {
+		t.Error("expected isFollowing=true for a profile found on page 2 of the following list")
+	}
+	if loaded.followID != "fw-dixie" {
+		t.Errorf("followID = %q, want fw-dixie", loaded.followID)
+	}
+	if c.calls != 2 {
+		t.Errorf("GetFollowing calls = %d, want 2 (one per page)", c.calls)
+	}
+}
+
+type endlessFollowClient struct {
+	*api.MockClient
+	calls int
+}
+
+func (c *endlessFollowClient) GetFollowing(cursor string) ([]model.Follow, string, error) {
+	c.calls++
+	return []model.Follow{{ID: "x", FollowedID: "nobody"}}, "more", nil
+}
+
+// TestLoadUserProfileCmd_FollowingScanRespectsPageCap ensures a server that
+// reports a cursor forever can't spin the scan indefinitely.
+func TestLoadUserProfileCmd_FollowingScanRespectsPageCap(t *testing.T) {
+	c := &endlessFollowClient{MockClient: api.NewMockClient()}
+	a := NewApp(c)
+
+	loaded := a.loadUserProfileCmd("dixie")().(userProfileLoadedMsg)
+	if loaded.isFollowing {
+		t.Error("expected isFollowing=false when the profile is never in the following list")
+	}
+	if c.calls != followingScanMaxPages {
+		t.Errorf("GetFollowing calls = %d, want the page cap %d", c.calls, followingScanMaxPages)
+	}
 }
 
 func TestHandleGuilds_UserGuildsLoaded_GuardsOnUsernameMatch(t *testing.T) {

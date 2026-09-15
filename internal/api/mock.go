@@ -9,9 +9,11 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 )
 
-// mockHelpReply mirrors the /help reply documented in the API's command table.
+// mockHelpReply mirrors the /help reply documented in the API's command
+// table (docs/00-latest-api-reference.md's Commands section).
 const mockHelpReply = "Commands: /me <action> · /poke /hug /hi5 /slap [@user] · " +
-	"/dice <notation> · /8ball <question> · /fortune · /help"
+	"/dice, /dice:SIDES, /dice:SIDES:COUNT, or notation (4d6kh3, 2d6+3, adv, d%, 6x4d6kh3) · " +
+	"/8ball <question> · /fortune · /gif <url> · /song <url> | artist | title [| genre] · /help"
 
 // MockClient implements Client with static fake data.
 // Used during development before the real API is available.

@@ -74,6 +74,32 @@ func TestProfileView_CountsHidden(t *testing.T) {
 	}
 }
 
+// --- following indicator ---
+
+func TestProfileView_FollowingIndicator_ShownWhenFollowing(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true).SetFollowState(true, "fw1")
+	view := m.View()
+	if !strings.Contains(view, "following") {
+		t.Errorf("a read-only profile you follow should show a 'following' indicator, got:\n%s", view)
+	}
+}
+
+func TestProfileView_FollowingIndicator_HiddenWhenNotFollowing(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(true).SetFollowState(false, "")
+	view := m.View()
+	if strings.Contains(view, "following") {
+		t.Errorf("a profile you don't follow must not show the 'following' indicator, got:\n%s", view)
+	}
+}
+
+func TestProfileView_FollowingIndicator_HiddenOnOwnProfile(t *testing.T) {
+	m := screens.NewProfileModel().SetUser(testUser()).SetReadOnly(false).SetFollowState(true, "fw1")
+	view := m.View()
+	if strings.Contains(view, "following") {
+		t.Errorf("your own profile must not show the 'following' indicator, got:\n%s", view)
+	}
+}
+
 // --- 'f' key — follow ---
 
 func TestProfileUpdate_FKey_EmitsFollowMsg_WhenNotFollowing(t *testing.T) {
@@ -400,6 +426,31 @@ func TestProfile_FilterNSFW_HidesNSFWPost(t *testing.T) {
 	}
 	if sp.Post.ID != "pp3" {
 		t.Errorf("expected pp3 (safe), got %s", sp.Post.ID)
+	}
+}
+
+func TestProfile_MutedTopics_HidesMatchingPost(t *testing.T) {
+	posts := []model.Post{
+		{ID: "pp1", AuthorUsername: "ragnar", Content: "keep", Topics: []string{"linux"}},
+		{ID: "pp2", AuthorUsername: "ragnar", Content: "drop", Topics: []string{"crypto"}},
+		{ID: "pp3", AuthorUsername: "ragnar", Content: "keep too"},
+	}
+	m := profileWithPosts(posts)
+	m, _ = m.Update(mutedTopicsMsg("crypto"))
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd on enter")
+	}
+	sp, ok := cmd().(screens.ShowProfilePostMsg)
+	if !ok {
+		t.Fatalf("expected ShowProfilePostMsg, got %T", cmd())
+	}
+	if sp.Post.ID != "pp3" {
+		t.Errorf("expected pp3 (crypto post filtered), got %s", sp.Post.ID)
 	}
 }
 

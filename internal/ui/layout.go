@@ -475,16 +475,22 @@ var menuTabs = []navTab{
 	{label: "profile", mnemonic: 'p', s: screenProfile},
 	{label: "search", mnemonic: 's', s: screenSearch, hidden: true},
 	{label: "settings", mnemonic: 'e', s: screenSettings},
+	{label: "globe", mnemonic: 'l', s: screenGlobe},
 }
 
 // visibleTabs returns the menuTabs entries shown on the tab bar/nav sidebar
-// and reachable by arrow-key cycling — i.e. everything except hidden entries.
-func visibleTabs() []navTab {
+// and reachable by arrow-key cycling — i.e. everything except hidden entries
+// and, when the user has hidden it via Settings, Globe (a.showGlobeTab).
+func visibleTabs(a App) []navTab {
 	out := make([]navTab, 0, len(menuTabs))
 	for _, t := range menuTabs {
-		if !t.hidden {
-			out = append(out, t)
+		if t.hidden {
+			continue
 		}
+		if t.s == screenGlobe && !a.showGlobeTab {
+			continue
+		}
+		out = append(out, t)
 	}
 	return out
 }
@@ -616,7 +622,7 @@ func tabIndexOf(a App) int {
 	if active == screenPostDetail {
 		active = a.postDetailReturn
 	}
-	for i, t := range visibleTabs() {
+	for i, t := range visibleTabs(a) {
 		if t.s == active {
 			return i
 		}
@@ -670,9 +676,12 @@ func splitMnemonic(label string, mnemonic rune) (before, ch, after string) {
 // leaderRows formats every "g"+mnemonic chord as a help-modal row via row
 // (see TabsLayout/MillerLayout's renderHelpModal), derived from menuTabs so
 // the help text can never drift from what the leader key actually does.
-func leaderRows(row func(key, desc string) string) []string {
+func leaderRows(a App, row func(key, desc string) string) []string {
 	rows := make([]string, 0, len(menuTabs))
 	for _, t := range menuTabs {
+		if t.s == screenGlobe && !a.showGlobeTab {
+			continue
+		}
 		rows = append(rows, row("g "+string(t.mnemonic), t.label))
 	}
 	return rows
@@ -781,6 +790,20 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 		// No auto-fetch: Search only has meaning once a query is submitted.
 		// Jumping in just shows whatever state it was last left in.
 		return a, nil
+	case screenGlobe:
+		a.globe = a.globe.SetSelf(a.currentUser)
+		var cmds []tea.Cmd
+		if !a.globe.GuildLoaded() {
+			if a.currentUser.GuildSlug != "" {
+				cmds = append(cmds, a.loadGlobeGuildMembersCmd(a.currentUser.Username))
+			} else {
+				a.globe = a.globe.SetGuildMembers(nil)
+			}
+		}
+		var fetchCmd tea.Cmd
+		a, fetchCmd = a.maybeStartGlobeFetch()
+		cmds = append(cmds, fetchCmd, a.scheduleGlobeAngleTickCmd())
+		return a, tea.Batch(cmds...)
 	}
 	return a, nil
 }
@@ -794,7 +817,7 @@ func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 	if a.active == screenSearch {
 		return a, nil
 	}
-	tabs := visibleTabs()
+	tabs := visibleTabs(a)
 	idx := (tabIndexOf(a) + delta + len(tabs)) % len(tabs)
 	return activateScreen(a, tabs[idx].s)
 }
@@ -831,6 +854,8 @@ func delegateScreenUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
 		a.journal, cmd = a.journal.Update(msg)
 	case screenSearch:
 		a.search, cmd = a.search.Update(msg)
+	case screenGlobe:
+		a.globe, cmd = a.globe.Update(msg)
 	}
 	return a, cmd
 }

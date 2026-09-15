@@ -55,6 +55,7 @@ cyber-tui/
 │       │   ├── cmail.go         # Direct messages (C-Mail) screen
 │       │   ├── chatrooms.go     # Public chatrooms screen
 │       │   ├── reconnect.go     # Shared RTDB reconnect backoff/retry helpers (cmail.go + chatrooms.go)
+│       │   ├── inputhistory.go  # Shell-style sent-line recall buffer (per conversation/room) for the cIRC/C-Mail compose input
 │       │   ├── compose.go       # Reusable multi-line text editor
 │       │   ├── timeutil.go      # Time formatting helpers
 │       │   ├── timeutil_test.go # Time formatting tests
@@ -313,7 +314,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 | `WithAutoLogin(email, password)` | method | Pre-fills credentials for programmatic login |
 | `WithSavedEmail(email)` | method | Pre-fills email field on login screen |
 
-**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenGuilds`, `screenTopics`, `screenJournal`, `screenSearch`, `screenSettings`
+**Screen enum values:** `screenLogin`, `screenFeed`, `screenChatrooms`, `screenCMail`, `screenProfile`, `screenPostDetail`, `screenNotifications`, `screenBookmarks`, `screenGuilds`, `screenTopics`, `screenJournal`, `screenSearch`, `screenSettings`, `screenGlobe`
 
 **Responsibilities:**
 
@@ -325,6 +326,7 @@ Root Bubble Tea model. Acts as the message hub and screen lifecycle manager.
 - Manages global shortcuts (`1`–`9` screen jump, `v` density toggle, `?` help, `t` theme picker, `z` timezone picker, `o` URL opener, `q`/`ctrl+c` quit)
 - Handles automatic token refresh on `ErrUnauthorized` responses
 - Surfaces transient errors via a **global notification banner** that replaces the status-bar row, colored by severity, and auto-dismisses after 4 s or on the next keypress (which still performs its normal action)
+- **Desktop notifications** (opt-in, `desktopNotifications` local config): emits an OSC 9 escape to `os.Stdout` via `desktopNotifyCmd` (`desktopnotify.go`), gated by `shouldDesktopNotify(source screen)` — enabled, not an SSH/ephemeral session, and either the terminal window isn't focused or it is but `a.active != source` (the tab the event belongs to). Focus is tracked from `tea.FocusMsg`/`tea.BlurMsg` (`tea.WithReportFocus()` in `main.go`), handled in `updateInner`. **Activity toasts** are built in the `notifsLoadedMsg` handler (`desktopNotifyForNewNotifs`) from `screens.NotifToastText(n)` — the same one-line text a Notifications-tab row shows — for each list item newer than the `lastNotifiedAt` high-water mark; `notifScreen(type)` routes the gate per type (`chat_mention`→cIRC, `dm_message` skipped, else Notifications), >3 collapse to a count. **C-Mail toasts** come from `maybeNotifyNewCMail` in `Update`, via a before/after `a.cmail.TotalUnread()` snapshot around any `IsDMStreamMsg` (works whether or not C-Mail is the active tab). One-shot guards `notifBaselined` / `cmailUnreadBaselined` suppress the login backlog. See `docs/53-desktop-notifications.md`
 - Runs background tick jobs: `schedulePollCmd` (60 s unread count), `scheduleWanderCmd` (1 h wander check), `scheduleRelativeTimeTickCmd` (20 s, keeps CIRC/C-Mail's `"relative"`-mode timestamps advancing — see `docs/17-settings.md`)
 
 **Error handling — errors never block a screen:**
@@ -377,12 +379,14 @@ Home feed of posts from followed users.
 - Emits `ShowPostMsg` on Enter → App navigates to PostDetail
 - Emits `SubmitNewPostMsg` on compose submit (content + topics)
 - `n` opens compose for a new post (with topics input); `r` opens compose for a reply
+- New-post panel: `Ctrl+S` publishes to the feed, **`Ctrl+D` saves it as a private Journal note instead** (emits `SaveNewPostAsNoteMsg`; title becomes a `#` heading; create-mode only, non-empty body) — `docs/51-compose-to-journal.md`
+- Compose panel stays open + populated on submit until App reports the outcome; a failed publish reopens it with the fields intact (`CloseComposeAfterSuccess`/`ClearComposeSubmitting`), a success closes it. Submit keys are inert while in flight.
 - `d` on the selected post (own posts only) shows a y/n confirmation overlay; on `y` emits `DeletePostMsg`
 - Dense/relaxed display modes; post content truncated to 4 lines in list view
 - Timezone-aware timestamps via `displayTime()`
 - Every eligible inline image in a post's body renders inline (not just the first) when the InlineImages setting is on and a graphics protocol was detected (`VisibleInlineImages()`, `internal/ui/screens/inlineimage.go`) — see the `internal/ui/imgview` package section for protocol details and `docs/plan-inline-images-improvements.md` for the iTerm2/Sixel repaint workarounds this depends on
 
-Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg` (Content, Title, Topics, IsPublic, IsNSFW), `DeletePostMsg`  
+Key types: `FeedModel`, `LoadMoreFeedMsg`, `RefreshFeedMsg`, `ShowPostMsg`, `ShowPostForReplyMsg`, `SubmitNewPostMsg` (Content, Title, Topics, IsPublic, IsNSFW), `SaveNewPostAsNoteMsg` (Content, Topics), `DeletePostMsg`  
 Key function: `ParseTopics(s string) []string` — splits comma-separated string, caps at 3  
 Key methods: `SetCurrentUsername(username)`, `RemovePost(postID)`
 
@@ -459,7 +463,7 @@ Settings are organised into static `settingsGroups`, each containing `settingsIt
 
 **Deferred fields** (read from API, never patched): `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics`
 
-**Local-only fields** (persisted to `~/.cyber-tui.json`, never sent to the API): `imageViewer` (enum, "terminal"/"browser" — "terminal" tries inline/fullscreen-modal rendering via `internal/ui/imgview` when a graphics protocol was detected, falling back to the browser only if none was; "browser" always opens images externally regardless of protocol detection), `inlineImages` (bool, gates Feed/Post Detail's automatic inline rendering independent of the fullscreen modal), `layoutName` ("tabs"/"miller" — see `internal/ui/layout.go`'s `layoutFromName`), `feedManualRefreshOnly` (bool, "feed" group, "auto-refresh (background poll)" — disables the 60s feed background poll; see `docs/39-feed-background-poll.md`), `typingIndicatorsEnabled` (bool, "c-mail" group, "typing indicators" — positive polarity; disables C-Mail's typing-presence subscription, announce/clear calls, and merged anim/idle-check tick; see `docs/00-battery-audit.md` item #6)
+**Local-only fields** (persisted to `~/.cyber-tui.json`, never sent to the API): `imageViewer` (enum, "terminal"/"browser" — "terminal" tries inline/fullscreen-modal rendering via `internal/ui/imgview` when a graphics protocol was detected, falling back to the browser only if none was; "browser" always opens images externally regardless of protocol detection), `inlineImages` (bool, gates Feed/Post Detail's automatic inline rendering independent of the fullscreen modal), `layoutName` ("tabs"/"miller" — see `internal/ui/layout.go`'s `layoutFromName`), `feedManualRefreshOnly` (bool, "feed" group, "auto-refresh (background poll)" — disables the 60s feed background poll; see `docs/39-feed-background-poll.md`), `typingIndicatorsEnabled` (bool, "c-mail" group, "typing indicators" — positive polarity; disables C-Mail's typing-presence subscription, announce/clear calls, and merged anim/idle-check tick; see `docs/00-battery-audit.md` item #6), `desktopNotifications` (bool, "desktop" group, "notifications (OSC 9 terminals)" — off by default; OSC 9 toast for new C-Mail and new activity, carrying the Notifications-tab row text, when the window is unfocused or focused on a different tab than the event; never fires from an SSH session; see `docs/53-desktop-notifications.md`)
 
 - `j`/`k` navigate; Space/Enter toggle booleans or cycle enum options
 - ctrl+s emits `SaveSettingsMsg` with the updated settings; ESC discards
@@ -477,6 +481,8 @@ Direct messages (C-Mail) with live Firebase RTDB integration.
 - Other person's messages left-aligned; my messages right-aligned (driven by `currentUser` field)
 - `j`/`k` navigate conversation list in list mode; Enter opens detail mode; Enter sends a message; `↑`/`↓` scroll history one line in detail mode, or move message-by-message once browsing is entered (see below)
 - **Per-message browsing:** mirrors `chatrooms.go`'s browsing mode. Reaching the top of the loaded messages via `↑` selects the newest message (`selectedMsgID`, blurs the compose input) instead of scrolling further; `↑`/`↓` then move the selection message-by-message via the shared `selectableMessageIndices`/`selectablePos`/`millerPageNav`/`selOffsets`/`selHeights`/`ensureMessageVisible` helpers (generalized out of `chatrooms.go` to take plain slices instead of a `ChatroomsModel`, so both screens use the same code), `Esc` or `↓` past the newest exits back to typing. `refreshMessages()` (mirroring `ChatroomsModel.refreshMessages`) renders via `renderChatMessagesWithSelection` (`render.go`), tracking each message's `msgOffsets`/`msgHeights` and highlighting the selected one with `theme.SelectedRow`. No flag/delete (no CMail message flag/delete API endpoint — see `docs/00-api-backlog.md`) or spoiler/l33t reveal (unsupported here); `updateCMailBrowsingKey` is the trimmed CMail counterpart to `updateBrowsingKey`. `SelectedMessageID() string` exposes the current selection for testing/App. `GetFocusedURLs()` scopes to just the selected message while browsing, falling back to aggregating every loaded message otherwise — same change made to `ChatroomsModel.GetFocusedURLs()`.
+- **Sent-line recall:** while typing (not while browsing messages), `ctrl+↑` / `ctrl+↓` walk the compose input back and forth through lines sent **in the open conversation** this session, shell-style — `ctrl+↑` stashes the half-typed draft on the first step, `ctrl+↓` steps forward and finally restores it, and `ctrl+↓` is inert until the first `ctrl+↑`. Backed by `inputHistory` (`inputhistory.go`, capped at 100 lines per thread) held in a `sentHistory map[string]*inputHistory` keyed by conversation ID, with a `histFor(id)` lazy-create helper (mirrors the `mutedUsersByRoom` map pattern); `record()` on send, `reset()` on conversation open. `chatrooms.go` has the identical wiring keyed by room slug. See `docs/52-sent-line-recall.md`.
+- **View profile:** `p`/`ctrl+p` views the other participant's profile from the conversation list (highlighted card); `ctrl+p` also works in an open conversation with the compose box focused (no message selected — reads `OtherParticipant(*activeConv)` directly, since a bare `p` there would just type into the compose box) and, like Chatrooms, `p`/`ctrl+p` views the selected sender's profile in per-message browsing mode. See `docs/16-view-profile.md`.
 - **Starting a conversation:** pressing `c` on any highlighted post, reply, notification, or read-only profile (or opening a `dm_message` notification) emits `StartConversationMsg{Username}` (defined in `messages.go`); App records the originating screen in `App.cmailReturn` and sets `CMailModel.canGoBack = true`, then calls `StartConversation(username)` via REST, switches to C-Mail, and opens the returned conversation in detail mode; self-DMs are dropped in the App handler. Distinct from `g m` (see "Keyboard Shortcuts" → Global): `c` targets the specific highlighted user, `g m` just opens the C-Mail tab's conversation list — the in-app hint for `c` reads "message" rather than "c-mail" to keep the two from being conflated
 - **Background across tab switches:** `activateScreen` (`layout.go`) no longer cancels the C-Mail subscription on tab-away — it calls `CMailModel.SetFocused(false)` instead; the RTDB message/typing streams and reconnect-retry chains keep running because `App.handleCMail` (`app.go`) routes any message matching `screens.IsDMStreamMsg` to `a.cmail.Update` whenever C-Mail isn't the active screen. Unlike Chatrooms, there's no separate `unreadCount` counter — `UnreadCount` lives per-conversation in `m.conversations`, and `TotalUnread()` sums it for the tab-bar badge. It has a single writer: the account-wide `user_conversations/<uid>` RTDB subscription (see below), which delivers the server-authoritative count within ~1s of a new message, no poll involved. `dmReceivedMsg` (the per-conversation message stream) no longer bumps `UnreadCount` locally — an earlier optimistic `bumpActiveConvUnread` local increment was removed because it raced with the account-wide push and stacked on top of the already-correct value, so the badge only ever grew and never reset to the true count. `SetFocused(true)` on return still zeroes the open conversation's count via `zeroActiveConvUnread`, and opening a conversation zeroes it directly (`SetActiveConversation`). Switching back into C-Mail from a *different* tab skips `ResetToList()` when `HasLiveConv()` is true, resuming the same conversation; re-pressing the C-Mail key while *already* on it still resets to the list (the escape hatch out of a deep-linked conversation — see below). Only the one conversation the user had open stays live.
 - **Deep-link ESC:** when `canGoBack` is true, ESC in detail mode emits `LeaveCMailMsg` instead of dropping to the conversation list; App sets `active = cmailReturn`, returning straight to whatever screen the conversation was opened from. Entering C-Mail through ordinary tab/leader-key navigation calls `CMailModel.ResetToList()` in `activateScreen` (`layout.go`), which clears `canGoBack` *and* forces `mode` back to list — so manually switching to the C-Mail tab while a deep-linked conversation is still open also drops to the list instead of leaving it stuck in detail mode, same as ESC — this mirrors the `canGoBack`/`profileReturn` pattern in `profile.go`
@@ -512,7 +518,8 @@ Public chatroom browser and chat — CIRC (tab `4`, key `4`). Full API integrati
 - **Deep-link ESC:** when `canGoBack` is true, ESC in detail mode emits `LeaveChatroomsMsg` instead of dropping to the room list; App sets `active = chatroomsReturn`, returning straight to Notifications (or wherever else a future deep link originates). Re-pressing the Chatrooms key while *already* on the screen still calls `ChatroomsModel.ResetToList()` in `activateScreen`, clearing `canGoBack` and forcing `mode` back to list — the intentional escape hatch out of a deep-linked room without ESC. Switching into Chatrooms from a *different* tab, however, resumes whatever room was left open instead of resetting (`activateScreen` only resets when the previously active screen wasn't already Chatrooms — see "Background across tab switches" above) — this mirrors the `canGoBack`/`profileReturn` pattern in `profile.go`, also just adopted by `cmail.go`
 - **Slash commands:** normal commands (`/me`, `/dice`, etc.) are expanded server-side; `/help` posts nothing, so `SendRoomMessage`'s reply text is routed through app.go's `roomCommandReplyMsg` into `AppendSystemMessage`, which injects a local-only `model.Message{IsSystem: true}` rendered via `renderSystemNotice` (shared with `cmail.go`). `/me`-style messages carry an undocumented `isAction` field (`model.Message.IsAction`, confirmed live) rendered via `renderActionLine` as classic IRC `* username body *` — see `docs/33-circ.md` for the live-testing findings. Before sending, the `"enter"` handler checks a `/`-prefixed input's first word against `isKnownSlashCommand` (shared with `cmail.go`); an unrecognized command is rejected locally via `AppendSystemMessage` (`*** unknown command: /xyz`) instead of being sent as a literal chat message — see `docs/33-circ.md`
 - Same inline-image rendering/text-suppression as `cmail.go` — see that section (shared `chatInlineImageURL()`/`sanitizeChatMessageForInlineImage()`/`renderCircMessagesWithSelection` machinery). `VisibleInlineImages()` additionally computes each slot's `ColIndent` from `circMessageTextIndent()` (username-length-derived), so the image lines up with where that message's own wrapped body text starts
-- **Per-message browsing:** reaching the top of the loaded messages via `↑` selects the newest message (`selectedMsgID`, blurs the compose input) instead of scrolling further; `↑`/`↓` then move the selection message-by-message (`updateBrowsingKey`, via `selectableMessageIndices`/`selectablePos`/`millerPageNav`), `Esc` or `↓` past the newest exits back to typing. `!` flags the selected message (opens the shared `FlagPrompt` overlay, `FlagKindMessage`) and `d` soft-deletes your own (`DeleteRoomMessageMsg`, y/n confirm); `Enter` toggles a spoiler/l33t message's reveal state. `refreshMessages()` renders via `renderCircMessagesWithSelection` (`render.go`), tracking `msgOffsets`/`msgHeights` and highlighting the selection with `theme.SelectedRow`. `GetFocusedURLs()` scopes to just the selected message while browsing, falling back to aggregating every loaded message otherwise. `cmail.go`'s browsing mode mirrors this (minus flag/delete/reveal, which CMail doesn't support) via free functions generalized out of this file to take plain slices instead of a `ChatroomsModel`, so both screens share the same navigation code.
+- **Sent-line recall:** identical to `cmail.go`'s — `ctrl+↑` / `ctrl+↓` walk the compose input through the lines sent in the open room this session while typing, backed by `inputHistory` in a `sentHistory map[string]*inputHistory` keyed by room slug (`histFor(slug)` helper, `reset()` in `enterRoomDetail`). See `docs/52-sent-line-recall.md`.
+- **Per-message browsing:** reaching the top of the loaded messages via `↑` selects the newest message (`selectedMsgID`, blurs the compose input) instead of scrolling further; `↑`/`↓` then move the selection message-by-message (`updateBrowsingKey`, via `selectableMessageIndices`/`selectablePos`/`millerPageNav`), `Esc` or `↓` past the newest exits back to typing. `!` flags the selected message (opens the shared `FlagPrompt` overlay, `FlagKindMessage`) and `d` soft-deletes your own (`DeleteRoomMessageMsg`, y/n confirm); `Enter` toggles a spoiler/l33t message's reveal state; `p`/`ctrl+p` views the sender's profile (`docs/16-view-profile.md`). `refreshMessages()` renders via `renderCircMessagesWithSelection` (`render.go`), tracking `msgOffsets`/`msgHeights` and highlighting the selection with `theme.SelectedRow`. `GetFocusedURLs()` scopes to just the selected message while browsing, falling back to aggregating every loaded message otherwise. `cmail.go`'s browsing mode mirrors this (minus flag/delete/reveal, which CMail doesn't support) via free functions generalized out of this file to take plain slices instead of a `ChatroomsModel`, so both screens share the same navigation code.
 
 Key types: `ChatroomsModel`, `chatroomMode` (`chatroomModeList` / `chatroomModeDetail`), `SendRoomMessageMsg`, `RoomOpenedMsg`, `RoomReconnectedMsg`, `OpenRoomMsg`, `LeaveChatroomsMsg`
 Key internal types: `roomSubscription` (RTDB channel + cancel func + `RoomID`), `roomSubscribedMsg`, `roomReceivedMsg`, `roomStreamClosedMsg`, `roomReconnectedMsg`, `roomReconnectFailedMsg`, `roomReconnectRetryDueMsg`, `circMsgsLoadedMsg`, `circOlderMsgsLoadedMsg`; presence: `roomPresenceSubscription`, `roomPresenceAnnouncedMsg`, `roomHeartbeatTickMsg`, `roomUsersLoadedMsg`, `roomPresenceSubscribedMsg`, `roomPresenceReceivedMsg`, `roomPresenceStreamClosedMsg`
@@ -530,6 +537,7 @@ Saved posts and replies, cursor-paginated.
 - `j`/`k` navigate items; `enter` opens the bookmarked post in PostDetail
 - `d` removes the selected bookmark (emits `DeleteBookmarkMsg`)
 - `b` on a post in Feed/PostDetail toggles a bookmark (emits `ToggleBookmarkMsg`)
+- `p`/`ctrl+p` on the selected bookmark views its author's profile (`bookmarkAuthor()` reads `Post.AuthorUsername`/`Reply.AuthorUsername`); see `docs/16-view-profile.md`
 
 Key types: `BookmarksModel`, `DeleteBookmarkMsg`, `ToggleBookmarkMsg`  
 Key methods: `SetBookmarks(items, cursor)`, `AppendBookmarks(items, cursor)`, `RemoveBookmark(id)`
@@ -558,9 +566,11 @@ Browse all topics (tags) and drill into posts for a selected topic.
 - Two-mode screen: topic list → topic feed
 - Topic list sorted by post count, cursor-paginated; `enter` opens the topic feed
 - Topic feed is a standard paginated post list; `esc` returns to the topic list
+- `m` (topic list only) mutes/unmutes the highlighted topic — emits `SetMutedTopicsMsg`, App persists `Settings.MutedTopics` via a debounced `PATCH /v1/settings`; muted rows show a `MUTED` marker. See `docs/54-muted-topics.md`
+- `f` (topic list only) cycles the list filter: all → hide muted → only muted (session-only). "only muted" is sourced from `Settings.MutedTopics`, so it lists every muted topic regardless of pagination
 - Same inline-image support as `guilds.go`'s thread feed — see that section
 
-Key types: `TopicsModel`, `LoadMoreTopicsMsg`, `LoadTopicPostsMsg`, `LoadMoreTopicPostsMsg`  
+Key types: `TopicsModel`, `LoadMoreTopicsMsg`, `LoadTopicPostsMsg`, `LoadMoreTopicPostsMsg`, `SetMutedTopicsMsg`  
 Key methods: `SetTopics(topics, cursor)`, `AppendTopics(topics, cursor)`, `SetTopicPosts(posts, cursor)`, `AppendTopicPosts(posts, cursor)`
 
 #### `journal.go`
@@ -568,14 +578,15 @@ Key methods: `SetTopics(topics, cursor)`, `AppendTopics(topics, cursor)`, `SetTo
 Private notes (Journal), cursor-paginated. Notes are visible only to the author.
 
 - List mode: `j`/`k` navigate notes; `d` prompts to delete
-- Edit mode (currently disabled): embeds `ComposeModel` (Ctrl+S saves, Ctrl+P publishes note as a post with confirmation, Esc cancels); `tab` toggles between compose and topics input
+- Edit mode: embeds `ComposeModel` (Ctrl+S saves, Ctrl+P publishes note as a post with confirmation, Esc cancels); `tab` toggles between compose and topics input
 - Confirmation overlay (y/n) for publish and delete actions
 - Viewport height dynamically adjusts when compose box grows or confirmation overlay appears
+- `Ctrl+P` → `y` no longer closes the editor synchronously: it stays open + populated (`publishing` flag; `Ctrl+P`/`Ctrl+S`/`Esc` inert, hint shows `… publishing`) until App reports the outcome. Success → `CloseEditAfterPublish()`; a non-401 failure → `ClearPublishing()` + banner, so unsaved text survives a rate-limited publish (`docs/51-compose-to-journal.md`)
 
 Note creation (`n`), editing (`enter`), deletion (`d`), and revision history (`h`) are all active. `PATCH /v1/notes/:id` was fixed server-side in API v0.4.
 
 Key types: `JournalModel`, `SubmitSaveNoteMsg`, `SubmitPublishNoteMsg`, `SubmitDeleteNoteMsg`, `LoadMoreJournalMsg`, `LoadNoteRevisionsMsg`, `LoadNoteRevisionMsg`  
-Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNoteContent(noteID, content, topics)`, `DeleteNote(noteID)`, `SetRevisions(noteID, revisions, cursor)`, `SetRevisionPreview(note)`
+Key methods: `SetNotes(notes, cursor)`, `AppendNotes(notes, cursor)`, `PrependNote(note)`, `UpdateNoteContent(noteID, content, topics)`, `DeleteNote(noteID)`, `CloseEditAfterPublish()`, `ClearPublishing()`, `IsPublishing()`, `SetRevisions(noteID, revisions, cursor)`, `SetRevisionPreview(note)`
 
 #### `search.go`
 
@@ -590,6 +601,46 @@ Full-text search across users, posts, and replies — tab `search` (no number ke
 Key types: `SearchModel`, `SubmitSearchMsg`, `DrillSearchTypeMsg`, `LoadMoreSearchMsg`, `ShowSearchPostMsg`, `ShowSearchReplyMsg`, `LeaveSearchMsg`  
 Key methods: `SetPreview(preview, query)`, `SetTypeResults(hitType, posts, replies, users, cursor)`, `AppendTypeResults(...)`, `FocusQuery()`, `InputFocused()`, `IsInTypeList()`, `LastQuery()`
 
+#### `globe.go` / `globe_landmask.go`
+
+Rotating globe plotting the caller's own location plus a toggleable marker
+set for every guild they belong to (their guild plus up to five
+apprenticeships) — tab `globe`, no numeric alias (12th tab), reached via
+`g l` or cycling. See `docs/55-globe.md`.
+
+- Pure sphere-projection math (`sphereProject`/`markerScreenPos`/`landAt`) over
+  a 720×360 (0.5°/cell) land/ocean bitmap generated from Natural Earth's
+  public-domain 1:50m dataset — no rendering dependency, no API client held
+  by the screen
+- Renders entirely in Unicode quadrant block characters (`classifyGlobeCell`,
+  U+2580–259F range), not braille: each pane cell is sampled as a 2×4
+  sub-pixel grid (`globeSubCols`/`globeSubRows`, `brailleDotBit` numbering —
+  only the sampling geometry is braille-shaped, no braille glyph is ever
+  rendered), collapsed to a 2×2 quadrant glyph. Rim cells (the disc's outer
+  silhouette) get a single flat land/ocean-majority color; cells fully inside
+  the disc render two-tone (land foreground, ocean background), so a
+  coastline is a genuine proportional split instead of a majority-vote flip.
+  Marker glyphs (`@`/`#`, each followed by a username label) fully override
+  the terrain glyph in their cell
+- No follow-network marker set: tried and removed, since `GET /v1/follows`
+  doesn't return usernames and there's no by-ID location lookup to fall back
+  to (`docs/00-api-backlog.md`)
+- Guild member locations come from `GetUserGuilds` (the caller's guild plus
+  apprenticeships) fanned out to `GetGuildMembers` per guild, merged and
+  deduplicated; `App` then paces the per-user profile fetches those
+  usernames need (the members-list response doesn't include locations) well
+  under the `GET /v1/users/:username` 30/min rate limit — markers pop in
+  progressively
+- `+`/`-` zoom, `m` toggles guild markers, `space` pauses rotation; no manual
+  spin control (matches every other single-pane screen's avoidance of
+  arrow/`h`/`l` keys, which are claimed by tab-cycling/list-nav)
+- The tab itself can be hidden via Settings ("show globe tab", local-only —
+  `config.Config.HideGlobeTab`), which excludes it from `visibleTabs`,
+  `leaderRows`, and the `g l` chord, same as Search's hidden entry
+
+Key types: `GlobeModel`  
+Key methods: `SetSelf(user)`, `SetGuildMembers(usernames)`, `SetProfile(username, user)`, `NextPending()`, `Requeue(username)`, `Advance()`
+
 #### `compose.go`
 
 Reusable multi-line text editor embedded in Feed, PostDetail, Profile, and C-Mail.
@@ -600,11 +651,11 @@ Reusable multi-line text editor embedded in Feed, PostDetail, Profile, and C-Mai
 - Character limit and placeholder text are configurable per embedding screen
 - Active/inactive border styling (cyan when focused, dimmed otherwise)
 
-`PostComposePanel` is a unified single-box compose panel for new posts (title, optional slug, body, topics, public/nsfw). Tab cycles through all fields. The `slug` field accepts `[a-z0-9-]` up to 60 chars; an invalid value blocks submit, focuses the slug field, and shows a red inline error. Empty slug is silently omitted from the wire (server generates one).
+`PostComposePanel` is a unified single-box compose panel for new posts (title, optional slug, body, topics, public/nsfw). Tab cycles through all fields. The `slug` field accepts `[a-z0-9-]` up to 60 chars; an invalid value blocks submit, focuses the slug field, and shows a red inline error. Empty slug is silently omitted from the wire (server generates one). `Ctrl+D` (create mode, non-empty body) emits `ComposeSaveAsNoteMsg` — the host diverts the text to the Journal. A `submitting` flag keeps the panel open + populated between submit and outcome, suppressing `Ctrl+S`/`Ctrl+D`/`Esc` (`docs/51-compose-to-journal.md`).
 
-Key types: `ComposeModel`, `ComposeSubmitMsg` (Content), `ComposeCancelMsg`, `PostComposePanel`  
+Key types: `ComposeModel`, `ComposeSubmitMsg` (Content), `ComposeSaveAsNoteMsg` (Content), `ComposeCancelMsg`, `PostComposePanel`  
 Key methods (`ComposeModel`): `Open(ctx, placeholder)`, `OpenWithContent(ctx, placeholder, content)`, `SetCharLimit(n)`, `SetWidth(w)`, `IsActive()`, `Content()`, `Close()`  
-Key methods (`PostComposePanel`): `Open(defaultPublic)`, `Close()`, `TitleValue()`, `SlugValue()`, `TopicsRaw()`, `IsPublic()`, `IsNSFW()`, `PanelHeight()`, `SetWidth(w)`  
+Key methods (`PostComposePanel`): `Open(defaultPublic)`, `Close()`, `TitleValue()`, `SlugValue()`, `TopicsRaw()`, `IsPublic()`, `IsNSFW()`, `PanelHeight()`, `SetWidth(w)`, `MarkSubmitting()`, `ClearSubmitting()`, `IsSubmitting()`  
 Key functions: `ValidateSlug(s string) error`
 
 #### `timeutil.go`
@@ -736,6 +787,7 @@ Permissions: `0600` (owner read/write only)
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
 | `graphicsProtocol` | string | `""` (autodetect) | `"kitty"`, `"iterm2"`, `"sixel"`, or `"none"` — bypasses autodetection when it's unreliable (e.g. mintty/Git Bash). Also editable live from the Settings screen (nested under "image viewer", terminal-only) as `"auto"`/`"kitty"`/`"iterm2"`/`"sixel"` — `"none"` stays config-file-only. See `docs/41-graphics-protocol-override.md` |
 | `imageScale` | number | `0` (= `1.0`) | Multiplier on the fullscreen image modal's display size, relative to the image's own native (1:1 pixel) size — not the terminal window. Clamped to `[0.2, 2.0]`; upscaling past native resolution is allowed (only for the modal). Also live-adjustable with `+`/`-` while the modal is open (session-only, guaranteed at least a 1-cell step per press). See `docs/46-image-modal-scale.md` |
+| `hideGlobeTab` | bool | `false` | Removes the Globe tab from the tab bar/nav sidebar, arrow-key cycling, and the `g l` leader chord. Editable from the Settings screen ("show globe tab", inverted) |
 
 ---
 
@@ -775,7 +827,7 @@ All screens implement Bubble Tea's `Model` interface. `ComposeModel` is embedded
 
 ### Global
 
-Two navigation schemes reach the same 11 screens — pick whichever is faster
+Two navigation schemes reach the same 12 screens — pick whichever is faster
 for a given target. Both are derived from the single `menuTabs` slice in
 `internal/ui/layout.go`, so TabsLayout and MillerLayout can never disagree
 about what a given key does (a bug that existed before this scheme and was
@@ -797,20 +849,21 @@ tab bar:
 | `9` | Profile |
 
 **Leader key** — `g` ("go to") arms a pending state; the very next keypress
-resolves against a mnemonic map to jump directly to any of the 11 screens,
-including Search and Settings which have no numeric alias. An unmapped
-follow-up key silently cancels the pending state rather than doing anything.
-The mnemonic letter is shown highlighted inline within each tab's label on
-the tab bar / nav sidebar as a hint:
+resolves against a mnemonic map to jump directly to any of the 12 screens,
+including Search, Settings, and Globe which have no numeric alias. An
+unmapped follow-up key silently cancels the pending state rather than doing
+anything. The mnemonic letter is shown highlighted inline within each tab's
+label on the tab bar / nav sidebar as a hint:
 
 | Chord | Screen | Chord | Screen |
 |---|---|---|---|
-| `g f` | Feed | `g g` | Guilds |
-| `g n` | Notifications | `g t` | Topics |
-| `g m` | C-Mail | `g p` | Profile |
-| `g i` | CIRC | `g s` | Search |
-| `g j` | Journal | `g e` | Settings |
+| `g f` | Feed | `g t` | Topics |
+| `g n` | Notifications | `g p` | Profile |
+| `g m` | C-Mail | `g s` | Search |
+| `g i` | CIRC | `g e` | Settings |
+| `g j` | Journal | `g l` | Globe |
 | `g b` | Bookmarks | | |
+| `g g` | Guilds | | |
 
 Only plain letters are used — no `alt+`, function keys, or `ctrl+`/`shift+`
 combinations — since those are caught inconsistently by terminal emulators,
@@ -927,7 +980,10 @@ fields.
 | `tab` / `shift+tab` | Cycle fields: title → slug → body → topics → public → NSFW |
 | `space` | Toggle the focused checkbox field (public / NSFW) |
 | `ctrl+s` | Submit (validates the slug field first; invalid slug refocuses it with an inline error) |
+| `ctrl+d` | Feed only, new post only: save what's written as a private Journal note instead of publishing (`docs/51-compose-to-journal.md`) |
 | `esc` | Cancel |
+
+The panel stays open and populated between submit and outcome (`ctrl+s`/`ctrl+d`/`esc` inert, hint shows `… posting`); a failed publish reopens it with the fields intact so a rate-limited post isn't lost. Same for the Journal editor's `ctrl+p` publish.
 
 ### Icon Picker
 
@@ -1114,7 +1170,7 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 |---|---|
 | **Chatrooms API** | UI fully built; REST integration deferred (server paths not finalized) |
 | **HTTPClient thread safety** | Resolved: `tokens` is guarded by a `sync.Mutex` (see `docs/30-security-hardening.md`) |
-| **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics`, `mutedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized. `mutedUsersByRoom` is also read but excluded from PATCH for a different reason — it's server-managed via `/mute` slash commands only (see `docs/37-circ-mute.md`), never client-patched |
+| **Settings — deferred fields** | `iconTheme`, `imagePixelSize`, `followedTopics` are read from the API but intentionally excluded from PATCH until the server-side feature is finalized. (`mutedTopics` *is* PATCHed as of feature 54 — see `docs/54-muted-topics.md`.) `mutedUsersByRoom` is also read but excluded from PATCH for a different reason — it's server-managed via `/mute` slash commands only (see `docs/37-circ-mute.md`), never client-patched |
 | **Journal write operations** | Fully operational. `PATCH /v1/notes/:id` was fixed server-side in API v0.4. |
 | **Post/reply deletion** | Wired and working — `d` key in Feed (own posts) and Post Detail (own posts and replies) |
 | **Attachments** | Images render inline (Feed, Post Detail, Search, Topics, Guilds post lists, C-Mail, cIRC, Profile — gated by the InlineImages setting; see `docs/45-inline-images-everywhere.md`) and open in a fullscreen modal (`o`) via `internal/ui/imgview` (Kitty/iTerm2/Sixel, falling back to the OS browser when no protocol is detected or the Image Viewer setting is "browser"). YouTube audio attachments can be composed via the `ctrl+j` Song Prompt modal (`docs/49-song-attach.md`, `docs/50-post-reply-attachments.md`, supporter accounts only) in cIRC, posts, and replies — not yet available in C-Mail. artist/title/genre are all required (max 100/150/50 chars, genre lowercased). Native image/gif attachment on posts/replies (added in `docs/50-post-reply-attachments.md`) was removed 2026-08-28: API v0.8.7 rejects `type: "image"` in a post/reply's `attachments`, and rejects inline markdown images in `content` too unless the URL is `bunker.cyberspace.online`-hosted (website-upload-only) — `ctrl+g` on Feed/Post Detail now warns instead of attaching |
@@ -1125,6 +1181,7 @@ Release tags follow semver: `git tag -a v0.1.0 -m "v0.1.0"`. The `--version` fla
 | **Profile navigation depth** | Navigating from a Following/Followers tab to another user's profile is single-level; ESC returns to the original `profileReturn` destination, not the intermediate profile |
 | **Feed position — deep pagination** | When returning to the Feed tab, the selected post is restored by ID from the fresh first-page load. If the post was reached via pagination it will not be in page 1 and the feed falls back to the top. Fix options: re-fetch pages sequentially until found (expensive), or skip the tab-switch reload (stale data). Neither is warranted for typical usage. |
 | **Ambiguous-width character stripping** | Unicode EAW = "A" characters (kaomoji symbols, `©`, `®`, `™`, Greek letters, etc.) are stripped at two points: (1) `stripAmbiguousRunes` in `internal/ui/markdown/renderer.go` strips non-letter ones from post/reply/cIRC content at render time; (2) `filterAmbiguousKeyMsg` in `internal/ui/screens/shared.go` intercepts `tea.KeyRunes` messages before they reach any `textarea` or `textinput` component (compose, topics, profile fields, C-Mail, chatrooms). Their column width is undefined and varies by terminal/font, causing border overflow and cursor misalignment. Wide (CJK), halfwidth, zero-width, and *letter* characters (`unicode.IsLetter`) are unaffected even if ambiguous-width — this is why the icon picker's kaomoji corpus (`internal/emoji/kaomoji_data.go`) was curated to prefer letters and ASCII lookalikes (`v`, `>`/`<`, `o`, `^`, `Ɐ`, `ღ`, `口`, etc.) over the raw symbols they visually resemble: those symbols displayed fine in the picker itself (its bordered box auto-sizes to content, so a width-1/2 mismeasurement is invisible) but were silently blanked to spaces once the same text passed through `stripAmbiguousRunes` on post/cIRC render. |
+| **Globe — no global user directory, first-page-only marker lists** | The API has no endpoint listing all users, so the globe can only ever plot the caller's own location plus the members of every guild they belong to (`docs/55-globe.md`). Each guild's member list uses the API's default first page only — a guild larger than one page shows a subset of members until this is revisited with auto-pagination. Follow-network markers were tried and removed: `GET /v1/follows` doesn't return usernames, and unlike the profile Following/Followers tabs there's no by-ID fallback for resolving a location (`docs/00-api-backlog.md`). |
 | **C-Mail detail viewport height has no floor — potential panic on a very short terminal** | `CMailModel`'s `tea.WindowSizeMsg` handler computes `detailH := msg.Height - theme.ChromeHeight - cmailDetailChrome` with no `if detailH < 1 { detailH = 1 }` clamp, unlike `ChatroomsModel.viewportHeight()`'s equivalent. A short enough terminal height drives it negative, and bubbles' `viewport.Model.visibleLines()`/`GotoBottom()` panics on a negative `Height` (slice bounds out of range). Not hit by any real terminal size — found via an overly-aggressive test height (5 rows) while testing the inline-images sticky-bottom fix (`docs/45-inline-images-everywhere.md`) — but worth a one-line fix (mirror `ChatroomsModel`'s clamp) next time `cmail.go` is touched. |
 
 ---

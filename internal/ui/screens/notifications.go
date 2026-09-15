@@ -813,21 +813,9 @@ func (m NotificationsModel) renderNotif(n model.Notification, selected bool) str
 	}
 
 	// For mention types, show an inline content preview so the user can read
-	// what mentioned them without navigating away. PostContent is set for
-	// post_mention; ReplyContent for reply_mention; MessageContent for
-	// chat_mention (v0.7+ metadata). Reason is the fallback for actorless
-	// system notifications (v0.8.5+) that explain themselves via that field.
-	mentionContent := n.PostContent
-	if mentionContent == "" {
-		mentionContent = n.ReplyContent
-	}
-	if mentionContent == "" {
-		mentionContent = n.MessageContent
-	}
-	if mentionContent == "" {
-		mentionContent = n.Reason
-	}
-	if mentionContent != "" && innerWidth > 4 {
+	// what mentioned them without navigating away — see notifContent for which
+	// field carries the body per type.
+	if mentionContent := notifContent(n); mentionContent != "" && innerWidth > 4 {
 		flat := strings.ReplaceAll(mentionContent, "\n", " ")
 		maxLen := innerWidth - 2 // room for "> " prefix
 		r := []rune(flat)
@@ -845,6 +833,47 @@ func (m NotificationsModel) renderNotif(n model.Notification, selected bool) str
 		boxStyle = boxStyle.Width(m.width - 2)
 	}
 	return boxStyle.Render(line)
+}
+
+// notifContent returns the notification's body text for a preview: the first
+// non-empty of PostContent (post_mention), ReplyContent (reply_mention),
+// MessageContent (chat_mention), or Reason (actorless system notifications).
+func notifContent(n model.Notification) string {
+	for _, s := range []string{n.PostContent, n.ReplyContent, n.MessageContent, n.Reason} {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// notifPreview returns notifContent flattened to a single line and truncated to
+// max runes (ellipsis added). Empty when the notification carries no body text.
+func notifPreview(n model.Notification, max int) string {
+	c := notifContent(n)
+	if c == "" {
+		return ""
+	}
+	flat := strings.ReplaceAll(c, "\n", " ")
+	if r := []rune(flat); max > 0 && len(r) > max {
+		flat = string(r[:max-1]) + "…"
+	}
+	return flat
+}
+
+// NotifToastText is the one-line desktop-notification text for n, mirroring a
+// Notifications-tab row minus the icon and timestamp: "@actor <summary>" (or
+// just "<summary>" for actorless system notifications), plus " — <preview>"
+// when the notification carries body text.
+func NotifToastText(n model.Notification) string {
+	s := notifSummary(n)
+	if hasActor(n) {
+		s = "@" + n.Actor.Username + " " + s
+	}
+	if p := notifPreview(n, 60); p != "" {
+		s += " — " + p
+	}
+	return s
 }
 
 func (m NotificationsModel) View() string {

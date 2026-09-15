@@ -55,21 +55,26 @@ type BookmarksModel struct {
 	loc           *time.Location
 	relaxed       bool
 	filterNSFW    bool
+	mutedTopics   map[string]struct{} // Settings.MutedTopics; bookmarked posts tagged with any are hidden
 }
 
 func NewBookmarksModel() BookmarksModel {
 	return BookmarksModel{}
 }
 
-// visibleItems returns the bookmarks shown given the FilterNSFW setting. Only
-// posts carry an NSFW flag; bookmarked replies have none and are always shown.
+// visibleItems returns the bookmarks shown given the FilterNSFW and muted-topics
+// settings. Only bookmarked posts carry an NSFW flag and topics; bookmarked
+// replies have neither and are always shown.
 func (m BookmarksModel) visibleItems() []model.Bookmark {
-	if !m.filterNSFW {
+	if !m.filterNSFW && len(m.mutedTopics) == 0 {
 		return m.items
 	}
 	out := m.items[:0:0]
 	for _, b := range m.items {
-		if b.Post != nil && b.Post.IsNSFW {
+		if b.Post != nil && m.filterNSFW && b.Post.IsNSFW {
+			continue
+		}
+		if b.Post != nil && topicMuted(b.Post.Topics, m.mutedTopics) {
 			continue
 		}
 		out = append(out, b)
@@ -158,6 +163,10 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 			m.filterNSFW = msg.Settings.FilterNSFW
 			m.selectedIndex = 0
 		}
+		if !sameMutedSet(m.mutedTopics, msg.Settings.MutedTopics) {
+			m.mutedTopics = mutedSet(msg.Settings.MutedTopics)
+			m.selectedIndex = 0
+		}
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -230,6 +239,16 @@ func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 			return m, func() tea.Msg {
 				return DeleteBookmarkMsg{BookmarkID: id, PostID: b.PostID, ReplyID: b.ReplyID}
 			}
+		case "p", "ctrl+p":
+			visible := m.visibleItems()
+			if m.selectedIndex >= len(visible) {
+				return m, nil
+			}
+			username := bookmarkAuthor(visible[m.selectedIndex])
+			if username == "" {
+				return m, nil
+			}
+			return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
 		case "enter":
 			visible := m.visibleItems()
 			if m.selectedIndex >= len(visible) {
@@ -343,6 +362,18 @@ func (m BookmarksModel) buildContent() (string, []int) {
 	return sb.String(), offsets
 }
 
+// bookmarkAuthor returns the author of a bookmark's embedded post/reply
+// content, or "" if neither is populated (an unhydrated stub).
+func bookmarkAuthor(b model.Bookmark) string {
+	switch {
+	case b.Post != nil:
+		return b.Post.AuthorUsername
+	case b.Reply != nil:
+		return b.Reply.AuthorUsername
+	}
+	return ""
+}
+
 func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 	innerWidth := m.width - 4
 	now := time.Now()
@@ -360,16 +391,15 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 	var createdAt, editedAt time.Time
 	var attachments []model.Attachment
 	var topics []string
+	author = bookmarkAuthor(b)
 	switch {
 	case b.Post != nil:
-		author = b.Post.AuthorUsername
 		content = b.Post.Content
 		createdAt = b.Post.CreatedAt
 		editedAt = b.Post.EditedAt
 		attachments = b.Post.Attachments
 		topics = b.Post.Topics
 	case b.Reply != nil:
-		author = b.Reply.AuthorUsername
 		content = b.Reply.Content
 		createdAt = b.Reply.CreatedAt
 		editedAt = b.Reply.EditedAt

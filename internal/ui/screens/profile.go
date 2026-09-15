@@ -103,6 +103,7 @@ type ProfileModel struct {
 	timeDisplayFormat   string
 	loc                 *time.Location
 	filterNSFW          bool
+	mutedTopics         map[string]struct{} // Settings.MutedTopics; Posts-tab entries tagged with any are hidden
 	showFollowerCount   bool
 	inlineImagesEnabled bool
 
@@ -130,14 +131,18 @@ type SaveProfileMsg struct {
 }
 
 func (m ProfileModel) visibleProfilePosts() []model.Post {
-	if !m.filterNSFW {
+	if !m.filterNSFW && len(m.mutedTopics) == 0 {
 		return m.posts
 	}
 	out := m.posts[:0:0]
 	for _, p := range m.posts {
-		if !p.IsNSFW {
-			out = append(out, p)
+		if m.filterNSFW && p.IsNSFW {
+			continue
 		}
+		if topicMuted(p.Topics, m.mutedTopics) {
+			continue
+		}
+		out = append(out, p)
 	}
 	return out
 }
@@ -597,6 +602,12 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 				m.tabSelected = 0
 			}
 		}
+		if !sameMutedSet(m.mutedTopics, msg.Settings.MutedTopics) {
+			m.mutedTopics = mutedSet(msg.Settings.MutedTopics)
+			if m.activeTab == tabPosts {
+				m.tabSelected = 0
+			}
+		}
 		m.showFollowerCount = msg.Settings.ShowFollowerCount
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		w := msg.Width
@@ -849,6 +860,9 @@ func (m ProfileModel) viewBodyBeforeWebsiteBand(username string) (body string, c
 	// gets its own band appended after all tab content instead — see View().
 	if m.inlineImagesEnabled && m.user.ProfilePictureUrl != "" {
 		headerParts = append(headerParts, strings.Repeat("\n", profileImageBandRows-1))
+	}
+	if m.readOnly && m.isFollowing {
+		headerParts = append(headerParts, theme.Highlight.Render("following"))
 	}
 	if m.showFollowerCount {
 		headerParts = append(headerParts, counts)

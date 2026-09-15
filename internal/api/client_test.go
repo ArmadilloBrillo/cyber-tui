@@ -3008,6 +3008,52 @@ func TestHTTPSettings_ShowGuildPostsInFeed_RoundTrips(t *testing.T) {
 	}
 }
 
+func TestHTTPUpdateSettings_SendsMutedTopics(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/settings" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == "PATCH" {
+			json.NewDecoder(r.Body).Decode(&gotBody)
+			writeOK(t, w, map[string]any{})
+			return
+		}
+		writeOK(t, w, map[string]any{"mutedTopics": []string{"crypto"}})
+	})))
+	c.Login("u@example.com", "pass")
+
+	settings, err := c.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if len(settings.MutedTopics) != 1 || settings.MutedTopics[0] != "crypto" {
+		t.Fatalf("MutedTopics parsed as %v, want [crypto]", settings.MutedTopics)
+	}
+
+	settings.MutedTopics = []string{"crypto", "sports"}
+	if err := c.UpdateSettings(settings); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	got, _ := gotBody["mutedTopics"].([]any)
+	if len(got) != 2 || got[0] != "crypto" || got[1] != "sports" {
+		t.Errorf("PATCH body mutedTopics = %v, want [crypto sports]", gotBody["mutedTopics"])
+	}
+
+	// Unblocking the last topic must still reach the server as [] (no omitempty).
+	settings.MutedTopics = nil
+	if err := c.UpdateSettings(settings); err != nil {
+		t.Fatalf("UpdateSettings (clear): %v", err)
+	}
+	if _, present := gotBody["mutedTopics"]; !present {
+		t.Errorf("PATCH body omitted mutedTopics when clearing; want an empty array")
+	}
+	if got, _ := gotBody["mutedTopics"].([]any); len(got) != 0 {
+		t.Errorf("PATCH body mutedTopics = %v, want []", gotBody["mutedTopics"])
+	}
+}
+
 // --- Notes ---
 
 func TestHTTPGetNotes_ParsesList(t *testing.T) {

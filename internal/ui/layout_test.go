@@ -16,13 +16,27 @@ import (
 // --- visibleTabs ---
 
 func TestVisibleTabs_ExcludesHiddenSearch(t *testing.T) {
-	for _, t2 := range visibleTabs() {
+	a := loggedInApp()
+	for _, t2 := range visibleTabs(a) {
 		if t2.s == screenSearch {
 			t.Error("expected screenSearch to be excluded from visibleTabs")
 		}
 	}
-	if got, want := len(visibleTabs()), len(menuTabs)-1; got != want {
+	if got, want := len(visibleTabs(a)), len(menuTabs)-1; got != want {
 		t.Errorf("expected %d visible tabs (menuTabs minus the one hidden entry), got %d", want, got)
+	}
+}
+
+func TestVisibleTabs_ExcludesGlobeWhenHidden(t *testing.T) {
+	a := loggedInApp()
+	a.showGlobeTab = false
+	for _, t2 := range visibleTabs(a) {
+		if t2.s == screenGlobe {
+			t.Error("expected screenGlobe to be excluded from visibleTabs when showGlobeTab is false")
+		}
+	}
+	if got, want := len(visibleTabs(a)), len(menuTabs)-2; got != want {
+		t.Errorf("expected %d visible tabs (menuTabs minus Search and Globe), got %d", want, got)
 	}
 }
 
