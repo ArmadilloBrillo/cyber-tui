@@ -2680,6 +2680,15 @@ func (a App) handleSearch(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case screens.LeaveSearchMsg:
 		a.active = a.searchReturn
+		if a.active == screenGlobe {
+			// LeaveSearchMsg bypasses activateScreen (unlike ordinary tab
+			// navigation), so the angle/fetch tick chains that died on the way
+			// into Search (see handleGlobe's gen/active guards) need restarting
+			// here explicitly, same as activateScreen's screenGlobe case does.
+			var cmd tea.Cmd
+			a, cmd = a.maybeStartGlobeFetch()
+			return a, tea.Batch(cmd, a.scheduleGlobeAngleTickCmd()), true
+		}
 		return a, nil, true
 	}
 	return a, nil, false
