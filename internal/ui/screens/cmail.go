@@ -1291,11 +1291,11 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 				if len(m.conversations) == 0 {
 					return m, nil
 				}
-				username := m.OtherParticipant(m.conversations[m.selectedConv])
-				if username == "" || username == "unknown" {
+				other := m.otherParticipantUser(m.conversations[m.selectedConv])
+				if other.Username == "" || other.Username == "unknown" || other.Deleted {
 					return m, nil
 				}
-				return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+				return m, func() tea.Msg { return ShowUserProfileMsg{Username: other.Username} }
 			}
 
 		case cmailModeDetail:
@@ -1325,11 +1325,11 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 				if m.activeConv == nil {
 					return m, nil
 				}
-				username := m.OtherParticipant(*m.activeConv)
-				if username == "" || username == "unknown" {
+				other := m.otherParticipantUser(*m.activeConv)
+				if other.Username == "" || other.Username == "unknown" || other.Deleted {
 					return m, nil
 				}
-				return m, func() tea.Msg { return ShowUserProfileMsg{Username: username} }
+				return m, func() tea.Msg { return ShowUserProfileMsg{Username: other.Username} }
 			case "ctrl+up":
 				if v, ok := m.histFor(m.activeConvID).prev(m.input.Value()); ok {
 					m.input.SetValue(v)
@@ -1582,15 +1582,16 @@ func (m CMailModel) OtherParticipant(conv model.Conversation) string {
 // OtherProfileFetchTarget returns the username CMailConvSelectedMsg should
 // set as OtherUsername to trigger a profile fetch for conv's other
 // participant, or "" if there's nothing to fetch — unresolvable ("unknown",
-// empty conversation stub) or already cached (HasOtherProfile). Both
-// emission sites (opening an existing conversation, starting a new one)
-// call this so the "should we fetch" decision lives in one place.
+// empty conversation stub), a deleted account (the profile lookup would just
+// 404), or already cached (HasOtherProfile). Both emission sites (opening an
+// existing conversation, starting a new one) call this so the "should we
+// fetch" decision lives in one place.
 func (m CMailModel) OtherProfileFetchTarget(conv model.Conversation) string {
-	other := m.OtherParticipant(conv)
-	if other == "" || other == "unknown" || m.HasOtherProfile(other) {
+	user := m.otherParticipantUser(conv)
+	if user.Username == "" || user.Username == "unknown" || user.Deleted || m.HasOtherProfile(user.Username) {
 		return ""
 	}
-	return other
+	return user.Username
 }
 
 // otherParticipantUser is OtherParticipant's full-user counterpart, used
@@ -1671,10 +1672,13 @@ func (m CMailModel) renderConvCards() string {
 
 	var sb strings.Builder
 	for i, c := range m.conversations {
-		other := m.OtherParticipant(c)
+		otherUser := m.otherParticipantUser(c)
 
-		// Left side: @username
-		nameStr := theme.Highlight.Render("@" + other)
+		// Left side: @username, tagged when the account has been deleted
+		nameStr := theme.Highlight.Render("@" + otherUser.Username)
+		if otherUser.Deleted {
+			nameStr += " " + theme.Subtle.Render("(deleted)")
+		}
 
 		// Right side: date  (N)
 		var rightParts []string
@@ -2080,6 +2084,9 @@ func (m CMailModel) View() string {
 			other = badgeUser.Username
 		}
 		header := theme.Title.Render("@" + other)
+		if badgeUser.Deleted {
+			header += " " + theme.Subtle.Render("(deleted)")
+		}
 		if m.inlineImagesEnabled {
 			if n := len(userBadgeCodes(badgeUser)); n > 0 {
 				header += badgeGap(n)

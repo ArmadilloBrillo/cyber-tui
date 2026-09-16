@@ -35,6 +35,7 @@ type User struct {
 	SerialNumber      int
 	PublicPostsCount  int
 	HasPublicPosts    bool
+	Deleted           bool // C-Mail otherUser only: the account has been deleted; other fields are best-effort
 	CreatedAt         time.Time
 	LastActiveAt      time.Time
 	UpdatedAt         time.Time
