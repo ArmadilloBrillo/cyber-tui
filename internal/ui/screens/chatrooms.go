@@ -1627,6 +1627,11 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 								m.input.Reset()
 								return m.AppendSystemMessage(roomID, "*** unknown command: "+cmd), nil
 							}
+							if cmd == "/mute" || cmd == "/unmute" {
+								if fields := strings.Fields(val); len(fields) >= 2 {
+									val = cmd + " " + strings.ToLower(strings.Join(fields[1:], " "))
+								}
+							}
 						}
 						m.input.Reset()
 						return m, func() tea.Msg {
