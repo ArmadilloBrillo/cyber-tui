@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.8.9
+# ᑕ¥βєяรקค¢є API v0.8.10
 
 ## Access
 
@@ -410,6 +410,8 @@ GET /v1/users/:username
 
 A profile's `guildId`, `guildSlug`, `guildIcon` and `guildName` describe the one guild the user is a member of — the badge. Any apprenticeships are in `GET /v1/users/:username/guilds`.
 
+`isSupporter` is `true` for any account with supporter status, and absent otherwise. Both endpoints return it.
+
 Rate limit: 30/min.
 
 ### List a User's Guilds
@@ -792,9 +794,9 @@ GET /v1/notifications?limit=20&cursor=<notificationId>&read=false&type=reply,rep
 Query params:
 - `limit` (1-50, default 20), `cursor` -- standard pagination
 - `read` -- `true` or `false` to filter by read status. Omit for all.
-- `type` -- comma-separated list of notification types (1-20 values). Omit for all.
+- `type` -- comma-separated list of notification types (1-30 distinct values; repeats are ignored). Omit for all -- there are more types than the filter takes, so omitting is the only way to get every type.
 
-Notification types: `bookmark`, `reply`, `thread_reply`, `new_follower`, `unfollowed`, `new_post_following`, `new_post_friend`, `poke`, `chat_mention`, `post_mention`, `reply_mention`, `graffiti_mention`, `dm_message`, `guild_new_thread`, `supporter_granted`, `supporter_removed`, `hacker_granted`, `hacker_removed`, `moderator_granted`, `moderator_removed`, `api_access_granted`, `api_access_removed`, `image_permission_granted`, `image_permission_removed`, `attachment_permission_granted`, `attachment_permission_removed`, `system_ban`, `system_ban_lifted`, `post_cooldown`, `rate_limit_warning`.
+Notification types: `bookmark`, `reply`, `thread_reply`, `new_follower`, `unfollowed`, `new_post_following`, `new_post_friend`, `poke`, `chat_mention`, `post_mention`, `reply_mention`, `graffiti_mention`, `dm_message`, `guild_new_thread`, `guild_chat_message`, `supporter_granted`, `supporter_removed`, `hacker_granted`, `hacker_removed`, `moderator_granted`, `moderator_removed`, `moderator_permissions_changed`, `api_access_granted`, `api_access_removed`, `edit_access_granted`, `edit_access_removed`, `image_permission_granted`, `image_permission_removed`, `attachment_permission_granted`, `attachment_permission_removed`, `system_ban`, `system_ban_lifted`, `post_cooldown`, `rate_limit_warning`, `gift_received`, `gift_sent`.
 
 This list excludes notifications you've muted, blocked, or switched off under `notifications` in `GET /v1/settings` — the same set the website shows you. A page can come back shorter than `limit` for that reason; keep paginating while `cursor` is non-null rather than stopping on a short page.
 
@@ -823,7 +825,7 @@ Each notification has this shape:
 - `targetType` — `post` or `reply`; `targetId` is the related entry's ID.
 - `read` — always `false` on creation.
 - `reason` — present only on some system notifications (e.g. `system_ban`).
-- `metadata` — type-dependent context. Common keys: `postSlug` and `authorUsername` (build the `/{username}/{slug}` deep link), `replyId` (the relevant reply), `postContent` / `replyContent` (the mention source text), and for guild threads `guildSlug`, `guildName`, `isGuildThread`, `threadId`. `metadata` is open-ended — clients should treat unknown keys as optional.
+- `metadata` — type-dependent context. Common keys: `postSlug` and `authorUsername` (build the `/{username}/{slug}` deep link), `replyId` (the relevant reply), `postContent` / `replyContent` (the mention source text), for guild threads `guildSlug`, `guildName`, `isGuildThread`, `threadId`, and for chat `roomSlug`, `roomName`, `messageContent`. `metadata` is open-ended — clients should treat unknown keys as optional.
 
 `guildSlug` / `isGuildThread` here live inside notification `metadata`; the same names also appear as top-level fields on guild-thread **entries** (see Guilds).
 
@@ -840,9 +842,11 @@ The API emits these notifications server-side — clients don't create them:
 - `guild_new_thread` — a new thread is posted in a guild you belong to.
 - `poke` — someone pokes you (`POST /v1/users/:username/poke`).
 
-Notifications are never sent to yourself for your own actions, and a user who would otherwise receive several notifications for the same event gets only one (the most specific). Remaining types in the list above are produced by other parts of the platform (DMs, chat, moderation, role/permission changes).
+Notifications are never sent to yourself for your own actions, and a user who would otherwise receive several notifications for the same event gets only one (the most specific). Remaining types in the list above are produced by other parts of the platform (DMs, chat, moderation, role/permission changes, gifts).
 
-A few concern your own account rather than someone else's action, and arrive with no sender: `post_cooldown` (an entry you wrote was held back and saved as a private note instead), `rate_limit_warning` (you're approaching a posting limit), `system_ban` and `system_ban_lifted` (a restriction was applied or removed), `moderator_granted` / `moderator_removed` and `api_access_granted` / `api_access_removed` (a role changed). Their `reason` field explains what happened.
+A few concern your own account rather than someone else's action, and arrive with no sender: `post_cooldown` (an entry you wrote was held back and saved as a private note instead), `rate_limit_warning` (you're approaching a posting limit), `system_ban` and `system_ban_lifted` (a restriction was applied or removed). Their `reason` field explains what happened.
+
+Role and permission changes (`moderator_granted` / `moderator_removed` / `moderator_permissions_changed`, `api_access_granted` / `api_access_removed`, `edit_access_granted` / `edit_access_removed`, and the `supporter_*`, `hacker_*`, `image_permission_*` and `attachment_permission_*` pairs) also concern your own account, but they do carry `actorId` / `actorUsername` — the staff member who made the change.
 
 ### Unread Count
 
@@ -1040,7 +1044,7 @@ This is how you **start a new conversation**. To **continue an existing one**, u
 GET /v1/cmail
 ```
 
-Returns the caller's conversations, unread first then newest activity first. Each entry: `conversationId`, `otherUser` (`userId`, `username`, and `displayName`/`profilePictureUrl` when set), `lastMessage`, `lastMessageAt` (ms epoch), `unreadCount`.
+Returns the caller's conversations, unread first then newest activity first. Each entry: `conversationId`, `otherUser` (`userId`, `username`, `displayName`/`profilePictureUrl` when set, and `deleted: true` when the account has been deleted), `lastMessage`, `lastMessageAt` (ms epoch), `unreadCount`.
 
 ### Read a Conversation
 
