@@ -1073,6 +1073,37 @@ func TestHTTPGetConversations_ParsesList(t *testing.T) {
 	}
 }
 
+// TestHTTPGetConversations_ParsesDeletedOtherUser guards the v0.8.10 otherUser.deleted
+// flag: a conversation with a deleted counterpart still carries their former identity,
+// just marked Deleted so callers can skip profile fetches and mark it in the UI.
+func TestHTTPGetConversations_ParsesDeletedOtherUser(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, []map[string]any{
+			{
+				"conversationId": "c1",
+				"otherUser":      map[string]any{"userId": "u2", "username": "molly_millions", "deleted": true},
+				"lastMessage":    "we need to talk",
+				"lastMessageAt":  1700000000000,
+				"unreadCount":    2,
+			},
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	convs, err := c.GetConversations()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(convs) != 1 || len(convs[0].Participants) != 1 {
+		t.Fatalf("GetConversations() = %+v, want 1 conv with 1 participant", convs)
+	}
+	if !convs[0].Participants[0].Deleted {
+		t.Error("expected Participants[0].Deleted to be true")
+	}
+	if convs[0].Participants[0].Username != "molly_millions" {
+		t.Errorf("Username = %q, want molly_millions", convs[0].Participants[0].Username)
+	}
+}
+
 // TestHTTPGetConversations_DropsEmptyStubEntries guards against corrupted/
 // orphaned conversation records — no other-user identity, no message, no
 // timestamp — showing up as blank "@unknown" rows in the list.

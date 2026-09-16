@@ -1608,6 +1608,57 @@ func TestCMailList_P_NoConversations_IsNoop(t *testing.T) {
 	}
 }
 
+// --- deleted-account participants (v0.8.10 otherUser.deleted) ---
+
+func TestCMailList_P_DeletedOtherUser_IsNoop(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity", Deleted: true}}},
+	})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	if cmd != nil {
+		t.Error("expected no-op for a deleted-account participant")
+	}
+}
+
+func TestCMailDetail_CtrlP_DeletedOtherUser_IsNoop(t *testing.T) {
+	client := api.NewMockClient()
+	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity", Deleted: true}}}
+	m := NewCMailModel("neo", "", client)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 24})
+	m.activeConvID = "c1"
+	m.activeConv = &conv
+	m.mode = cmailModeDetail
+	m.input.Focus()
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if cmd != nil {
+		t.Error("expected no-op for a deleted-account participant")
+	}
+}
+
+func TestCMail_OtherProfileFetchTarget_DeletedOtherUser_ReturnsEmpty(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity", Deleted: true}}}
+
+	if got := m.OtherProfileFetchTarget(conv); got != "" {
+		t.Errorf("OtherProfileFetchTarget() = %q, want empty for a deleted account", got)
+	}
+}
+
+func TestCMail_RenderConvCards_DeletedOtherUser_ShowsMarker(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations([]model.Conversation{
+		{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity", Deleted: true}}},
+	})
+
+	if got := m.renderConvCards(); !strings.Contains(got, "(deleted)") {
+		t.Errorf("renderConvCards() = %q, want it to contain \"(deleted)\"", got)
+	}
+}
+
 // --- copy message text (see updateCMailBrowsingKey's "y" case) ---
 
 func TestCMailBrowsing_Y_EmitsCopyMessageTextMsg(t *testing.T) {
