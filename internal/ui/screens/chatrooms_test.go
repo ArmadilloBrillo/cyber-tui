@@ -1612,6 +1612,39 @@ func TestBrowsing_C_NoSelectedMessage_IsNoop(t *testing.T) {
 	}
 }
 
+// --- enter: /mute and /unmute lowercase their username argument ---
+
+func TestChatrooms_Enter_LowercasesMuteUnmuteUsername(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"mute", "/mute JM2C", "/mute jm2c"},
+		{"unmute", "/unmute JM2C", "/unmute jm2c"},
+		{"non-mute command untouched", "/dice 2d6", "/dice 2d6"},
+		{"mute with no argument untouched", "/mute", "/mute"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := chatroomsInRoom(api.NewMockClient(), "zion")
+			m = setInput(m, tt.input, len(tt.input))
+
+			_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if cmd == nil {
+				t.Fatal("expected a cmd")
+			}
+			sm, ok := cmd().(SendRoomMessageMsg)
+			if !ok {
+				t.Fatalf("expected SendRoomMessageMsg, got %T", cmd())
+			}
+			if sm.Body != tt.want {
+				t.Errorf("Body = %q, want %q", sm.Body, tt.want)
+			}
+		})
+	}
+}
+
 // --- mute user (see updateBrowsingKey's "m" case) ---
 
 func TestBrowsing_M_EmitsMuteUserMsg(t *testing.T) {
