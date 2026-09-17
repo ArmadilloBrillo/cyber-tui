@@ -551,6 +551,7 @@ type wireCircMessage struct {
 type wireCMailOtherUser struct {
 	UserID   string `json:"userId"`
 	Username string `json:"username"`
+	Deleted  bool   `json:"deleted,omitempty"`
 }
 
 // wireCMailConversation is a single entry from GET /v1/cmail.
@@ -2370,7 +2371,7 @@ func (c *HTTPClient) GetConversations() ([]model.Conversation, error) {
 		sanitize.Strings(&w)
 		conv := model.Conversation{
 			ID:            w.ConversationID,
-			Participants:  []model.User{{ID: w.OtherUser.UserID, Username: w.OtherUser.Username}},
+			Participants:  []model.User{{ID: w.OtherUser.UserID, Username: w.OtherUser.Username, Deleted: w.OtherUser.Deleted}},
 			UnreadCount:   w.UnreadCount,
 			LastMessage:   w.LastMessage,
 			LastMessageAt: time.UnixMilli(w.LastMessageAt),

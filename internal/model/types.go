@@ -35,6 +35,7 @@ type User struct {
 	SerialNumber      int
 	PublicPostsCount  int
 	HasPublicPosts    bool
+	Deleted           bool // C-Mail otherUser only: the account has been deleted; other fields are best-effort
 	CreatedAt         time.Time
 	LastActiveAt      time.Time
 	UpdatedAt         time.Time
@@ -317,7 +318,7 @@ type NotificationActor struct {
 // handle the UI shows as #slug. GuildName is the rarer display-name variant.
 type Notification struct {
 	ID                   string
-	Type                 string // "reply", "reply_mention", "post_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "unfollowed", "bookmark", "poke", "guild_new_thread", "chat_mention", "dm_message", "supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed", "image_permission_granted", "image_permission_removed", "attachment_permission_granted", "attachment_permission_removed", "system_ban", "graffiti_mention", "moderator_granted", "moderator_removed", "api_access_granted", "api_access_removed", "system_ban_lifted", "post_cooldown", "rate_limit_warning"
+	Type                 string // "reply", "reply_mention", "post_mention", "thread_reply", "new_post_friend", "new_post_following", "new_follower", "unfollowed", "bookmark", "poke", "guild_new_thread", "guild_chat_message", "chat_mention", "dm_message", "supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed", "image_permission_granted", "image_permission_removed", "attachment_permission_granted", "attachment_permission_removed", "system_ban", "graffiti_mention", "moderator_granted", "moderator_removed", "moderator_permissions_changed", "api_access_granted", "api_access_removed", "edit_access_granted", "edit_access_removed", "system_ban_lifted", "post_cooldown", "rate_limit_warning", "gift_received", "gift_sent"
 	Read                 bool
 	CreatedAt            time.Time
 	Actor                NotificationActor

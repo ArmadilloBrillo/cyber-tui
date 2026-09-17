@@ -69,25 +69,26 @@ Prefer not to pipe to a shell? Download [`install.sh`](install.sh), read it, the
 
 ## Features
 
-- **Feed** — browse posts from people you follow; compose new posts with topics; open any post for replies; delete your own posts
-- **Post detail** — scrollable pager with threaded replies; compose replies inline; delete your own content
-- **Notifications** — reply, follow, poke, and bookmark alerts; mark individual or all as read; jump straight to the referenced post
-- **C-Mail** — direct messages with live updates via Firebase RTDB (SSE stream)
+- **Feed** — browse posts from people you follow; compose new posts with topics; open any post for threaded replies; edit or delete your own posts and replies
+- **Notifications** — reply, follow, poke, bookmark, and chat-mention alerts; mark individual or all as read; jump straight to the referenced post, guild thread, or chatroom
+- **C-Mail** — direct messages with live updates via Firebase RTDB (SSE), typing indicators, sent-line recall, and IRC-style slash commands
+- **CIRC** — public chatrooms with live presence (who's online, idle status), `@mention` completion, and the same slash-command set as C-Mail (`/me`, `/dice`, `/8ball`, `/fortune`, `/poke`, text-style commands, and more)
 - **Journal** — private notes visible only to you; create, edit, and delete notes; browse full revision history
 - **Bookmarks** — save and browse bookmarked posts and replies; remove bookmarks inline
-- **Topics** — browse all tags sorted by post count; drill into a topic feed
-- **Guilds** — browse the guild directory; drill into guild threads; compose new threads; join or leave a guild; view the member list and navigate to member profiles
-- **Profile** — view any user's Info, Posts, Replies, Following, and Followers tabs; edit your own bio, website, and location; follow or unfollow users
+- **Topics** — browse all tags sorted by post count, drill into a topic feed, and mute topics you don't want to see anywhere in the app
+- **Guilds** — browse the guild directory; drill into guild threads; compose new threads; join, leave, or get promoted; view the member list and navigate to member profiles
+- **Profile** — Info/Posts/Replies/Following/Followers sub-tabs for any user; edit your own bio, website, and location; follow or unfollow
+- **Search** — full-text search across users, posts, and replies
 - **Settings** — notification preferences, content filters, and display options synced to your account
-- **Three themes** — `cyber` (bright green-on-black, default), `c64` (Commodore 64), `vt320` (amber VT320)
+- **Globe** — a rotating Unicode globe plotting your own location and your guilds' members; can be hidden from the tab bar
+- **SSH hosting** — optionally serve the client over SSH ([Wish](https://github.com/charmbracelet/wish)) for unauthenticated demo/kiosk access
+- **Inline images** — render post/reply image attachments directly in the terminal (Kitty, iTerm2, or Sixel graphics protocols), with a fullscreen zoom/scale modal
+- **Five themes** — `cyber` (bright green-on-black, default), `c64` (Commodore 64), `vt320` (amber VT320), `bland` (uses your terminal's own palette), and `custom` (build your own in an in-TUI editor)
 - **Display density** — toggle between dense and relaxed list views
 - **Timezone** — display timestamps in any UTC offset
-- **Markdown rendering** — GFM formatting and @mention highlighting in post and reply content
+- **Markdown rendering** — GFM formatting and @mention highlighting in post, reply, and chat content
+- **Desktop notifications** — optional OS toast (OSC 9) for new C-Mail and activity while the app is backgrounded
 - **Session persistence** — refresh token saved to `~/.cyber-tui.json`; login only required when the token expires
-
-**Not yet fully wired:**
-
-- **Chatrooms** — UI complete; REST integration deferred (server-side paths not finalised)
 
 ---
 
@@ -129,7 +130,7 @@ On first run you will be prompted to log in with your cyberspace.online email an
 
 All settings live in `~/.cyber-tui.json`. The file is created automatically on first login and written with mode **`0600`** (owner read/write only).
 
-You can add any of the following fields manually:
+You can add any of the following fields manually. Most are also editable live from the in-app Settings screen; a few (marked below) are config-file-only.
 
 ```json
 {
@@ -139,24 +140,66 @@ You can add any of the following fields manually:
   "theme": "cyber",
   "timezone": "UTC",
   "density": "",
+  "layout": "",
   "autoEmail": "you@example.com",
   "autoPassword": "your_password"
 }
 ```
 
+**Core**
+
 | Field | Default | Description |
 |---|---|---|
 | `apiBaseURL` | `https://api.cyberspace.online` | Override the API endpoint |
+| `allowInsecureApi` | `false` | Permit a plain `http://` `apiBaseURL` to a non-loopback host |
 | `useMock` | `false` | Run against built-in mock data (no credentials needed) |
 | `debug` | `false` | Print verbose HTTP and RTDB output |
-| `theme` | `"cyber"` | Active theme: `"cyber"`, `"c64"`, or `"vt320"` |
-| `timezone` | `"UTC"` | Display timezone as a UTC offset label, e.g. `"UTC+2:00"` |
-| `density` | `""` | `""` = dense, `"relaxed"` = blank lines between list items |
-| `wanderLust` | `true` | Wander mode — randomises your profile location every 12 hours |
 | `autoEmail` | — | Pre-fill email on the login screen |
 | `autoPassword` | — | Pre-fill password for automatic login on startup ⚠️ |
 
+**Display**
+
+| Field | Default | Description |
+|---|---|---|
+| `theme` | `"cyber"` | `"cyber"`, `"c64"`, `"vt320"`, `"bland"`, or `"custom"` |
+| `customPalette` | `null` | Your saved palette for the `"custom"` theme (written by the in-TUI theme editor — not hand-edited) |
+| `layout` | `""` | `""`/`"tabs"` = tab bar (default), `"miller"` = sidebar columns |
+| `density` | `""` | `""` = dense, `"relaxed"` = blank lines between list items |
+| `timezone` | `"UTC"` | Display timezone as a UTC offset label, e.g. `"UTC+2:00"` |
+| `hideGlobeTab` | `false` | Hide the Globe tab from the tab bar and navigation |
+| `maxThreadDepth` | `3` | How many levels of reply nesting are visually indented in post detail |
+
+**Images** (config-file-only except `imageViewer`, which also has a Settings toggle)
+
+| Field | Default | Description |
+|---|---|---|
+| `inlineImages` | `false` | Render each post's first image attachment inline in Feed/post detail (experimental) |
+| `imageViewer` | `"terminal"` | `"terminal"` shows images in a fullscreen modal; `"browser"` always opens the OS browser |
+| `graphicsProtocol` | `""` (autodetect) | Force `"kitty"`, `"iterm2"`, `"sixel"`, or `"none"` when autodetection is unreliable (e.g. mintty/Git Bash) |
+| `imageScale` | `0` (= `1.0`) | Fullscreen modal size multiplier relative to the image's native size, `0.2`–`2.0` (also adjustable live with `+`/`-`) |
+| `dithering` | `false` | Bayer-ordered dithering/duotone recoloring for terminal-rendered images |
+| `ditherSharpness` | `"medium"` | `"rough"`, `"medium"`, `"sharp"`, or `"crisp"` — only applies when `dithering` is on |
+
+**Notifications & behavior**
+
+| Field | Default | Description |
+|---|---|---|
+| `desktopNotifications` | `false` | OS desktop toast (OSC 9) for new C-Mail/activity while backgrounded |
+| `typingIndicatorsDisabled` | `false` | Turn off C-Mail's typing-indicator subsystem |
+| `feedManualRefreshOnly` | `false` | Disable Feed's 60s background poll for new-post badges |
+| `wanderLust` | `false` | Wander mode — randomises your profile location every 12 hours |
+
+**SSH hosting**
+
+| Field | Default | Description |
+|---|---|---|
+| `sshListenAddr` | — | Enable SSH server mode, e.g. `":2222"` |
+| `sshHostKeyPath` | — | Path to the SSH host key file (default: `./ssh_host_key`) |
+| `allowRemoteSsh` | `false` | Permit `sshListenAddr` to bind a non-loopback address — SSH mode performs no authentication, so this stays off by default |
+
 > ⚠️ **`autoPassword` is not recommended.** Your password is stored in plain text. The preferred flow is to log in once interactively — the app saves a session token and auto-logins on subsequent launches without storing your password. Only set `autoPassword` if you have a specific need (e.g. CI or a kiosk setup) and understand the risk.
+>
+> ⚠️ **SSH server mode is experimental and unauthenticated.** Only bind it beyond loopback (`allowRemoteSsh`) if you understand that anyone who can reach the address gets a full session.
 
 ---
 

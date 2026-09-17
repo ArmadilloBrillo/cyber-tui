@@ -845,11 +845,13 @@ func TestNotifs_UnreadFilter_AllRead_EmptyState(t *testing.T) {
 var allKnownNotifTypes = []string{
 	"new_post_friend", "new_post_following", "bookmark", "new_follower", "unfollowed",
 	"reply", "reply_mention", "post_mention", "chat_mention", "dm_message", "thread_reply",
-	"guild_new_thread", "poke", "supporter_granted", "supporter_removed", "hacker_granted",
+	"guild_new_thread", "guild_chat_message", "poke", "supporter_granted", "supporter_removed", "hacker_granted",
 	"hacker_removed", "image_permission_granted", "image_permission_removed",
 	"attachment_permission_granted", "attachment_permission_removed", "system_ban",
 	"system_ban_lifted", "graffiti_mention", "moderator_granted", "moderator_removed",
-	"api_access_granted", "api_access_removed", "post_cooldown", "rate_limit_warning",
+	"moderator_permissions_changed", "api_access_granted", "api_access_removed",
+	"edit_access_granted", "edit_access_removed", "post_cooldown", "rate_limit_warning",
+	"gift_received", "gift_sent",
 }
 
 func TestNotifCategories_CoverAllKnownTypesExactlyOnce(t *testing.T) {
@@ -1421,6 +1423,83 @@ func TestNotifIcon_RateLimitWarning(t *testing.T) {
 	n := model.Notification{Type: "rate_limit_warning", Read: false}
 	if !strings.Contains(notifIcon(n), "⚠") {
 		t.Errorf("expected ⚠ in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_GuildChatMessage_WithRoomName(t *testing.T) {
+	n := model.Notification{Type: "guild_chat_message", RoomName: "The Sprawl", RoomSlug: "cyberspace"}
+	if got, want := notifSummary(n), "posted in #The Sprawl."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifSummary_GuildChatMessage_RoomSlugFallback(t *testing.T) {
+	n := model.Notification{Type: "guild_chat_message", RoomSlug: "cyberspace"}
+	if got, want := notifSummary(n), "posted in #cyberspace."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifIcon_GuildChatMessage(t *testing.T) {
+	n := model.Notification{Type: "guild_chat_message", Read: false}
+	if !strings.Contains(notifIcon(n), "#") {
+		t.Errorf("expected # in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_ModeratorPermissionsChanged(t *testing.T) {
+	n := model.Notification{Type: "moderator_permissions_changed"}
+	if got, want := notifSummary(n), "changed your Moderator permissions."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifIcon_ModeratorPermissionsChanged(t *testing.T) {
+	n := model.Notification{Type: "moderator_permissions_changed", Read: false}
+	if !strings.Contains(notifIcon(n), "!") {
+		t.Errorf("expected ! in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_EditAccessGranted(t *testing.T) {
+	n := model.Notification{Type: "edit_access_granted"}
+	if got, want := notifSummary(n), "granted you edit access."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifSummary_EditAccessRemoved(t *testing.T) {
+	n := model.Notification{Type: "edit_access_removed"}
+	if got, want := notifSummary(n), "revoked your edit access."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifIcon_EditAccess(t *testing.T) {
+	n := model.Notification{Type: "edit_access_granted", Read: false}
+	if !strings.Contains(notifIcon(n), "/") {
+		t.Errorf("expected / in icon, got %q", notifIcon(n))
+	}
+}
+
+func TestNotifSummary_GiftReceived(t *testing.T) {
+	n := model.Notification{Type: "gift_received"}
+	if got, want := notifSummary(n), "sent you a gift."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifSummary_GiftSent(t *testing.T) {
+	n := model.Notification{Type: "gift_sent"}
+	if got, want := notifSummary(n), "gift sent."; got != want {
+		t.Errorf("unexpected summary: got %q, want %q", got, want)
+	}
+}
+
+func TestNotifIcon_Gift(t *testing.T) {
+	n := model.Notification{Type: "gift_received", Read: false}
+	if !strings.Contains(notifIcon(n), "¤") {
+		t.Errorf("expected ¤ in icon, got %q", notifIcon(n))
 	}
 }
 

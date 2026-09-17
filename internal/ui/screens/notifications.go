@@ -67,14 +67,16 @@ type notifCategory struct {
 var notifCategories = []notifCategory{
 	{label: "mentions", types: []string{"reply_mention", "post_mention", "chat_mention", "graffiti_mention"}},
 	{label: "social", types: []string{"new_follower", "unfollowed", "poke", "bookmark"}},
-	{label: "threads", types: []string{"reply", "thread_reply", "guild_new_thread", "new_post_friend", "new_post_following"}},
+	{label: "threads", types: []string{"reply", "thread_reply", "guild_new_thread", "guild_chat_message", "new_post_friend", "new_post_following"}},
 	{label: "c-mail", types: []string{"dm_message"}},
 	{label: "account/system", types: []string{
 		"supporter_granted", "supporter_removed", "hacker_granted", "hacker_removed",
 		"image_permission_granted", "image_permission_removed",
 		"attachment_permission_granted", "attachment_permission_removed",
 		"system_ban", "system_ban_lifted", "moderator_granted", "moderator_removed",
-		"api_access_granted", "api_access_removed", "post_cooldown", "rate_limit_warning",
+		"moderator_permissions_changed", "api_access_granted", "api_access_removed",
+		"edit_access_granted", "edit_access_removed", "post_cooldown", "rate_limit_warning",
+		"gift_received", "gift_sent",
 	}},
 }
 
@@ -687,6 +689,14 @@ func baseNotifSummary(n model.Notification) string {
 			return "posted a new thread in #" + g + "."
 		}
 		return "posted a new thread."
+	case "guild_chat_message":
+		if n.RoomName != "" {
+			return "posted in #" + n.RoomName + "."
+		}
+		if n.RoomSlug != "" {
+			return "posted in #" + n.RoomSlug + "."
+		}
+		return "posted in a guild chat."
 	case "poke":
 		return `poked you ¯\_(ツ)_/¯`
 	case "supporter_granted":
@@ -713,16 +723,26 @@ func baseNotifSummary(n model.Notification) string {
 		return "granted you Moderator status."
 	case "moderator_removed":
 		return "removed your Moderator status."
+	case "moderator_permissions_changed":
+		return "changed your Moderator permissions."
 	case "api_access_granted":
 		return "granted you API access."
 	case "api_access_removed":
 		return "revoked your API access."
+	case "edit_access_granted":
+		return "granted you edit access."
+	case "edit_access_removed":
+		return "revoked your edit access."
 	case "system_ban_lifted":
 		return "your ban has been lifted."
 	case "post_cooldown":
 		return "a post was rate-limited and saved as a note instead."
 	case "rate_limit_warning":
 		return "you're approaching a posting limit."
+	case "gift_received":
+		return "sent you a gift."
+	case "gift_sent":
+		return "gift sent."
 	default:
 		return n.Type
 	}
@@ -745,7 +765,7 @@ func notifIcon(n model.Notification) string {
 		sym = "+"
 	case "unfollowed":
 		sym = "☹"
-	case "guild_new_thread":
+	case "guild_new_thread", "guild_chat_message":
 		sym = "#"
 	case "poke":
 		sym = "~"
@@ -764,9 +784,9 @@ func notifIcon(n model.Notification) string {
 		sym = "☠"
 	case "graffiti_mention":
 		sym = "@"
-	case "moderator_granted", "moderator_removed":
+	case "moderator_granted", "moderator_removed", "moderator_permissions_changed":
 		sym = "!"
-	case "api_access_granted", "api_access_removed":
+	case "api_access_granted", "api_access_removed", "edit_access_granted", "edit_access_removed":
 		sym = "/"
 	case "system_ban_lifted":
 		sym = "✓"
@@ -774,6 +794,8 @@ func notifIcon(n model.Notification) string {
 		sym = "⏱"
 	case "rate_limit_warning":
 		sym = "⚠"
+	case "gift_received", "gift_sent":
+		sym = "¤"
 	default:
 		sym = "·"
 	}
