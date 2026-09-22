@@ -1619,6 +1619,40 @@ func (c *HTTPClient) GetUnreadNotificationCount() (int, bool, error) {
 	return data.Count, data.Exact, nil
 }
 
+// maxUnreadCountPages bounds how many pages CountUnreadNotifications walks,
+// so an account with a large muted/disabled-type backlog can't turn one
+// 60s badge poll into an unbounded burst of requests. 5 pages * 50/page =
+// 250, well under the 30/min rate limit on this endpoint.
+const maxUnreadCountPages = 5
+
+// CountUnreadNotifications counts unread notifications by paginating
+// GET /v1/notifications?read=false instead of calling
+// GET /v1/notifications/unread-count, because the list endpoint excludes
+// notification types the user has muted/blocked/switched off (see
+// docs/00-latest-api-reference.md:801) while the unread-count endpoint does
+// not (docs/00-latest-api-reference.md:859) -- see also docs/00-api-backlog.md.
+// exact is false if maxUnreadCountPages is exhausted before the cursor runs
+// out; treat that like the old server-side 100-cap and render "99+".
+func (c *HTTPClient) CountUnreadNotifications() (count int, exact bool, err error) {
+	cursor := ""
+	for page := 0; page < maxUnreadCountPages; page++ {
+		path := "/v1/notifications?limit=50&read=false"
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		notifs, nextCursor, err := fetchPage(c, path, wireNotificationToModel)
+		if err != nil {
+			return 0, false, fmt.Errorf("count unread notifications: %w", err)
+		}
+		count += len(notifs)
+		if nextCursor == "" {
+			return count, true, nil
+		}
+		cursor = nextCursor
+	}
+	return count, false, nil
+}
+
 // --- Bookmarks ---
 
 func (c *HTTPClient) GetBookmarks(cursor string) ([]model.Bookmark, string, error) {
