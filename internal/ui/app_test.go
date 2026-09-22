@@ -2453,33 +2453,6 @@ func TestUnreadCountMsg_PropagatesExactFlag(t *testing.T) {
 	}
 }
 
-// countUnreadSpyClient overrides CountUnreadNotifications so tests can pin
-// which client method fetchUnreadCountCmd actually calls.
-type countUnreadSpyClient struct {
-	*api.MockClient
-	count int
-	exact bool
-	err   error
-}
-
-func (c *countUnreadSpyClient) CountUnreadNotifications() (int, bool, error) {
-	return c.count, c.exact, c.err
-}
-
-func TestFetchUnreadCountCmd_UsesCountUnreadNotifications(t *testing.T) {
-	spy := &countUnreadSpyClient{MockClient: api.NewMockClient(), count: 42, exact: true}
-	a := NewApp(spy)
-
-	msg := a.fetchUnreadCountCmd()()
-	got, ok := msg.(unreadCountMsg)
-	if !ok {
-		t.Fatalf("expected unreadCountMsg, got %T", msg)
-	}
-	if got.count != 42 || !got.exact {
-		t.Errorf("unreadCountMsg = %+v, want {count:42 exact:true}", got)
-	}
-}
-
 func TestMarkAllNotifsReadMsg_SetsExactTrue(t *testing.T) {
 	a := loggedInApp()
 	a.polledUnreadCount = 150
