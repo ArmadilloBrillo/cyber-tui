@@ -414,10 +414,6 @@ func (m *MockClient) GetUnreadNotificationCount() (int, bool, error) {
 	return count, true, nil
 }
 
-func (m *MockClient) CountUnreadNotifications() (int, bool, error) {
-	return m.GetUnreadNotificationCount()
-}
-
 func (m *MockClient) MarkNotificationRead(id string) error { return nil }
 
 func (m *MockClient) MarkAllNotificationsRead() (bool, error) { return false, nil }
