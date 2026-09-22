@@ -2386,6 +2386,96 @@ func TestHTTPGetUnreadNotificationCount_InexactAboveCap(t *testing.T) {
 	}
 }
 
+func TestHTTPCountUnreadNotifications_SinglePage(t *testing.T) {
+	var gotURL string
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURL = r.URL.String()
+		writeOKWithCursor(t, w, []map[string]any{{"id": "n1"}, {"id": "n2"}, {"id": "n3"}}, "")
+	})))
+	c.LoginWithRefreshToken("tok")
+
+	count, exact, err := c.CountUnreadNotifications()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("count = %d, want 3", count)
+	}
+	if !exact {
+		t.Error("expected exact true for a single, fully-drained page")
+	}
+	if !strings.Contains(gotURL, "limit=50") || !strings.Contains(gotURL, "read=false") {
+		t.Errorf("expected limit=50 and read=false in request URL, got: %s", gotURL)
+	}
+}
+
+func TestHTTPCountUnreadNotifications_MultiPage(t *testing.T) {
+	var gotCursors []string
+	call := 0
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCursors = append(gotCursors, r.URL.Query().Get("cursor"))
+		call++
+		if call == 1 {
+			writeOKWithCursor(t, w, []map[string]any{{"id": "n1"}, {"id": "n2"}}, "page2")
+			return
+		}
+		writeOKWithCursor(t, w, []map[string]any{{"id": "n3"}}, "")
+	})))
+	c.LoginWithRefreshToken("tok")
+
+	count, exact, err := c.CountUnreadNotifications()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("count = %d, want 3", count)
+	}
+	if !exact {
+		t.Error("expected exact true once the cursor is exhausted")
+	}
+	if len(gotCursors) != 2 || gotCursors[0] != "" || gotCursors[1] != "page2" {
+		t.Errorf("gotCursors = %v, want [\"\" \"page2\"]", gotCursors)
+	}
+}
+
+func TestHTTPCountUnreadNotifications_CapsAtMaxPages(t *testing.T) {
+	calls := 0
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		writeOKWithCursor(t, w, []map[string]any{{"id": "n"}}, "more")
+	})))
+	c.LoginWithRefreshToken("tok")
+
+	count, exact, err := c.CountUnreadNotifications()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exact {
+		t.Error("expected exact false when the page cap is hit before the cursor is exhausted")
+	}
+	if calls != 5 {
+		t.Errorf("expected the walk to stop at 5 requests, got %d", calls)
+	}
+	if count != 5 {
+		t.Errorf("count = %d, want 5 (1 item/page * 5 pages)", count)
+	}
+}
+
+func TestHTTPCountUnreadNotifications_PropagatesError(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	})))
+	c.LoginWithRefreshToken("tok")
+
+	_, _, err := c.CountUnreadNotifications()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "count unread notifications") {
+		t.Errorf("expected wrapped error to mention \"count unread notifications\", got: %v", err)
+	}
+}
+
 func TestHTTPMarkNotificationRead_Method(t *testing.T) {
 	var capturedMethod, capturedPath string
 	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

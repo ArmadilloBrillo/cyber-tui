@@ -461,10 +461,13 @@ type App struct {
 
 	// polledUnreadCount is the single source of truth for the tab badge unread count.
 	// It is synced from: 60-second server poll, m/M key, and enter on a notification.
-	// Never overwrite with the local list count — the server count is always authoritative.
+	// The poll (fetchUnreadCountCmd) derives this via CountUnreadNotifications,
+	// which paginates GET /v1/notifications?read=false rather than calling
+	// GET /v1/notifications/unread-count — see that method's doc comment for why.
 	polledUnreadCount int
-	// polledUnreadCountExact is false once polledUnreadCount was capped at 100 by the
-	// server (v0.8.5+); the badge renders "99+" instead of the number in that case.
+	// polledUnreadCountExact is false once polledUnreadCount was capped by
+	// CountUnreadNotifications's page limit; the badge renders "99+" instead
+	// of the number in that case.
 	polledUnreadCountExact bool
 
 	// settings holds the user's preferences fetched from GET /v1/settings on login.
@@ -6496,7 +6499,7 @@ func (a *App) checkForUpdateCmd() tea.Cmd {
 
 func (a *App) fetchUnreadCountCmd() tea.Cmd {
 	return func() tea.Msg {
-		count, exact, err := a.client.GetUnreadNotificationCount()
+		count, exact, err := a.client.CountUnreadNotifications()
 		if err != nil {
 			return nil
 		}

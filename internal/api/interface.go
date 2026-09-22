@@ -121,6 +121,12 @@ type Client interface {
 	// The value is cached for ~5 s on the server side. exact is false once the true
 	// count exceeds 100 — count is capped at 100 in that case; render "99+".
 	GetUnreadNotificationCount() (count int, exact bool, err error)
+	// CountUnreadNotifications derives the unread badge count by paginating
+	// GET /v1/notifications?read=false (which already excludes muted/disabled
+	// types) rather than trusting GetUnreadNotificationCount, which does not
+	// apply that filtering. exact is false if the walk was capped before
+	// exhausting the cursor.
+	CountUnreadNotifications() (count int, exact bool, err error)
 	MarkNotificationRead(id string) error
 	// MarkAllNotificationsRead marks up to 5,000 notifications read per call.
 	// hasMore is true if the caller should call it again to mark the rest.
