@@ -758,7 +758,7 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 	case screenProfile:
 		return a, a.loadProfileCmd()
 	case screenNotifications:
-		if !a.notifications.HasPaginated() {
+		if !a.notifications.IsLoaded() {
 			a.notifications = a.notifications.SetFetching()
 			return a, a.loadNotifsCmd()
 		}

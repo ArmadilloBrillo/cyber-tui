@@ -114,6 +114,30 @@ func TestRenderFeedPendingBar_BlankWhenNoneOrNotOnFeed(t *testing.T) {
 	}
 }
 
+// --- activateScreen: Notifications refetch guard ---
+//
+// Regression test: the guard used to check HasPaginated() (scroll depth)
+// instead of IsLoaded() (load state), so revisiting the tab without ever
+// scrolling past page 1 refetched it every time.
+
+func TestActivateScreen_Notifications_RefetchesOnFirstEntry(t *testing.T) {
+	a := loggedInApp()
+	_, cmd := activateScreen(a, screenNotifications)
+	if cmd == nil {
+		t.Error("expected a refetch command on first entry to Notifications")
+	}
+}
+
+func TestActivateScreen_Notifications_NoRefetchWhenAlreadyLoaded(t *testing.T) {
+	a := loggedInApp()
+	a.notifications = a.notifications.SetNotifs([]model.Notification{{ID: "n1"}}, "")
+
+	_, cmd := activateScreen(a, screenNotifications)
+	if cmd != nil {
+		t.Error("expected no refetch when notifications are already loaded, even without pagination")
+	}
+}
+
 func TestRenderNav_DoesNotShowSearch(t *testing.T) {
 	a := loggedInApp()
 	out := ansi.Strip(MillerLayout{}.renderNav(a))

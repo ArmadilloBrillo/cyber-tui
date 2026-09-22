@@ -105,6 +105,7 @@ type NotificationsModel struct {
 	refreshing          bool
 	exhausted           bool
 	nextCursor          string
+	loaded              bool // true once the first page has ever come back; distinct from hasPaginated
 	hasPaginated        bool
 	showUnreadOnly      bool
 	err                 error
@@ -124,6 +125,12 @@ func NewNotificationsModel() NotificationsModel {
 // IsReady reports whether the viewport has been initialised.
 func (m NotificationsModel) IsReady() bool { return m.ready }
 
+// IsLoaded reports whether the first page has ever been fetched, so
+// activateScreen (layout.go) only refetches on genuinely first entry —
+// mirrors BookmarksModel/GuildsModel/TopicsModel's IsLoaded. Deliberately
+// separate from HasPaginated, which tracks scroll depth, not load state.
+func (m NotificationsModel) IsLoaded() bool { return m.loaded }
+
 func (m NotificationsModel) SetFetching() NotificationsModel {
 	m.fetching = true
 	m.err = nil
@@ -141,6 +148,7 @@ func (m NotificationsModel) SetNotifs(notifs []model.Notification, cursor string
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	m.loaded = true
 	m.hasPaginated = false
 	m.selectedIndex = 0
 	if m.ready {
