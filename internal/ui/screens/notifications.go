@@ -94,6 +94,7 @@ func notifFilterOptionLabel(i int) string {
 
 type NotificationsModel struct {
 	notifs              []model.Notification
+	localMentions       []model.Notification // client-synthesized, unread bare-word mentions; never returned by the server, re-merged into notifs across every SetNotifs reload so they survive it
 	notifOffsets        []int // start line of each notification within the viewport content
 	viewport            viewport.Model
 	width               int
@@ -141,7 +142,7 @@ func (m NotificationsModel) SetFetching() NotificationsModel {
 }
 
 func (m NotificationsModel) SetNotifs(notifs []model.Notification, cursor string) NotificationsModel {
-	m.notifs = notifs
+	m.notifs = mergeNotifsByTime(m.localMentions, notifs)
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.err = nil
@@ -169,6 +170,47 @@ func (m NotificationsModel) AppendNotifs(notifs []model.Notification, cursor str
 		m = m.refreshContent() // selectedIndex preserved; scroll position preserved
 	}
 	return m
+}
+
+// AddLocalMention inserts a client-synthesized notification (a bare-word
+// cIRC mention the server never creates) into the list at its correct
+// chronological position. Unread entries are also tracked in localMentions
+// so SetNotifs re-merges them across a server reload; an already-read entry
+// (created because the user was actively viewing the mentioned room) is
+// shown once but not force-preserved — like any other read entry, it's fine
+// for it to fall out on the next real reload.
+func (m NotificationsModel) AddLocalMention(n model.Notification) NotificationsModel {
+	if !n.Read {
+		m.localMentions = mergeNotifsByTime([]model.Notification{n}, m.localMentions)
+	}
+	m.notifs = mergeNotifsByTime([]model.Notification{n}, m.notifs)
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
+// mergeNotifsByTime merges two notification slices that are each already
+// sorted newest-first into one newest-first slice. Used to fold
+// client-synthesized local mentions into the server-sourced list without
+// pinning them above genuinely newer server notifications — a plain prepend
+// would leave a local mention stuck at the top indefinitely once real
+// notifications arrive after it.
+func mergeNotifsByTime(a, b []model.Notification) []model.Notification {
+	merged := make([]model.Notification, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		if b[j].CreatedAt.After(a[i].CreatedAt) {
+			merged = append(merged, b[j])
+			j++
+		} else {
+			merged = append(merged, a[i])
+			i++
+		}
+	}
+	merged = append(merged, a[i:]...)
+	merged = append(merged, b[j:]...)
+	return merged
 }
 
 func (m NotificationsModel) SetError(err error) NotificationsModel {
@@ -240,6 +282,13 @@ func (m NotificationsModel) UnreadCount() int {
 	return n
 }
 
+// LocalUnreadCount returns the number of client-synthesized (never
+// server-created) unread notifications currently tracked — localMentions
+// holds only unread entries by construction (see AddLocalMention/MarkRead).
+func (m NotificationsModel) LocalUnreadCount() int {
+	return len(m.localMentions)
+}
+
 func (m NotificationsModel) location() *time.Location {
 	if m.loc == nil {
 		return time.UTC
@@ -252,6 +301,14 @@ func (m NotificationsModel) MarkRead(id string) NotificationsModel {
 	for i, n := range m.notifs {
 		if n.ID == id {
 			m.notifs[i].Read = true
+			break
+		}
+	}
+	// Once read, a local mention no longer needs to be force-preserved across
+	// a future SetNotifs reload — it's fine for it to fall out naturally.
+	for i, n := range m.localMentions {
+		if n.ID == id {
+			m.localMentions = append(m.localMentions[:i], m.localMentions[i+1:]...)
 			break
 		}
 	}
@@ -270,6 +327,7 @@ func (m NotificationsModel) MarkAllRead() NotificationsModel {
 	for i := range m.notifs {
 		m.notifs[i].Read = true
 	}
+	m.localMentions = nil // none still need force-preserving once every entry is read
 	if m.ready {
 		m = m.refreshContent()
 	}

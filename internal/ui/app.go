@@ -467,10 +467,22 @@ type App struct {
 	// a paginated GET /v1/notifications?read=false walk instead — see the
 	// CountUnreadNotifications workaround removed in the same change as this
 	// comment, and docs/00-api-backlog.md, for that history.)
+	// It also carries a client-only delta on top of the server count: the
+	// unreadCountMsg handler adds NotificationsModel.LocalUnreadCount() (bare-word
+	// cIRC mentions the server never creates) each poll. That's additive layering
+	// of a delta the server can't know about, not recomputing the total from local
+	// state — the class of bug the paragraph above warns against — so it doesn't
+	// contradict "server count is authoritative."
 	polledUnreadCount int
 	// polledUnreadCountExact is false once polledUnreadCount was capped at 100 by the
 	// server (v0.8.5+); the badge renders "99+" instead of the number in that case.
 	polledUnreadCountExact bool
+	// lastServerUnreadCount is the server's own unread-count from the most recent
+	// poll, tracked separately from polledUnreadCount (which also includes local-only
+	// mention entries) so unreadCountMsg's reload-trigger comparison stays an
+	// apples-to-apples server-to-server delta — comparing against the mixed total
+	// would let an outstanding local mention mask a genuine new server notification.
+	lastServerUnreadCount int
 
 	// settings holds the user's preferences fetched from GET /v1/settings on login.
 	settings model.Settings
@@ -1508,6 +1520,25 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case screens.RoomOpenedMsg:
 		return a, a.markRoomReadCmd(msg.RoomID), true
+	case screens.RoomMentionedMsg:
+		n := model.Notification{
+			ID:             localMentionIDPrefix + msg.MessageID,
+			Type:           "chat_mention",
+			Read:           a.viewingRoom(msg.RoomID),
+			CreatedAt:      time.Now(),
+			Actor:          model.NotificationActor{Username: msg.From},
+			RoomSlug:       msg.RoomID,
+			RoomName:       msg.RoomName,
+			MessageContent: msg.Body,
+		}
+		a.notifications = a.notifications.AddLocalMention(n)
+		if !n.Read {
+			a.polledUnreadCount++
+		}
+		if !a.shouldNotifyRoomMention(msg.RoomID) {
+			return a, nil, true
+		}
+		return a, desktopNotifyCmd(msg.RoomName, "@"+msg.From+": "+msg.Body), true
 	case screens.RoomReconnectedMsg:
 		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
@@ -5573,13 +5604,14 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, tea.Batch(a.fetchUnreadCountCmd(), a.schedulePollCmd()), true
 	case unreadCountMsg:
-		prev := a.polledUnreadCount
-		a.polledUnreadCount = msg.count
+		prevServer := a.lastServerUnreadCount
+		a.lastServerUnreadCount = msg.count
+		a.polledUnreadCount = msg.count + a.notifications.LocalUnreadCount()
 		a.polledUnreadCountExact = msg.exact
 		// The desktop toast for new activity fires from the notifsLoadedMsg
 		// handler (desktopNotifyForNewNotifs) so it can carry the real
 		// per-notification text; this poll just triggers that list refresh.
-		if msg.count > prev && !a.notifications.HasPaginated() {
+		if msg.count > prevServer && !a.notifications.HasPaginated() {
 			return a, a.loadNotifsCmd(), true
 		}
 		return a, nil, true
@@ -5620,6 +5652,32 @@ func (a App) suppressActiveRoomMentions(notifs []model.Notification) (App, tea.C
 		}
 	}
 	return a, tea.Batch(cmds...)
+}
+
+// viewingRoom reports whether roomID is the exact room the user currently
+// has open in Chatrooms detail view — the same "already seen it in context"
+// condition suppressActiveRoomMentions uses for the server-side chat_mention
+// case. ResetToList (reachable by re-pressing the Chatrooms key while
+// already on it) drops back to the room list without tearing down the live
+// subscription, so being on the Chatrooms tab doesn't by itself mean the
+// user is reading this room — ActiveRoomSlug() is empty in that state.
+func (a App) viewingRoom(roomID string) bool {
+	return a.active == screenChatrooms && a.chatrooms.ActiveRoomSlug() == roomID
+}
+
+// shouldNotifyRoomMention reports whether a client-side bare-word mention
+// (screens.RoomMentionedMsg) in roomID should toast. Same focus gate as
+// shouldDesktopNotify, but with screenChatrooms narrowed via viewingRoom to
+// "is this the exact room open in detail" rather than just "is Chatrooms
+// the active tab".
+func (a App) shouldNotifyRoomMention(roomID string) bool {
+	if a.ephemeral || !a.desktopNotifications {
+		return false
+	}
+	if !a.focusReported || !a.focused {
+		return true
+	}
+	return !a.viewingRoom(roomID)
 }
 
 // desktopNotifyForNewNotifs fires a desktop toast for every notification in the
@@ -5689,8 +5747,16 @@ func (a *App) loadNotifsPageCmd(cursor string) tea.Cmd {
 	}
 }
 
+// localMentionIDPrefix marks a client-synthesized notification ID (a
+// bare-word cIRC mention; see screens.RoomMentionedMsg) — the server never
+// issued this ID, so markNotifReadCmd must not try to PATCH it.
+const localMentionIDPrefix = "local-mention-"
+
 func (a *App) markNotifReadCmd(id string) tea.Cmd {
 	return func() tea.Msg {
+		if strings.HasPrefix(id, localMentionIDPrefix) {
+			return nil
+		}
 		_ = a.client.MarkNotificationRead(id) // fire-and-forget; UI already updated
 		return nil
 	}

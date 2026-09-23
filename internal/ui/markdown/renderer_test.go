@@ -336,6 +336,31 @@ func TestRender_Mention(t *testing.T) {
 	}
 }
 
+func TestMentionsUserBare(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		username string
+		want     bool
+	}{
+		{"bare lowercase", "hey ragnar check this out", "ragnar", true},
+		{"bare uppercase first letter", "hey Ragnar check this out", "ragnar", true},
+		{"bare mixed case", "hey RaGnAr check this out", "ragnar", true},
+		{"at-prefixed only", "hey @ragnar check this out", "ragnar", false},
+		{"substring not a whole word", "ragnarwessels was here", "ragnar", false},
+		{"mixed: at-mention and separate bare word", "@ragnar ragnar are you there", "ragnar", true},
+		{"no match", "hello there", "ragnar", false},
+		{"empty username", "hey ragnar", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MentionsUserBare(tt.body, tt.username); got != tt.want {
+				t.Errorf("MentionsUserBare(%q, %q) = %v, want %v", tt.body, tt.username, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRender_MentionInCodeBlockNotHighlighted(t *testing.T) {
 	md := "```\n@alice is here\n```"
 	raw := Render(md, 80)
