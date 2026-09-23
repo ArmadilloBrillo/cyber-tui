@@ -2453,6 +2453,56 @@ func TestUnreadCountMsg_PropagatesExactFlag(t *testing.T) {
 	}
 }
 
+func TestUnreadCountMsg_DoesNotClobberLocalMentionBadge(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo", MessageID: "msg1"})
+	a = m.(App)
+	if a.polledUnreadCount != 1 {
+		t.Fatalf("setup: expected polledUnreadCount 1 after the mention, got %d", a.polledUnreadCount)
+	}
+
+	// The server has no idea the local mention exists — its own count is 0.
+	m2, _ := a.Update(unreadCountMsg{count: 0, exact: true})
+	got := m2.(App)
+
+	if got.polledUnreadCount != 1 {
+		t.Errorf("polledUnreadCount = %d, want 1 (the poll must not drop the local mention's contribution)", got.polledUnreadCount)
+	}
+}
+
+func TestUnreadCountMsg_ServerIncreaseStillTriggersReload_WithLocalMentionOutstanding(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Baseline poll: server already at 5, nothing local yet.
+	m, _ := a.Update(unreadCountMsg{count: 5, exact: true})
+	a = m.(App)
+
+	// A local mention arrives independently of the poll cycle.
+	m2, _ := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo", MessageID: "msg1"})
+	a = m2.(App)
+	if a.polledUnreadCount != 6 {
+		t.Fatalf("setup: expected polledUnreadCount 6 (5 server + 1 local), got %d", a.polledUnreadCount)
+	}
+
+	// A genuine new server notification raises the server's own count by
+	// exactly the same amount the local mention already padded the badge by
+	// — comparing against the mixed total would mask this as "no increase".
+	m3, cmd := a.Update(unreadCountMsg{count: 6, exact: true})
+	got := m3.(App)
+
+	if cmd == nil {
+		t.Error("expected loadNotifsCmd to fire for the genuine server-side increase, even with a local mention already outstanding")
+	}
+	if got.polledUnreadCount != 7 {
+		t.Errorf("polledUnreadCount = %d, want 7 (6 server + 1 local)", got.polledUnreadCount)
+	}
+}
+
 func TestMarkAllNotifsReadMsg_SetsExactTrue(t *testing.T) {
 	a := loggedInApp()
 	a.polledUnreadCount = 150
@@ -3676,6 +3726,193 @@ func TestNotifsLoaded_DoesNotSuppress_ForADifferentRoom(t *testing.T) {
 
 	if got.notifications.UnreadCount() != 1 {
 		t.Errorf("UnreadCount() = %d, want 1 (mention in a different room must still notify)", got.notifications.UnreadCount())
+	}
+}
+
+// --- client-side bare-word mention toast (RoomMentionedMsg) ---
+
+func TestShouldNotifyRoomMention(t *testing.T) {
+	inRoom := func(a App, slug string) App {
+		a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: slug, Name: slug}})
+		cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		a.chatrooms = cm
+		if a.chatrooms.ActiveRoomSlug() != slug {
+			t.Fatalf("setup: expected %q open in detail mode", slug)
+		}
+		return a
+	}
+
+	t.Run("disabled", func(t *testing.T) {
+		a := loggedInApp()
+		if a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want false when desktop notifications disabled")
+		}
+	})
+
+	t.Run("ephemeral SSH session", func(t *testing.T) {
+		a := loggedInApp()
+		a.desktopNotifications = true
+		a.ephemeral = true
+		if a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want false for an ephemeral session")
+		}
+	})
+
+	t.Run("unfocused", func(t *testing.T) {
+		a := loggedInApp()
+		a.desktopNotifications = true
+		if !a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want true when window focus is unknown/unfocused")
+		}
+	})
+
+	t.Run("focused, different tab", func(t *testing.T) {
+		a := loggedInApp()
+		a.desktopNotifications = true
+		a.focusReported, a.focused = true, true
+		a.active = screenFeed
+		if !a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want true when not on the Chatrooms tab")
+		}
+	})
+
+	t.Run("focused, exact room open in detail", func(t *testing.T) {
+		a := loggedInApp()
+		a.desktopNotifications = true
+		a.focusReported, a.focused = true, true
+		a.active = screenChatrooms
+		a = inRoom(a, "cyberspace")
+		if a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want false while actively viewing the mentioned room")
+		}
+	})
+
+	t.Run("focused, Chatrooms tab but back at the room list", func(t *testing.T) {
+		a := loggedInApp()
+		a.desktopNotifications = true
+		a.focusReported, a.focused = true, true
+		a.active = screenChatrooms
+		a = inRoom(a, "cyberspace")
+		a.chatrooms = a.chatrooms.ResetToList() // e.g. the re-press escape hatch; subscription stays live
+		if !a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want true when back at the room list even though the subscription is still live")
+		}
+	})
+}
+
+func TestHandleChatrooms_RoomMentionedMsg_FiresToast(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.active = screenFeed // not viewing Chatrooms at all
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, cmd := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo", MessageID: "msg1"})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd when not viewing the mentioned room")
+	}
+	if got.polledUnreadCount != 1 {
+		t.Errorf("polledUnreadCount = %d, want 1", got.polledUnreadCount)
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+	if !strings.Contains(got.notifications.View(), "trinity") {
+		t.Errorf("expected the mention entry to render in the Notifications tab, got: %q", got.notifications.View())
+	}
+}
+
+func TestHandleChatrooms_RoomMentionedMsg_SuppressedWhileViewingRoom(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.focusReported, a.focused = true, true
+	a.active = screenChatrooms
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "cyberspace", Name: "Cyberspace"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+	if a.chatrooms.ActiveRoomSlug() != "cyberspace" {
+		t.Fatal("setup: expected the room open in detail mode")
+	}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	// Turn off the default unread-only filter so an already-read entry still
+	// renders in View() below — this only flips the filter flag before any
+	// mention has been added, so it has no other effect on this test. The
+	// "u" key also sets fetching=true (it normally triggers a reload); clear
+	// it back out via SetNotifs(nil, "") to simulate that reload completing.
+	a.notifications, _ = a.notifications.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	a.notifications = a.notifications.SetNotifs(nil, "")
+
+	m, cmd := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo", MessageID: "msg1"})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast while actively viewing the mentioned room")
+	}
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0 (entry created already read)", got.polledUnreadCount)
+	}
+	if got.notifications.UnreadCount() != 0 {
+		t.Errorf("notifications.UnreadCount() = %d, want 0", got.notifications.UnreadCount())
+	}
+	if !strings.Contains(got.notifications.View(), "trinity") {
+		t.Errorf("expected the entry to still be created (already read, not skipped), got: %q", got.notifications.View())
+	}
+}
+
+func TestHandleChatrooms_RoomMentionedMsg_SurvivesNotifsReload(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.active = screenFeed
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo", MessageID: "msg1"})
+	a = m.(App)
+	if a.notifications.UnreadCount() != 1 {
+		t.Fatal("setup: expected the local mention to be unread")
+	}
+
+	// An unrelated server reload must not wipe out the still-unread local mention.
+	m2, _ := a.Update(notifsLoadedMsg{notifs: []model.Notification{
+		{ID: "n1", Type: "reply", Read: false, CreatedAt: time.Now()},
+	}})
+	got := m2.(App)
+
+	if !strings.Contains(got.notifications.View(), "trinity") {
+		t.Error("expected the unread local mention to survive a server notifsLoadedMsg reload")
+	}
+}
+
+// markReadSpyClient counts MarkNotificationRead calls.
+type markReadSpyClient struct {
+	*api.MockClient
+	calls int
+}
+
+func (c *markReadSpyClient) MarkNotificationRead(id string) error {
+	c.calls++
+	return nil
+}
+
+func TestMarkNotifReadCmd_SkipsAPIForSyntheticID(t *testing.T) {
+	spy := &markReadSpyClient{MockClient: api.NewMockClient()}
+	a := NewApp(spy)
+
+	a.markNotifReadCmd(localMentionIDPrefix + "msg1")()
+
+	if spy.calls != 0 {
+		t.Errorf("expected no MarkNotificationRead call for a synthetic ID, got %d", spy.calls)
+	}
+}
+
+func TestMarkNotifReadCmd_CallsAPIForRealID(t *testing.T) {
+	spy := &markReadSpyClient{MockClient: api.NewMockClient()}
+	a := NewApp(spy)
+
+	a.markNotifReadCmd("n1")()
+
+	if spy.calls != 1 {
+		t.Errorf("expected one MarkNotificationRead call for a real ID, got %d", spy.calls)
 	}
 }
 

@@ -246,6 +246,35 @@ func TestRoomUsersPanelPreferredWidth_AccountsForIdleBadge(t *testing.T) {
 
 // --- presence message handling ---
 
+// resolveRoomMsgs executes cmd and flattens one level of tea.BatchMsg into
+// the individual resulting messages, without recursively executing whatever
+// commands those messages' own Update() calls return (waitForRoomMsg blocks
+// on a live channel and must not run in a unit test) — package screens_test
+// has its own resolveMsgs (screens_test.go) but that's a different package
+// from this white-box file, so this is a local copy.
+func resolveRoomMsgs(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if msg == nil {
+		return nil
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			if m := c(); m != nil {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	return []tea.Msg{msg}
+}
+
 func chatroomsInRoom(client api.Client, roomID string) ChatroomsModel {
 	room := model.Room{ID: "r1", Slug: roomID, Name: roomID}
 	m := NewChatroomsModel("neo", client)
@@ -499,6 +528,107 @@ func TestRoomReceived_KeepsStreamingWhileUnfocused(t *testing.T) {
 	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{Body: "hey"}})
 	if cmd == nil {
 		t.Error("expected waitForRoomMsg to be re-issued so the stream keeps running in the background")
+	}
+}
+
+// --- bare-word mention detection (client-side, catches what chat_mention misses) ---
+
+func TestRoomReceived_EmitsMentionForBareWord(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{
+		From: model.User{Username: "trinity"},
+		Body: "hey neo check this out",
+	}})
+
+	var found bool
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if mm, ok := msg.(RoomMentionedMsg); ok {
+			found = true
+			if mm.RoomID != "zion" || mm.From != "trinity" || mm.Body != "hey neo check this out" {
+				t.Errorf("RoomMentionedMsg = %+v, unexpected fields", mm)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a RoomMentionedMsg for a bare-word mention")
+	}
+}
+
+func TestRoomReceived_NoMentionMsg_WhenNoBareWord(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{
+		From: model.User{Username: "trinity"},
+		Body: "hello there",
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if _, ok := msg.(RoomMentionedMsg); ok {
+			t.Error("expected no RoomMentionedMsg without a mention")
+		}
+	}
+}
+
+func TestRoomReceived_NoMentionMsg_FromSelf(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{
+		From: model.User{Username: "Neo"}, // case variant of the current user
+		Body: "hey neo look at this",
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if _, ok := msg.(RoomMentionedMsg); ok {
+			t.Error("expected no self-notification for own bare username")
+		}
+	}
+}
+
+func TestRoomReceived_NoMentionMsg_ForSystemMessage(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{
+		From:     model.User{Username: "trinity"},
+		Body:     "neo joined the room",
+		IsSystem: true,
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if _, ok := msg.(RoomMentionedMsg); ok {
+			t.Error("expected no RoomMentionedMsg for a local system message")
+		}
+	}
+}
+
+func TestRoomReceived_NoMentionMsg_ForDeletedMessage(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{
+		From:    model.User{Username: "trinity"},
+		Body:    "hey neo",
+		Deleted: true,
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if _, ok := msg.(RoomMentionedMsg); ok {
+			t.Error("expected no RoomMentionedMsg for a deleted message")
+		}
+	}
+}
+
+func TestRoomReceived_NoMentionMsg_ForAtMention(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{
+		From: model.User{Username: "trinity"},
+		Body: "@neo check this out",
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if _, ok := msg.(RoomMentionedMsg); ok {
+			t.Error("expected no RoomMentionedMsg for an @-mention — chat_mention already covers that")
+		}
 	}
 }
 

@@ -173,6 +173,157 @@ func TestNotifs_MarkAllRead_OptimisticUpdate(t *testing.T) {
 	}
 }
 
+// --- local (client-synthesized) mentions ---
+
+func TestNotifs_AddLocalMention_InsertsAtTopWhenNewest(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+
+	local := makeNotif("local-mention-m1", "chat_mention", "", false) // created after n1, so it's newer
+	m = m.AddLocalMention(local)
+
+	if len(m.notifs) != 2 || m.notifs[0].ID != "local-mention-m1" {
+		t.Fatalf("expected the newer local mention at the top, got %+v", m.notifs)
+	}
+}
+
+func TestNotifs_AddLocalMention_InsertsByTime_NotAlwaysAtTop(t *testing.T) {
+	now := time.Now()
+	newer := makeNotif("n-newer", "reply", "p1", false)
+	newer.CreatedAt = now
+	m := initNotifs([]model.Notification{newer})
+
+	local := makeNotif("local-mention-m1", "chat_mention", "", false)
+	local.CreatedAt = now.Add(-time.Hour) // older than the already-listed server notification
+	m = m.AddLocalMention(local)
+
+	if len(m.notifs) != 2 || m.notifs[0].ID != "n-newer" || m.notifs[1].ID != "local-mention-m1" {
+		t.Fatalf("expected the local mention to sort below the newer server notification, got %+v", m.notifs)
+	}
+}
+
+func TestNotifs_AddLocalMention_UnreadSurvivesSetNotifs(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", false))
+
+	// A fresh server reload that knows nothing about the local mention.
+	m = m.SetNotifs([]model.Notification{makeNotif("n1", "reply", "p1", false)}, "")
+
+	if len(m.notifs) != 2 {
+		t.Fatalf("expected the unread local mention to survive SetNotifs, got %+v", m.notifs)
+	}
+	var found bool
+	for _, n := range m.notifs {
+		found = found || n.ID == "local-mention-m1"
+	}
+	if !found {
+		t.Errorf("expected local-mention-m1 to still be present, got %+v", m.notifs)
+	}
+}
+
+func TestNotifs_SetNotifs_OrdersLocalMentionsByTime(t *testing.T) {
+	now := time.Now()
+	m := initNotifs(nil)
+
+	// The local mention was created a while ago and is still unread.
+	old := makeNotif("local-mention-old", "chat_mention", "", false)
+	old.CreatedAt = now.Add(-time.Hour)
+	m = m.AddLocalMention(old)
+
+	// A server reload brings in a genuinely newer notification, plus an
+	// older one — the local mention must sort between them by time, not
+	// stay pinned at the top just because it's client-only.
+	newer := makeNotif("n-newer", "reply", "p1", false)
+	newer.CreatedAt = now
+	older := makeNotif("n-older", "reply", "p2", false)
+	older.CreatedAt = now.Add(-2 * time.Hour)
+	m = m.SetNotifs([]model.Notification{newer, older}, "")
+
+	want := []string{"n-newer", "local-mention-old", "n-older"}
+	if len(m.notifs) != len(want) {
+		t.Fatalf("notifs = %+v, want %d entries", m.notifs, len(want))
+	}
+	for i, id := range want {
+		if m.notifs[i].ID != id {
+			t.Errorf("notifs[%d].ID = %q, want %q, got order %+v", i, m.notifs[i].ID, id, m.notifs)
+		}
+	}
+}
+
+func TestNotifs_AddLocalMention_ReadDoesNotSurviveSetNotifs(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", true)) // already read (viewed live)
+
+	if len(m.notifs) != 1 || m.notifs[0].ID != "local-mention-m1" {
+		t.Fatalf("expected the read local mention to be visible immediately, got %+v", m.notifs)
+	}
+
+	m = m.SetNotifs([]model.Notification{makeNotif("n1", "reply", "p1", false)}, "")
+
+	for _, n := range m.notifs {
+		if n.ID == "local-mention-m1" {
+			t.Error("expected the already-read local mention to be dropped on the next reload, not force-preserved")
+		}
+	}
+}
+
+func TestNotifs_MarkRead_DropsFromLocalMentions(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", false))
+	m = m.MarkRead("local-mention-m1")
+
+	// Now that it's read, it must stop being force-preserved.
+	m = m.SetNotifs([]model.Notification{makeNotif("n1", "reply", "p1", false)}, "")
+
+	for _, n := range m.notifs {
+		if n.ID == "local-mention-m1" {
+			t.Error("expected a marked-read local mention to no longer survive SetNotifs")
+		}
+	}
+}
+
+func TestNotifs_MarkAllRead_ClearsLocalMentions(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", false))
+	m = m.MarkAllRead()
+
+	m = m.SetNotifs([]model.Notification{makeNotif("n1", "reply", "p1", false)}, "")
+
+	for _, n := range m.notifs {
+		if n.ID == "local-mention-m1" {
+			t.Error("expected MarkAllRead to clear localMentions so it doesn't survive SetNotifs")
+		}
+	}
+}
+
+func TestNotifs_LocalUnreadCount(t *testing.T) {
+	m := initNotifs(nil)
+	if m.LocalUnreadCount() != 0 {
+		t.Fatalf("expected 0 with none added, got %d", m.LocalUnreadCount())
+	}
+
+	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", false))
+	if m.LocalUnreadCount() != 1 {
+		t.Errorf("expected 1 after adding an unread mention, got %d", m.LocalUnreadCount())
+	}
+
+	m = m.AddLocalMention(makeNotif("local-mention-m2", "chat_mention", "", true)) // already read
+	if m.LocalUnreadCount() != 1 {
+		t.Errorf("expected an already-read mention not to count, got %d", m.LocalUnreadCount())
+	}
+
+	m = m.MarkRead("local-mention-m1")
+	if m.LocalUnreadCount() != 0 {
+		t.Errorf("expected 0 after marking the unread one read, got %d", m.LocalUnreadCount())
+	}
+
+	m = m.AddLocalMention(makeNotif("local-mention-m3", "chat_mention", "", false))
+	m = m.MarkAllRead()
+	if m.LocalUnreadCount() != 0 {
+		t.Errorf("expected 0 after MarkAllRead, got %d", m.LocalUnreadCount())
+	}
+}
+
 // --- jump to post ---
 
 func TestNotifs_Enter_Reply_EmitsShowPost(t *testing.T) {

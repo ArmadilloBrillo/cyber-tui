@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/api"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -395,6 +396,33 @@ func isKnownSlashCommand(cmd string, extra map[string]bool) bool {
 // RoomOpenedMsg is emitted when the user enters a chatroom. App uses it to call MarkRoomRead.
 type RoomOpenedMsg struct {
 	RoomID string
+}
+
+// RoomMentionedMsg is emitted when a live incoming message in the room the
+// user is subscribed to contains their username as a bare word (no "@") —
+// the server's chat_mention notification already covers the "@username"
+// form, so this only carries what that pipeline misses. App uses it to fire
+// a desktop toast and insert a Notifications-tab entry, gated on whether the
+// user is actively viewing this room.
+type RoomMentionedMsg struct {
+	RoomID    string // room slug
+	RoomName  string
+	From      string // sender's username
+	Body      string // raw message body; desktopNotifyCmd truncates
+	MessageID string // the underlying model.Message.ID; used to build a stable synthetic notification ID
+}
+
+// mentionsCurrentUser reports whether msg is a live chat message (not a
+// local system notice) from someone other than currentUser that contains
+// currentUser's username as a bare word.
+func mentionsCurrentUser(msg model.Message, currentUser string) bool {
+	if currentUser == "" || msg.IsSystem {
+		return false
+	}
+	if strings.EqualFold(msg.From.Username, currentUser) {
+		return false // never self-notify
+	}
+	return markdown.MentionsUserBare(msg.Body, currentUser)
 }
 
 // NewChatroomsModel creates a new ChatroomsModel for the given authenticated user.
@@ -1282,6 +1310,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		return m.PrependMessages(msg.roomID, msg.msgs), nil
 
 	case roomReceivedMsg:
+		var cmds []tea.Cmd
 		if msg.msg.Deleted {
 			// A delete patch — from us in another session, or from another
 			// user — carries only {ID, Deleted}; merge onto the existing
@@ -1296,11 +1325,21 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			if !m.focused || !m.viewport.AtBottom() {
 				m.unreadCount++
 			}
+			if mentionsCurrentUser(msg.msg, m.currentUser) {
+				roomID, roomName := m.activeRoomID, m.activeRoomID
+				if m.activeRoom != nil {
+					roomName = m.activeRoom.Name
+				}
+				from, body, messageID := msg.msg.From.Username, msg.msg.Body, msg.msg.ID
+				cmds = append(cmds, func() tea.Msg {
+					return RoomMentionedMsg{RoomID: roomID, RoomName: roomName, From: from, Body: body, MessageID: messageID}
+				})
+			}
 		}
 		if m.sub != nil {
-			return m, waitForRoomMsg(m.sub)
+			cmds = append(cmds, waitForRoomMsg(m.sub))
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 
 	case roomStreamClosedMsg:
 		if msg.roomID != m.activeRoomID {

@@ -263,6 +263,26 @@ func compiledHighlightRegex(username string) *regexp.Regexp {
 	return actual.(*regexp.Regexp)
 }
 
+// MentionsUserBare reports whether body contains username as a bare word —
+// case-insensitive, word-bounded, but NOT prefixed by "@". An "@username"
+// occurrence is deliberately excluded: the server's chat_mention
+// notification already covers that form, so this only needs to catch what
+// that pipeline misses. compiledHighlightRegex's own "@?" is part of the
+// match, not a lookaround, so an "@username" match's loc[0] lands on the
+// "@" itself — checking that leading byte is enough to tell bare and
+// "@"-prefixed matches apart without a second regex.
+func MentionsUserBare(body, username string) bool {
+	if username == "" {
+		return false
+	}
+	for _, loc := range compiledHighlightRegex(username).FindAllStringIndex(body, -1) {
+		if body[loc[0]] != '@' {
+			return true
+		}
+	}
+	return false
+}
+
 func renderInlineLine(line string, highlightRe *regexp.Regexp) string {
 	if strings.TrimSpace(line) == "" {
 		return line
