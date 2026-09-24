@@ -649,6 +649,10 @@ func (l TabsLayout) renderSongPrompt(a App) string {
 	return a.songPrompt.View()
 }
 
+func (l TabsLayout) renderKeywordEditor(a App) string {
+	return a.keywordEditor.View()
+}
+
 // renderImageModal returns the bordered text-only shell for the image overlay.
 // The image escape sequence is injected separately in View() via ANSI cursor movement.
 func (l TabsLayout) renderImageModal(a App) string {

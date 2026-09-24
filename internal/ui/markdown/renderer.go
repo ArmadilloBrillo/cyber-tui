@@ -283,6 +283,34 @@ func MentionsUserBare(body, username string) bool {
 	return false
 }
 
+// keywordRegexCache memoizes per-keyword regexes for MatchKeywords, the same
+// way highlightRegexCache does for usernames.
+var keywordRegexCache sync.Map // string (keyword) -> *regexp.Regexp
+
+func compiledKeywordRegex(keyword string) *regexp.Regexp {
+	if v, ok := keywordRegexCache.Load(keyword); ok {
+		return v.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(keyword) + `\b`)
+	actual, _ := keywordRegexCache.LoadOrStore(keyword, re)
+	return actual.(*regexp.Regexp)
+}
+
+// MatchKeywords returns the first entry of keywords that occurs in text as a
+// case-insensitive whole word, or "" if none match. Empty entries are
+// skipped.
+func MatchKeywords(text string, keywords []string) string {
+	for _, kw := range keywords {
+		if kw == "" {
+			continue
+		}
+		if compiledKeywordRegex(kw).MatchString(text) {
+			return kw
+		}
+	}
+	return ""
+}
+
 func renderInlineLine(line string, highlightRe *regexp.Regexp) string {
 	if strings.TrimSpace(line) == "" {
 		return line

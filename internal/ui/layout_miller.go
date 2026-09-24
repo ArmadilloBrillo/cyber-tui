@@ -642,6 +642,10 @@ func (l MillerLayout) renderSongPrompt(a App) string {
 	return a.songPrompt.View()
 }
 
+func (l MillerLayout) renderKeywordEditor(a App) string {
+	return a.keywordEditor.View()
+}
+
 func (l MillerLayout) renderImageModal(a App) string {
 	blankLine := strings.Repeat(" ", a.imageModalCols)
 	lines := make([]string, a.imageModalRows)

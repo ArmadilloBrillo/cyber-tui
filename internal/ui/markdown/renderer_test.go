@@ -361,6 +361,30 @@ func TestMentionsUserBare(t *testing.T) {
 	}
 }
 
+func TestMatchKeywords(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		keywords []string
+		want     string
+	}{
+		{"single match", "hey check out cyberdeck stuff", []string{"cyberdeck"}, "cyberdeck"},
+		{"case insensitive", "hey check out CyberDeck stuff", []string{"cyberdeck"}, "cyberdeck"},
+		{"substring not a whole word", "cyberdecks are cool", []string{"cyberdeck"}, ""},
+		{"first matching keyword wins", "hello world", []string{"nope", "world", "hello"}, "world"},
+		{"no match", "hello there", []string{"cyberdeck"}, ""},
+		{"empty keyword list", "hello there", nil, ""},
+		{"empty keyword entries skipped", "hello there", []string{"", "there"}, "there"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchKeywords(tt.text, tt.keywords); got != tt.want {
+				t.Errorf("MatchKeywords(%q, %v) = %q, want %q", tt.text, tt.keywords, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRender_MentionInCodeBlockNotHighlighted(t *testing.T) {
 	md := "```\n@alice is here\n```"
 	raw := Render(md, 80)

@@ -120,6 +120,13 @@ type Config struct {
 	// from an SSH-hosted (ephemeral) session — the toast would pop on the host.
 	DesktopNotifications bool `json:"desktopNotifications,omitempty"`
 
+	// KeywordAlerts is a user-edited list of words/phrases that raise a
+	// Notifications-tab entry (and, subject to DesktopNotifications, an OSC 9
+	// toast) whenever they appear as a whole word anywhere content is scanned
+	// — cIRC, C-Mail, posts, replies, and post topics/tags. Edited via the
+	// Settings screen. Empty by default.
+	KeywordAlerts []string `json:"keywordAlerts,omitempty"`
+
 	// TypingIndicatorsDisabled turns off C-Mail's whole typing-indicator
 	// subsystem (see docs/00-battery-audit.md item #6): the inbound
 	// typing-presence RTDB subscription, the outbound announce/clear calls

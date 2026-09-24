@@ -88,6 +88,11 @@ type SharedConfigMsg struct {
 	// settings screen to display/edit the toggle. Consumed directly by App's
 	// visibleTabs/leaderRows (layout.go), not by any screen.
 	ShowGlobeTab bool
+	// KeywordAlerts is the user's raw preference (config.Config.KeywordAlerts),
+	// used by the settings screen to display/edit the list and by every
+	// content-scanning hook (cIRC, C-Mail, feed, replies) to know what to
+	// match against.
+	KeywordAlerts []string
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -133,6 +138,25 @@ type OpenRoomMsg struct {
 	NotifID  string
 }
 
+// DMKeywordMsg is emitted when a live incoming C-Mail message — either in
+// the open conversation or, cross-conversation, via the account-wide
+// conversation-list stream — matches one of the user's configured keyword
+// alerts. App uses it to fire a desktop toast and insert a Notifications-tab
+// entry, gated the same as the rest of C-Mail's desktop notifications
+// (App.shouldDesktopNotify(screenCMail) — tab-level, not per-conversation;
+// C-Mail has no finer-grained gate anywhere else either).
+type DMKeywordMsg struct {
+	ConvID string
+	From   string // sender's username
+	Body   string // raw message/last-message text; desktopNotifyCmd truncates
+	// MessageID is the underlying model.Message.ID when known (the open
+	// conversation's live stream); empty for a cross-conversation match off
+	// Conversation.LastMessage, which carries no message ID — the synthetic
+	// notification ID falls back to ConvID in that case.
+	MessageID string
+	Keyword   string
+}
+
 // BackFromProfileMsg is emitted by ProfileModel in read-only mode when ESC is pressed.
 type BackFromProfileMsg struct{}
 
@@ -166,8 +190,14 @@ type SaveSettingsMsg struct {
 	Dithering               bool
 	DitherSharpness         string
 	LayoutName              string // "tabs" or "miller"
-	RemoteChanged           bool   // true when API-managed fields differ from the last saved baseline
+	KeywordAlerts           []string
+	RemoteChanged           bool // true when API-managed fields differ from the last saved baseline
 }
+
+// OpenKeywordEditorMsg is emitted by SettingsModel when Enter/Space is
+// pressed on the "alert keywords" row. App opens the KeywordEditorModel
+// popup, seeded from SettingsModel.KeywordAlerts().
+type OpenKeywordEditorMsg struct{}
 
 // BookmarkedMsg is sent back to the bookmarks screen after a successful CreateBookmark
 // so it can show transient feedback.

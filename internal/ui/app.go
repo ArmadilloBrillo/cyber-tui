@@ -23,6 +23,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
@@ -200,6 +201,12 @@ type App struct {
 	// attach uses — see applyAttachURL and submitSongPrompt.
 	songPromptOpen bool
 	songPrompt     screens.SongPromptModel
+
+	// keywordEditor state — open with Enter on Settings' "alert keywords"
+	// row (screens.OpenKeywordEditorMsg), closed by Esc (discard) or ctrl+s
+	// (commit + save, see handleKeywordEditorKey).
+	keywordEditorOpen bool
+	keywordEditor     screens.KeywordEditorModel
 
 	// imageCarousel state — populated when an image is opened from a picker
 	// containing more than one image, letting left/right cycle between them
@@ -506,6 +513,28 @@ type App struct {
 	// (an OSC 9 escape to stdout) for new C-Mail / activity while backgrounded
 	// — see docs/53-desktop-notifications.md. Off by default.
 	desktopNotifications bool
+	// keywordSeenPostIDs tracks which post IDs the keyword-alert scan (see
+	// feedPeekMsg) has already accounted for — seeded (marked seen, not
+	// scanned) whenever the user loads or paginates the feed normally, so
+	// only content that arrives via the background peek poll after that gets
+	// scanned/alerted on. Mirrors FeedModel.SetPendingNew's own "diff against
+	// what's already known" baseline approach, kept separately here since
+	// FeedModel has no notion of keyword alerts.
+	keywordSeenPostIDs map[string]struct{}
+	// keywordReplySeen tracks, per configured keyword, the set of reply IDs
+	// already accounted for by the replies keyword-alert poll (see
+	// keywordReplyPollTickMsg) — a set rather than a "last seen id" cursor
+	// because SearchReplies' result ordering isn't documented, so a cursor
+	// would risk missing replies depending on how the server orders them.
+	// The first response for a given keyword only seeds this (baseline, no
+	// alert), same reasoning as keywordSeenPostIDs above.
+	keywordReplySeen map[string]map[string]struct{}
+	// keywordAlerts is the local config value (config.Config.KeywordAlerts):
+	// user-edited words/phrases that raise a Notifications-tab entry (and,
+	// subject to desktopNotifications, an OSC 9 toast) wherever content is
+	// scanned — cIRC, C-Mail, posts, replies, and post topics/tags. Empty by
+	// default.
+	keywordAlerts []string
 	// showGlobeTab is the local config value (inverted from
 	// config.Config.HideGlobeTab) controlling whether the Globe tab appears
 	// on the tab bar/nav sidebar and in arrow-key cycling and the "g l"
@@ -678,6 +707,7 @@ func NewApp(client api.Client) App {
 		iconPicker:         screens.NewIconPickerModel(),
 		attachURLPrompt:    screens.NewPathPromptModel(),
 		songPrompt:         screens.NewSongPromptModel(),
+		keywordEditor:      screens.NewKeywordEditorModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -718,6 +748,7 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	a.feedManualRefreshOnly = s.FeedManualRefreshOnly
 	a.typingIndicatorsEnabled = !s.TypingIndicatorsDisabled
 	a.desktopNotifications = s.DesktopNotifications
+	a.keywordAlerts = s.KeywordAlerts
 	a.showGlobeTab = !s.HideGlobeTab
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.imageViewer = s.ImageViewer
@@ -1015,7 +1046,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, KeywordAlerts: a.keywordAlerts, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
 	*a = a.updateAll(msg)
 }
 
@@ -1094,6 +1125,10 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	}
 	if a.songPromptOpen {
 		model, cmd := a.handleSongPromptKey(m)
+		return model.(App), cmd, true
+	}
+	if a.keywordEditorOpen {
+		model, cmd := a.handleKeywordEditorKey(m)
 		return model.(App), cmd, true
 	}
 	// When a screen has a focused text input, let it consume all keys.
@@ -1294,6 +1329,7 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case feedLoadedMsg:
 		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
+		a.markPostsSeenForKeywords(msg.posts)
 		var detailCmd tea.Cmd
 		a.feed, detailCmd = a.feed.CurrentDetailCmd()
 		// Auto-fill the compact list column if the initial page is shorter than it.
@@ -1303,6 +1339,7 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, detailCmd, true
 	case feedPageMsg:
 		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
+		a.markPostsSeenForKeywords(msg.posts)
 		// Keep auto-filling until the compact list column is full.
 		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.feed.PostCount() < min {
 			return a, a.loadFeedPageCmd(msg.cursor), true
@@ -1521,15 +1558,20 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.RoomOpenedMsg:
 		return a, a.markRoomReadCmd(msg.RoomID), true
 	case screens.RoomMentionedMsg:
+		idPrefix, notifType := localMentionIDPrefix, "chat_mention"
+		if msg.Keyword != "" {
+			idPrefix, notifType = localKeywordIDPrefix, "keyword_match"
+		}
 		n := model.Notification{
-			ID:             localMentionIDPrefix + msg.MessageID,
-			Type:           "chat_mention",
+			ID:             idPrefix + msg.MessageID,
+			Type:           notifType,
 			Read:           a.viewingRoom(msg.RoomID),
 			CreatedAt:      time.Now(),
 			Actor:          model.NotificationActor{Username: msg.From},
 			RoomSlug:       msg.RoomID,
 			RoomName:       msg.RoomName,
 			MessageContent: msg.Body,
+			MatchedKeyword: msg.Keyword,
 		}
 		a.notifications = a.notifications.AddLocalMention(n)
 		if !n.Read {
@@ -1538,7 +1580,11 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		if !a.shouldNotifyRoomMention(msg.RoomID) {
 			return a, nil, true
 		}
-		return a, desktopNotifyCmd(msg.RoomName, "@"+msg.From+": "+msg.Body), true
+		toastBody := "@" + msg.From + ": " + msg.Body
+		if msg.Keyword != "" {
+			toastBody = `"` + msg.Keyword + `" — ` + msg.From + ": " + msg.Body
+		}
+		return a, desktopNotifyCmd(msg.RoomName, toastBody), true
 	case screens.RoomReconnectedMsg:
 		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
@@ -1621,6 +1667,29 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.LeaveCMailMsg:
 		a.active = a.cmailReturn
 		return a, nil, true
+	case screens.DMKeywordMsg:
+		id := msg.MessageID
+		if id == "" {
+			id = msg.ConvID
+		}
+		viewing := a.active == screenCMail && a.focusReported && a.focused
+		n := model.Notification{
+			ID:             localKeywordIDPrefix + id,
+			Type:           "keyword_match",
+			Read:           viewing,
+			CreatedAt:      time.Now(),
+			Actor:          model.NotificationActor{Username: msg.From},
+			MessageContent: msg.Body,
+			MatchedKeyword: msg.Keyword,
+		}
+		a.notifications = a.notifications.AddLocalMention(n)
+		if !n.Read {
+			a.polledUnreadCount++
+		}
+		if !a.shouldDesktopNotify(screenCMail) {
+			return a, nil, true
+		}
+		return a, desktopNotifyCmd("C-Mail", `"`+msg.Keyword+`" — `+msg.From+": "+msg.Body), true
 	default:
 		// Keep the open conversation's RTDB subscription (and its typing/
 		// reconnect chains) alive while another tab is active — see
@@ -1790,6 +1859,11 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.broadcastConfig()
 		return a, nil, true
 
+	case screens.OpenKeywordEditorMsg:
+		a.keywordEditor = a.keywordEditor.Open(a.settingsScreen.KeywordAlerts())
+		a.keywordEditorOpen = true
+		return a, nil, true
+
 	case screens.SaveSettingsMsg:
 		s := msg.Settings
 		wl := msg.WanderLust
@@ -1805,6 +1879,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		dt := msg.Dithering
 		ds := msg.DitherSharpness
 		ln := msg.LayoutName
+		ka := msg.KeywordAlerts
 		a.settingsSaveSeq++
 		seq := a.settingsSaveSeq
 		return a, func() tea.Msg {
@@ -1813,7 +1888,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln, keywordAlerts: ka}
 		}, true
 
 	case settingsSavedMsg:
@@ -1841,6 +1916,11 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		// subsystem, see cmail.go's SharedConfigMsg handler.
 		a.typingIndicatorsEnabled = msg.typingIndicatorsEnabled
 		a.desktopNotifications = msg.desktopNotifications
+		// hadNoKeywords detects an empty→non-empty transition so the
+		// (possibly dead) replies keyword-alert poll chain gets restarted
+		// immediately below — same reasoning as wasManual above.
+		hadNoKeywords := len(a.keywordAlerts) == 0
+		a.keywordAlerts = msg.keywordAlerts
 		a.showGlobeTab = msg.showGlobeTab
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
@@ -1871,18 +1951,19 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName, msg.keywordAlerts)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "settings saved")
-		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
+		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ln, ka := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName, msg.keywordAlerts
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
 				cfg.WanderLust = wl
 				cfg.FeedManualRefreshOnly = fmro
 				cfg.TypingIndicatorsDisabled = !tie
 				cfg.DesktopNotifications = dn
+				cfg.KeywordAlerts = ka
 				cfg.HideGlobeTab = !sgt
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
@@ -1898,6 +1979,9 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		cmds := []tea.Cmd{notifyCmd, saveCmd}
 		if wasManual && !a.feedManualRefreshOnly {
 			cmds = append(cmds, a.scheduleFeedPollCmd())
+		}
+		if hadNoKeywords && len(a.keywordAlerts) > 0 {
+			cmds = append(cmds, a.scheduleKeywordReplyPollCmd())
 		}
 		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
 			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < min {
@@ -4424,6 +4508,29 @@ func (a App) handleSongPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
+// handleKeywordEditorKey processes input while the keyword-alerts popup is
+// open (Settings' "alert keywords" row, screens.OpenKeywordEditorMsg).
+// esc/ctrl+s are handled here; everything else forwards to the model.
+func (a App) handleKeywordEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.keywordEditorOpen = false
+		return a, nil
+	case "ctrl+s":
+		a.settingsScreen = a.settingsScreen.SetKeywordAlerts(a.keywordEditor.Keywords())
+		a.keywordEditorOpen = false
+		// Reuse SettingsModel's own ctrl+s handling (IsDirty check +
+		// SaveSettingsMsg construction) verbatim via a synthetic key,
+		// instead of duplicating that snapshot/build logic here.
+		var cmd tea.Cmd
+		a.settingsScreen, cmd = a.settingsScreen.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+		return a, cmd
+	}
+	var cmd tea.Cmd
+	a.keywordEditor, cmd = a.keywordEditor.Update(msg)
+	return a, cmd
+}
+
 // submitSongPrompt validates the song prompt's fields and, if valid, closes
 // the modal and dispatches the built attachment per target: Feed's new-post
 // panel / Post Detail's edit panel / Post Detail's reply compose each get a
@@ -4620,6 +4727,13 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	if !a.feedManualRefreshOnly {
 		feedPollCmd = a.scheduleFeedPollCmd()
 	}
+	// Same dead-chain-unless-restarted reasoning as feedPollCmd above: only
+	// start the replies keyword-alert poll when there's actually something to
+	// search for. settingsSavedMsg restarts it if a keyword is added later.
+	var keywordReplyPollCmd tea.Cmd
+	if len(a.keywordAlerts) > 0 {
+		keywordReplyPollCmd = a.scheduleKeywordReplyPollCmd()
+	}
 	return tea.Batch(
 		a.loadFeedCmd(),
 		a.loadBookmarksCmd(""),
@@ -4636,6 +4750,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.loadNotifsCmd(),
 		a.schedulePollCmd(),
 		feedPollCmd,
+		keywordReplyPollCmd,
 		a.loadSettingsCmd(),
 		a.scheduleWanderCmd(),
 		a.checkAndWanderCmd(),
@@ -4767,6 +4882,7 @@ type settingsSavedMsg struct {
 	dithering               bool
 	ditherSharpness         string
 	layoutName              string
+	keywordAlerts           []string
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
@@ -5099,6 +5215,90 @@ const feedPollInterval = 60 * time.Second
 func (a *App) scheduleFeedPollCmd() tea.Cmd {
 	gen := a.sessionGen
 	return tea.Tick(feedPollInterval, func(time.Time) tea.Msg { return feedPollTickMsg{gen: gen} })
+}
+
+// keywordReplyPollInterval is how often the replies keyword-alert poll (see
+// keywordReplyPollTickMsg) checks each configured keyword via SearchReplies
+// — same cadence as the feed peek poll.
+const keywordReplyPollInterval = 60 * time.Second
+
+type keywordReplyPollTickMsg struct{ gen int }
+
+// keywordReplyMatchMsg carries one keyword's SearchReplies results back from
+// fetchKeywordRepliesCmd for scanKeywordReplyMatches to diff against what's
+// already been seen for that keyword.
+type keywordReplyMatchMsg struct {
+	keyword string
+	replies []model.Reply
+}
+
+func (a *App) scheduleKeywordReplyPollCmd() tea.Cmd {
+	gen := a.sessionGen
+	return tea.Tick(keywordReplyPollInterval, func(time.Time) tea.Msg { return keywordReplyPollTickMsg{gen: gen} })
+}
+
+// fetchKeywordRepliesCmd searches replies for keyword — one call per
+// configured keyword per poll tick, independent of feed size or platform
+// activity (see the plan's cost comparison against fanning out
+// GetPostReplies per post). Errors are swallowed (nil msg), same as
+// fetchFeedPeekCmd — a missed poll just tries again next tick.
+func (a *App) fetchKeywordRepliesCmd(keyword string) tea.Cmd {
+	return func() tea.Msg {
+		replies, _, err := a.client.SearchReplies(keyword, "")
+		if err != nil {
+			return nil
+		}
+		return keywordReplyMatchMsg{keyword: keyword, replies: replies}
+	}
+}
+
+// scanKeywordReplyMatches diffs a keyword's fresh SearchReplies results
+// against keywordReplySeen[keyword], alerting only for reply IDs not seen
+// before. The first call for a given keyword only seeds the set (baseline,
+// no alerts) so enabling keyword alerts doesn't replay every existing
+// matching reply on the platform.
+func (a App) scanKeywordReplyMatches(keyword string, replies []model.Reply) (App, tea.Cmd) {
+	if a.keywordReplySeen == nil {
+		a.keywordReplySeen = make(map[string]map[string]struct{})
+	}
+	seen, seeded := a.keywordReplySeen[keyword]
+	if !seeded {
+		seen = make(map[string]struct{}, len(replies))
+		for _, r := range replies {
+			seen[r.ID] = struct{}{}
+		}
+		a.keywordReplySeen[keyword] = seen
+		return a, nil
+	}
+	var cmds []tea.Cmd
+	for _, r := range replies {
+		if _, known := seen[r.ID]; known {
+			continue
+		}
+		seen[r.ID] = struct{}{}
+		viewing := a.active == screenFeed && a.focusReported && a.focused
+		n := model.Notification{
+			ID:             localKeywordIDPrefix + r.ID,
+			Type:           "keyword_match",
+			Read:           viewing,
+			CreatedAt:      time.Now(),
+			Actor:          model.NotificationActor{Username: r.AuthorUsername},
+			TargetID:       r.PostID,
+			TargetType:     "reply",
+			ReplyID:        r.ID,
+			ReplyContent:   r.Content,
+			MatchedKeyword: keyword,
+		}
+		a.notifications = a.notifications.AddLocalMention(n)
+		if !n.Read {
+			a.polledUnreadCount++
+		}
+		if !a.shouldDesktopNotify(screenFeed) {
+			continue
+		}
+		cmds = append(cmds, desktopNotifyCmd("keyword \""+keyword+"\"", "@"+r.AuthorUsername+": "+r.Content))
+	}
+	return a, tea.Batch(cmds...)
 }
 
 func (a *App) loadFeedPageCmd(cursor string) tea.Cmd {
@@ -5628,9 +5828,92 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, tea.Batch(a.fetchFeedPeekCmd(), a.scheduleFeedPollCmd()), true
 	case feedPeekMsg:
 		a.feed = a.feed.SetPendingNew(msg.posts)
-		return a, nil, true
+		a, cmd := a.scanPeekedPostsForKeywords(msg.posts)
+		return a, cmd, true
+	case keywordReplyPollTickMsg:
+		if msg.gen != a.sessionGen {
+			return a, nil, true
+		}
+		if len(a.keywordAlerts) == 0 {
+			// Chain dies here — restarted from settingsSavedMsg when a
+			// keyword is added mid-session (mirrors feedPollTickMsg's own
+			// manual-refresh-only dead-chain handling above).
+			return a, nil, true
+		}
+		cmds := []tea.Cmd{a.scheduleKeywordReplyPollCmd()}
+		for _, kw := range a.keywordAlerts {
+			cmds = append(cmds, a.fetchKeywordRepliesCmd(kw))
+		}
+		return a, tea.Batch(cmds...), true
+	case keywordReplyMatchMsg:
+		a, cmd := a.scanKeywordReplyMatches(msg.keyword, msg.replies)
+		return a, cmd, true
 	}
 	return a, nil, false
+}
+
+// markPostsSeenForKeywords records posts the user has just loaded or
+// paginated into view as already-accounted-for, so scanPeekedPostsForKeywords
+// below only ever fires for content that arrives via the background peek
+// poll after that — not a normal load or "load more" page, which the user is
+// already looking at.
+func (a *App) markPostsSeenForKeywords(posts []model.Post) {
+	if a.keywordSeenPostIDs == nil {
+		a.keywordSeenPostIDs = make(map[string]struct{}, len(posts))
+	}
+	for _, p := range posts {
+		a.keywordSeenPostIDs[p.ID] = struct{}{}
+	}
+}
+
+// scanPeekedPostsForKeywords checks each not-yet-seen post from a feedPeekMsg
+// against the user's configured keyword alerts — title, content, and topics
+// (topics/tags share the one Post.Topics field) in a single scan. A post
+// already accounted for by markPostsSeenForKeywords (normal load/pagination)
+// is skipped, same baseline reasoning as SetPendingNew's own "new posts"
+// diff.
+func (a App) scanPeekedPostsForKeywords(posts []model.Post) (App, tea.Cmd) {
+	if len(a.keywordAlerts) == 0 {
+		return a, nil
+	}
+	if a.keywordSeenPostIDs == nil {
+		a.keywordSeenPostIDs = make(map[string]struct{}, len(posts))
+	}
+	var cmds []tea.Cmd
+	for _, p := range posts {
+		if _, known := a.keywordSeenPostIDs[p.ID]; known {
+			continue
+		}
+		a.keywordSeenPostIDs[p.ID] = struct{}{}
+		text := p.Title + "\n" + p.Content + "\n" + strings.Join(p.Topics, " ")
+		kw := markdown.MatchKeywords(text, a.keywordAlerts)
+		if kw == "" {
+			continue
+		}
+		viewing := a.active == screenFeed && a.focusReported && a.focused
+		n := model.Notification{
+			ID:                 localKeywordIDPrefix + p.ID,
+			Type:               "keyword_match",
+			Read:               viewing,
+			CreatedAt:          time.Now(),
+			Actor:              model.NotificationActor{Username: p.AuthorUsername},
+			TargetID:           p.ID,
+			TargetType:         "post",
+			PostSlug:           p.Slug,
+			PostAuthorUsername: p.AuthorUsername,
+			PostContent:        p.Content,
+			MatchedKeyword:     kw,
+		}
+		a.notifications = a.notifications.AddLocalMention(n)
+		if !n.Read {
+			a.polledUnreadCount++
+		}
+		if !a.shouldDesktopNotify(screenFeed) {
+			continue
+		}
+		cmds = append(cmds, desktopNotifyCmd("keyword \""+kw+"\"", "@"+p.AuthorUsername+": "+p.Content))
+	}
+	return a, tea.Batch(cmds...)
 }
 
 // suppressActiveRoomMentions marks read (locally + via API) any unread
@@ -5752,9 +6035,15 @@ func (a *App) loadNotifsPageCmd(cursor string) tea.Cmd {
 // issued this ID, so markNotifReadCmd must not try to PATCH it.
 const localMentionIDPrefix = "local-mention-"
 
+// localKeywordIDPrefix marks a client-synthesized keyword-alert notification
+// ID — same reasoning as localMentionIDPrefix, kept distinct so a keyword
+// match and a username mention on the same underlying message/post/reply
+// never collide on ID.
+const localKeywordIDPrefix = "local-keyword-"
+
 func (a *App) markNotifReadCmd(id string) tea.Cmd {
 	return func() tea.Msg {
-		if strings.HasPrefix(id, localMentionIDPrefix) {
+		if strings.HasPrefix(id, localMentionIDPrefix) || strings.HasPrefix(id, localKeywordIDPrefix) {
 			return nil
 		}
 		_ = a.client.MarkNotificationRead(id) // fire-and-forget; UI already updated
