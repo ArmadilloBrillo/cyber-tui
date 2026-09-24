@@ -632,6 +632,86 @@ func TestRoomReceived_NoMentionMsg_ForAtMention(t *testing.T) {
 	}
 }
 
+// --- keyword alert detection (client-side, generalizes bare-word mention matching) ---
+
+func TestRoomReceived_EmitsKeywordMatch(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.keywordAlerts = []string{"cyberdeck"}
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{
+		From: model.User{Username: "trinity"},
+		Body: "check out this cyberdeck build",
+	}})
+
+	var found bool
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if mm, ok := msg.(RoomMentionedMsg); ok && mm.Keyword != "" {
+			found = true
+			if mm.Keyword != "cyberdeck" || mm.From != "trinity" {
+				t.Errorf("RoomMentionedMsg = %+v, unexpected fields", mm)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a RoomMentionedMsg with Keyword set for a keyword match")
+	}
+}
+
+func TestRoomReceived_NoKeywordMatch_WhenNoKeywordConfigured(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{
+		From: model.User{Username: "trinity"},
+		Body: "check out this cyberdeck build",
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if mm, ok := msg.(RoomMentionedMsg); ok && mm.Keyword != "" {
+			t.Errorf("expected no keyword match with an empty keyword list, got %+v", mm)
+		}
+	}
+}
+
+func TestRoomReceived_NoKeywordMatch_FromSelf(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.keywordAlerts = []string{"cyberdeck"}
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{
+		From: model.User{Username: "Neo"}, // case variant of the current user
+		Body: "check out this cyberdeck build",
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if mm, ok := msg.(RoomMentionedMsg); ok && mm.Keyword != "" {
+			t.Errorf("expected no self-notification for own keyword match, got %+v", mm)
+		}
+	}
+}
+
+func TestRoomReceived_MentionAndKeyword_BothEmitted(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.keywordAlerts = []string{"cyberdeck"}
+
+	_, cmd := m.Update(roomReceivedMsg{msg: model.Message{
+		From: model.User{Username: "trinity"},
+		Body: "hey neo check out this cyberdeck build",
+	}})
+
+	var sawMention, sawKeyword bool
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if mm, ok := msg.(RoomMentionedMsg); ok {
+			if mm.Keyword == "" {
+				sawMention = true
+			} else {
+				sawKeyword = true
+			}
+		}
+	}
+	if !sawMention || !sawKeyword {
+		t.Errorf("expected both a mention and a keyword RoomMentionedMsg, got mention=%v keyword=%v", sawMention, sawKeyword)
+	}
+}
+
 func TestRoomUsersLoaded_SortsAndStores(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 

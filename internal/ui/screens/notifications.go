@@ -65,7 +65,7 @@ type notifCategory struct {
 }
 
 var notifCategories = []notifCategory{
-	{label: "mentions", types: []string{"reply_mention", "post_mention", "chat_mention", "graffiti_mention"}},
+	{label: "mentions", types: []string{"reply_mention", "post_mention", "chat_mention", "graffiti_mention", "keyword_match"}},
 	{label: "social", types: []string{"new_follower", "unfollowed", "poke", "bookmark"}},
 	{label: "threads", types: []string{"reply", "thread_reply", "guild_new_thread", "guild_chat_message", "new_post_friend", "new_post_following"}},
 	{label: "c-mail", types: []string{"dm_message"}},
@@ -495,6 +495,24 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 			}
 			n := visible[m.selectedIndex]
 			switch n.Type {
+			case "keyword_match":
+				switch {
+				case n.RoomSlug != "":
+					// cIRC keyword match — jump straight to the room.
+					m = m.MarkRead(n.ID)
+					notifID, slug := n.ID, n.RoomSlug
+					return m, func() tea.Msg { return OpenRoomMsg{RoomSlug: slug, NotifID: notifID} }
+				case n.MessageContent != "":
+					// C-Mail keyword match — open the conversation.
+					m = m.MarkRead(n.ID)
+					notifID, username := n.ID, n.Actor.Username
+					return m, tea.Batch(
+						func() tea.Msg { return MarkNotifReadMsg{ID: notifID} },
+						func() tea.Msg { return StartConversationMsg{Username: username} },
+					)
+				}
+				// Post/reply keyword matches fall through to the
+				// TargetID-based post navigation below.
 			case "chat_mention":
 				// Jump straight to the cIRC room the mention happened in.
 				m = m.MarkRead(n.ID)
@@ -809,6 +827,22 @@ func baseNotifSummary(n model.Notification) string {
 		return "sent you a gift."
 	case "gift_sent":
 		return "gift sent."
+	case "keyword_match":
+		kw := `"` + n.MatchedKeyword + `"`
+		switch {
+		case n.RoomName != "":
+			return "keyword " + kw + " matched in #" + n.RoomName + "."
+		case n.RoomSlug != "":
+			return "keyword " + kw + " matched in #" + n.RoomSlug + "."
+		case n.ReplyContent != "":
+			return "keyword " + kw + " matched in a reply."
+		case n.PostContent != "":
+			return "keyword " + kw + " matched in a post."
+		case n.MessageContent != "":
+			return "keyword " + kw + " matched in a C-Mail message."
+		default:
+			return "keyword " + kw + " matched."
+		}
 	default:
 		return n.Type
 	}
@@ -862,6 +896,8 @@ func notifIcon(n model.Notification) string {
 		sym = "⚠"
 	case "gift_received", "gift_sent":
 		sym = "¤"
+	case "keyword_match":
+		sym = "⚑"
 	default:
 		sym = "·"
 	}

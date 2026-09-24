@@ -1002,7 +1002,7 @@ var allKnownNotifTypes = []string{
 	"system_ban_lifted", "graffiti_mention", "moderator_granted", "moderator_removed",
 	"moderator_permissions_changed", "api_access_granted", "api_access_removed",
 	"edit_access_granted", "edit_access_removed", "post_cooldown", "rate_limit_warning",
-	"gift_received", "gift_sent",
+	"gift_received", "gift_sent", "keyword_match",
 }
 
 func TestNotifCategories_CoverAllKnownTypesExactlyOnce(t *testing.T) {

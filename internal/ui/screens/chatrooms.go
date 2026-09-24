@@ -216,6 +216,7 @@ type ChatroomsModel struct {
 	err          error // last message-load/subscribe failure for the active room; cleared on success
 
 	mutedUsersByRoom map[string][]string // roomID -> muted usernames, from Settings
+	keywordAlerts    []string            // user's configured keyword alerts, from SharedConfigMsg
 
 	serverRooms []model.Room // rooms from GET /v1/circ, before nsfwRoom injection
 	roomsLoaded bool         // true once SetRooms has been called with a real fetch result
@@ -399,10 +400,13 @@ type RoomOpenedMsg struct {
 }
 
 // RoomMentionedMsg is emitted when a live incoming message in the room the
-// user is subscribed to contains their username as a bare word (no "@") —
-// the server's chat_mention notification already covers the "@username"
-// form, so this only carries what that pipeline misses. App uses it to fire
-// a desktop toast and insert a Notifications-tab entry, gated on whether the
+// user is subscribed to either contains their username as a bare word (no
+// "@") — the server's chat_mention notification already covers the
+// "@username" form, so this only carries what that pipeline misses — or
+// matches one of the user's configured keyword alerts. Keyword is empty for
+// a username mention, non-empty for a keyword match; a message can produce
+// one of each as two separate RoomMentionedMsg values. App uses it to fire a
+// desktop toast and insert a Notifications-tab entry, gated on whether the
 // user is actively viewing this room.
 type RoomMentionedMsg struct {
 	RoomID    string // room slug
@@ -410,6 +414,7 @@ type RoomMentionedMsg struct {
 	From      string // sender's username
 	Body      string // raw message body; desktopNotifyCmd truncates
 	MessageID string // the underlying model.Message.ID; used to build a stable synthetic notification ID
+	Keyword   string // non-empty: which configured keyword matched, instead of a username mention
 }
 
 // mentionsCurrentUser reports whether msg is a live chat message (not a
@@ -423,6 +428,16 @@ func mentionsCurrentUser(msg model.Message, currentUser string) bool {
 		return false // never self-notify
 	}
 	return markdown.MentionsUserBare(msg.Body, currentUser)
+}
+
+// matchedKeywordInMessage reports the first configured keyword found in msg,
+// or "" if none match — same self/system exclusion as mentionsCurrentUser,
+// so a user's own messages never trigger their own keyword alerts.
+func matchedKeywordInMessage(msg model.Message, currentUser string, keywords []string) string {
+	if msg.IsSystem || strings.EqualFold(msg.From.Username, currentUser) {
+		return ""
+	}
+	return markdown.MatchKeywords(msg.Body, keywords)
 }
 
 // NewChatroomsModel creates a new ChatroomsModel for the given authenticated user.
@@ -1279,6 +1294,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.mutedUsersByRoom = msg.Settings.MutedUsersByRoom
+		m.keywordAlerts = msg.KeywordAlerts
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m.filterNSFW = msg.Settings.FilterNSFW
 		m = m.SetLocation(msg.Loc)
@@ -1325,14 +1341,19 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			if !m.focused || !m.viewport.AtBottom() {
 				m.unreadCount++
 			}
+			roomID, roomName := m.activeRoomID, m.activeRoomID
+			if m.activeRoom != nil {
+				roomName = m.activeRoom.Name
+			}
+			from, body, messageID := msg.msg.From.Username, msg.msg.Body, msg.msg.ID
 			if mentionsCurrentUser(msg.msg, m.currentUser) {
-				roomID, roomName := m.activeRoomID, m.activeRoomID
-				if m.activeRoom != nil {
-					roomName = m.activeRoom.Name
-				}
-				from, body, messageID := msg.msg.From.Username, msg.msg.Body, msg.msg.ID
 				cmds = append(cmds, func() tea.Msg {
 					return RoomMentionedMsg{RoomID: roomID, RoomName: roomName, From: from, Body: body, MessageID: messageID}
+				})
+			}
+			if kw := matchedKeywordInMessage(msg.msg, m.currentUser, m.keywordAlerts); kw != "" {
+				cmds = append(cmds, func() tea.Msg {
+					return RoomMentionedMsg{RoomID: roomID, RoomName: roomName, From: from, Body: body, MessageID: messageID, Keyword: kw}
 				})
 			}
 		}

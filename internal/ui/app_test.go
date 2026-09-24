@@ -218,6 +218,104 @@ func TestActiveScreenHasFocusedInput_ChatroomsDefault(t *testing.T) {
 	}
 }
 
+func TestActiveScreenHasFocusedInput_SettingsAlwaysFalse(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSettings
+	if a.activeScreenHasFocusedInput() {
+		t.Error("settings screen should never report a focused input — keyword editing happens in the popup, not inline")
+	}
+}
+
+// --- keyword-alerts popup (Settings' "alert keywords" row) ---
+
+func TestOpenKeywordEditorMsg_OpensPopupSeededFromSettings(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSettings
+	a.settingsScreen = a.settingsScreen.SetKeywordAlerts([]string{"foo", "bar"})
+
+	m, _ := a.Update(screens.OpenKeywordEditorMsg{})
+	got := m.(App)
+	if !got.keywordEditorOpen {
+		t.Fatal("expected keywordEditorOpen to be true")
+	}
+	if !stringSliceEqual(got.keywordEditor.Keywords(), []string{"foo", "bar"}) {
+		t.Errorf("keywordEditor seeded with %v, want [foo bar]", got.keywordEditor.Keywords())
+	}
+}
+
+// TestHandleKeywordEditorKey_LetterShortcutTypesIntoAddRow guards against the
+// exact regression this popup replaced: a plain-letter global shortcut (here
+// "t" for the theme picker) must not be swallowed before reaching the
+// popup's add-row input.
+func TestHandleKeywordEditorKey_LetterShortcutTypesIntoAddRow(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSettings
+	a.keywordEditorOpen = true
+	a.keywordEditor = a.keywordEditor.Open(nil)
+
+	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	got := m.(App)
+	if got.themePickerOpen {
+		t.Error("'t' should type into the popup's add-row, not open the theme picker")
+	}
+	if !got.keywordEditorOpen {
+		t.Error("expected the popup to remain open after typing 't'")
+	}
+}
+
+func TestHandleKeywordEditorKey_CtrlS_CommitsAndSaves(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSettings
+	a.settingsScreen, _ = a.settingsScreen.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a.keywordEditorOpen = true
+	a.keywordEditor = a.keywordEditor.Open(nil)
+	a.keywordEditor, _ = a.keywordEditor.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("cyberdeck")})
+	a.keywordEditor, _ = a.keywordEditor.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m, cmd := a.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	got := m.(App)
+	if got.keywordEditorOpen {
+		t.Error("expected the popup to close on ctrl+s")
+	}
+	if !stringSliceEqual(got.settingsScreen.KeywordAlerts(), []string{"cyberdeck"}) {
+		t.Errorf("settingsScreen.KeywordAlerts() = %v, want [cyberdeck]", got.settingsScreen.KeywordAlerts())
+	}
+	if cmd == nil {
+		t.Error("expected a save cmd (SaveSettingsMsg) since the list is now dirty")
+	}
+}
+
+func TestHandleKeywordEditorKey_Esc_DiscardsAndCloses(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSettings
+	a.settingsScreen = a.settingsScreen.SetKeywordAlerts([]string{"foo"})
+	a.keywordEditorOpen = true
+	a.keywordEditor = a.keywordEditor.Open([]string{"foo"})
+	a.keywordEditor, _ = a.keywordEditor.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("bar")})
+	a.keywordEditor, _ = a.keywordEditor.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := m.(App)
+	if got.keywordEditorOpen {
+		t.Error("expected the popup to close on esc")
+	}
+	if !stringSliceEqual(got.settingsScreen.KeywordAlerts(), []string{"foo"}) {
+		t.Errorf("settingsScreen.KeywordAlerts() = %v, want unchanged [foo] (esc must discard)", got.settingsScreen.KeywordAlerts())
+	}
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // --- leader key ("g" + mnemonic) ---
 
 func TestHandleKeys_Leader_G_ArmsAndConsumes(t *testing.T) {
@@ -3820,6 +3918,307 @@ func TestHandleChatrooms_RoomMentionedMsg_FiresToast(t *testing.T) {
 	}
 	if !strings.Contains(got.notifications.View(), "trinity") {
 		t.Errorf("expected the mention entry to render in the Notifications tab, got: %q", got.notifications.View())
+	}
+}
+
+func TestHandleChatrooms_RoomMentionedMsg_KeywordMatch(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.active = screenFeed // not viewing Chatrooms at all
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, cmd := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "check this cyberdeck out", MessageID: "msg1", Keyword: "cyberdeck"})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd for a keyword match when not viewing the room")
+	}
+	if got.polledUnreadCount != 1 {
+		t.Errorf("polledUnreadCount = %d, want 1", got.polledUnreadCount)
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+	view := got.notifications.View()
+	if !strings.Contains(view, "cyberdeck") {
+		t.Errorf("expected the matched keyword to render in the Notifications tab, got: %q", view)
+	}
+}
+
+// TestHandleChatrooms_RoomMentionedMsg_MentionAndKeywordDontCollide verifies
+// a mention and a keyword match on the same underlying message get distinct
+// local notification IDs (localMentionIDPrefix vs localKeywordIDPrefix) —
+// without that, the second AddLocalMention would silently merge onto the
+// first as an update instead of adding a second entry.
+func TestHandleChatrooms_RoomMentionedMsg_MentionAndKeywordDontCollide(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.active = screenFeed
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo, cyberdeck?", MessageID: "msg1"})
+	a = m.(App)
+	m, _ = a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo, cyberdeck?", MessageID: "msg1", Keyword: "cyberdeck"})
+	got := m.(App)
+
+	if got.notifications.UnreadCount() != 2 {
+		t.Errorf("notifications.UnreadCount() = %d, want 2 (mention and keyword match must not collide on ID)", got.notifications.UnreadCount())
+	}
+}
+
+func TestHandleCMail_DMKeywordMsg_FiresToast(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.active = screenFeed // not viewing C-Mail at all
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, cmd := a.Update(screens.DMKeywordMsg{ConvID: "c1", From: "trinity", Body: "check this cyberdeck out", MessageID: "msg1", Keyword: "cyberdeck"})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd when not viewing C-Mail")
+	}
+	if got.polledUnreadCount != 1 {
+		t.Errorf("polledUnreadCount = %d, want 1", got.polledUnreadCount)
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+	view := got.notifications.View()
+	if !strings.Contains(view, "cyberdeck") {
+		t.Errorf("expected the matched keyword to render in the Notifications tab, got: %q", view)
+	}
+}
+
+func TestHandleCMail_DMKeywordMsg_SuppressedWhileViewingCMail(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.focusReported, a.focused = true, true
+	a.active = screenCMail
+
+	m, cmd := a.Update(screens.DMKeywordMsg{ConvID: "c1", From: "trinity", Body: "check this cyberdeck out", MessageID: "msg1", Keyword: "cyberdeck"})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast while actively viewing C-Mail")
+	}
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0 (entry created already read)", got.polledUnreadCount)
+	}
+}
+
+// --- keyword alerts on the feed peek poll (posts, topics, tags) ---
+
+func TestScanPeekedPosts_FirstLoadSeedsBaseline_NoAlert(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	post := model.Post{ID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
+	m, _ := a.Update(feedLoadedMsg{posts: []model.Post{post}})
+	a = m.(App)
+
+	// The same post reappearing via the peek poll must not alert — it was
+	// already accounted for on load, not newly arrived.
+	m, cmd := a.Update(feedPeekMsg{posts: []model.Post{post}})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast for a post already seen on initial load")
+	}
+	if got.notifications.UnreadCount() != 0 {
+		t.Errorf("notifications.UnreadCount() = %d, want 0", got.notifications.UnreadCount())
+	}
+}
+
+func TestScanPeekedPosts_EmitsKeywordMatch_ForNewPost(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ := a.Update(feedLoadedMsg{posts: []model.Post{{ID: "p1", Content: "hello"}}})
+	a = m.(App)
+
+	m, cmd := a.Update(feedPeekMsg{posts: []model.Post{
+		{ID: "p2", Content: "check out this cyberdeck build", AuthorUsername: "trinity", Slug: "p2-slug"},
+	}})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd for a new keyword-matching post")
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+	view := got.notifications.View()
+	if !strings.Contains(view, "cyberdeck") {
+		t.Errorf("expected the matched keyword to render in the Notifications tab, got: %q", view)
+	}
+}
+
+func TestScanPeekedPosts_MatchesTopics(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"retrocomputing"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, cmd := a.Update(feedPeekMsg{posts: []model.Post{
+		{ID: "p1", Content: "just a normal post", Topics: []string{"retrocomputing"}},
+	}})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd for a keyword match in a post's topics/tags")
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+}
+
+func TestScanPeekedPosts_NoAlert_WithoutKeywordsConfigured(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+
+	_, cmd := a.Update(feedPeekMsg{posts: []model.Post{
+		{ID: "p1", Content: "check out this cyberdeck build"},
+	}})
+	if cmd != nil {
+		t.Error("expected no toast with an empty keyword list")
+	}
+}
+
+func TestScanPeekedPosts_SuppressedWhileViewingFeed(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.focusReported, a.focused = true, true
+	a.active = screenFeed
+
+	m, cmd := a.Update(feedPeekMsg{posts: []model.Post{
+		{ID: "p1", Content: "check out this cyberdeck build"},
+	}})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast while actively viewing Feed")
+	}
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0 (entry created already read)", got.polledUnreadCount)
+	}
+}
+
+// --- keyword alerts on the replies poll (SearchReplies) ---
+
+func TestKeywordReplyMatch_FirstResponseSeedsBaseline_NoAlert(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	reply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
+	m, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{reply}})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast on the first (baseline) response for a keyword")
+	}
+	if got.notifications.UnreadCount() != 0 {
+		t.Errorf("notifications.UnreadCount() = %d, want 0", got.notifications.UnreadCount())
+	}
+}
+
+func TestKeywordReplyMatch_EmitsForNewReply(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Baseline: nothing yet.
+	m, _ := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: nil})
+	a = m.(App)
+
+	newReply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
+	m, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{newReply}})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd for a newly-seen matching reply")
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+	view := got.notifications.View()
+	if !strings.Contains(view, "cyberdeck") {
+		t.Errorf("expected the matched keyword to render in the Notifications tab, got: %q", view)
+	}
+}
+
+func TestKeywordReplyMatch_NoAlert_ForAlreadySeenReply(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	reply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
+	m, _ := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{reply}}) // baseline
+	a = m.(App)
+
+	// Same reply ID reappearing in a later poll must not alert again.
+	_, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{reply}})
+	if cmd != nil {
+		t.Error("expected no repeat toast for an already-seen reply")
+	}
+}
+
+func TestKeywordReplyMatch_SuppressedWhileViewingFeed(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.focusReported, a.focused = true, true
+	a.active = screenFeed
+
+	m, _ := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: nil}) // baseline
+	a = m.(App)
+
+	newReply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
+	m, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{newReply}})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast while actively viewing Feed")
+	}
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0 (entry created already read)", got.polledUnreadCount)
+	}
+}
+
+func TestKeywordReplyPollTick_DeadChainWithoutKeywords(t *testing.T) {
+	a := loggedInApp()
+	a.sessionGen = 3
+	_, cmd := a.Update(keywordReplyPollTickMsg{gen: 3})
+	if cmd != nil {
+		t.Error("expected the poll chain to die when no keywords are configured")
+	}
+}
+
+func TestKeywordReplyPollTick_FetchesPerKeywordAndReschedules(t *testing.T) {
+	a := loggedInApp()
+	a.sessionGen = 3
+	a.keywordAlerts = []string{"cyberdeck", "wetware"}
+
+	_, cmd := a.Update(keywordReplyPollTickMsg{gen: 3})
+	if cmd == nil {
+		t.Fatal("expected a batched cmd (reschedule + one fetch per keyword)")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected tea.BatchMsg, got %T", cmd())
+	}
+	if len(batch) != 1+len(a.keywordAlerts) {
+		t.Fatalf("expected %d cmds (1 reschedule + %d fetches), got %d", 1+len(a.keywordAlerts), len(a.keywordAlerts), len(batch))
+	}
+	// batch[0] is the reschedule tick — invoking it would block for
+	// keywordReplyPollInterval, so only the fetch cmds (batch[1:]) run here.
+	var matchCount int
+	for _, c := range batch[1:] {
+		if _, ok := c().(keywordReplyMatchMsg); ok {
+			matchCount++
+		}
+	}
+	if matchCount != len(a.keywordAlerts) {
+		t.Errorf("expected %d keywordReplyMatchMsg (one per keyword), got %d", len(a.keywordAlerts), matchCount)
 	}
 }
 

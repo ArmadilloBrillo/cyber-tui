@@ -213,6 +213,21 @@ type CMailModel struct {
 	ready         bool
 	err           error
 	currentUser   string
+	keywordAlerts []string // user's configured keyword alerts, from SharedConfigMsg
+
+	// keywordConvSeen/keywordConvsSeeded support the free cross-conversation
+	// keyword scan off the always-on account-wide conversation-list stream
+	// (userConvsReceivedMsg): each conversation's LastMessageAt at the point
+	// it was last scanned, so a later event only re-scans conversations whose
+	// last message actually changed. keywordConvsSeeded gates the very first
+	// scan to a silent baseline (record, don't alert) so login doesn't replay
+	// a backlog of pre-existing matches — mirrors FeedModel.SetPendingNew's
+	// "diff against what's already known" approach. Re-seeds itself (see
+	// userConvsReceivedMsg) if keywordAlerts was empty when the last event
+	// arrived, so adding a keyword mid-session doesn't immediately alert on
+	// the whole existing conversation list either.
+	keywordConvSeen    map[string]time.Time
+	keywordConvsSeeded bool
 
 	mode         cmailMode
 	selectedConv int            // index into conversations
@@ -955,6 +970,7 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
+		m.keywordAlerts = msg.KeywordAlerts
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m = m.SetLocation(msg.Loc)
@@ -1008,10 +1024,17 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 
 	case dmReceivedMsg:
 		m = m.AppendMessage(msg.msg)
-		if m.dmSub != nil {
-			return m, waitForDM(m.dmSub)
+		var cmds []tea.Cmd
+		if kw := matchedKeywordInDM(msg.msg, m.currentUser, m.keywordAlerts); kw != "" && m.activeConv != nil {
+			convID, from, body, messageID := m.activeConv.ID, msg.msg.From.Username, msg.msg.Body, msg.msg.ID
+			cmds = append(cmds, func() tea.Msg {
+				return DMKeywordMsg{ConvID: convID, From: from, Body: body, MessageID: messageID, Keyword: kw}
+			})
 		}
-		return m, nil
+		if m.dmSub != nil {
+			cmds = append(cmds, waitForDM(m.dmSub))
+		}
+		return m, tea.Batch(cmds...)
 
 	case dmStreamClosedMsg:
 		if msg.convID != m.activeConvID {
@@ -1075,11 +1098,41 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 		return m, waitForUserConvs(m.userConvsSub)
 
 	case userConvsReceivedMsg:
+		var cmds []tea.Cmd
+		if len(m.keywordAlerts) > 0 {
+			if !m.keywordConvsSeeded {
+				m.keywordConvsSeeded = true
+				m.keywordConvSeen = make(map[string]time.Time, len(msg.convs))
+				for _, c := range msg.convs {
+					m.keywordConvSeen[c.ID] = c.LastMessageAt
+				}
+			} else {
+				if m.keywordConvSeen == nil {
+					m.keywordConvSeen = make(map[string]time.Time, len(msg.convs))
+				}
+				for _, c := range msg.convs {
+					seen, known := m.keywordConvSeen[c.ID]
+					m.keywordConvSeen[c.ID] = c.LastMessageAt
+					if c.ID == m.activeConvID {
+						continue // covered live by the open-conversation hook
+					}
+					if known && !c.LastMessageAt.After(seen) {
+						continue
+					}
+					if kw := markdown.MatchKeywords(c.LastMessage, m.keywordAlerts); kw != "" {
+						convID, from, body := c.ID, m.OtherParticipant(c), c.LastMessage
+						cmds = append(cmds, func() tea.Msg {
+							return DMKeywordMsg{ConvID: convID, From: from, Body: body, Keyword: kw}
+						})
+					}
+				}
+			}
+		}
 		m = m.SetConversations(msg.convs)
 		if m.userConvsSub != nil {
-			return m, waitForUserConvs(m.userConvsSub)
+			cmds = append(cmds, waitForUserConvs(m.userConvsSub))
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 
 	case userConvsStreamClosedMsg:
 		m.userConvsSub = nil
@@ -1919,6 +1972,17 @@ func (m CMailModel) SetConversationMessages(convID string, msgs []model.Message)
 		m.viewport.GotoBottom()
 	}
 	return m
+}
+
+// matchedKeywordInDM reports the first of the user's configured keyword
+// alerts found in msg, or "" if none match — mirrors chatrooms.go's
+// matchedKeywordInMessage, skipping the user's own messages so they never
+// trigger their own alerts.
+func matchedKeywordInDM(msg model.Message, currentUser string, keywords []string) string {
+	if msg.IsSystem || strings.EqualFold(msg.From.Username, currentUser) {
+		return ""
+	}
+	return markdown.MatchKeywords(msg.Body, keywords)
 }
 
 // AppendMessage adds a live incoming message to the currently open conversation.

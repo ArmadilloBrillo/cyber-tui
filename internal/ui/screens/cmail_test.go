@@ -1706,3 +1706,148 @@ func TestCMailModel_SetComposeValueMsg_ReplacesInput(t *testing.T) {
 		t.Errorf("input.Value() = %q, want the replaced /gif command", got)
 	}
 }
+
+// --- keyword alert detection on live DM messages ---
+
+func TestDMReceived_EmitsKeywordMatch(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.keywordAlerts = []string{"cyberdeck"}
+
+	_, cmd := m.Update(dmReceivedMsg{msg: model.Message{
+		From: model.User{Username: "trinity"},
+		Body: "check out this cyberdeck build",
+	}})
+
+	var found bool
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if km, ok := msg.(DMKeywordMsg); ok {
+			found = true
+			if km.Keyword != "cyberdeck" || km.From != "trinity" || km.ConvID != "c1" {
+				t.Errorf("DMKeywordMsg = %+v, unexpected fields", km)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a DMKeywordMsg for a keyword match")
+	}
+}
+
+func TestDMReceived_NoKeywordMatch_WhenNoKeywordConfigured(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+
+	_, cmd := m.Update(dmReceivedMsg{msg: model.Message{
+		From: model.User{Username: "trinity"},
+		Body: "check out this cyberdeck build",
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if km, ok := msg.(DMKeywordMsg); ok {
+			t.Errorf("expected no keyword match with an empty keyword list, got %+v", km)
+		}
+	}
+}
+
+func TestDMReceived_NoKeywordMatch_FromSelf(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.keywordAlerts = []string{"cyberdeck"}
+
+	_, cmd := m.Update(dmReceivedMsg{msg: model.Message{
+		From: model.User{Username: "Neo"}, // case variant of the current user
+		Body: "check out this cyberdeck build",
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if km, ok := msg.(DMKeywordMsg); ok {
+			t.Errorf("expected no self-notification for own keyword match, got %+v", km)
+		}
+	}
+}
+
+// --- keyword alert detection on the account-wide conversation-list stream ---
+
+func keywordConv(id, lastMessage string, at time.Time) model.Conversation {
+	return model.Conversation{
+		ID:            id,
+		Participants:  []model.User{{Username: "neo"}, {Username: "trinity"}},
+		LastMessage:   lastMessage,
+		LastMessageAt: at,
+	}
+}
+
+func TestUserConvsReceived_FirstEventSeedsBaseline_NoAlert(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m.keywordAlerts = []string{"cyberdeck"}
+
+	_, cmd := m.Update(userConvsReceivedMsg{convs: []model.Conversation{
+		keywordConv("c1", "check this cyberdeck", time.Now()),
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if km, ok := msg.(DMKeywordMsg); ok {
+			t.Errorf("expected no alert on the first (baseline) event, got %+v", km)
+		}
+	}
+}
+
+func TestUserConvsReceived_EmitsKeywordMatch_OnNewerMessage(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m.keywordAlerts = []string{"cyberdeck"}
+	base := time.Now()
+
+	m, _ = m.Update(userConvsReceivedMsg{convs: []model.Conversation{keywordConv("c1", "hello", base)}})
+
+	_, cmd := m.Update(userConvsReceivedMsg{convs: []model.Conversation{
+		keywordConv("c1", "check this cyberdeck", base.Add(time.Minute)),
+	}})
+
+	var found bool
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if km, ok := msg.(DMKeywordMsg); ok {
+			found = true
+			if km.Keyword != "cyberdeck" || km.ConvID != "c1" || km.From != "trinity" {
+				t.Errorf("DMKeywordMsg = %+v, unexpected fields", km)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a DMKeywordMsg for a newer keyword-matching last message")
+	}
+}
+
+func TestUserConvsReceived_NoAlert_WhenLastMessageAtUnchanged(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m.keywordAlerts = []string{"cyberdeck"}
+	base := time.Now()
+
+	m, _ = m.Update(userConvsReceivedMsg{convs: []model.Conversation{keywordConv("c1", "hello", base)}})
+
+	// Same LastMessageAt as the baseline — not a genuinely new message.
+	_, cmd := m.Update(userConvsReceivedMsg{convs: []model.Conversation{
+		keywordConv("c1", "check this cyberdeck", base),
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if km, ok := msg.(DMKeywordMsg); ok {
+			t.Errorf("expected no alert when LastMessageAt hasn't advanced, got %+v", km)
+		}
+	}
+}
+
+func TestUserConvsReceived_SkipsActiveConversation(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m.keywordAlerts = []string{"cyberdeck"}
+	m.activeConvID = "c1" // covered live by the open-conversation hook instead
+	base := time.Now()
+
+	m, _ = m.Update(userConvsReceivedMsg{convs: []model.Conversation{keywordConv("c1", "hello", base)}})
+
+	_, cmd := m.Update(userConvsReceivedMsg{convs: []model.Conversation{
+		keywordConv("c1", "check this cyberdeck", base.Add(time.Minute)),
+	}})
+
+	for _, msg := range resolveRoomMsgs(cmd) {
+		if km, ok := msg.(DMKeywordMsg); ok {
+			t.Errorf("expected no cross-conversation alert for the currently open conversation, got %+v", km)
+		}
+	}
+}
