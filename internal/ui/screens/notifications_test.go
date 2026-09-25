@@ -250,49 +250,50 @@ func TestNotifs_SetNotifs_OrdersLocalMentionsByTime(t *testing.T) {
 	}
 }
 
-func TestNotifs_AddLocalMention_ReadDoesNotSurviveSetNotifs(t *testing.T) {
+// survivesRead returns the entry with the given ID after a SetNotifs reload,
+// or nil if it was dropped.
+func survivesRead(m NotificationsModel, id string) *model.Notification {
+	m = m.SetNotifs([]model.Notification{makeNotif("n1", "reply", "p1", false)}, "")
+	for i := range m.notifs {
+		if m.notifs[i].ID == id {
+			return &m.notifs[i]
+		}
+	}
+	return nil
+}
+
+func TestNotifs_AddLocalMention_ReadSurvivesSetNotifs(t *testing.T) {
 	m := initNotifs(nil)
 	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", true)) // already read (viewed live)
 
 	if len(m.notifs) != 1 || m.notifs[0].ID != "local-mention-m1" {
 		t.Fatalf("expected the read local mention to be visible immediately, got %+v", m.notifs)
 	}
-
-	m = m.SetNotifs([]model.Notification{makeNotif("n1", "reply", "p1", false)}, "")
-
-	for _, n := range m.notifs {
-		if n.ID == "local-mention-m1" {
-			t.Error("expected the already-read local mention to be dropped on the next reload, not force-preserved")
-		}
+	n := survivesRead(m, "local-mention-m1")
+	if n == nil || !n.Read {
+		t.Errorf("expected the already-read local mention to survive a reload as read, got %+v", n)
 	}
 }
 
-func TestNotifs_MarkRead_DropsFromLocalMentions(t *testing.T) {
+func TestNotifs_MarkRead_LocalMentionSurvivesSetNotifsAsRead(t *testing.T) {
 	m := initNotifs(nil)
-	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", false))
-	m = m.MarkRead("local-mention-m1")
+	m = m.AddLocalMention(makeNotif("local-keyword-m1", "keyword_match", "", false))
+	m = m.MarkRead("local-keyword-m1")
 
-	// Now that it's read, it must stop being force-preserved.
-	m = m.SetNotifs([]model.Notification{makeNotif("n1", "reply", "p1", false)}, "")
-
-	for _, n := range m.notifs {
-		if n.ID == "local-mention-m1" {
-			t.Error("expected a marked-read local mention to no longer survive SetNotifs")
-		}
+	n := survivesRead(m, "local-keyword-m1")
+	if n == nil || !n.Read {
+		t.Errorf("expected a marked-read local entry to survive a reload as read, got %+v", n)
 	}
 }
 
-func TestNotifs_MarkAllRead_ClearsLocalMentions(t *testing.T) {
+func TestNotifs_MarkAllRead_LocalMentionsSurviveSetNotifsAsRead(t *testing.T) {
 	m := initNotifs(nil)
 	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", false))
 	m = m.MarkAllRead()
 
-	m = m.SetNotifs([]model.Notification{makeNotif("n1", "reply", "p1", false)}, "")
-
-	for _, n := range m.notifs {
-		if n.ID == "local-mention-m1" {
-			t.Error("expected MarkAllRead to clear localMentions so it doesn't survive SetNotifs")
-		}
+	n := survivesRead(m, "local-mention-m1")
+	if n == nil || !n.Read {
+		t.Errorf("expected MarkAllRead'd local entry to survive a reload as read, got %+v", n)
 	}
 }
 
