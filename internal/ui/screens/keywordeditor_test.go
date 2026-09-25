@@ -93,6 +93,30 @@ func TestKeywordEditor_LettersDAndXTypeIntoAddRow(t *testing.T) {
 	}
 }
 
+func TestKeywordEditor_LettersJAndKTypeIntoAddRow(t *testing.T) {
+	m := NewKeywordEditorModel().Open([]string{"a"})
+	m = typeText(m, "jk")
+	if m.input.Value() != "jk" {
+		t.Errorf("input.Value() = %q, want %q (j/k must type on the add-row)", m.input.Value(), "jk")
+	}
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0 (j must not navigate on the add-row)", m.cursor)
+	}
+}
+
+func TestKeywordEditor_JAndKNavigateOnKeywordList(t *testing.T) {
+	m := NewKeywordEditorModel().Open([]string{"a", "b"})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.cursor != 2 {
+		t.Errorf("cursor = %d, want 2 after j", m.cursor)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.cursor != 1 {
+		t.Errorf("cursor = %d, want 1 after k", m.cursor)
+	}
+}
+
 func TestKeywordEditor_UpDownNavigatesAcrossAddRowAndKeywords(t *testing.T) {
 	m := NewKeywordEditorModel().Open([]string{"a", "b"})
 	if m.cursor != 0 {

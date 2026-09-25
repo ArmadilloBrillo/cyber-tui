@@ -65,14 +65,25 @@ func (m KeywordEditorModel) ensureVisible() KeywordEditorModel {
 // (see App.handleKeywordEditorKey) — same split as PathPromptModel/
 // IconPickerModel between model-local keys and App-level dismissal/save.
 func (m KeywordEditorModel) Update(msg tea.KeyMsg) (KeywordEditorModel, tea.Cmd) {
-	switch msg.String() {
-	case "up", "k":
+	key := msg.String()
+	// j/k are vim aliases for down/up only on the keyword list; on the
+	// add-row they must reach the input like any other letter.
+	if m.cursor > 0 {
+		switch key {
+		case "k":
+			key = "up"
+		case "j":
+			key = "down"
+		}
+	}
+	switch key {
+	case "up":
 		if m.cursor > 0 {
 			m.cursor--
 			m = m.ensureVisible()
 		}
 		return m, nil
-	case "down", "j":
+	case "down":
 		if m.cursor < len(m.keywords) {
 			m.cursor++
 			m = m.ensureVisible()
