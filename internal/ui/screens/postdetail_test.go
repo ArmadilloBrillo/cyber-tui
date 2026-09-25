@@ -309,7 +309,7 @@ func TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack(t *testing.T) 
 	// Small pane so the post (image band + text) is taller than it —
 	// otherwise millerPageNav's reveal-above/below logic for tall items
 	// never engages.
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 15})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
 
 	post := pdPost("p1")
@@ -790,5 +790,37 @@ func TestPostDetail_ComposeSubmit_CarriesReplyAudioAttachment(t *testing.T) {
 	}
 	if msg2.Attachment != nil {
 		t.Errorf("expected the next reply to start with no attachment, got Attachment=%v", msg2.Attachment)
+	}
+}
+
+// TestPostDetail_HardBreakKey_FromSharedConfig: the configured key reaches
+// the reply box through SharedConfigMsg.
+func TestPostDetail_HardBreakKey_FromSharedConfig(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetPost(pdPost("p1"))
+	m, _ = m.Update(screens.SharedConfigMsg{HardBreakKey: "ctrl+l"})
+	m, _ = m.OpenCompose()
+
+	for _, msg := range []tea.Msg{
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")},
+		tea.KeyMsg{Type: tea.KeyCtrlL},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")},
+	} {
+		m, _ = m.Update(msg)
+	}
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd == nil {
+		t.Fatal("ctrl+s produced no command")
+	}
+	_, cmd = m.Update(cmd())
+	if cmd == nil {
+		t.Fatal("ComposeSubmitMsg produced no command")
+	}
+	sub, ok := cmd().(screens.SubmitReplyMsg)
+	if !ok {
+		t.Fatalf("submit produced %T, want SubmitReplyMsg", cmd())
+	}
+	if sub.Content != "a  \nb" {
+		t.Errorf("reply content = %q, want %q", sub.Content, "a  \nb")
 	}
 }

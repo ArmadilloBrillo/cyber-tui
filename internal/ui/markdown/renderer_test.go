@@ -857,3 +857,58 @@ func TestRenderInline_NoHighlightUserUnaffected(t *testing.T) {
 		t.Errorf("expected the line to still carry theme.Base ANSI styling, got: %q", raw)
 	}
 }
+
+func TestRender_ParagraphsSeparatedByBlankLine(t *testing.T) {
+	lines := strings.Split(strip(Render("first\n\nsecond\n\n\n\nthird", 80)), "\n")
+	got := make([]string, len(lines))
+	for i, l := range lines {
+		got[i] = strings.TrimSpace(l)
+	}
+	want := []string{"first", "", "second", "", "third"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("expected one blank line between paragraphs, got %q", got)
+	}
+}
+
+func TestRender_BlocksSeparatedByBlankLine(t *testing.T) {
+	out := strip(Render("intro\n\n- one\n- two\n\nouter", 80))
+	if !strings.Contains(out, "intro") || !strings.Contains(out, "outer") {
+		t.Fatalf("unexpected output %q", out)
+	}
+	lines := strings.Split(out, "\n")
+	if strings.TrimSpace(lines[1]) != "" {
+		t.Errorf("expected blank line between paragraph and list, got %q", lines[1])
+	}
+	if strings.TrimSpace(lines[len(lines)-2]) != "" {
+		t.Errorf("expected blank line between list and paragraph, got %q", lines[len(lines)-2])
+	}
+	for i, l := range lines {
+		if strings.Contains(l, "two") && strings.TrimSpace(lines[i-1]) == "" {
+			t.Errorf("list items must stay adjacent, got blank before %q", l)
+		}
+	}
+}
+
+func TestRender_SoftBreakStaysSpace(t *testing.T) {
+	out := strip(Render("one\ntwo", 80))
+	if strings.Contains(out, "\n") && strings.TrimSpace(strings.SplitN(out, "\n", 2)[1]) != "" {
+		t.Errorf("single newline must not split the paragraph, got %q", out)
+	}
+	if !strings.Contains(out, "one two") {
+		t.Errorf("expected soft break rendered as a space, got %q", out)
+	}
+}
+
+func TestRender_HardBreakKeepsLineBreak(t *testing.T) {
+	lines := strings.Split(strip(Render("one  \ntwo", 80)), "\n")
+	if len(lines) != 2 || strings.TrimSpace(lines[0]) != "one" || strings.TrimSpace(lines[1]) != "two" {
+		t.Errorf("expected two adjacent lines, got %q", lines)
+	}
+}
+
+func TestRender_NoLeadingOrTrailingBlankLines(t *testing.T) {
+	out := strip(Render("a\n\nb\n\n", 80))
+	if strings.HasPrefix(out, "\n") || strings.HasSuffix(strings.TrimRight(out, " "), "\n") {
+		t.Errorf("unexpected leading/trailing newline in %q", out)
+	}
+}

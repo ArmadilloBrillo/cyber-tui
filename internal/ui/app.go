@@ -498,6 +498,9 @@ type App struct {
 	wanderLust bool
 	// maxThreadDepth is the local config value for reply nesting depth. Defaults to 3.
 	maxThreadDepth int
+	// hardBreakKey is the local config value for the compose hard-break key.
+	// Defaults to "alt+enter".
+	hardBreakKey string
 	// feedManualRefreshOnly is the local config value disabling Feed's
 	// background poll (see docs/39-feed-background-poll.md). Defaults to
 	// false (auto-poll on).
@@ -751,6 +754,7 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	a.keywordAlerts = s.KeywordAlerts
 	a.showGlobeTab = !s.HideGlobeTab
 	a.maxThreadDepth = s.GetMaxThreadDepth()
+	a.hardBreakKey = s.GetHardBreakKey()
 	a.imageViewer = s.ImageViewer
 	a.graphicsProtocolName = s.GraphicsProtocol
 	a.inlineImages = s.InlineImages
@@ -1046,7 +1050,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, KeywordAlerts: a.keywordAlerts, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, KeywordAlerts: a.keywordAlerts, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName, HardBreakKey: a.hardBreakKey}
 	*a = a.updateAll(msg)
 }
 
@@ -1146,6 +1150,11 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	if a.activeScreenHasFocusedInput() {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
+		}
+		// The settings key-capture row wants every other key, including the
+		// global ones below, so it can reject or bind them.
+		if a.active == screenSettings {
+			return a, nil, false
 		}
 		// A backgrounded Circ room or C-Mail conversation resumes detail mode
 		// (and its "always focused" compose input, see
@@ -1880,6 +1889,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		ds := msg.DitherSharpness
 		ln := msg.LayoutName
 		ka := msg.KeywordAlerts
+		hb := msg.HardBreakKey
 		a.settingsSaveSeq++
 		seq := a.settingsSaveSeq
 		return a, func() tea.Msg {
@@ -1888,7 +1898,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln, keywordAlerts: ka}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln, keywordAlerts: ka, hardBreakKey: hb}
 		}, true
 
 	case settingsSavedMsg:
@@ -1948,17 +1958,21 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.dithering = msg.dithering
 		a.ditherSharpness = msg.ditherSharpness
 		a.layoutName = msg.layoutName
+		a.hardBreakKey = msg.hardBreakKey
 		a.layout = layoutFromName(msg.layoutName)
 		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
 		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName, msg.keywordAlerts)
+		a.settingsScreen = a.settingsScreen.SetSavedHardBreakKey(msg.hardBreakKey)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
 		a, notifyCmd = a.notify(notifyInfo, "settings saved")
 		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ln, ka := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName, msg.keywordAlerts
+		hb := msg.hardBreakKey
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
+				cfg.HardBreakKey = hb
 				cfg.WanderLust = wl
 				cfg.FeedManualRefreshOnly = fmro
 				cfg.TypingIndicatorsDisabled = !tie
@@ -4883,6 +4897,7 @@ type settingsSavedMsg struct {
 	ditherSharpness         string
 	layoutName              string
 	keywordAlerts           []string
+	hardBreakKey            string
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made

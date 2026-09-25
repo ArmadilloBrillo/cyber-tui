@@ -93,6 +93,10 @@ type SharedConfigMsg struct {
 	// content-scanning hook (cIRC, C-Mail, feed, replies) to know what to
 	// match against.
 	KeywordAlerts []string
+	// HardBreakKey is the raw config value (config.Config.GetHardBreakKey):
+	// the compose key that inserts a hard line break. Pushed into every
+	// compose box and shown by the settings screen.
+	HardBreakKey string
 }
 
 // URLProvider is implemented by screens that can expose URLs from their
@@ -191,6 +195,7 @@ type SaveSettingsMsg struct {
 	DitherSharpness         string
 	LayoutName              string // "tabs" or "miller"
 	KeywordAlerts           []string
+	HardBreakKey            string
 	RemoteChanged           bool // true when API-managed fields differ from the last saved baseline
 }
 

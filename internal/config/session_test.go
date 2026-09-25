@@ -266,3 +266,35 @@ func TestGetDitherSharpness(t *testing.T) {
 		})
 	}
 }
+
+func TestGetHardBreakKey(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty defaults to alt+enter", "", "alt+enter"},
+		{"combo passes through", "ctrl+l", "ctrl+l"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := (config.Config{HardBreakKey: tc.in}).GetHardBreakKey(); got != tc.want {
+				t.Errorf("GetHardBreakKey() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSaveAndLoad_HardBreakKey(t *testing.T) {
+	withTempHome(t)
+	if err := config.Save(config.Config{HardBreakKey: "ctrl+l"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.HardBreakKey != "ctrl+l" {
+		t.Errorf("HardBreakKey = %q, want %q", got.HardBreakKey, "ctrl+l")
+	}
+}

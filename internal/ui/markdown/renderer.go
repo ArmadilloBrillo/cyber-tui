@@ -393,10 +393,10 @@ func (r *renderer) renderDocument(doc *ast.Document) string {
 		rendered := r.renderBlock(child)
 		if rendered != "" {
 			parts = append(parts, rendered)
-			lineOffset += strings.Count(rendered, "\n") + 1
+			lineOffset += strings.Count(rendered, "\n") + 2
 		}
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n\n")
 }
 
 func (r *renderer) renderBlock(node ast.Node) string {
