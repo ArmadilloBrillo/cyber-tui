@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -149,6 +150,12 @@ func (m KeywordEditorModel) View() string {
 		rows = append(rows, theme.Subtle.Render("  (no keywords yet)"))
 	} else {
 		end := min(m.offset+keywordEditorVisibleRows, len(m.keywords))
+		// Reserve both indicator lines whenever the list scrolls so the box
+		// height stays constant as the offset changes.
+		scrolls := len(m.keywords) > keywordEditorVisibleRows
+		if scrolls {
+			rows = append(rows, scrollIndicator("▲", m.offset))
+		}
 		for i := m.offset; i < end; i++ {
 			if i+1 == m.cursor {
 				rows = append(rows, theme.Highlight.Render("▸ "+m.keywords[i]))
@@ -156,10 +163,20 @@ func (m KeywordEditorModel) View() string {
 				rows = append(rows, theme.Subtle.Render("  "+m.keywords[i]))
 			}
 		}
+		if scrolls {
+			rows = append(rows, scrollIndicator("▼", len(m.keywords)-end))
+		}
 	}
 
 	hint := theme.Subtle.Render("↑↓ select   enter add   d delete   ctrl+s save   esc cancel")
 	rows = append(rows, "", hint)
 
 	return theme.ActiveBorder.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
+}
+
+func scrollIndicator(arrow string, hidden int) string {
+	if hidden == 0 {
+		return ""
+	}
+	return theme.Subtle.Render(fmt.Sprintf("  %s %d more", arrow, hidden))
 }

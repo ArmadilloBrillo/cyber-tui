@@ -1,9 +1,11 @@
 package screens
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func typeText(m KeywordEditorModel, s string) KeywordEditorModel {
@@ -160,5 +162,29 @@ func TestKeywordEditor_ScrollOffsetTracksCursorPastVisibleWindow(t *testing.T) {
 	lastIdx := len(keywords) - 1
 	if lastIdx < m.offset || lastIdx >= m.offset+keywordEditorVisibleRows {
 		t.Errorf("offset = %d, last keyword index %d not within the visible window", m.offset, lastIdx)
+	}
+}
+
+func TestKeywordEditor_ViewShowsScrollIndicatorsOnlyWhenScrollable(t *testing.T) {
+	short := NewKeywordEditorModel().Open([]string{"a", "b"}).View()
+	if strings.Contains(short, "more") {
+		t.Errorf("short list should show no scroll indicator:\n%s", short)
+	}
+
+	kws := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	m := NewKeywordEditorModel().Open(kws)
+	top := m.View()
+	if !strings.Contains(top, "▼ 2 more") || strings.Contains(top, "▲") {
+		t.Errorf("at top want only '▼ 2 more':\n%s", top)
+	}
+	for range kws {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	bottom := m.View()
+	if !strings.Contains(bottom, "▲ 2 more") || strings.Contains(bottom, "▼") {
+		t.Errorf("at bottom want only '▲ 2 more':\n%s", bottom)
+	}
+	if lipgloss.Height(top) != lipgloss.Height(bottom) {
+		t.Errorf("box height changed while scrolling: %d vs %d", lipgloss.Height(top), lipgloss.Height(bottom))
 	}
 }
