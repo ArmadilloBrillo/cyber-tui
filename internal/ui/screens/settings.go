@@ -16,7 +16,7 @@ import (
 // has no impact on correctness — no flat-index arithmetic needed.
 type settingsItem struct {
 	label   string
-	kind    string   // "bool" or "enum"
+	kind    string   // "bool", "enum", "keywordlist" or "keybind"
 	options []string // populated for kind=="enum"
 	// Bool items: getBool reads, toggle flips.
 	getBool func(m SettingsModel) bool
@@ -268,6 +268,18 @@ var settingsGroups = []settingsGroup{
 		},
 	},
 	{
+		title: "compose",
+		items: []settingsItem{
+			{
+				// The key that inserts a markdown hard line break, for
+				// terminals that swallow the default alt+enter. Captured
+				// rather than typed: kind "keybind" has its own key handling
+				// in Update/handleCapture and View, like "keywordlist".
+				label: "hard line break key", kind: "keybind",
+			},
+		},
+	},
+	{
 		title: "c-mail",
 		items: []settingsItem{
 			{
@@ -359,6 +371,10 @@ type SettingsModel struct {
 	originalShowGlobeTab            bool           // last saved baseline
 	keywordAlerts                   []string       // live local config value (config.Config.KeywordAlerts); edited via the KeywordEditorModel popup, not inline
 	originalKeywordAlerts           []string       // last saved baseline
+	hardBreakKey                    string         // live local config value (config.Config.HardBreakKey)
+	originalHardBreakKey            string         // last saved baseline
+	capturing                       bool           // true while the hard-break row is waiting for a keypress
+	captureErr                      string         // why the last captured key was rejected
 	prefsSeeded                     bool           // whether the SharedConfigMsg preference fields above have been seeded once
 	cursor                          int
 	width                           int
@@ -414,6 +430,17 @@ func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typ
 	return m
 }
 
+// SetSavedHardBreakKey advances the hard-break key baseline after a save.
+func (m SettingsModel) SetSavedHardBreakKey(key string) SettingsModel {
+	m.hardBreakKey = key
+	m.originalHardBreakKey = key
+	return m
+}
+
+// Capturing reports whether the hard-break row is waiting for a keypress. App
+// uses it to hand every key to this screen instead of its global shortcuts.
+func (m SettingsModel) Capturing() bool { return m.capturing }
+
 // SetError sets the error field.
 func (m SettingsModel) SetError(err error) SettingsModel {
 	m.err = err
@@ -448,6 +475,7 @@ func (m SettingsModel) IsDirty() bool {
 		m.dithering != m.originalDithering ||
 		m.ditherSharpness != m.originalDitherSharpness ||
 		m.layoutName != m.originalLayoutName ||
+		m.hardBreakKey != m.originalHardBreakKey ||
 		!stringSlicesEqual(m.keywordAlerts, m.originalKeywordAlerts)
 }
 
@@ -587,6 +615,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.originalLayoutName = msg.LayoutName
 			m.keywordAlerts = msg.KeywordAlerts
 			m.originalKeywordAlerts = msg.KeywordAlerts
+			m.hardBreakKey = msg.HardBreakKey
+			m.originalHardBreakKey = msg.HardBreakKey
 		}
 		return m, nil
 
@@ -596,6 +626,9 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.capturing {
+			return m.handleCapture(msg), nil
+		}
 		items := flatItems(m)
 		total := len(items)
 
@@ -615,6 +648,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 					m = items[m.cursor].toggle(m)
 				case "keywordlist":
 					return m, func() tea.Msg { return OpenKeywordEditorMsg{} }
+				case "keybind":
+					m.capturing, m.captureErr = true, ""
 				}
 			}
 			return m, nil
@@ -650,9 +685,10 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				ds := m.ditherSharpness
 				ln := m.layoutName
 				ka := m.keywordAlerts
+				hb := m.hardBreakKey
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, LayoutName: ln, KeywordAlerts: ka, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, LayoutName: ln, KeywordAlerts: ka, HardBreakKey: hb, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -674,12 +710,35 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.ditherSharpness = m.originalDitherSharpness
 			m.layoutName = m.originalLayoutName
 			m.keywordAlerts = m.originalKeywordAlerts
+			m.hardBreakKey = m.originalHardBreakKey
 			m.err = nil
 			return m, nil
 		}
 	}
 
 	return m, nil
+}
+
+// handleCapture consumes one keypress while the hard-break row is capturing.
+// The first acceptable key is bound and ends capture; esc cancels. A key the
+// compose screens cannot honour is rejected with the reason shown in the
+// footer.
+func (m SettingsModel) handleCapture(msg tea.KeyMsg) SettingsModel {
+	if msg.String() == "esc" {
+		m.capturing, m.captureErr = false, ""
+		return m
+	}
+	key, err := HardBreakKeyFromMsg(msg)
+	if err == nil {
+		err = ValidateHardBreakKey(key)
+	}
+	if err != nil {
+		m.captureErr = err.Error()
+		return m
+	}
+	m.hardBreakKey = key
+	m.capturing, m.captureErr = false, ""
+	return m
 }
 
 // View renders the settings screen.
@@ -739,6 +798,13 @@ func (m SettingsModel) View() string {
 					rawValue = fmt.Sprintf("%d keywords", len(m.keywordAlerts))
 					value = theme.Highlight.Render(rawValue)
 				}
+			case "keybind":
+				if m.capturing {
+					rawValue = "press a key combo…"
+				} else {
+					rawValue = HardBreakLabel(m.hardBreakKey)
+				}
+				value = theme.Highlight.Render(rawValue)
 			default: // "enum"
 				cur := item.getEnum(m)
 				rawValue = "< " + cur + " >"
@@ -788,12 +854,18 @@ func (m SettingsModel) View() string {
 	// Add footer
 	var footer string
 	switch {
+	case m.capturing && m.captureErr != "":
+		footer = theme.Error.Render(m.captureErr + "   esc · cancel")
+	case m.capturing:
+		footer = theme.Subtle.Render("press the key combo   esc · cancel")
 	case m.err != nil:
 		footer = theme.Error.Render("error: " + m.err.Error())
 	case m.IsDirty():
 		footer = theme.Subtle.Render("ctrl+s · save   esc · revert")
 	case selectedKind == "keywordlist":
 		footer = theme.Subtle.Render("enter · edit keywords")
+	case selectedKind == "keybind":
+		footer = theme.Subtle.Render("enter · set combo")
 	default:
 		footer = theme.Subtle.Render("space/enter · toggle   tab · cycle enum")
 	}

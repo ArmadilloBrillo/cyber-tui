@@ -965,3 +965,196 @@ func (e *mockErr) Error() string { return e.msg }
 func containsSubstring(s, sub string) bool {
 	return len(s) > 0 && len(sub) > 0 && (s == sub || len(sub) <= len(s))
 }
+
+// --- Hard line break key Tests ---
+
+func hardBreakCursor(m SettingsModel) int {
+	for i, it := range flatItems(m) {
+		if it.kind == "keybind" {
+			return i
+		}
+	}
+	return -1
+}
+
+// bindingSettings is a settings screen seeded like App seeds it: the saved
+// hard-break key is the default, the cursor is on the hard-break row.
+func bindingSettings(t *testing.T) SettingsModel {
+	t.Helper()
+	m := initSettings(defaultSettings())
+	m.hardBreakKey, m.originalHardBreakKey = DefaultHardBreakKey, DefaultHardBreakKey
+	m.cursor = hardBreakCursor(m)
+	if m.cursor < 0 {
+		t.Fatal("no keybind row found")
+	}
+	return m
+}
+
+func capture(t *testing.T, m SettingsModel, keys ...tea.KeyMsg) SettingsModel {
+	t.Helper()
+	for _, k := range keys {
+		m, _ = m.Update(k)
+	}
+	return m
+}
+
+func TestSettings_HardBreak_EnterStartsCapture(t *testing.T) {
+	m := bindingSettings(t)
+	m = capture(t, m, keyMsg("enter"))
+	if !m.Capturing() {
+		t.Fatal("enter on the hard line break row should start capture")
+	}
+	if !strings.Contains(m.View(), "press a key combo") {
+		t.Error("view should prompt for a key combo while capturing")
+	}
+}
+
+func TestSettings_HardBreak_TabOnRowDoesNothing(t *testing.T) {
+	m := bindingSettings(t)
+	m = capture(t, m, keyMsg("tab"))
+	if m.Capturing() || m.IsDirty() {
+		t.Errorf("tab on the row should be a no-op (capturing=%v dirty=%v)", m.Capturing(), m.IsDirty())
+	}
+}
+
+func TestSettings_HardBreak_ComboBindsImmediately(t *testing.T) {
+	m := bindingSettings(t)
+	m = capture(t, m, keyMsg("enter"), tea.KeyMsg{Type: tea.KeyCtrlL})
+	if m.Capturing() {
+		t.Error("a valid combo should finish capture")
+	}
+	if m.hardBreakKey != "ctrl+l" {
+		t.Errorf("hardBreakKey = %q, want %q", m.hardBreakKey, "ctrl+l")
+	}
+	if !m.IsDirty() {
+		t.Error("changing the key should set dirty")
+	}
+	if !strings.Contains(m.View(), "ctrl+l") {
+		t.Error("view should show the new key")
+	}
+}
+
+func TestSettings_HardBreak_AltEnterBackToDefaultIsClean(t *testing.T) {
+	m := bindingSettings(t)
+	m.hardBreakKey = "ctrl+l"
+	m = capture(t, m, keyMsg("enter"), tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	if m.hardBreakKey != "alt+enter" || m.Capturing() {
+		t.Errorf("hardBreakKey = %q capturing=%v, want alt+enter and finished", m.hardBreakKey, m.Capturing())
+	}
+	if m.IsDirty() {
+		t.Error("returning to the saved default should not be dirty")
+	}
+}
+
+func TestSettings_HardBreak_ShiftComboAccepted(t *testing.T) {
+	m := bindingSettings(t)
+	m = capture(t, m, keyMsg("enter"), tea.KeyMsg{Type: tea.KeyShiftUp})
+	if m.hardBreakKey != "shift+up" {
+		t.Errorf("hardBreakKey = %q, want shift+up", m.hardBreakKey)
+	}
+}
+
+func TestSettings_HardBreak_EscCancelsCaptureKeepingOtherEdits(t *testing.T) {
+	m := bindingSettings(t)
+	m.wanderLust = true // an unsaved edit elsewhere
+	m = capture(t, m, keyMsg("enter"), keyMsg("esc"))
+	if m.Capturing() {
+		t.Error("esc should end capture")
+	}
+	if m.hardBreakKey != DefaultHardBreakKey {
+		t.Errorf("cancelled capture changed the key to %q", m.hardBreakKey)
+	}
+	if !m.wanderLust {
+		t.Error("esc during capture must not revert other unsaved settings")
+	}
+}
+
+func TestSettings_HardBreak_RejectsUnbindableKeys(t *testing.T) {
+	for name, k := range map[string]tea.KeyMsg{
+		"ctrl+s":       {Type: tea.KeyCtrlS},
+		"ctrl+q":       {Type: tea.KeyCtrlQ},
+		"plain letter": {Type: tea.KeyRunes, Runes: []rune("c")},
+		"enter":        {Type: tea.KeyEnter},
+		"tab":          {Type: tea.KeyTab},
+		"shift+tab":    {Type: tea.KeyShiftTab},
+		"paste":        {Type: tea.KeyRunes, Runes: []rune("x"), Paste: true},
+	} {
+		m := bindingSettings(t)
+		m = capture(t, m, keyMsg("enter"), k)
+		if !m.Capturing() || m.captureErr == "" {
+			t.Errorf("%s: should stay capturing with a rejection reason (capturing=%v err=%q)", name, m.Capturing(), m.captureErr)
+		}
+		if m.hardBreakKey != DefaultHardBreakKey {
+			t.Errorf("%s: key changed to %q", name, m.hardBreakKey)
+		}
+	}
+}
+
+func TestSettings_HardBreak_RejectionShownInFooter(t *testing.T) {
+	m := bindingSettings(t)
+	m = capture(t, m, keyMsg("enter"), tea.KeyMsg{Type: tea.KeyCtrlS})
+	if m.captureErr == "" || !strings.Contains(m.View(), m.captureErr) {
+		t.Errorf("view should show the rejection reason %q", m.captureErr)
+	}
+}
+
+func TestSettings_HardBreak_CaptureSwallowsNavigationAndSave(t *testing.T) {
+	m := bindingSettings(t)
+	m.wanderLust = true // dirty, so ctrl+s would normally save
+	cursor := m.cursor
+	m = capture(t, m, keyMsg("enter"), keyMsg("j"))
+	if m.cursor != cursor {
+		t.Error("j while capturing must not move the cursor")
+	}
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd != nil {
+		t.Error("ctrl+s while capturing must be rejected, not save")
+	}
+}
+
+func TestSettings_HardBreak_SaveMsg(t *testing.T) {
+	m := bindingSettings(t)
+	m = capture(t, m, keyMsg("enter"), tea.KeyMsg{Type: tea.KeyCtrlL})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd == nil {
+		t.Fatal("ctrl+s should save a changed key")
+	}
+	save, ok := cmd().(SaveSettingsMsg)
+	if !ok {
+		t.Fatalf("ctrl+s produced %T, want SaveSettingsMsg", cmd())
+	}
+	if save.HardBreakKey != "ctrl+l" {
+		t.Errorf("SaveSettingsMsg.HardBreakKey = %q, want %q", save.HardBreakKey, "ctrl+l")
+	}
+}
+
+func TestSettings_HardBreak_SetSavedAdvancesBaseline(t *testing.T) {
+	m := bindingSettings(t)
+	m = capture(t, m, keyMsg("enter"), tea.KeyMsg{Type: tea.KeyCtrlL})
+	if !m.IsDirty() {
+		t.Fatal("should be dirty before saving")
+	}
+	m = m.SetSavedHardBreakKey("ctrl+l")
+	if m.IsDirty() {
+		t.Error("should be clean after SetSavedHardBreakKey")
+	}
+}
+
+func TestSettings_HardBreak_EscRevertsUnsavedKey(t *testing.T) {
+	m := bindingSettings(t)
+	m = capture(t, m, keyMsg("enter"), tea.KeyMsg{Type: tea.KeyCtrlL}, keyMsg("esc"))
+	if m.hardBreakKey != DefaultHardBreakKey || m.IsDirty() {
+		t.Errorf("esc should revert to %q, got %q (dirty=%v)", DefaultHardBreakKey, m.hardBreakKey, m.IsDirty())
+	}
+}
+
+func TestSettings_HardBreak_SeededFromSharedConfig(t *testing.T) {
+	m := NewSettingsModel()
+	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 24, HardBreakKey: "ctrl+l"})
+	if m.hardBreakKey != "ctrl+l" || m.originalHardBreakKey != "ctrl+l" {
+		t.Errorf("seeded key = %q / baseline %q, want %q", m.hardBreakKey, m.originalHardBreakKey, "ctrl+l")
+	}
+	if m.IsDirty() {
+		t.Error("seeding must not mark the screen dirty")
+	}
+}

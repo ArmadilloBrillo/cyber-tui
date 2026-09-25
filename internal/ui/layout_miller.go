@@ -290,6 +290,8 @@ func (l MillerLayout) HasFocusedInput(a App) bool {
 		return a.journal.ComposeActive()
 	case screenSearch:
 		return a.search.InputFocused()
+	case screenSettings:
+		return a.settingsScreen.Capturing()
 	}
 	return false
 }

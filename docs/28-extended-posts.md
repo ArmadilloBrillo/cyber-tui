@@ -55,7 +55,7 @@ The compose overlay now stacks: content → title → topics → toggle line.
 
 ### Submission
 
-`ctrl+s` or `alt+enter` (from any input in the overlay) submits with all fields. The title is trimmed of leading/trailing whitespace before submission.
+`ctrl+s` (from any input in the overlay) submits with all fields. The title is trimmed of leading/trailing whitespace before submission.
 
 ## Rendering
 

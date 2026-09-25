@@ -579,6 +579,8 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		return m, nil
 
 	case SharedConfigMsg:
+		m.compose = m.compose.SetHardBreakKey(msg.HardBreakKey)
+		m.editPanel = m.editPanel.SetHardBreakKey(msg.HardBreakKey)
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
 		m.inlineImagesEnabled = msg.InlineImagesEnabled

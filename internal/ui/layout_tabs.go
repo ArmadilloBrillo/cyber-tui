@@ -123,6 +123,8 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 		return a.journal.ComposeActive()
 	case screenSearch:
 		return a.search.InputFocused()
+	case screenSettings:
+		return a.settingsScreen.Capturing()
 	}
 	return false
 }
@@ -517,7 +519,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			localSection = section("feed (compose)", row("Enter", "paragraph"))
+			localSection = section("feed (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"))
 		} else {
 			localSection = section("feed",
 				row("p", "view profile"),
@@ -528,7 +530,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
-			localSection = section("post detail (compose)", row("Enter", "paragraph"))
+			localSection = section("post detail (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"))
 		} else {
 			localSection = section("post detail",
 				row("d", "delete own"),
@@ -559,7 +561,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		)
 	case screenJournal:
 		if a.journal.ComposeActive() {
-			localSection = section("journal (editing)", row("Enter", "paragraph"))
+			localSection = section("journal (editing)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"))
 		} else {
 			localSection = section("journal",
 				row("h", "revision history"),
@@ -569,7 +571,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		localSection = section("bookmarks")
 	case screenGuilds:
 		if a.guilds.ComposeActive() {
-			localSection = section("guilds (compose)", row("Enter", "paragraph"))
+			localSection = section("guilds (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"))
 		} else if a.guilds.IsBrowsingMembers() {
 			localSection = section("guilds (members)", row("enter", "view profile"))
 		} else if a.guilds.IsBrowsingGuild() {

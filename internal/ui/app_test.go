@@ -218,11 +218,63 @@ func TestActiveScreenHasFocusedInput_ChatroomsDefault(t *testing.T) {
 	}
 }
 
-func TestActiveScreenHasFocusedInput_SettingsAlwaysFalse(t *testing.T) {
+func TestActiveScreenHasFocusedInput_SettingsFalseUnlessCapturing(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenSettings
 	if a.activeScreenHasFocusedInput() {
-		t.Error("settings screen should never report a focused input — keyword editing happens in the popup, not inline")
+		t.Error("settings screen should not report a focused input outside key capture — keyword editing happens in the popup, not inline")
+	}
+}
+
+// capturingSettingsApp returns an App on the Settings screen with the hard
+// line break row selected and waiting for a keypress.
+func capturingSettingsApp(t *testing.T) App {
+	t.Helper()
+	a := loggedInApp()
+	a.active = screenSettings
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a = m.(App)
+	for i := 0; i < 60 && !strings.Contains(a.settingsScreen.View(), "enter · set combo"); i++ {
+		m, _ = a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		a = m.(App)
+	}
+	m, _ = a.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a = m.(App)
+	if !a.settingsScreen.Capturing() {
+		t.Fatal("setup: expected the hard line break row to be capturing")
+	}
+	return a
+}
+
+// While the hard-break row captures, global shortcuts such as ctrl+q must be
+// rejected as unbindable rather than quitting or opening pickers.
+func TestSettingsCapture_GlobalKeysDoNotFire(t *testing.T) {
+	for _, k := range []tea.KeyType{tea.KeyCtrlQ, tea.KeyCtrlO, tea.KeyCtrlT, tea.KeyCtrlG, tea.KeyCtrlJ, tea.KeyCtrlCloseBracket} {
+		a := capturingSettingsApp(t)
+		m, cmd := a.Update(tea.KeyMsg{Type: k})
+		got := m.(App)
+		if cmd != nil {
+			if _, quit := cmd().(tea.QuitMsg); quit {
+				t.Errorf("key %v quit the app during capture", k)
+			}
+		}
+		if !got.settingsScreen.Capturing() {
+			t.Errorf("key %v ended capture; it should have been rejected in place", k)
+		}
+		if got.iconPickerOpen || got.attachURLPromptOpen {
+			t.Errorf("key %v opened a picker or prompt during capture", k)
+		}
+	}
+}
+
+func TestSettingsCapture_CtrlCStillQuits(t *testing.T) {
+	a := capturingSettingsApp(t)
+	_, cmd := a.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c must still quit during capture")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("ctrl+c produced %T, want tea.QuitMsg", cmd())
 	}
 }
 
@@ -7280,4 +7332,17 @@ func TestHandleSettings_UpdateAvailableMsgShowsBanner(t *testing.T) {
 		t.Errorf("notifyText = %q, want it to mention v9.9.9", a.notifyText)
 	}
 	runCmd(t, cmd) // just confirm the expire-tick cmd doesn't panic
+}
+
+func TestHelpModal_ComposeShowsConfiguredHardBreakKey(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.hardBreakKey = "ctrl+l"
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "hi"})
+	a.postDetail, _ = a.postDetail.OpenCompose()
+
+	help := ansi.Strip(TabsLayout{}.renderHelpModal(a))
+	if !strings.Contains(help, "ctrl+l") || !strings.Contains(help, "line break") {
+		t.Errorf("help should list the configured hard-break key, got:\n%s", help)
+	}
 }

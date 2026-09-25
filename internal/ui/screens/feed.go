@@ -527,6 +527,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		return m, nil
 
 	case SharedConfigMsg:
+		m.panel = m.panel.SetHardBreakKey(msg.HardBreakKey)
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.defaultPublicPost = msg.Settings.DefaultPublicPost
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled

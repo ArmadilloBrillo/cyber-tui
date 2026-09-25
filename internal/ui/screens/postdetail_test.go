@@ -792,3 +792,35 @@ func TestPostDetail_ComposeSubmit_CarriesReplyAudioAttachment(t *testing.T) {
 		t.Errorf("expected the next reply to start with no attachment, got Attachment=%v", msg2.Attachment)
 	}
 }
+
+// TestPostDetail_HardBreakKey_FromSharedConfig: the configured key reaches
+// the reply box through SharedConfigMsg.
+func TestPostDetail_HardBreakKey_FromSharedConfig(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetPost(pdPost("p1"))
+	m, _ = m.Update(screens.SharedConfigMsg{HardBreakKey: "ctrl+l"})
+	m, _ = m.OpenCompose()
+
+	for _, msg := range []tea.Msg{
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")},
+		tea.KeyMsg{Type: tea.KeyCtrlL},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")},
+	} {
+		m, _ = m.Update(msg)
+	}
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd == nil {
+		t.Fatal("ctrl+s produced no command")
+	}
+	_, cmd = m.Update(cmd())
+	if cmd == nil {
+		t.Fatal("ComposeSubmitMsg produced no command")
+	}
+	sub, ok := cmd().(screens.SubmitReplyMsg)
+	if !ok {
+		t.Fatalf("submit produced %T, want SubmitReplyMsg", cmd())
+	}
+	if sub.Content != "a  \nb" {
+		t.Errorf("reply content = %q, want %q", sub.Content, "a  \nb")
+	}
+}

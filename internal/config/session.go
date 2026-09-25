@@ -152,6 +152,12 @@ type Config struct {
 	// can detect — see docs/46-image-modal-scale.md. Also adjustable live
 	// with +/- while the modal is open, for the current session only.
 	ImageScale float64 `json:"imageScale,omitempty"`
+
+	// HardBreakKey is the compose key that inserts a markdown hard line break,
+	// as a Bubble Tea key string with a ctrl, alt or shift modifier
+	// ("alt+enter", "ctrl+l"). Empty means the default. The value is validated
+	// where it is used, since the key rules live with the compose screens.
+	HardBreakKey string `json:"hardBreakKey,omitempty"`
 }
 
 // MinImageScale and MaxImageScale bound both the config value and live +/-
@@ -198,6 +204,15 @@ func (c Config) GetMaxThreadDepth() int {
 		return 3
 	}
 	return c.MaxThreadDepth
+}
+
+// GetHardBreakKey returns HardBreakKey, substituting the default
+// ("alt+enter") when the field is empty (absent from the config file).
+func (c Config) GetHardBreakKey() string {
+	if c.HardBreakKey == "" {
+		return "alt+enter"
+	}
+	return c.HardBreakKey
 }
 
 // DefaultPath returns the canonical path for the config file: ~/.cyber-tui.json.

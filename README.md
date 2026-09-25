@@ -169,6 +169,12 @@ You can add any of the following fields manually. Most are also editable live fr
 | `hideGlobeTab` | `false` | Hide the Globe tab from the tab bar and navigation |
 | `maxThreadDepth` | `3` | How many levels of reply nesting are visually indented in post detail |
 
+**Compose**
+
+| Field | Default | Description |
+|---|---|---|
+| `hardBreakKey` | `"alt+enter"` | Key that inserts a hard line break while writing a post or reply (Enter inserts a paragraph break). A key combo with ctrl, alt or shift, e.g. `"ctrl+l"` for terminals that intercept `alt+enter`. Also editable in Settings under "compose": Enter on the row, then press the combo |
+
 **Images** (config-file-only except `imageViewer`, which also has a Settings toggle)
 
 | Field | Default | Description |

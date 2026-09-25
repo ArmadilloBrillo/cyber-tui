@@ -646,7 +646,7 @@ Key methods: `SetSelf(user)`, `SetGuildMembers(usernames)`, `SetProfile(username
 Reusable multi-line text editor embedded in Feed, PostDetail, Profile, and C-Mail.
 
 - Built on `bubbles/textarea`
-- Enter inserts a paragraph break (`\n\n`); ctrl+s emits `ComposeSubmitMsg`; ESC emits `ComposeCancelMsg`
+- Enter inserts a paragraph break (`\n\n`); the configurable hard-break key (default alt+enter) inserts a hard line break (two spaces plus `\n`); ctrl+s emits `ComposeSubmitMsg`; ESC emits `ComposeCancelMsg`
 - Auto-expands from `composeMinLines=3` to `composeMaxLines=8` as content grows
 - Character limit and placeholder text are configurable per embedding screen
 - Active/inactive border styling (cyan when focused, dimmed otherwise)
@@ -787,6 +787,7 @@ Permissions: `0600` (owner read/write only)
 | `lastWandered` | string | `""` (= never) | ISO timestamp of last wander mode update |
 | `graphicsProtocol` | string | `""` (autodetect) | `"kitty"`, `"iterm2"`, `"sixel"`, or `"none"` — bypasses autodetection when it's unreliable (e.g. mintty/Git Bash). Also editable live from the Settings screen (nested under "image viewer", terminal-only) as `"auto"`/`"kitty"`/`"iterm2"`/`"sixel"` — `"none"` stays config-file-only. See `docs/41-graphics-protocol-override.md` |
 | `imageScale` | number | `0` (= `1.0`) | Multiplier on the fullscreen image modal's display size, relative to the image's own native (1:1 pixel) size — not the terminal window. Clamped to `[0.2, 2.0]`; upscaling past native resolution is allowed (only for the modal). Also live-adjustable with `+`/`-` while the modal is open (session-only, guaranteed at least a 1-cell step per press). See `docs/46-image-modal-scale.md` |
+| `hardBreakKey` | string | `""` (= `"alt+enter"`) | Compose key that inserts a markdown hard line break: one Bubble Tea key string with a ctrl, alt or shift modifier (e.g. `"ctrl+l"`). Validated by `screens.ValidateHardBreakKey`; an invalid value falls back to `alt+enter`. Editable from the Settings screen ("hard line break key", captured by keypress) |
 | `hideGlobeTab` | bool | `false` | Removes the Globe tab from the tab bar/nav sidebar, arrow-key cycling, and the `g l` leader chord. Editable from the Settings screen ("show globe tab", inverted) |
 
 ---
@@ -961,13 +962,18 @@ cycle), not a global shortcut.
 
 **Reply/inline compose** (`ComposeModel` — replies, guild/topic threads,
 CIRC/C-Mail messages): `enter` inserts a paragraph break (`\n\n`) rather than
-submitting — most terminals can't distinguish `shift+enter` from `enter`
-without the Kitty keyboard protocol, so there's no separate hard-line-break
-key.
+submitting. Most terminals can't distinguish `shift+enter` from `enter`
+without the Kitty keyboard protocol, so a hard line break has its own
+configurable key (default `alt+enter`) that inserts two trailing spaces plus a
+newline, which the website renders as `<br>`. The website folds a bare single
+newline into a space, so a bracketed paste has its single newlines converted to
+hard breaks (blank lines are kept, runs of blank lines collapse to one, fenced
+code blocks are left as pasted).
 
 | Key | Action |
 |---|---|
 | `enter` | Insert paragraph break |
+| `alt+enter` (configurable) | Insert hard line break |
 | `ctrl+s` | Submit |
 | `esc` | Cancel |
 
@@ -984,6 +990,15 @@ fields.
 | `esc` | Cancel |
 
 The panel stays open and populated between submit and outcome (`ctrl+s`/`ctrl+d`/`esc` inert, hint shows `… posting`); a failed publish reopens it with the fields intact so a rate-limited post isn't lost. Same for the Journal editor's `ctrl+p` publish.
+
+**Hard line break key.** Set in Settings under "compose" > "hard line break
+key": press `enter` on the row, then the combo. Every binding must include a
+modifier (ctrl, alt or shift) so plain typing is never affected. If the
+terminal intercepts `alt+enter`, bind another combo such as `ctrl+l`. While
+capturing, every key except `ctrl+c` goes to the settings row (`esc` cancels),
+and combos compose already uses are rejected with the reason: `ctrl+s`,
+`ctrl+d`, `ctrl+p`, `shift+tab`, the global `ctrl+o/q/t/]/g/j/left/right`, and
+the textarea's editing keys. Logic lives in `internal/ui/screens/hardbreak.go`.
 
 ### Icon Picker
 

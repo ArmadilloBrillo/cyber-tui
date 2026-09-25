@@ -66,6 +66,7 @@ type ComposeModel struct {
 	focused      bool // true = active border; false = dimmed border (topics input has focus)
 	width        int
 	contentLines int // current textarea height in lines, clamped [composeMinLines, composeMaxLines]
+	hardBreak    string
 }
 
 // NewComposeModel creates a ComposeModel. Width is set correctly when the first
@@ -85,6 +86,7 @@ func NewComposeModel(width int) ComposeModel {
 		textarea:     ta,
 		width:        width,
 		contentLines: composeMinLines,
+		hardBreak:    DefaultHardBreakKey,
 	}
 }
 
@@ -171,6 +173,13 @@ func (m ComposeModel) SetCharLimit(n int) ComposeModel {
 	return m
 }
 
+// SetHardBreakKey sets the key that inserts a hard line break. An
+// empty or invalid value falls back to the default.
+func (m ComposeModel) SetHardBreakKey(key string) ComposeModel {
+	m.hardBreak = resolveHardBreakKey(key)
+	return m
+}
+
 // SetWidth resizes the compose area to fit the new terminal width.
 func (m ComposeModel) SetWidth(w int) ComposeModel {
 	m.width = w
@@ -192,7 +201,7 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 
 	if km, ok := msg.(tea.KeyMsg); ok {
 		var keep bool
-		km, keep = filterAmbiguousKeyMsg(km)
+		km, keep = filterAmbiguousKeyMsg(convertPaste(km))
 		if !keep {
 			return m, nil
 		}
@@ -200,6 +209,10 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 	}
 
 	if key, ok := msg.(tea.KeyMsg); ok {
+		if key.String() == m.hardBreak {
+			m.textarea = insertHardBreak(m.textarea)
+			return m.recalcHeight(), nil
+		}
 		switch key.String() {
 		case "ctrl+s":
 			content := m.textarea.Value()
@@ -209,9 +222,8 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 		case "enter":
 			// Paragraph break: insert \n\n so the website renderer (GFM breaks: true)
 			// wraps this in <p> tags, matching the website's own Enter behaviour.
-			// Note: shift+enter cannot be distinguished from enter in most terminals
-			// without Kitty keyboard protocol, so hard line breaks (\n → <br>) are
-			// not supported unless the terminal negotiates Kitty.
+			// shift+enter cannot be told apart from enter without the Kitty keyboard
+			// protocol, so hard line breaks use the configurable hard-break key.
 			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			return m.recalcHeight(), nil
@@ -321,6 +333,7 @@ type PostComposePanel struct {
 	editing     bool // true when editing an existing post rather than creating one
 	width       int
 	bodyLines   int
+	hardBreak   string
 
 	// attachmentTouched distinguishes "never touched this session" from
 	// "explicitly cleared" so an edit submit can tell whether to send the
@@ -373,6 +386,7 @@ func NewPostComposePanel(width int) PostComposePanel {
 		textarea:    ta,
 		topicsInput: top,
 		bodyLines:   composeMinLines,
+		hardBreak:   DefaultHardBreakKey,
 	}
 	return m.SetWidth(width)
 }
@@ -605,12 +619,23 @@ func (m PostComposePanel) recalcBodyHeight() PostComposePanel {
 	return m
 }
 
+// SetHardBreakKey sets the key that inserts a hard line break in the body. An
+// empty or invalid value falls back to the default.
+func (m PostComposePanel) SetHardBreakKey(key string) PostComposePanel {
+	m.hardBreak = resolveHardBreakKey(key)
+	return m
+}
+
 // Update handles key events and routes them to the focused field.
 func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 	if !m.active {
 		return m, nil
 	}
 	if key, ok := msg.(tea.KeyMsg); ok {
+		if m.focus == postFieldBody && key.String() == m.hardBreak {
+			m.textarea = insertHardBreak(m.textarea)
+			return m.recalcBodyHeight(), nil
+		}
 		// While a submit is in flight the panel stays open and populated, but
 		// the keys that would start another one (or throw the work away) are
 		// inert until the App reports the outcome.
@@ -695,7 +720,7 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 				m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
 				return m.recalcBodyHeight(), nil
 			}
-			filtered, keep := filterAmbiguousKeyMsg(km)
+			filtered, keep := filterAmbiguousKeyMsg(convertPaste(km))
 			if !keep {
 				return m, nil
 			}
