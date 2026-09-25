@@ -165,7 +165,6 @@ var (
 	altEnter = tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
 	plainEnt = tea.KeyMsg{Type: tea.KeyEnter}
 	ctrlL    = tea.KeyMsg{Type: tea.KeyCtrlL}
-	keyEsc   = tea.KeyMsg{Type: tea.KeyEscape}
 )
 
 func openReply(t *testing.T, spec string) ComposeModel {
