@@ -1,9 +1,11 @@
 package screens
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func typeText(m KeywordEditorModel, s string) KeywordEditorModel {
@@ -93,6 +95,30 @@ func TestKeywordEditor_LettersDAndXTypeIntoAddRow(t *testing.T) {
 	}
 }
 
+func TestKeywordEditor_LettersJAndKTypeIntoAddRow(t *testing.T) {
+	m := NewKeywordEditorModel().Open([]string{"a"})
+	m = typeText(m, "jk")
+	if m.input.Value() != "jk" {
+		t.Errorf("input.Value() = %q, want %q (j/k must type on the add-row)", m.input.Value(), "jk")
+	}
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0 (j must not navigate on the add-row)", m.cursor)
+	}
+}
+
+func TestKeywordEditor_JAndKNavigateOnKeywordList(t *testing.T) {
+	m := NewKeywordEditorModel().Open([]string{"a", "b"})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.cursor != 2 {
+		t.Errorf("cursor = %d, want 2 after j", m.cursor)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.cursor != 1 {
+		t.Errorf("cursor = %d, want 1 after k", m.cursor)
+	}
+}
+
 func TestKeywordEditor_UpDownNavigatesAcrossAddRowAndKeywords(t *testing.T) {
 	m := NewKeywordEditorModel().Open([]string{"a", "b"})
 	if m.cursor != 0 {
@@ -136,5 +162,29 @@ func TestKeywordEditor_ScrollOffsetTracksCursorPastVisibleWindow(t *testing.T) {
 	lastIdx := len(keywords) - 1
 	if lastIdx < m.offset || lastIdx >= m.offset+keywordEditorVisibleRows {
 		t.Errorf("offset = %d, last keyword index %d not within the visible window", m.offset, lastIdx)
+	}
+}
+
+func TestKeywordEditor_ViewShowsScrollIndicatorsOnlyWhenScrollable(t *testing.T) {
+	short := NewKeywordEditorModel().Open([]string{"a", "b"}).View()
+	if strings.Contains(short, "more") {
+		t.Errorf("short list should show no scroll indicator:\n%s", short)
+	}
+
+	kws := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	m := NewKeywordEditorModel().Open(kws)
+	top := m.View()
+	if !strings.Contains(top, "▼ 2 more") || strings.Contains(top, "▲") {
+		t.Errorf("at top want only '▼ 2 more':\n%s", top)
+	}
+	for range kws {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	bottom := m.View()
+	if !strings.Contains(bottom, "▲ 2 more") || strings.Contains(bottom, "▼") {
+		t.Errorf("at bottom want only '▲ 2 more':\n%s", bottom)
+	}
+	if lipgloss.Height(top) != lipgloss.Height(bottom) {
+		t.Errorf("box height changed while scrolling: %d vs %d", lipgloss.Height(top), lipgloss.Height(bottom))
 	}
 }

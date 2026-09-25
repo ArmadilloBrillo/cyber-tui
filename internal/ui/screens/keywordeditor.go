@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -65,14 +66,25 @@ func (m KeywordEditorModel) ensureVisible() KeywordEditorModel {
 // (see App.handleKeywordEditorKey) — same split as PathPromptModel/
 // IconPickerModel between model-local keys and App-level dismissal/save.
 func (m KeywordEditorModel) Update(msg tea.KeyMsg) (KeywordEditorModel, tea.Cmd) {
-	switch msg.String() {
-	case "up", "k":
+	key := msg.String()
+	// j/k are vim aliases for down/up only on the keyword list; on the
+	// add-row they must reach the input like any other letter.
+	if m.cursor > 0 {
+		switch key {
+		case "k":
+			key = "up"
+		case "j":
+			key = "down"
+		}
+	}
+	switch key {
+	case "up":
 		if m.cursor > 0 {
 			m.cursor--
 			m = m.ensureVisible()
 		}
 		return m, nil
-	case "down", "j":
+	case "down":
 		if m.cursor < len(m.keywords) {
 			m.cursor++
 			m = m.ensureVisible()
@@ -138,6 +150,12 @@ func (m KeywordEditorModel) View() string {
 		rows = append(rows, theme.Subtle.Render("  (no keywords yet)"))
 	} else {
 		end := min(m.offset+keywordEditorVisibleRows, len(m.keywords))
+		// Reserve both indicator lines whenever the list scrolls so the box
+		// height stays constant as the offset changes.
+		scrolls := len(m.keywords) > keywordEditorVisibleRows
+		if scrolls {
+			rows = append(rows, scrollIndicator("▲", m.offset))
+		}
 		for i := m.offset; i < end; i++ {
 			if i+1 == m.cursor {
 				rows = append(rows, theme.Highlight.Render("▸ "+m.keywords[i]))
@@ -145,10 +163,20 @@ func (m KeywordEditorModel) View() string {
 				rows = append(rows, theme.Subtle.Render("  "+m.keywords[i]))
 			}
 		}
+		if scrolls {
+			rows = append(rows, scrollIndicator("▼", len(m.keywords)-end))
+		}
 	}
 
 	hint := theme.Subtle.Render("↑↓ select   enter add   d delete   ctrl+s save   esc cancel")
 	rows = append(rows, "", hint)
 
 	return theme.ActiveBorder.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
+}
+
+func scrollIndicator(arrow string, hidden int) string {
+	if hidden == 0 {
+		return ""
+	}
+	return theme.Subtle.Render(fmt.Sprintf("  %s %d more", arrow, hidden))
 }
