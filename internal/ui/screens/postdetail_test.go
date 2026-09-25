@@ -309,7 +309,7 @@ func TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack(t *testing.T) 
 	// Small pane so the post (image band + text) is taller than it —
 	// otherwise millerPageNav's reveal-above/below logic for tall items
 	// never engages.
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 15})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
 
 	post := pdPost("p1")
