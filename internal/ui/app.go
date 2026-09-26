@@ -1291,7 +1291,9 @@ func (a *App) handleKeys(msg tea.Msg) (*App, tea.Cmd, bool) {
 			a.search = a.search.FocusQuery()
 			return a, nil, true
 		}
-	case "ctrl+c", "q", "ctrl+q":
+	case "ctrl+c", "ctrl+q":
+		return a, tea.Quit, true
+	case "q":
 		if a.active != screenLogin {
 			return a, tea.Quit, true
 		}
