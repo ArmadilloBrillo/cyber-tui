@@ -317,13 +317,14 @@ const (
 	postFieldTopics
 	postFieldPublic
 	postFieldNSFW
+	postFieldBork
 	postFieldCount
 )
 
 // PostComposePanel is a unified single-box compose panel for new posts.
 // It combines title, body, and topics inputs with public/NSFW toggles
 // into a single bordered panel. Tab cycles through all fields; Space
-// toggles the public and NSFW checkboxes.
+// toggles the public, NSFW and bork checkboxes.
 type PostComposePanel struct {
 	titleInput  textinput.Model
 	slugInput   textinput.Model
@@ -332,6 +333,7 @@ type PostComposePanel struct {
 	slugError   string
 	isPublic    bool
 	isNSFW      bool
+	isBork      bool
 	focus       postField
 	active      bool
 	editing     bool // true when editing an existing post rather than creating one
@@ -405,6 +407,7 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.focus = postFieldTitle
 	m.isPublic = defaultPublic
 	m.isNSFW = false
+	m.isBork = false
 	m.titleInput.SetValue("")
 	m.slugInput.SetValue("")
 	m.slugError = ""
@@ -432,6 +435,7 @@ func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cm
 	m.focus = postFieldBody
 	m.isPublic = post.IsPublic
 	m.isNSFW = post.IsNSFW
+	m.isBork = false
 	m.titleInput.SetValue(post.Title)
 	m.slugInput.SetValue("")
 	m.slugError = ""
@@ -529,6 +533,7 @@ func (m PostComposePanel) SlugValue() string {
 func (m PostComposePanel) TopicsRaw() string { return m.topicsInput.Value() }
 func (m PostComposePanel) IsPublic() bool    { return m.isPublic }
 func (m PostComposePanel) IsNSFW() bool      { return m.isNSFW }
+func (m PostComposePanel) IsBork() bool      { return m.isBork }
 
 // PanelHeight returns the total terminal rows the panel renders:
 // 2 (border) + 1 (title row) + 1 (slug row) + 1 (sep) + bodyLines + 1 (sep) + 1 (topics row).
@@ -553,7 +558,7 @@ func (m PostComposePanel) SetWidth(w int) PostComposePanel {
 	}
 	const (
 		labelW   = 7  // "title  " or "topics " or "slug   "
-		togglesW = 22 // "  [x] public  [ ] nsfw"
+		togglesW = 33 // "  [x] public  [ ] nsfw  [ ] bork"
 		cursorW  = 1  // textinput.View() renders Width+1 (cursor always occupies one extra slot)
 	)
 	titleInputW := innerW - labelW - cursorW
@@ -598,7 +603,7 @@ func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
 		return m, m.textarea.Focus()
 	case postFieldTopics:
 		return m, m.topicsInput.Focus()
-	default: // postFieldPublic, postFieldNSFW
+	default: // postFieldPublic, postFieldNSFW, postFieldBork
 		return m, nil
 	}
 }
@@ -688,6 +693,9 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 				return m, nil
 			case postFieldNSFW:
 				m.isNSFW = !m.isNSFW
+				return m, nil
+			case postFieldBork:
+				m.isBork = !m.isBork
 				return m, nil
 			}
 		}
@@ -811,6 +819,10 @@ func (m PostComposePanel) View() string {
 	if m.isNSFW {
 		nsfwCheck = "[x]"
 	}
+	borkCheck := "[ ]"
+	if m.isBork {
+		borkCheck = "[x]"
+	}
 	pubStyle := inactive
 	if m.focus == postFieldPublic {
 		pubStyle = active
@@ -819,10 +831,15 @@ func (m PostComposePanel) View() string {
 	if m.focus == postFieldNSFW {
 		nsfwStyle = active
 	}
+	borkStyle := inactive
+	if m.focus == postFieldBork {
+		borkStyle = active
+	}
 	topicsRow := topicsStyle.Render("topics ") +
 		m.topicsInput.View() +
 		"  " + pubStyle.Render(pubCheck+" public") +
-		"  " + nsfwStyle.Render(nsfwCheck+" nsfw")
+		"  " + nsfwStyle.Render(nsfwCheck+" nsfw") +
+		"  " + borkStyle.Render(borkCheck+" bork")
 
 	rows := []string{titleRow}
 	if !m.editing {

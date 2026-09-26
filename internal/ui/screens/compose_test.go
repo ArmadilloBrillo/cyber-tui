@@ -148,6 +148,41 @@ func TestPostComposePanel_Open_ResetsAttachment(t *testing.T) {
 	}
 }
 
+func TestPostComposePanel_Bork_TabReachesToggleAndSpaceFlipsIt(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.Open(false)
+	m.focus = postFieldNSFW
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != postFieldBork {
+		t.Fatalf("focus after Tab from nsfw = %v, want postFieldBork", m.focus)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if !m.IsBork() {
+		t.Error("IsBork() = false after Space on the bork toggle, want true")
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "[x] bork") {
+		t.Errorf("expected a ticked bork box in the view, got: %q", view)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if m.IsBork() {
+		t.Error("IsBork() = true after a second Space, want false")
+	}
+}
+
+func TestPostComposePanel_Bork_ResetsOnOpenAndOpenForEdit(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m.isBork = true
+	m, _ = m.Open(false)
+	if m.IsBork() {
+		t.Error("IsBork() = true after Open(), want false")
+	}
+	m.isBork = true
+	m, _ = m.OpenForEdit(model.Post{Content: "hi"})
+	if m.IsBork() {
+		t.Error("IsBork() = true after OpenForEdit(), want false")
+	}
+}
+
 // TestPostComposePanel_PanelHeight_GrowsForPendingAudio guards the layout
 // math: a pending audio attachment adds exactly one row, the same as an
 // image attachment does, so App's viewport-height recalculation stays in

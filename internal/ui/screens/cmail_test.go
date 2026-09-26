@@ -281,6 +281,44 @@ func TestCMail_Send_CircOnlyCommandsRejected(t *testing.T) {
 	}
 }
 
+func TestCMail_Send_BorkRewritesBody(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.input.SetValue("/bork the nation")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a send command for /bork")
+	}
+	msg, ok := cmd().(SendCMailMsg)
+	if !ok {
+		t.Fatalf("expected SendCMailMsg, got %T", cmd())
+	}
+	if want := "zee nashun Bork Bork Bork!"; msg.Body != want {
+		t.Errorf("Body = %q, want %q", msg.Body, want)
+	}
+}
+
+func TestCMail_Send_BorkRejectsNothingOrCommand(t *testing.T) {
+	cases := []struct{ in, notice string }{
+		{"/bork", "/bork: nothing to send"},
+		{"/bork /me waves", "/bork: cannot wrap another command"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.in, func(t *testing.T) {
+			m := cmailInConversation(api.NewMockClient(), "c1")
+			m.input.SetValue(tt.in)
+
+			m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if cmd != nil {
+				t.Fatalf("expected no command for %q", tt.in)
+			}
+			if view := m.View(); !strings.Contains(view, tt.notice) {
+				t.Errorf("expected notice %q in the view, got: %q", tt.notice, view)
+			}
+		})
+	}
+}
+
 // TestCMail_Send_SpoilerCannotChain mirrors the same CIRC fix — /spoiler is
 // a known style but the server rejects it chained with any other style.
 func TestCMail_Send_SpoilerCannotChain(t *testing.T) {

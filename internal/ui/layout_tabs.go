@@ -508,7 +508,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			localSection = section("feed (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"))
+			localSection = section("feed (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"), row("tab, space", "tick public / nsfw / bork"))
 		} else {
 			localSection = section("feed",
 				row("p", "view profile"),
@@ -588,12 +588,16 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		localSection = section(t)
 	case screenChatrooms:
 		if a.chatrooms.IsShowingDetail() {
-			localSection = section("circ (room)")
+			localSection = section("circ (room)", row("/bork <text>", "speak like a swedish chef"))
 		} else {
 			localSection = section("circ")
 		}
 	case screenCMail:
-		localSection = section("c-mail")
+		if a.cmail.IsShowingDetail() {
+			localSection = section("c-mail", row("/bork <text>", "speak like a swedish chef"))
+		} else {
+			localSection = section("c-mail")
+		}
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left,

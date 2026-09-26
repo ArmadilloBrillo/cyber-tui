@@ -72,7 +72,7 @@ Prefer not to pipe to a shell? Download [`install.sh`](install.sh), read it, the
 - **Feed** — browse posts from people you follow; compose new posts with topics; open any post for threaded replies; edit or delete your own posts and replies
 - **Notifications** — reply, follow, poke, bookmark, and chat-mention alerts; mark individual or all as read; jump straight to the referenced post, guild thread, or chatroom
 - **C-Mail** — direct messages with live updates via Firebase RTDB (SSE), typing indicators, sent-line recall, and IRC-style slash commands
-- **CIRC** — public chatrooms with live presence (who's online, idle status), `@mention` completion, and the same slash-command set as C-Mail (`/me`, `/dice`, `/8ball`, `/fortune`, `/poke`, text-style commands, and more)
+- **CIRC** — public chatrooms with live presence (who's online, idle status), `@mention` completion, and the same slash-command set as C-Mail (`/me`, `/dice`, `/8ball`, `/fortune`, `/poke`, `/bork`, text-style commands, and more)
 - **Journal** — private notes visible only to you; create, edit, and delete notes; browse full revision history
 - **Bookmarks** — save and browse bookmarked posts and replies; remove bookmarks inline
 - **Topics** — browse all tags sorted by post count, drill into a topic feed, and mute topics you don't want to see anywhere in the app
