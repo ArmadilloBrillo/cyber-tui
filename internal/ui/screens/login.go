@@ -169,7 +169,7 @@ func (m LoginModel) View() string {
 		theme.Border.Render(m.inputs[1].View()),
 	)
 
-	hint := theme.Subtle.Render("tab · navigate   enter · confirm")
+	hint := theme.Subtle.Render("tab · navigate   enter · confirm   esc · quit")
 
 	var status string
 	switch {

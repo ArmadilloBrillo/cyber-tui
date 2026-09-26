@@ -405,6 +405,16 @@ func TestHandleKeys_Esc_QuitsOnLoginScreen(t *testing.T) {
 	}
 }
 
+func TestHandleKeys_CtrlC_QuitsOnLoginScreen(t *testing.T) {
+	for _, k := range []tea.KeyType{tea.KeyCtrlC, tea.KeyCtrlQ} {
+		a := newTestApp() // active == screenLogin
+		_, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: k})
+		if !consumed || cmd == nil {
+			t.Errorf("expected %v to quit on login screen (consumed=%v, cmd nil=%v)", k, consumed, cmd == nil)
+		}
+	}
+}
+
 func TestHandleKeys_Esc_NotConsumed_OffLoginScreen(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenProfile
