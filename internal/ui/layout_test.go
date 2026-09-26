@@ -17,12 +17,12 @@ import (
 
 func TestVisibleTabs_ExcludesHiddenSearch(t *testing.T) {
 	a := loggedInApp()
-	for _, t2 := range visibleTabs(a) {
+	for _, t2 := range visibleTabs(&a) {
 		if t2.s == screenSearch {
 			t.Error("expected screenSearch to be excluded from visibleTabs")
 		}
 	}
-	if got, want := len(visibleTabs(a)), len(menuTabs)-1; got != want {
+	if got, want := len(visibleTabs(&a)), len(menuTabs)-1; got != want {
 		t.Errorf("expected %d visible tabs (menuTabs minus the one hidden entry), got %d", want, got)
 	}
 }
@@ -30,12 +30,12 @@ func TestVisibleTabs_ExcludesHiddenSearch(t *testing.T) {
 func TestVisibleTabs_ExcludesGlobeWhenHidden(t *testing.T) {
 	a := loggedInApp()
 	a.showGlobeTab = false
-	for _, t2 := range visibleTabs(a) {
+	for _, t2 := range visibleTabs(&a) {
 		if t2.s == screenGlobe {
 			t.Error("expected screenGlobe to be excluded from visibleTabs when showGlobeTab is false")
 		}
 	}
-	if got, want := len(visibleTabs(a)), len(menuTabs)-2; got != want {
+	if got, want := len(visibleTabs(&a)), len(menuTabs)-2; got != want {
 		t.Errorf("expected %d visible tabs (menuTabs minus Search and Globe), got %d", want, got)
 	}
 }
@@ -45,7 +45,7 @@ func TestVisibleTabs_ExcludesGlobeWhenHidden(t *testing.T) {
 func TestRenderTabBar_DoesNotShowSearch(t *testing.T) {
 	a := loggedInApp()
 	a.width = 100
-	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	out := ansi.Strip(TabsLayout{}.renderTabBar(&a))
 	if strings.Contains(out, "search") {
 		t.Errorf("expected the tab bar to omit the hidden Search entry, got: %q", out)
 	}
@@ -58,7 +58,7 @@ func TestRenderTabBar_UnreadBadge_ShowsExactCount(t *testing.T) {
 	a.width = 100
 	a.polledUnreadCount = 3
 	a.polledUnreadCountExact = true
-	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	out := ansi.Strip(TabsLayout{}.renderTabBar(&a))
 	if !strings.Contains(out, "(3)") {
 		t.Errorf("expected exact unread badge (3), got: %q", out)
 	}
@@ -69,7 +69,7 @@ func TestRenderTabBar_UnreadBadge_ShowsCappedIndicator(t *testing.T) {
 	a.width = 100
 	a.polledUnreadCount = 100
 	a.polledUnreadCountExact = false
-	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	out := ansi.Strip(TabsLayout{}.renderTabBar(&a))
 	if !strings.Contains(out, "(99+)") {
 		t.Errorf("expected capped unread badge (99+), got: %q", out)
 	}
@@ -94,7 +94,7 @@ func TestRenderFeedPendingBar_ShowsLabelWhenPending(t *testing.T) {
 	a.feed = a.feed.SetPosts(nil, "")
 	a.feed = a.feed.SetPendingNew([]model.Post{{ID: "p1"}, {ID: "p2"}})
 
-	out := ansi.Strip(TabsLayout{}.renderFeedPendingBar(a))
+	out := ansi.Strip(TabsLayout{}.renderFeedPendingBar(&a))
 	if !strings.Contains(out, "load 2 new entries") {
 		t.Errorf("renderFeedPendingBar() = %q, want it to contain \"load 2 new entries\"", out)
 	}
@@ -103,13 +103,13 @@ func TestRenderFeedPendingBar_ShowsLabelWhenPending(t *testing.T) {
 func TestRenderFeedPendingBar_BlankWhenNoneOrNotOnFeed(t *testing.T) {
 	a := loggedInApp()
 	a.feed = a.feed.SetPosts(nil, "")
-	if out := (TabsLayout{}).renderFeedPendingBar(a); out != "" {
+	if out := (TabsLayout{}).renderFeedPendingBar(&a); out != "" {
 		t.Errorf("renderFeedPendingBar() = %q, want blank with nothing pending", out)
 	}
 
 	a.feed = a.feed.SetPendingNew([]model.Post{{ID: "p1"}})
 	a.active = screenNotifications
-	if out := (TabsLayout{}).renderFeedPendingBar(a); out != "" {
+	if out := (TabsLayout{}).renderFeedPendingBar(&a); out != "" {
 		t.Errorf("renderFeedPendingBar() = %q, want blank on a non-feed tab", out)
 	}
 }
@@ -166,7 +166,7 @@ func TestRenderNav_DoesNotShowSearch(t *testing.T) {
 func TestTabVisualState_Unselected(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	selected, detail := tabVisualState(a, screenCMail)
+	selected, detail := tabVisualState(&a, screenCMail)
 	if selected || detail {
 		t.Errorf("selected=%v detail=%v, want false,false for a tab that isn't active", selected, detail)
 	}
@@ -175,7 +175,7 @@ func TestTabVisualState_Unselected(t *testing.T) {
 func TestTabVisualState_SelectedListMode_NoDetail(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenFeed
-	selected, detail := tabVisualState(a, screenFeed)
+	selected, detail := tabVisualState(&a, screenFeed)
 	if !selected || detail {
 		t.Errorf("selected=%v detail=%v, want true,false for the active tab in its top-level view", selected, detail)
 	}
@@ -189,7 +189,7 @@ func TestTabVisualState_ChatroomsDetail(t *testing.T) {
 	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	a.chatrooms = cm
 
-	selected, detail := tabVisualState(a, screenChatrooms)
+	selected, detail := tabVisualState(&a, screenChatrooms)
 	if !selected || !detail {
 		t.Errorf("selected=%v detail=%v, want true,true with a room open", selected, detail)
 	}
@@ -205,7 +205,7 @@ func TestTabVisualState_CMailDetail(t *testing.T) {
 	a.cmail = cm
 	a.active = screenCMail
 
-	selected, detail := tabVisualState(a, screenCMail)
+	selected, detail := tabVisualState(&a, screenCMail)
 	if !selected || !detail {
 		t.Errorf("selected=%v detail=%v, want true,true with a conversation open", selected, detail)
 	}
@@ -218,7 +218,7 @@ func TestTabVisualState_GuildsBrowsingGuild(t *testing.T) {
 	gm, _ := a.guilds.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	a.guilds = gm
 
-	selected, detail := tabVisualState(a, screenGuilds)
+	selected, detail := tabVisualState(&a, screenGuilds)
 	if !selected || !detail {
 		t.Errorf("selected=%v detail=%v, want true,true while browsing a guild", selected, detail)
 	}
@@ -231,7 +231,7 @@ func TestTabVisualState_TopicsBrowsingTopic(t *testing.T) {
 	tm, _ := a.topics.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	a.topics = tm
 
-	selected, detail := tabVisualState(a, screenTopics)
+	selected, detail := tabVisualState(&a, screenTopics)
 	if !selected || !detail {
 		t.Errorf("selected=%v detail=%v, want true,true while browsing a topic", selected, detail)
 	}
@@ -249,7 +249,7 @@ func TestTabVisualState_ChatroomsDetail_PersistsWhenBackgrounded(t *testing.T) {
 
 	a, _ = activateScreen(a, screenFeed) // background Chatrooms
 
-	selected, detail := tabVisualState(a, screenChatrooms)
+	selected, detail := tabVisualState(&a, screenChatrooms)
 	if selected {
 		t.Error("expected Chatrooms to not be selected after switching to Feed")
 	}
@@ -267,7 +267,7 @@ func TestTabVisualState_GuildsBrowsing_PersistsWhenBackgrounded(t *testing.T) {
 
 	a.active = screenFeed // background Guilds
 
-	selected, detail := tabVisualState(a, screenGuilds)
+	selected, detail := tabVisualState(&a, screenGuilds)
 	if selected {
 		t.Error("expected Guilds to not be selected after switching to Feed")
 	}
@@ -285,7 +285,7 @@ func TestTabVisualState_TopicsBrowsing_PersistsWhenBackgrounded(t *testing.T) {
 
 	a.active = screenFeed // background Topics
 
-	selected, detail := tabVisualState(a, screenTopics)
+	selected, detail := tabVisualState(&a, screenTopics)
 	if selected {
 		t.Error("expected Topics to not be selected after switching to Feed")
 	}
@@ -303,12 +303,12 @@ func TestTabVisualState_TopicsBrowsing_ClearsOnEsc(t *testing.T) {
 	tm, _ = tm.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	a.topics = tm
 
-	if selected, detail := tabVisualState(a, screenTopics); !selected || detail {
+	if selected, detail := tabVisualState(&a, screenTopics); !selected || detail {
 		t.Errorf("selected=%v detail=%v, want true,false after esc back to the topic list", selected, detail)
 	}
 
 	a.active = screenFeed // background Topics after esc
-	if selected, detail := tabVisualState(a, screenTopics); selected || detail {
+	if selected, detail := tabVisualState(&a, screenTopics); selected || detail {
 		t.Errorf("selected=%v detail=%v, want false,false — esc should clear detail even once backgrounded", selected, detail)
 	}
 }
@@ -325,7 +325,7 @@ func TestTabVisualState_CMailDetail_PersistsWhenBackgrounded(t *testing.T) {
 
 	a.active = screenFeed // background C-Mail — its RTDB subscription stays live now
 
-	selected, detail := tabVisualState(a, screenCMail)
+	selected, detail := tabVisualState(&a, screenCMail)
 	if selected {
 		t.Error("expected C-Mail to not be selected after switching to Feed")
 	}
@@ -341,7 +341,7 @@ func TestTabVisualState_PostDetail_CreditsOriginTab(t *testing.T) {
 		a.postDetailReturn = origin
 		a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1"})
 
-		selected, detail := tabVisualState(a, origin)
+		selected, detail := tabVisualState(&a, origin)
 		if !selected || !detail {
 			t.Errorf("origin %v: selected=%v detail=%v, want true,true while PostDetail is open", origin, selected, detail)
 		}
@@ -351,7 +351,7 @@ func TestTabVisualState_PostDetail_CreditsOriginTab(t *testing.T) {
 		if origin == screenNotifications {
 			other = screenSettings
 		}
-		selected, detail = tabVisualState(a, other)
+		selected, detail = tabVisualState(&a, other)
 		if selected || detail {
 			t.Errorf("origin %v, other tab %v: selected=%v detail=%v, want false,false", origin, other, selected, detail)
 		}
@@ -366,7 +366,7 @@ func TestTabVisualState_PostDetail_PersistsWhenBackgrounded(t *testing.T) {
 
 	a.active = screenFeed // background PostDetail
 
-	selected, detail := tabVisualState(a, screenBookmarks)
+	selected, detail := tabVisualState(&a, screenBookmarks)
 	if selected {
 		t.Error("expected Bookmarks to not be selected after switching to Feed")
 	}
@@ -386,7 +386,7 @@ func TestRenderTabBar_ShowsDetailMarker(t *testing.T) {
 	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	a.chatrooms = cm
 
-	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	out := ansi.Strip(TabsLayout{}.renderTabBar(&a))
 	if !strings.Contains(out, "›") {
 		t.Errorf("expected a detail marker (›) in the tab bar with a room open, got: %q", out)
 	}
@@ -397,7 +397,7 @@ func TestRenderTabBar_NoDetailMarkerInListMode(t *testing.T) {
 	a.width = 100
 	a, _ = activateScreen(a, screenChatrooms)
 
-	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	out := ansi.Strip(TabsLayout{}.renderTabBar(&a))
 	if strings.Contains(out, "›") {
 		t.Errorf("expected no detail marker while Chatrooms is still in list mode, got: %q", out)
 	}
@@ -427,7 +427,7 @@ func TestRenderTabBar_ShowsDetailMarkerWhenBackgrounded(t *testing.T) {
 	a.chatrooms = cm
 	a, _ = activateScreen(a, screenFeed) // background Chatrooms
 
-	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	out := ansi.Strip(TabsLayout{}.renderTabBar(&a))
 	if !strings.Contains(out, "›") {
 		t.Errorf("expected a detail marker for the backgrounded room, got: %q", out)
 	}
@@ -444,7 +444,7 @@ func TestRenderTabBar_ShowsDetailMarkerForBackgroundedCMail(t *testing.T) {
 	a.cmail = cm
 	a.active = screenFeed // background C-Mail — the conversation stays open now
 
-	out := ansi.Strip(TabsLayout{}.renderTabBar(a))
+	out := ansi.Strip(TabsLayout{}.renderTabBar(&a))
 	if !strings.Contains(out, "›") {
 		t.Errorf("expected a detail marker for backgrounded C-Mail (its conversation genuinely stays open now), got: %q", out)
 	}
@@ -636,7 +636,7 @@ func TestCompositeOverlays_KittyCleanupFallsThroughToInlineImages(t *testing.T) 
 		inlineImageCache:  map[string]string{inlineImageCacheKey(slot, imgview.ProtocolKitty, nil): "\x1b_Gfake\x1b\\"},
 	}
 	l := fakeModalRenderer{slots: []screens.InlineImageSlot{slot}, rowOrigin: 5, colOrigin: 7}
-	out := compositeOverlays(l, a, strings.Repeat("x\n", 9)+"x")
+	out := compositeOverlays(l, &a, strings.Repeat("x\n", 9)+"x")
 
 	if !strings.Contains(out, imgview.DeleteKittyPlacement(kittyModalPlacementID)) {
 		t.Error("expected the Kitty modal placement delete in the composited output")
@@ -665,7 +665,7 @@ func TestCompositeOverlays_ImageModalOpen_StillDrawsInlineImagesBehindIt(t *test
 		inlineImageCache: map[string]string{inlineImageCacheKey(slot, imgview.ProtocolKitty, nil): "\x1b_Gfake\x1b\\"},
 	}
 	l := fakeModalRenderer{slots: []screens.InlineImageSlot{slot}, rowOrigin: 5, colOrigin: 7}
-	out := compositeOverlays(l, a, strings.Repeat("x\n", 9)+"x")
+	out := compositeOverlays(l, &a, strings.Repeat("x\n", 9)+"x")
 
 	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
 		t.Error("expected the inline image's cached escape sequence in the output even while the modal is open")
@@ -714,7 +714,7 @@ func TestCompositeOverlays_ImageModalCycle_ForcesPrevBoxRowsDirty(t *testing.T) 
 	prevYOff, prevH := rowRange(prevA)
 	curYOff, curH := rowRange(a)
 
-	out := compositeOverlays(TabsLayout{}, a, base)
+	out := compositeOverlays(TabsLayout{}, &a, base)
 
 	checked := 0
 	for r := prevYOff + 1; r <= prevYOff+prevH; r++ {
@@ -756,7 +756,7 @@ func TestCompositeOverlays_ImageModalCycle_SixelGetsFullRepaint(t *testing.T) {
 		imageModalCols:     20,
 	}
 
-	out := compositeOverlays(TabsLayout{}, a, base)
+	out := compositeOverlays(TabsLayout{}, &a, base)
 	if !strings.HasPrefix(out, "\x1b[2J\x1b[H") {
 		t.Errorf("expected a full-screen erase prepended to the frame, got %q", out)
 	}
@@ -966,7 +966,7 @@ func TestTabsLayoutView_InjectsInlineImages(t *testing.T) {
 	}
 	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol, nil): "\x1b_Gfake\x1b\\"}
 
-	out := (TabsLayout{}).View(a)
+	out := (TabsLayout{}).View(&a)
 	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
 		t.Errorf("expected TabsLayout.View to composite the cached inline image, got: %q", out)
 	}
@@ -995,7 +995,7 @@ func TestMillerLayoutView_InjectsInlineImages(t *testing.T) {
 	}
 	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol, nil): "\x1b_Gfake\x1b\\"}
 
-	out := (MillerLayout{}).View(a)
+	out := (MillerLayout{}).View(&a)
 	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
 		t.Errorf("expected MillerLayout.View to composite the cached inline image in the Feed detail pane, got: %q", out)
 	}

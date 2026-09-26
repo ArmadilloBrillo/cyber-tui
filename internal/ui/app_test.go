@@ -752,7 +752,7 @@ func TestHandleKeys_CtrlLeft_CyclesTabsWhileChatroomsInputFocused(t *testing.T) 
 	if !consumed {
 		t.Error("expected ctrl+left to be consumed even while chatrooms input is focused")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected ctrl+left to cycle to a different tab")
 	}
 }
@@ -764,7 +764,7 @@ func TestHandleKeys_CtrlRight_CyclesTabsWhileChatroomsInputFocused(t *testing.T)
 	if !consumed {
 		t.Error("expected ctrl+right to be consumed even while chatrooms input is focused")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected ctrl+right to cycle to a different tab")
 	}
 }
@@ -788,7 +788,7 @@ func TestHandleKeys_Left_CyclesTabs_WhileChatroomsInputFocusedAndComposeEmpty(t 
 	if !consumed {
 		t.Error("expected plain left arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain left arrow to cycle to a different tab")
 	}
 }
@@ -800,7 +800,7 @@ func TestHandleKeys_Right_CyclesTabs_WhileChatroomsInputFocusedAndComposeEmpty(t
 	if !consumed {
 		t.Error("expected plain right arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain right arrow to cycle to a different tab")
 	}
 }
@@ -880,7 +880,7 @@ func TestHandleKeys_Left_CyclesTabs_WhileCMailInputFocusedAndComposeEmpty(t *tes
 	if !consumed {
 		t.Error("expected plain left arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain left arrow to cycle to a different tab")
 	}
 }
@@ -892,7 +892,7 @@ func TestHandleKeys_Right_CyclesTabs_WhileCMailInputFocusedAndComposeEmpty(t *te
 	if !consumed {
 		t.Error("expected plain right arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain right arrow to cycle to a different tab")
 	}
 }
@@ -1252,7 +1252,7 @@ func TestHandleKeys_Left_CyclesTabs_FromPostDetail(t *testing.T) {
 	if !consumed {
 		t.Error("expected plain left arrow to be consumed (tab-cycle) from PostDetail")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain left arrow to cycle to a different tab")
 	}
 }
@@ -1264,7 +1264,7 @@ func TestHandleKeys_Right_CyclesTabs_FromPostDetail(t *testing.T) {
 	if !consumed {
 		t.Error("expected plain right arrow to be consumed (tab-cycle) from PostDetail")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain right arrow to cycle to a different tab")
 	}
 }
@@ -1513,7 +1513,7 @@ func hasHint(hints []hint, key string) bool {
 
 func TestScreenHints_ChatroomsDetail_NoHelpButHasCtrlO(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if hasHint(hints, "?") {
 		t.Error("expected no '?' hint in chatrooms detail mode — it's unreachable while the compose input is focused")
 	}
@@ -1526,7 +1526,7 @@ func TestScreenHints_ChatroomsList_StillHasHelp(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenChatrooms
 	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if !hasHint(hints, "?") {
 		t.Error("expected '?' hint in chatrooms list mode — no input is focused there")
 	}
@@ -1542,7 +1542,7 @@ func TestScreenHints_CMailDetail_NoHelpButHasCtrlO(t *testing.T) {
 	a.cmail = cm
 	a.active = screenCMail
 
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if hasHint(hints, "?") {
 		t.Error("expected no '?' hint in c-mail detail mode — it's unreachable while the compose input is focused")
 	}
@@ -1554,7 +1554,7 @@ func TestScreenHints_CMailDetail_NoHelpButHasCtrlO(t *testing.T) {
 func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenCMail
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if !hasHint(hints, "?") {
 		t.Error("expected '?' hint in c-mail list mode — no input is focused there")
 	}
@@ -1562,7 +1562,7 @@ func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
 
 func TestScreenHints_ChatroomsDetail_HasCtrlTwins(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+←→"} {
 		if !hasHint(hints, key) {
 			t.Errorf("expected a %q hint in chatrooms detail mode", key)
@@ -1583,7 +1583,7 @@ func TestScreenHints_CMailDetail_HasCtrlTwins(t *testing.T) {
 	a.cmail = cm
 	a.active = screenCMail
 
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+←→"} {
 		if !hasHint(hints, key) {
 			t.Errorf("expected a %q hint in c-mail detail mode", key)
@@ -1887,7 +1887,7 @@ func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) 
 	if !ok {
 		t.Fatal("expected urlPostLoadedMsg to be handled")
 	}
-	a = m
+	a = *m
 
 	if a.postDetail.PostID() != "p2" {
 		t.Fatalf("expected p2 open, got %q", a.postDetail.PostID())
@@ -1904,7 +1904,7 @@ func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) 
 	if !ok {
 		t.Fatal("expected BackToFeedMsg to be handled")
 	}
-	a = m
+	a = *m
 	if a.active != screenPostDetail {
 		t.Errorf("active = %v, want screenPostDetail (still nested)", a.active)
 	}
@@ -1923,7 +1923,7 @@ func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) 
 	if !ok {
 		t.Fatal("expected BackToFeedMsg to be handled")
 	}
-	a = m
+	a = *m
 	if a.active != screenFeed {
 		t.Errorf("active = %v, want screenFeed", a.active)
 	}
@@ -2170,7 +2170,7 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 	a := loggedInApp()
 	a.feedManualRefreshOnly = true
 
-	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		FeedManualRefreshOnly: false,
 		ImageViewer:           "terminal",
 	})
@@ -2212,7 +2212,7 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 func TestHandleTopics_SetMutedTopics_AppliesAndDebouncesSave(t *testing.T) {
 	a := loggedInApp()
 
-	a, cmd, ok := a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"crypto"}})
+	_, cmd, ok := a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"crypto"}})
 	if !ok {
 		t.Fatal("expected handleTopics to handle SetMutedTopicsMsg")
 	}
@@ -2240,7 +2240,7 @@ func TestHandleTopics_SetMutedTopics_AppliesAndDebouncesSave(t *testing.T) {
 	if !ok || res.err != nil {
 		t.Fatalf("expected a successful mutedTopicsSaveResultMsg, got %#v", c())
 	}
-	a, _, _ = a.handleTopics(res)
+	_, _, _ = a.handleTopics(res)
 	if len(a.mutedTopicsSaved) != 1 || a.mutedTopicsSaved[0] != "crypto" {
 		t.Errorf("mutedTopicsSaved = %v, want [crypto]", a.mutedTopicsSaved)
 	}
@@ -2270,10 +2270,10 @@ func TestHandleTopics_SetMutedTopics_RollsBackOnSaveFailure(t *testing.T) {
 	a.active = screenFeed
 	a.focus = focusMenu
 	// Login baseline: "news" is already muted and persisted.
-	a, _, _ = a.handleSettings(settingsLoadedMsg{settings: model.Settings{MutedTopics: []string{"news"}}})
+	_, _, _ = a.handleSettings(settingsLoadedMsg{settings: model.Settings{MutedTopics: []string{"news"}}})
 
 	// User mutes "crypto" too — optimistic.
-	a, _, _ = a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"news", "crypto"}})
+	_, _, _ = a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"news", "crypto"}})
 	if len(a.settings.MutedTopics) != 2 {
 		t.Fatalf("optimistic MutedTopics = %v, want [news crypto]", a.settings.MutedTopics)
 	}
@@ -2286,7 +2286,7 @@ func TestHandleTopics_SetMutedTopics_RollsBackOnSaveFailure(t *testing.T) {
 	}
 
 	seqBefore := a.mutedTopicsSaveSeq
-	a, cmd, ok := a.handleTopics(res)
+	_, cmd, ok := a.handleTopics(res)
 	if !ok {
 		t.Fatal("expected handleTopics to handle the failed result")
 	}
@@ -6089,7 +6089,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 	// The very first sync reports every slot as "revived" too (nothing was
 	// visible before), which is harmless: the caller's revive step just
 	// deletes from an empty pendingKittyDeletes map, a no-op.
-	a, ids1, toDelete1, _ := a.syncKittyPlacements(slots1)
+	ids1, toDelete1, _ := a.syncKittyPlacements(slots1)
 	if len(toDelete1) != 0 {
 		t.Errorf("expected no deletes on first sync, got %v", toDelete1)
 	}
@@ -6099,7 +6099,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 	}
 
 	// Same slots again: ids must stay stable, no deletes/revives.
-	a, ids2, toDelete2, revived2 := a.syncKittyPlacements(slots1)
+	ids2, toDelete2, revived2 := a.syncKittyPlacements(slots1)
 	if ids2["post:p1:0"] != id1 || ids2["post:p2:0"] != id2 {
 		t.Errorf("expected ids to stay stable across syncs, got %v", ids2)
 	}
@@ -6109,7 +6109,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 
 	// p1 scrolls out of view, p3 comes into view.
 	slots2 := []screens.InlineImageSlot{{Key: "post:p2:0"}, {Key: "post:p3:0"}}
-	a, ids3, toDelete3, revived3 := a.syncKittyPlacements(slots2)
+	ids3, toDelete3, revived3 := a.syncKittyPlacements(slots2)
 	if len(toDelete3) != 1 || toDelete3[0] != id1 {
 		t.Errorf("expected exactly p1's id (%d) to be reported for deletion, got %v", id1, toDelete3)
 	}
@@ -6129,7 +6129,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 	// inlineImageCacheKey) valid, and is reported as revived so the caller
 	// cancels its still-pending delete.
 	slots3 := []screens.InlineImageSlot{{Key: "post:p1:0"}, {Key: "post:p2:0"}, {Key: "post:p3:0"}}
-	_, ids4, toDelete4, revived4 := a.syncKittyPlacements(slots3)
+	ids4, toDelete4, revived4 := a.syncKittyPlacements(slots3)
 	if ids4["post:p1:0"] != id1 {
 		t.Errorf("expected p1 to be revived with its original id %d, got %d", id1, ids4["post:p1:0"])
 	}
@@ -6174,12 +6174,12 @@ func feedAppWithOneImage(t *testing.T) (a App, key string) {
 func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T) {
 	a, key := feedAppWithOneImage(t)
 
-	a, cmd := a.syncInlineImages()
+	cmd := a.syncInlineImages()
 	if cmd == nil || !a.inlineImageFetching[key] {
 		t.Fatal("setup: expected the first sync to schedule a fetch")
 	}
 
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
 	if _, failed := a.inlineImageFailedAt[key]; !failed {
 		t.Fatal("expected the failure to be recorded")
 	}
@@ -6187,14 +6187,14 @@ func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T
 		t.Error("expected the in-flight marker to be cleared after the failure")
 	}
 
-	a, _ = a.syncInlineImages()
+	a.syncInlineImages()
 	if a.inlineImageFetching[key] {
 		t.Error("expected syncInlineImages to skip refetching within the cooldown window")
 	}
 
 	// Backdate the failure past the cooldown and confirm it retries.
 	a.inlineImageFailedAt[key] = time.Now().Add(-inlineImageFailureCooldown - time.Second)
-	a, _ = a.syncInlineImages()
+	a.syncInlineImages()
 	if !a.inlineImageFetching[key] {
 		t.Error("expected syncInlineImages to retry once the cooldown has lapsed")
 	}
@@ -6208,12 +6208,12 @@ func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T
 func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 	a, key := feedAppWithOneImage(t)
 
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
 	if _, cached := a.inlineImageCache[key]; !cached {
 		t.Fatal("setup: expected the encode to be cached under the no-dither key")
 	}
 
-	a, cmd := a.syncInlineImages()
+	cmd := a.syncInlineImages()
 	if cmd != nil {
 		t.Fatal("setup: expected a cache hit (no fetch) before enabling dithering")
 	}
@@ -6221,7 +6221,7 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 	a.dithering = true
 	a.ditherSharpness = "sharp"
 
-	a, cmd = a.syncInlineImages()
+	cmd = a.syncInlineImages()
 	if cmd == nil {
 		t.Fatal("expected enabling dithering to invalidate the cached key and schedule a fresh fetch")
 	}
@@ -6239,12 +6239,12 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 // leave a stale cooldown blocking future retries after the URL recovers.
 func TestInlineImageFailureCooldown_ClearedBySubsequentSuccess(t *testing.T) {
 	a, key := feedAppWithOneImage(t)
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
 	if _, failed := a.inlineImageFailedAt[key]; !failed {
 		t.Fatal("setup: expected the failure to be recorded")
 	}
 
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
 	if _, failed := a.inlineImageFailedAt[key]; failed {
 		t.Error("expected the failure record to be cleared after a subsequent success")
 	}
@@ -6270,7 +6270,7 @@ func TestSyncInlineImages_DisablingClearsStaleKittyPlacements(t *testing.T) {
 		},
 	}
 
-	a, _ = a.syncInlineImages()
+	a.syncInlineImages()
 
 	if len(a.kittyVisibleKeys) != 0 {
 		t.Errorf("expected kittyVisibleKeys to be cleared, got %v", a.kittyVisibleKeys)
@@ -6308,7 +6308,8 @@ func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
 		inlineImages:            false, // canInlineImages() false: current slots stay empty, so the tracked entry above reads as stale
 		inlineImageVisibleRects: stale,
 	}
-	sixelOut, cmd := sixel.syncInlineImages()
+	sixelOut := sixel
+	cmd := sixelOut.syncInlineImages()
 	if cmd != nil {
 		t.Error("expected no cmd for Sixel — the repaint decision is made in View(), not queued here")
 	}
@@ -6324,7 +6325,8 @@ func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
 		inlineImages:            false,
 		inlineImageVisibleRects: stale,
 	}
-	itermOut, cmd := iterm.syncInlineImages()
+	itermOut := iterm
+	cmd = itermOut.syncInlineImages()
 	if cmd != nil {
 		t.Error("expected no cmd for a stale iTerm2 row — it relies on forceRowsDirty in View(), not a cmd")
 	}
@@ -6363,7 +6365,8 @@ func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 		},
 	}
 
-	a1, _ := a.syncInlineImages()
+	a1 := a
+	a1.syncInlineImages()
 	if !slices.Contains(a1.inlineImageStaleRows, 10) {
 		t.Fatalf("setup: expected row 10 stale after the first call, got %v", a1.inlineImageStaleRows)
 	}
@@ -6375,7 +6378,8 @@ func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 	a1.inlineImageVisibleRects = map[string]inlineImageRect{
 		"post:B:0": {Row: 20, Col: 1, Cols: 10, Rows: 4},
 	}
-	a2, _ := a1.syncInlineImages()
+	a2 := a1
+	a2.syncInlineImages()
 	if !slices.Contains(a2.inlineImageStaleRows, 10) {
 		t.Errorf("expected row 10 from the first call to survive into the second call's accumulated staleRows, got %v", a2.inlineImageStaleRows)
 	}
@@ -6386,14 +6390,16 @@ func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 	// A quiet call (nothing newly stale — a2.inlineImageVisibleRects is
 	// already {}) immediately afterward, well within inlineImageStaleGrace,
 	// must NOT clear the accumulated set yet.
-	a3, _ := a2.syncInlineImages()
+	a3 := a2
+	a3.syncInlineImages()
 	if len(a3.inlineImageStaleRows) == 0 {
 		t.Fatalf("expected accumulated staleRows to survive a quiet call within the grace period, got %v", a3.inlineImageStaleRows)
 	}
 
 	// Once the grace period has elapsed, the next quiet call clears it.
 	a3.inlineImageStaleSince = time.Now().Add(-inlineImageStaleGrace - time.Second)
-	a4, _ := a3.syncInlineImages()
+	a4 := a3
+	a4.syncInlineImages()
 	if len(a4.inlineImageStaleRows) != 0 {
 		t.Errorf("expected accumulated staleRows cleared after the grace period elapsed, got %v", a4.inlineImageStaleRows)
 	}
@@ -6420,7 +6426,8 @@ func TestSyncInlineImages_StaleRowsSurviveQuietTick(t *testing.T) {
 		},
 	}
 
-	a1, _ := a.syncInlineImages()
+	a1 := a
+	a1.syncInlineImages()
 	if len(a1.inlineImageStaleRows) == 0 {
 		t.Fatalf("setup: expected staleRows populated after the first call, got %v", a1.inlineImageStaleRows)
 	}
@@ -6428,7 +6435,8 @@ func TestSyncInlineImages_StaleRowsSurviveQuietTick(t *testing.T) {
 	// An unrelated quiet call — a1.inlineImageVisibleRects is already {},
 	// so this computes zero new staleRows, standing in for an unrelated
 	// background tick's Update firing before the resend has flushed.
-	a2, _ := a1.syncInlineImages()
+	a2 := a1
+	a2.syncInlineImages()
 	if !slices.Contains(a2.inlineImageStaleRows, 10) {
 		t.Errorf("expected row 10 to survive an unrelated quiet Update within the grace period, got %v", a2.inlineImageStaleRows)
 	}
@@ -7062,7 +7070,7 @@ func TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol(t *testing
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = "" // auto — the only way DetectProtocol() ever gets consulted
 
-	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		GraphicsProtocol: "", // unchanged
 		Dithering:        true,
 		ImageViewer:      "terminal",
@@ -7106,7 +7114,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 
 	var cmd1 tea.Cmd
 	var ok bool
-	a, cmd1, ok = a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd1, ok = a.handleSettings(screens.SaveSettingsMsg{
 		WanderLust:       true,
 		Timezone:         "UTC+2",
 		ImageViewer:      "terminal",
@@ -7117,7 +7125,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 	}
 
 	var cmd2 tea.Cmd
-	a, cmd2, ok = a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd2, ok = a.handleSettings(screens.SaveSettingsMsg{
 		WanderLust:       true,
 		Timezone:         "UTC+5:30",
 		MaxThreadDepth:   7,
@@ -7131,7 +7139,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 	// Second (newer) save completes first.
 	saved2 := cmd2().(settingsSavedMsg)
 	var diskCmd2 tea.Cmd
-	a, diskCmd2, ok = a.handleSettings(saved2)
+	_, diskCmd2, ok = a.handleSettings(saved2)
 	if !ok {
 		t.Fatal("expected settingsSavedMsg to be handled")
 	}
@@ -7142,7 +7150,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 
 	// First (now-stale) save completes afterward.
 	saved1 := cmd1().(settingsSavedMsg)
-	a, cmd, ok := a.handleSettings(saved1)
+	_, cmd, ok := a.handleSettings(saved1)
 	if !ok {
 		t.Fatal("expected stale settingsSavedMsg to still report handled=true")
 	}
@@ -7248,7 +7256,7 @@ func TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves(t *testing.T)
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = ""
 
-	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		GraphicsProtocol: "kitty", // changed
 		ImageViewer:      "terminal",
 	})
@@ -7321,7 +7329,7 @@ func TestCheckForUpdateCmd_SkipsEphemeralSession(t *testing.T) {
 func TestHandleSettings_UpdateAvailableMsgShowsBanner(t *testing.T) {
 	a := loggedInApp()
 
-	a, cmd, ok := a.handleSettings(updateAvailableMsg{tag: "v9.9.9", url: "https://example.com/releases/v9.9.9"})
+	_, cmd, ok := a.handleSettings(updateAvailableMsg{tag: "v9.9.9", url: "https://example.com/releases/v9.9.9"})
 	if !ok {
 		t.Fatal("handleSettings did not claim updateAvailableMsg")
 	}
@@ -7344,5 +7352,72 @@ func TestHelpModal_ComposeShowsConfiguredHardBreakKey(t *testing.T) {
 	help := ansi.Strip(TabsLayout{}.renderHelpModal(a))
 	if !strings.Contains(help, "ctrl+l") || !strings.Contains(help, "line break") {
 		t.Errorf("help should list the configured hard-break key, got:\n%s", help)
+	}
+}
+
+func TestHandleLogoAnim_SkipsScrambleWhileComposeOpen(t *testing.T) {
+	a := loggedInApp()
+	_, cmd, handled := a.handleLogoAnim(logoAnimTickMsg{gen: a.sessionGen})
+	if !handled || cmd == nil || a.logoPhase != logoPhaseScrambling {
+		t.Fatalf("setup: expected the scramble to start with no compose open, got handled=%v phase=%v", handled, a.logoPhase)
+	}
+
+	a = loggedInApp()
+	f, _ := a.feed.Update(keyMsg("n"))
+	a.feed = f
+	_, cmd, handled = a.handleLogoAnim(logoAnimTickMsg{gen: a.sessionGen})
+	if !handled {
+		t.Error("expected the tick to be consumed")
+	}
+	if a.logoPhase != logoPhaseIdle {
+		t.Errorf("expected the scramble not to start while the editor is open, got phase %v", a.logoPhase)
+	}
+	if cmd == nil {
+		t.Error("expected the idle timer to be re-armed so the animation resumes after the editor closes")
+	}
+}
+
+func TestRoot_MatchesValueUpdatePath(t *testing.T) {
+	var byValue tea.Model = loggedInApp()
+	root := NewRoot(loggedInApp())
+	var byRoot tea.Model = root
+
+	msgs := []tea.Msg{
+		tea.WindowSizeMsg{Width: 120, Height: 40},
+		keyMsg("n"),
+		keyMsg("h"),
+		keyMsg("i"),
+	}
+	for i, msg := range msgs {
+		byValue, _ = byValue.Update(msg)
+		var cmd tea.Cmd
+		byRoot, cmd = byRoot.Update(msg)
+		_ = cmd
+		if byRoot != tea.Model(root) {
+			t.Fatalf("msg %d: expected Root.Update to return the same *Root, not a copy", i)
+		}
+		if got, want := byRoot.View(), byValue.View(); got != want {
+			t.Fatalf("msg %d: Root.View differs from the value-path View", i)
+		}
+	}
+	if !root.app.feed.PanelActive() {
+		t.Error("expected the feed composer to be open after 'n'")
+	}
+}
+
+// The command runs on a background goroutine, so it must work on a snapshot of
+// the current user and never write through to the live App.
+func TestSaveProfileCmd_DoesNotMutateLiveApp(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "alice", Bio: "old"}
+
+	msg := a.saveProfileCmd(screens.SaveProfileMsg{Bio: "new"})()
+
+	if a.currentUser.Bio != "old" {
+		t.Errorf("expected the live App's Bio untouched by the command, got %q", a.currentUser.Bio)
+	}
+	loaded, ok := msg.(profileLoadedMsg)
+	if !ok || loaded.user.Bio != "new" || loaded.user.Username != "alice" {
+		t.Errorf("expected profileLoadedMsg carrying the updated user, got %#v", msg)
 	}
 }

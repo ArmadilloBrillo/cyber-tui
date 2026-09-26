@@ -57,7 +57,9 @@ func (l MillerLayout) activeCompactRenderer(a App) CompactListRenderer {
 	return nil
 }
 
-func (l MillerLayout) View(a App) string {
+func (l MillerLayout) View(a *App) string { return l.view(*a) }
+
+func (l MillerLayout) view(a App) string {
 	contentH := a.height - 1 - millerHeaderHeight // full height minus bottom bar and column header
 	contentW := a.width - millerSidebarWidth
 
@@ -116,7 +118,7 @@ func (l MillerLayout) View(a App) string {
 		base = lipgloss.JoinVertical(lipgloss.Left, hdrRow, mainRow, l.renderBottomBar(a))
 	}
 
-	return compositeOverlays(l, a, base)
+	return compositeOverlays(l, &a, base)
 }
 
 // InlineImageSlots returns the visible inline-image slots for whichever
@@ -262,7 +264,7 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 }
 
 // DelegateUpdate routes a tea.Msg to the currently active screen model.
-func (l MillerLayout) DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
+func (l MillerLayout) DelegateUpdate(msg tea.Msg, a *App) tea.Cmd {
 	return delegateScreenUpdate(msg, a)
 }
 
@@ -317,7 +319,7 @@ func (l MillerLayout) renderNav(a App) string {
 	navW := millerSidebarWidth - 1 // leave 1 col for the "│" separator
 
 	var rows []string
-	for _, t := range visibleTabs(a) {
+	for _, t := range visibleTabs(&a) {
 		badge := ""
 		if t.s == screenNotifications && a.polledUnreadCount > 0 {
 			badge = " ●" + notifBadgeText(a.polledUnreadCount, a.polledUnreadCountExact)
@@ -337,7 +339,7 @@ func (l MillerLayout) renderNav(a App) string {
 				badge = fmt.Sprintf(" ●%d", n)
 			}
 		}
-		selected, detail := tabVisualState(a, t.s)
+		selected, detail := tabVisualState(&a, t.s)
 		// ▷ (open) marks "one level deep" — a Circ room, Guilds/Topics
 		// browse, a C-Mail conversation, or a PostDetail opened from this
 		// tab (see tabVisualState) — vs. ▶ for selected-at-the-top-level, or
@@ -480,7 +482,7 @@ func (l MillerLayout) screenHints(a App) []hint {
 		}
 		return hints
 	default: // focusList
-		return append([]hint{{"h/←", "menu"}, {"→/↵", "preview"}}, TabsLayout{}.screenHints(a)...)
+		return append([]hint{{"h/←", "menu"}, {"→/↵", "preview"}}, TabsLayout{}.screenHints(&a)...)
 	}
 }
 
