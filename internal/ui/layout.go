@@ -84,28 +84,28 @@ type modalRenderer interface {
 // image injection — on top of base, in that fixed order. Called once as the
 // last line of each Layout's View(), so no implementation can skip a step
 // or return early partway through.
-func compositeOverlays(l modalRenderer, a App, base string) string {
+func compositeOverlays(l modalRenderer, a *App, base string) string {
 	switch {
 	case a.themePickerOpen:
-		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
+		return overlayCenter(base, l.renderThemePicker(*a), a.width, a.height)
 	case a.themeEditorOpen:
-		return overlayCenter(base, l.renderThemeEditor(a), a.width, a.height)
+		return overlayCenter(base, l.renderThemeEditor(*a), a.width, a.height)
 	case a.pathPromptOpen:
-		return overlayCenter(base, l.renderPathPrompt(a), a.width, a.height)
+		return overlayCenter(base, l.renderPathPrompt(*a), a.width, a.height)
 	case a.helpModalOpen:
-		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
+		return overlayCenter(base, l.renderHelpModal(*a), a.width, a.height)
 	case a.urlPickerOpen:
-		return overlayCenter(base, l.renderURLPicker(a), a.width, a.height)
+		return overlayCenter(base, l.renderURLPicker(*a), a.width, a.height)
 	case a.iconPickerOpen:
-		return overlayCenter(base, l.renderIconPicker(a), a.width, a.height)
+		return overlayCenter(base, l.renderIconPicker(*a), a.width, a.height)
 	case a.attachURLPromptOpen:
-		return overlayCenter(base, l.renderAttachURLPrompt(a), a.width, a.height)
+		return overlayCenter(base, l.renderAttachURLPrompt(*a), a.width, a.height)
 	case a.songPromptOpen:
-		return overlayCenter(base, l.renderSongPrompt(a), a.width, a.height)
+		return overlayCenter(base, l.renderSongPrompt(*a), a.width, a.height)
 	case a.keywordEditorOpen:
-		return overlayCenter(base, l.renderKeywordEditor(a), a.width, a.height)
+		return overlayCenter(base, l.renderKeywordEditor(*a), a.width, a.height)
 	}
-	slots, rowOrigin, colOrigin, _ := l.InlineImageSlots(a)
+	slots, rowOrigin, colOrigin, _ := l.InlineImageSlots(*a)
 	if a.imageModalOpen {
 		// Redraw inline-image thumbnails behind the modal before compositing
 		// it on top. Previously skipped entirely while the modal was open —
@@ -116,7 +116,7 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		// this fix). Harmless no-op for iTerm2/Kitty, which don't erase
 		// anything behind the modal.
 		if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 || len(a.inlineImageStaleRows) > 0 {
-			base = injectInlineImages(a, base, slots, rowOrigin, colOrigin)
+			base = injectInlineImages(*a, base, slots, rowOrigin, colOrigin)
 		}
 		cycled := a.imageModalPrevRows != 0 &&
 			(a.imageModalPrevRows != a.imageModalRows || a.imageModalPrevCols != a.imageModalCols)
@@ -137,7 +137,7 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 			// rather than a fixed marker for the same collision-proofing
 			// reason as injectInlineImages' stale-row resend — see its doc
 			// comment.
-			prevApp := a
+			prevApp := *a
 			prevApp.imageModalRows = a.imageModalPrevRows
 			prevApp.imageModalCols = a.imageModalPrevCols
 			prevModal := l.renderImageModal(prevApp)
@@ -163,7 +163,7 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 			// is needed rather than a fixed marker.
 			base = sixelFullRepaint(base, a.height, a.imageRepaintGen)
 		}
-		textModal := l.renderImageModal(a)
+		textModal := l.renderImageModal(*a)
 		composed := overlayCenter(base, textModal, a.width, a.height)
 		// Compute the same offsets overlayCenter used so we can position
 		// the image sequence inside the border without embedding it in the
@@ -217,7 +217,7 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		base = strings.Join(lines, "\n")
 	}
 	if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 || len(a.inlineImageStaleRows) > 0 {
-		return injectInlineImages(a, base, slots, rowOrigin, colOrigin)
+		return injectInlineImages(*a, base, slots, rowOrigin, colOrigin)
 	}
 	return base
 }
@@ -484,7 +484,7 @@ var menuTabs = []navTab{
 // visibleTabs returns the menuTabs entries shown on the tab bar/nav sidebar
 // and reachable by arrow-key cycling — i.e. everything except hidden entries
 // and, when the user has hidden it via Settings, Globe (a.showGlobeTab).
-func visibleTabs(a App) []navTab {
+func visibleTabs(a *App) []navTab {
 	out := make([]navTab, 0, len(menuTabs))
 	for _, t := range menuTabs {
 		if t.hidden {
@@ -515,7 +515,7 @@ func visibleTabs(a App) []navTab {
 // and a post opened via t stays open (PostDetailModel.HasPost) until closed
 // via Esc or re-navigating to t from PostDetail itself (activateScreen's
 // escape hatch).
-func tabVisualState(a App, t screen) (selected, detail bool) {
+func tabVisualState(a *App, t screen) (selected, detail bool) {
 	selected = a.active == t || (a.active == screenPostDetail && a.postDetailReturn == t)
 
 	switch t {
@@ -625,7 +625,7 @@ func tabIndexOf(a App) int {
 	if active == screenPostDetail {
 		active = a.postDetailReturn
 	}
-	for i, t := range visibleTabs(a) {
+	for i, t := range visibleTabs(&a) {
 		if t.s == active {
 			return i
 		}
@@ -820,7 +820,7 @@ func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 	if a.active == screenSearch {
 		return a, nil
 	}
-	tabs := visibleTabs(a)
+	tabs := visibleTabs(&a)
 	idx := (tabIndexOf(a) + delta + len(tabs)) % len(tabs)
 	return activateScreen(a, tabs[idx].s)
 }

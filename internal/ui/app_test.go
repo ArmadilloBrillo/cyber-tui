@@ -1513,7 +1513,7 @@ func hasHint(hints []hint, key string) bool {
 
 func TestScreenHints_ChatroomsDetail_NoHelpButHasCtrlO(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if hasHint(hints, "?") {
 		t.Error("expected no '?' hint in chatrooms detail mode — it's unreachable while the compose input is focused")
 	}
@@ -1526,7 +1526,7 @@ func TestScreenHints_ChatroomsList_StillHasHelp(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenChatrooms
 	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if !hasHint(hints, "?") {
 		t.Error("expected '?' hint in chatrooms list mode — no input is focused there")
 	}
@@ -1542,7 +1542,7 @@ func TestScreenHints_CMailDetail_NoHelpButHasCtrlO(t *testing.T) {
 	a.cmail = cm
 	a.active = screenCMail
 
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if hasHint(hints, "?") {
 		t.Error("expected no '?' hint in c-mail detail mode — it's unreachable while the compose input is focused")
 	}
@@ -1554,7 +1554,7 @@ func TestScreenHints_CMailDetail_NoHelpButHasCtrlO(t *testing.T) {
 func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenCMail
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if !hasHint(hints, "?") {
 		t.Error("expected '?' hint in c-mail list mode — no input is focused there")
 	}
@@ -1562,7 +1562,7 @@ func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
 
 func TestScreenHints_ChatroomsDetail_HasCtrlTwins(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+←→"} {
 		if !hasHint(hints, key) {
 			t.Errorf("expected a %q hint in chatrooms detail mode", key)
@@ -1583,7 +1583,7 @@ func TestScreenHints_CMailDetail_HasCtrlTwins(t *testing.T) {
 	a.cmail = cm
 	a.active = screenCMail
 
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+←→"} {
 		if !hasHint(hints, key) {
 			t.Errorf("expected a %q hint in c-mail detail mode", key)

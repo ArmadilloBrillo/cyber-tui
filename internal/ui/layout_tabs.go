@@ -36,14 +36,14 @@ func (l TabsLayout) NeedsCompactAutoFill(termHeight int) int { return 0 }
 // View renders the full terminal output for the tabs layout.
 func (l TabsLayout) View(a App) string {
 	contentHeight := a.height - theme.ChromeHeight
-	content := lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(l.renderActiveScreen(a))
+	content := lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(l.renderActiveScreen(&a))
 	base := lipgloss.JoinVertical(lipgloss.Left,
-		l.renderTabBar(a),
-		l.renderFeedPendingBar(a),
+		l.renderTabBar(&a),
+		l.renderFeedPendingBar(&a),
 		content,
-		l.renderBottomBar(a),
+		l.renderBottomBar(&a),
 	)
-	return compositeOverlays(l, a, base)
+	return compositeOverlays(l, &a, base)
 }
 
 // InlineImageSlots returns the active screen's visible inline-image slots and
@@ -136,7 +136,7 @@ func (l TabsLayout) ContentHeight(termHeight int) int { return termHeight }
 // not a side pane), so a modal can use the full terminal width.
 func (l TabsLayout) ModalMaxWidth(termWidth int) int { return termWidth }
 
-func (l TabsLayout) renderTabBar(a App) string {
+func (l TabsLayout) renderTabBar(a *App) string {
 	var tabs string
 	for _, t := range visibleTabs(a) {
 		badge := ""
@@ -195,7 +195,7 @@ func (l TabsLayout) renderTabBar(a App) string {
 // the "N new entries" message while posts are staged from the background
 // feed poll. Hidden during an active refresh so it doesn't sit alongside the
 // viewport's own "fetching new posts..." message for that instant.
-func (l TabsLayout) renderFeedPendingBar(a App) string {
+func (l TabsLayout) renderFeedPendingBar(a *App) string {
 	if a.active != screenFeed || a.feed.IsRefreshing() {
 		return ""
 	}
@@ -205,7 +205,7 @@ func (l TabsLayout) renderFeedPendingBar(a App) string {
 	return ""
 }
 
-func (l TabsLayout) renderActiveScreen(a App) string {
+func (l TabsLayout) renderActiveScreen(a *App) string {
 	switch a.active {
 	case screenFeed:
 		return a.feed.View()
@@ -237,14 +237,14 @@ func (l TabsLayout) renderActiveScreen(a App) string {
 	return ""
 }
 
-func (l TabsLayout) renderBottomBar(a App) string {
+func (l TabsLayout) renderBottomBar(a *App) string {
 	if a.notifyText == "" {
 		return l.renderStatusBar(a)
 	}
 	return l.renderNotification(a)
 }
 
-func (l TabsLayout) renderNotification(a App) string {
+func (l TabsLayout) renderNotification(a *App) string {
 	color := theme.ColorGreen
 	prefix := "✓ "
 	switch a.notifyLevel {
@@ -267,7 +267,7 @@ func (l TabsLayout) renderNotification(a App) string {
 		Render(prefix + text + suffix)
 }
 
-func (l TabsLayout) renderStatusBar(a App) string {
+func (l TabsLayout) renderStatusBar(a *App) string {
 	user := sbStyle().Foreground(theme.ColorCyan).Bold(true)
 	meta := sbStyle().Foreground(theme.ColorMeta)
 	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
@@ -330,7 +330,7 @@ func (l TabsLayout) renderStatusBar(a App) string {
 	return bg.Padding(0, 1).Render(bar)
 }
 
-func (l TabsLayout) screenHints(a App) []hint {
+func (l TabsLayout) screenHints(a *App) []hint {
 	more := hint{"?", "more"}
 	switch a.active {
 	case screenFeed:
@@ -510,7 +510,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)
 
 	section := func(title string, extra ...string) string {
-		parts := append([]string{sectionStyle.Render(title)}, hintRows(l.screenHints(a), row)...)
+		parts := append([]string{sectionStyle.Render(title)}, hintRows(l.screenHints(&a), row)...)
 		parts = append(parts, extra...)
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
