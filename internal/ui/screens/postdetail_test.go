@@ -299,7 +299,7 @@ func TestPostDetail_VisibleInlineImages_MultipleImagesInOnePost(t *testing.T) {
 // failing to reappear on real iTerm2 — confirmed live to reproduce via
 // pure in-screen scrolling alone, no tab switch involved, and confirmed
 // here as a genuine viewport-positioning bug, not a redraw/timing issue:
-// millerPageNav's revealAbove (miller_pager.go) bottom-aligned the
+// pageNav's revealAbove (pager.go) bottom-aligned the
 // viewport when scrolling back onto an item taller than the pane, leaving
 // its top — where an image band usually sits — still scrolled out of view.
 // Fixed by top-aligning revealAbove unconditionally, matching revealBelow.
@@ -307,7 +307,7 @@ func TestPostDetail_VisibleInlineImages_MultipleImagesInOnePost(t *testing.T) {
 func TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack(t *testing.T) {
 	m := initPostDetail()
 	// Small pane so the post (image band + text) is taller than it —
-	// otherwise millerPageNav's reveal-above/below logic for tall items
+	// otherwise pageNav's reveal-above/below logic for tall items
 	// never engages.
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
@@ -327,7 +327,7 @@ func TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack(t *testing.T) 
 
 	// Press down enough times to move selection off the post and onto a
 	// reply (scrolling the image out of view). The post is taller than the
-	// pane by design (see above), so millerPageNav scrolls one line at a
+	// pane by design (see above), so pageNav scrolls one line at a
 	// time before it crosses into the reply — needs many presses, not few.
 	for i := 0; i < 60 && m.SelectedReplyID() == ""; i++ {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})

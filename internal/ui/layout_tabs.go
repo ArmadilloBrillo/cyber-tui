@@ -31,8 +31,6 @@ func hintRows(hints []hint, rowFn func(string, string) string) []string {
 // TabsLayout implements the classic horizontal tab bar layout.
 type TabsLayout struct{}
 
-func (l TabsLayout) NeedsCompactAutoFill(termHeight int) int { return 0 }
-
 // View renders the full terminal output for the tabs layout.
 func (l TabsLayout) View(a *App) string {
 	contentHeight := a.height - theme.ChromeHeight
@@ -73,20 +71,15 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 		// now it cycles the same as everywhere else (tabIndexOf anchors on
 		// postDetailReturn, so this never lands back on the origin tab in one
 		// step; see activateScreen's escape hatch for how that's reached).
-		if a.focus == focusMenu {
-			var cmd tea.Cmd
-			a, cmd = navigateTabBy(a, -1)
-			return a, cmd, true
-		}
+		var cmd tea.Cmd
+		a, cmd = navigateTabBy(a, -1)
+		return a, cmd, true
 	case "right":
-		if a.focus == focusMenu {
-			var cmd tea.Cmd
-			a, cmd = navigateTabBy(a, +1)
-			return a, cmd, true
-		}
+		var cmd tea.Cmd
+		a, cmd = navigateTabBy(a, +1)
+		return a, cmd, true
 	case "ctrl+left":
-		// Unlike plain "left", not gated on focus == focusMenu: this is the
-		// ctrl-twin that reaches tab-cycling from CMail/CIRC detail mode,
+		// The ctrl-twin that reaches tab-cycling from CMail/CIRC detail mode,
 		// where the compose input holds focus for the entire view.
 		var cmd tea.Cmd
 		a, cmd = navigateTabBy(a, -1)
@@ -131,10 +124,6 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 
 func (l TabsLayout) ContentWidth(termWidth int) int   { return termWidth }
 func (l TabsLayout) ContentHeight(termHeight int) int { return termHeight }
-
-// ModalMaxWidth: no side chrome in this layout (the tab bar is a top row,
-// not a side pane), so a modal can use the full terminal width.
-func (l TabsLayout) ModalMaxWidth(termWidth int) int { return termWidth }
 
 func (l TabsLayout) renderTabBar(a *App) string {
 	var tabs string

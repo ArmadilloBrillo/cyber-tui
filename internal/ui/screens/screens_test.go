@@ -755,7 +755,7 @@ func TestChatrooms_Up_WhileBrowsingAtOldest_StillTriggersHistoryLoad(t *testing.
 // string, but wrong when applied per-message and summed, since it counts
 // each message's own trailing "\n" as a phantom extra line. The summed
 // (inflated) offsets desynced from the viewport's real line count, so
-// millerPageNav kept computing a YOffset the viewport's own maxYOffset()
+// pageNav kept computing a YOffset the viewport's own maxYOffset()
 // clamped right back down — an invisible deadlock.
 func TestChatrooms_DownThroughManyMessages_ReachesNewestAndExits(t *testing.T) {
 	m := screens.NewChatroomsModel("neuromancer", nil)

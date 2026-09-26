@@ -75,17 +75,6 @@ func TestRenderTabBar_UnreadBadge_ShowsCappedIndicator(t *testing.T) {
 	}
 }
 
-func TestRenderNav_UnreadBadge_ShowsCappedIndicator(t *testing.T) {
-	a := loggedInApp()
-	a.width = 100
-	a.polledUnreadCount = 100
-	a.polledUnreadCountExact = false
-	out := ansi.Strip(MillerLayout{}.renderNav(a))
-	if !strings.Contains(out, "●99+") {
-		t.Errorf("expected capped unread badge ●99+, got: %q", out)
-	}
-}
-
 // --- renderFeedPendingBar: background-poll indicator lives in the separator
 // row, not pushed into the feed viewport (see FeedModel.buildContent) ---
 
@@ -135,14 +124,6 @@ func TestActivateScreen_Notifications_NoRefetchWhenAlreadyLoaded(t *testing.T) {
 	_, cmd := activateScreen(a, screenNotifications)
 	if cmd != nil {
 		t.Error("expected no refetch when notifications are already loaded, even without pagination")
-	}
-}
-
-func TestRenderNav_DoesNotShowSearch(t *testing.T) {
-	a := loggedInApp()
-	out := ansi.Strip(MillerLayout{}.renderNav(a))
-	if strings.Contains(out, "search") {
-		t.Errorf("expected the nav sidebar to omit the hidden Search entry, got: %q", out)
 	}
 }
 
@@ -403,20 +384,6 @@ func TestRenderTabBar_NoDetailMarkerInListMode(t *testing.T) {
 	}
 }
 
-func TestRenderNav_ShowsOpenMarkerForDetail(t *testing.T) {
-	a := loggedInApp()
-	a, _ = activateScreen(a, screenChatrooms)
-	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
-	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	a.chatrooms = cm
-
-	out := ansi.Strip(MillerLayout{}.renderNav(a))
-	if !strings.Contains(out, "▷") {
-		t.Errorf("expected the open (▷) marker in the nav sidebar with a room open, got: %q", out)
-	}
-}
-
 func TestRenderTabBar_ShowsDetailMarkerWhenBackgrounded(t *testing.T) {
 	a := loggedInApp()
 	a.width = 100
@@ -447,21 +414,6 @@ func TestRenderTabBar_ShowsDetailMarkerForBackgroundedCMail(t *testing.T) {
 	out := ansi.Strip(TabsLayout{}.renderTabBar(&a))
 	if !strings.Contains(out, "›") {
 		t.Errorf("expected a detail marker for backgrounded C-Mail (its conversation genuinely stays open now), got: %q", out)
-	}
-}
-
-func TestRenderNav_ShowsOpenMarkerWhenBackgrounded(t *testing.T) {
-	a := loggedInApp()
-	a, _ = activateScreen(a, screenChatrooms)
-	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
-	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	a.chatrooms = cm
-	a, _ = activateScreen(a, screenFeed) // background Chatrooms
-
-	out := ansi.Strip(MillerLayout{}.renderNav(a))
-	if !strings.Contains(out, "▷") {
-		t.Errorf("expected the open (▷) marker in the nav sidebar for the backgrounded room, got: %q", out)
 	}
 }
 
@@ -580,26 +532,12 @@ func TestSplitMnemonic_NotFound(t *testing.T) {
 	}
 }
 
-// --- layoutFromName ---
-
-func TestLayoutFromName(t *testing.T) {
-	if _, ok := layoutFromName("miller").(MillerLayout); !ok {
-		t.Errorf("expected layoutFromName(%q) to return MillerLayout", "miller")
-	}
-	for _, name := range []string{"", "tabs", "unknown"} {
-		if _, ok := layoutFromName(name).(TabsLayout); !ok {
-			t.Errorf("expected layoutFromName(%q) to return TabsLayout", name)
-		}
-	}
-}
-
 // --- compositeOverlays ---
 
 // fakeModalRenderer is a minimal modalRenderer test double so
 // compositeOverlays' shared logic can be tested in isolation, without a full
-// TabsLayout/MillerLayout render pipeline — see TestTabsLayoutView_ and
-// TestMillerLayoutView_InjectsInlineImages below for the real-pipeline
-// smoke tests that exercise each layout's own InlineImageSlots.
+// TabsLayout render pipeline — see TestTabsLayoutView_InjectsInlineImages
+// below for the real-pipeline smoke test.
 type fakeModalRenderer struct {
 	slots                []screens.InlineImageSlot
 	rowOrigin, colOrigin int
@@ -620,12 +558,12 @@ func (f fakeModalRenderer) InlineImageSlots(a App) ([]screens.InlineImageSlot, i
 }
 
 // TestCompositeOverlays_KittyCleanupFallsThroughToInlineImages is a
-// regression test for the bug MillerLayout originally shipped with: the
+// regression test for a bug the since-removed Miller layout shipped with: the
 // Kitty placement-cleanup block must fall through to inline-image
 // injection in the same frame, not return early — an early return there
 // silently drops all inline-image rendering for the rest of the session
 // (see app.go's imageNeedsCleanup doc comment). Since compositeOverlays is
-// now the one place this logic lives, this test alone covers both layouts.
+// now the one place this logic lives, this test covers it.
 func TestCompositeOverlays_KittyCleanupFallsThroughToInlineImages(t *testing.T) {
 	slot := screens.InlineImageSlot{Key: "post:p1:0", URL: "https://example.com/a.png", Row: 1, ColIndent: 2}
 	a := App{
@@ -969,110 +907,5 @@ func TestTabsLayoutView_InjectsInlineImages(t *testing.T) {
 	out := (TabsLayout{}).View(&a)
 	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
 		t.Errorf("expected TabsLayout.View to composite the cached inline image, got: %q", out)
-	}
-}
-
-// TestMillerLayoutView_InjectsInlineImages is the same golden-output check
-// for MillerLayout's Feed detail pane specifically — the exact code path
-// that silently rendered nothing before this branch (MillerLayout never
-// called injectInlineImages at all, and Feed's detail pane has no other
-// source of truth for its rendering width than MillerLayout.InlineImageSlots
-// computing it fresh, so this exercises that whole chain end to end).
-func TestMillerLayoutView_InjectsInlineImages(t *testing.T) {
-	a := loggedInApp()
-	a.width, a.height = 100, 40
-	a.graphicsProtocol = imgview.ProtocolKitty
-	a.feed, _ = a.feed.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-	a.feed, _ = a.feed.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
-	a.feed = a.feed.SetPosts([]model.Post{
-		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
-	}, "")
-	a.feed, _ = a.feed.Update(screens.FeedDetailRepliesMsg{PostID: "p1", Replies: nil})
-
-	slots, _, _, _ := MillerLayout{}.InlineImageSlots(a)
-	if len(slots) != 1 {
-		t.Fatalf("setup: expected 1 slot from Miller's Feed detail pane, got %d: %+v", len(slots), slots)
-	}
-	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol, nil): "\x1b_Gfake\x1b\\"}
-
-	out := (MillerLayout{}).View(&a)
-	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
-		t.Errorf("expected MillerLayout.View to composite the cached inline image in the Feed detail pane, got: %q", out)
-	}
-}
-
-// --- MillerLayout.HasFocusedInput: backgrounded Circ/CMail room ---
-
-// TestMillerHasFocusedInput_ChatroomsDoesNotTrapNavAtFocusMenu is a
-// regression test: a Circ room stays in chatroomModeDetail (so
-// ChatroomsModel.InputFocused() stays true) for as long as it's open, even
-// after the user has pressed "left" to move Miller's own focus away to the
-// spaces column. Before this fix, HasFocusedInput only checked
-// InputFocused(), so every subsequent j/k/up/down was swallowed into the
-// backgrounded room's Update instead of reaching HandleNav's focusMenu case
-// (navigateTabBy) — the room was reachable but effectively un-leavable via
-// vertical nav.
-func TestMillerHasFocusedInput_ChatroomsDoesNotTrapNavAtFocusMenu(t *testing.T) {
-	a := loggedInApp()
-	a.active = screenChatrooms
-	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{Slug: "r1", Name: "r1"}})
-	a.chatrooms, _ = a.chatrooms.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if !a.chatrooms.InputFocused() {
-		t.Fatal("setup: expected the room to be open (InputFocused true)")
-	}
-
-	a.focus = focusList
-	if !(MillerLayout{}).HasFocusedInput(a) {
-		t.Error("expected HasFocusedInput true while focus is still on the room")
-	}
-
-	a.focus = focusMenu
-	if (MillerLayout{}).HasFocusedInput(a) {
-		t.Error("expected HasFocusedInput false once focus has moved to the spaces column, even with the room still open")
-	}
-}
-
-// TestMillerHasFocusedInput_CMailDoesNotTrapNavAtFocusMenu mirrors the Circ
-// case above for CMail, which has the identical mode-based InputFocused
-// pattern (cmailModeDetail).
-func TestMillerHasFocusedInput_CMailDoesNotTrapNavAtFocusMenu(t *testing.T) {
-	a := loggedInApp()
-	a.active = screenCMail
-	a.cmail = a.cmail.SetConversations([]model.Conversation{{ID: "c1"}})
-	a.cmail, _ = a.cmail.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if !a.cmail.InputFocused() {
-		t.Fatal("setup: expected the conversation to be open (InputFocused true)")
-	}
-
-	a.focus = focusList
-	if !(MillerLayout{}).HasFocusedInput(a) {
-		t.Error("expected HasFocusedInput true while focus is still on the conversation")
-	}
-
-	a.focus = focusMenu
-	if (MillerLayout{}).HasFocusedInput(a) {
-		t.Error("expected HasFocusedInput false once focus has moved to the spaces column, even with the conversation still open")
-	}
-}
-
-// --- ModalMaxWidth: keep the centered-on-full-width image modal off Miller's sidebar ---
-
-func TestTabsLayout_ModalMaxWidth_IsFullWidth(t *testing.T) {
-	if got := (TabsLayout{}).ModalMaxWidth(120); got != 120 {
-		t.Errorf("ModalMaxWidth(120) = %d, want 120 (no side chrome)", got)
-	}
-}
-
-func TestMillerLayout_ModalMaxWidth_ReservesTwiceTheSidebar(t *testing.T) {
-	// millerSidebarWidth = 22; centering means avoiding a left-side
-	// obstruction of width r requires reserving 2*r off the total.
-	if got := (MillerLayout{}).ModalMaxWidth(120); got != 120-2*millerSidebarWidth {
-		t.Errorf("ModalMaxWidth(120) = %d, want %d", got, 120-2*millerSidebarWidth)
-	}
-}
-
-func TestMillerLayout_ModalMaxWidth_FloorsAtOne(t *testing.T) {
-	if got := (MillerLayout{}).ModalMaxWidth(10); got != 1 {
-		t.Errorf("ModalMaxWidth(10) = %d, want 1 (terminal narrower than 2x sidebar)", got)
 	}
 }

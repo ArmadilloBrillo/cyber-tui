@@ -51,14 +51,6 @@ const (
 	screenGlobe
 )
 
-type focusTarget int
-
-const (
-	focusMenu   focusTarget = iota
-	focusList               // list pane (compact post list in 3-pane Miller)
-	focusDetail             // reading pane (full post view in 3-pane Miller)
-)
-
 // availableThemes is the ordered list of selectable themes shown in the picker.
 var availableThemes = []string{"cyber", "c64", "vt320", "bland", "custom"}
 
@@ -105,7 +97,6 @@ const (
 
 type App struct {
 	layout      Layout
-	layoutName  string // "tabs" (default) or "miller"; used when persisting to config
 	client      api.Client
 	tokens      model.Tokens
 	currentUser model.User
@@ -115,7 +106,6 @@ type App struct {
 	// overwritten when viewing another user's profile.
 	ownApprenticeSlugs []string
 	active             screen
-	focus              focusTarget
 	width              int
 	height             int
 
@@ -685,10 +675,8 @@ type App struct {
 func NewApp(client api.Client) App {
 	return App{
 		layout:             TabsLayout{},
-		layoutName:         "tabs",
 		client:             client,
 		active:             screenLogin,
-		focus:              focusMenu,
 		loc:                time.UTC,
 		wanderLust:         false,
 		showGlobeTab:       true,
@@ -761,8 +749,6 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	a.dithering = s.Dithering
 	a.ditherSharpness = s.GetDitherSharpness()
 	a.imageScale = s.GetImageScale()
-	a.layoutName = s.Layout
-	a.layout = layoutFromName(s.Layout)
 	a.customPalette = s.CustomPalette
 	return a
 }
@@ -774,13 +760,6 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.savedSession = &s
 	a = a.WithSavedPreferences(s)
 	return a
-}
-
-func layoutFromName(name string) Layout {
-	if name == "miller" {
-		return MillerLayout{}
-	}
-	return TabsLayout{}
 }
 
 // WithGraphicsProtocol sets the terminal graphics protocol detected at startup.
@@ -1075,7 +1054,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, KeywordAlerts: a.keywordAlerts, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName, HardBreakKey: a.hardBreakKey}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, KeywordAlerts: a.keywordAlerts, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, HardBreakKey: a.hardBreakKey}
 	*a = a.updateAll(msg)
 }
 
@@ -1242,9 +1221,6 @@ func (a *App) handleKeys(msg tea.Msg) (*App, tea.Cmd, bool) {
 	case "ctrl+]":
 		if a.activeScreenHasFocusedInput() {
 			width := int(float64(a.width) * modalScreenMarginFrac)
-			if mw := a.layout.ModalMaxWidth(a.width); width > mw {
-				width = mw
-			}
 			height := int(float64(a.height) * modalScreenMarginFrac)
 			a.iconPickerOpen = true
 			var cmd tea.Cmd
@@ -1365,33 +1341,15 @@ func (a *App) handleFeed(msg tea.Msg) (*App, tea.Cmd, bool) {
 	case feedLoadedMsg:
 		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
 		a.markPostsSeenForKeywords(msg.posts)
-		var detailCmd tea.Cmd
-		a.feed, detailCmd = a.feed.CurrentDetailCmd()
-		// Auto-fill the compact list column if the initial page is shorter than it.
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.feed.PostCount() < min {
-			return a, tea.Batch(detailCmd, a.loadFeedPageCmd(msg.cursor)), true
-		}
-		return a, detailCmd, true
+		return a, nil, true
 	case feedPageMsg:
 		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
 		a.markPostsSeenForKeywords(msg.posts)
-		// Keep auto-filling until the compact list column is full.
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.feed.PostCount() < min {
-			return a, a.loadFeedPageCmd(msg.cursor), true
-		}
 		return a, nil, true
 	case screens.RefreshFeedMsg:
 		return a, a.loadFeedCmd(), true
 	case screens.LoadMoreFeedMsg:
 		return a, a.loadFeedPageCmd(msg.Cursor), true
-	case screens.LoadFeedDetailMsg:
-		return a, a.loadFeedDetailCmd(msg.PostID), true
-	case screens.FeedDetailRepliesMsg:
-		a.feed, _ = a.feed.Update(msg)
-		return a, nil, true
-	case screens.FeedDetailNavMsg:
-		a.feed, _ = a.feed.Update(msg)
-		return a, nil, true
 	case screens.ShowPostMsg:
 		a.postDetailReturn = a.active
 		a.active = screenPostDetail
@@ -1920,7 +1878,6 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		ii := msg.InlineImages
 		dt := msg.Dithering
 		ds := msg.DitherSharpness
-		ln := msg.LayoutName
 		ka := msg.KeywordAlerts
 		hb := msg.HardBreakKey
 		a.settingsSaveSeq++
@@ -1931,7 +1888,7 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln, keywordAlerts: ka, hardBreakKey: hb}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, keywordAlerts: ka, hardBreakKey: hb}
 		}, true
 
 	case settingsSavedMsg:
@@ -1990,18 +1947,15 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		a.inlineImages = msg.inlineImages
 		a.dithering = msg.dithering
 		a.ditherSharpness = msg.ditherSharpness
-		a.layoutName = msg.layoutName
 		a.hardBreakKey = msg.hardBreakKey
-		a.layout = layoutFromName(msg.layoutName)
-		a.focus = focusMenu
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName, msg.keywordAlerts)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.keywordAlerts)
 		a.settingsScreen = a.settingsScreen.SetSavedHardBreakKey(msg.hardBreakKey)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
 		*a, notifyCmd = a.notify(notifyInfo, "settings saved")
-		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ln, ka := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName, msg.keywordAlerts
+		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ka := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.keywordAlerts
 		hb := msg.hardBreakKey
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
@@ -2019,7 +1973,6 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 				cfg.InlineImages = ii
 				cfg.Dithering = dt
 				cfg.DitherSharpness = ds
-				cfg.Layout = ln
 			})
 			return nil
 		}
@@ -2029,21 +1982,6 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		}
 		if hadNoKeywords && len(a.keywordAlerts) > 0 {
 			cmds = append(cmds, a.scheduleKeywordReplyPollCmd())
-		}
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
-			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < min {
-				cmds = append(cmds, a.loadFeedPageCmd(cursor))
-			}
-			if a.guilds.IsViewingGuildPosts() {
-				if cursor := a.guilds.PostsNextCursor(); cursor != "" && a.guilds.PostCount() < min {
-					cmds = append(cmds, a.loadGuildPostsPageCmd(a.guilds.ActiveGuild(), cursor))
-				}
-			}
-			if a.topics.IsViewingTopicPosts() {
-				if cursor := a.topics.PostsNextCursor(); cursor != "" && a.topics.PostCount() < min {
-					cmds = append(cmds, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), cursor))
-				}
-			}
 		}
 		return a, tea.Batch(cmds...), true
 
@@ -2540,25 +2478,6 @@ func (a *App) handleGuilds(msg tea.Msg) (*App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 		a.guilds = a.guilds.SetGuildPosts(msg.posts, msg.cursor)
-		var detailCmd tea.Cmd
-		a.guilds, detailCmd = a.guilds.CurrentDetailCmd()
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.guilds.PostCount() < min {
-			return a, tea.Batch(detailCmd, a.loadGuildPostsPageCmd(msg.slug, msg.cursor)), true
-		}
-		if detailCmd != nil {
-			return a, detailCmd, true
-		}
-		return a, nil, true
-
-	case screens.LoadGuildThreadMsg:
-		return a, a.loadGuildThreadCmd(msg.PostID), true
-
-	case screens.GuildThreadRepliesMsg:
-		a.guilds, _ = a.guilds.Update(msg)
-		return a, nil, true
-
-	case screens.GuildThreadNavMsg:
-		a.guilds, _ = a.guilds.Update(msg)
 		return a, nil, true
 
 	case screens.LoadMoreGuildPostsMsg:
@@ -2569,9 +2488,6 @@ func (a *App) handleGuilds(msg tea.Msg) (*App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 		a.guilds = a.guilds.AppendGuildPosts(msg.posts, msg.cursor)
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.guilds.PostCount() < min {
-			return a, a.loadGuildPostsPageCmd(msg.slug, msg.cursor), true
-		}
 		return a, nil, true
 
 	case screens.RefreshGuildPostsMsg:
@@ -2736,25 +2652,6 @@ func (a *App) handleTopics(msg tea.Msg) (*App, tea.Cmd, bool) {
 
 	case topicPostsLoadedMsg:
 		a.topics = a.topics.SetTopicPosts(msg.posts, msg.cursor)
-		var detailCmd tea.Cmd
-		a.topics, detailCmd = a.topics.CurrentDetailCmd()
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.topics.PostCount() < min {
-			return a, tea.Batch(detailCmd, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor)), true
-		}
-		if detailCmd != nil {
-			return a, detailCmd, true
-		}
-		return a, nil, true
-
-	case screens.LoadTopicThreadMsg:
-		return a, a.loadTopicThreadCmd(msg.PostID), true
-
-	case screens.TopicThreadRepliesMsg:
-		a.topics, _ = a.topics.Update(msg)
-		return a, nil, true
-
-	case screens.TopicThreadNavMsg:
-		a.topics, _ = a.topics.Update(msg)
 		return a, nil, true
 
 	case screens.LoadMoreTopicPostsMsg:
@@ -2762,9 +2659,6 @@ func (a *App) handleTopics(msg tea.Msg) (*App, tea.Cmd, bool) {
 
 	case topicPostsPageMsg:
 		a.topics = a.topics.AppendTopicPosts(msg.posts, msg.cursor)
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.topics.PostCount() < min {
-			return a, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor), true
-		}
 		return a, nil, true
 
 	case screens.RefreshTopicPostsMsg:
@@ -3015,7 +2909,6 @@ func (a *App) handleUnauthorized(msg tea.Msg) (*App, tea.Cmd, bool) {
 	a.sessionGen++
 
 	a.active = screenLogin
-	a.focus = focusMenu
 	a.login = screens.NewLoginModel(a.currentUser.Email)
 
 	var cmd tea.Cmd
@@ -3455,10 +3348,7 @@ func (a *App) ditherOptions() *imgview.DitherOptions {
 
 // activeInlineImageSlots returns the active screen's currently visible
 // inline image slots, or nil for screens that don't support inline images.
-// Used by TabsLayout.InlineImageSlots; MillerLayout has its own equivalent
-// since its screen geometry (and, for Feed/Guilds/Topics, which screen
-// method even has the current content — see FeedModel.VisibleDetailInlineImages)
-// differs from Tabs'.
+// Used by TabsLayout.InlineImageSlots.
 func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
 	switch a.active {
 	case screenPostDetail:
@@ -4117,7 +4007,7 @@ const modalScreenMarginFrac = 0.8
 // The step is based on a.imageModalCols — the box actually on screen right
 // now — not on a value recomputed from a.imageScale. Those two can diverge:
 // openImageInTerminal additionally clamps the rendered box to
-// modalScreenMarginFrac/Layout.ModalMaxWidth, which is a tighter ceiling
+// modalScreenMarginFrac, which is a tighter ceiling
 // than config.MaxImageScale in a small terminal. Stepping from the
 // unclamped scale let repeated "+" presses at that ceiling keep inflating
 // a.imageScale with no visible effect (correctly, since the box was already
@@ -4186,14 +4076,9 @@ func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
 // (encoders called with allowUpscale=true) — unlike inline thumbnails, this
 // is a user-driven zoom the caller explicitly asked for.
 //
-// width is clamped through a.layout.ModalMaxWidth rather than raw a.width:
-// the modal is centered against the full terminal width by
-// compositeOverlays regardless of layout, so in Miller layout a box wide
-// enough to approach a.width would have its left edge splice into the nav
-// sidebar — see ModalMaxWidth's doc comment. Both width and height are then
-// additionally capped at modalScreenMarginFrac of the terminal size — see
-// its doc comment for why the modal must stay well clear of the real screen
-// edges, not just merely within them.
+// Both width and height are capped at modalScreenMarginFrac of the terminal
+// size — see its doc comment for why the modal must stay well clear of the
+// real screen edges, not just merely within them.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
 	ditherOpts := a.ditherOptions()
@@ -4201,7 +4086,7 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	if scale <= 0 {
 		scale = 1.0
 	}
-	width := min(a.layout.ModalMaxWidth(a.width), int(float64(a.width)*modalScreenMarginFrac))
+	width := int(float64(a.width) * modalScreenMarginFrac)
 	height := min(a.height-2, int(float64(a.height)*modalScreenMarginFrac)) // reserve 2 rows for the modal border
 	a.imageFetchGen++
 	gen := a.imageFetchGen
@@ -4945,7 +4830,6 @@ type settingsSavedMsg struct {
 	inlineImages            bool
 	dithering               bool
 	ditherSharpness         string
-	layoutName              string
 	keywordAlerts           []string
 	hardBreakKey            string
 }
@@ -5661,36 +5545,6 @@ func (a *App) loadRepliesCmd(postID string) tea.Cmd {
 			return errMsg{err}
 		}
 		return repliesLoadedMsg{postID: postID, replies: replies}
-	}
-}
-
-func (a *App) loadFeedDetailCmd(postID string) tea.Cmd {
-	return func() tea.Msg {
-		replies, err := a.client.GetPostReplies(postID)
-		if err != nil {
-			return screens.FeedDetailRepliesMsg{PostID: postID}
-		}
-		return screens.FeedDetailRepliesMsg{PostID: postID, Replies: replies}
-	}
-}
-
-func (a *App) loadGuildThreadCmd(postID string) tea.Cmd {
-	return func() tea.Msg {
-		replies, err := a.client.GetPostReplies(postID)
-		if err != nil {
-			return screens.GuildThreadRepliesMsg{PostID: postID}
-		}
-		return screens.GuildThreadRepliesMsg{PostID: postID, Replies: replies}
-	}
-}
-
-func (a *App) loadTopicThreadCmd(postID string) tea.Cmd {
-	return func() tea.Msg {
-		replies, err := a.client.GetPostReplies(postID)
-		if err != nil {
-			return screens.TopicThreadRepliesMsg{PostID: postID}
-		}
-		return screens.TopicThreadRepliesMsg{PostID: postID, Replies: replies}
 	}
 }
 

@@ -1,9 +1,7 @@
 package screens
 
-import "strings"
-
-// millerPageNav computes the new replyIndex and scrollOffset after a single j/k
-// keypress in a Miller-layout detail pane (or PostDetail in tabs mode).
+// pageNav computes the new replyIndex and scrollOffset after a single j/k
+// keypress in a paged item list (PostDetail, cIRC and C-Mail browsing).
 //
 // Pager behaviour: scroll one line at a time within the current item; only advance
 // to the next item once the current item's trailing edge becomes visible (delta>0),
@@ -12,7 +10,7 @@ import "strings"
 //   - replyStarts[i] is the start line of reply i within the full content.
 //   - replyHeights[i] is the rendered height of reply i.
 //   - replyIndex == -1 means the post itself is selected; 0+ indexes into the reply slice.
-func millerPageNav(delta, paneH, postH int, replyStarts, replyHeights []int, replyIndex, scrollOffset int) (newReplyIndex, newScrollOffset int) {
+func pageNav(delta, paneH, postH int, replyStarts, replyHeights []int, replyIndex, scrollOffset int) (newReplyIndex, newScrollOffset int) {
 	newReplyIndex = replyIndex
 	newScrollOffset = scrollOffset
 
@@ -110,24 +108,4 @@ func millerPageNav(delta, paneH, postH int, replyStarts, replyHeights []int, rep
 		}
 	}
 	return newReplyIndex, newScrollOffset
-}
-
-// sliceContent clips fullContent to a height-line window starting at offset.
-// If lineCount fits within height, the full content is returned unchanged.
-func sliceContent(fullContent string, offset, height, lineCount int) string {
-	if lineCount <= height {
-		return fullContent
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	if offset+height > lineCount {
-		offset = lineCount - height
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	lines := strings.Split(fullContent, "\n")
-	end := min(offset+height, len(lines))
-	return strings.Join(lines[offset:end], "\n")
 }
