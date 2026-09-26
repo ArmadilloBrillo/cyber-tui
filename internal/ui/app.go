@@ -857,7 +857,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	a2, cmd := a.updateInner(msg)
 	if cmailUnreadBefore >= 0 {
-		a2, cmd = a2.maybeNotifyNewCMail(cmailUnreadBefore, cmd)
+		*a2, cmd = a2.maybeNotifyNewCMail(cmailUnreadBefore, cmd)
 	}
 	if a2.active != prevActive {
 		// See screenSwitchedAt's doc comment (App struct) and
@@ -885,9 +885,9 @@ func (a App) maybeNotifyNewCMail(before int, cmd tea.Cmd) (App, tea.Cmd) {
 	return a, cmd
 }
 
-func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
+func (a *App) updateInner(msg tea.Msg) (*App, tea.Cmd) {
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
-		a = a.applyWindowSize(m)
+		*a = a.applyWindowSize(m)
 		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
 		return a, a.delegateUpdate(contentMsg)
 	}
@@ -917,16 +917,16 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 		if len(a.imageCarouselItems) > 1 {
 			switch km.String() {
 			case "left":
-				return a.cycleImageCarousel(-1)
+				return ptrCmd(a.cycleImageCarousel(-1))
 			case "right":
-				return a.cycleImageCarousel(+1)
+				return ptrCmd(a.cycleImageCarousel(+1))
 			}
 		}
 		switch km.String() {
 		case "+", "=":
-			return a.adjustImageScale(imageScaleStep)
+			return ptrCmd(a.adjustImageScale(imageScaleStep))
 		case "-":
-			return a.adjustImageScale(-imageScaleStep)
+			return ptrCmd(a.adjustImageScale(-imageScaleStep))
 		}
 		a.imageModalOpen = false
 		a.chatrooms = a.chatrooms.SetAnimPaused(false)
@@ -1093,7 +1093,7 @@ func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
 
 // handleKeys processes tea.KeyMsg events: modal intercepts, focused-input
 // bypass, and all global keyboard shortcuts.
-func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleKeys(msg tea.Msg) (*App, tea.Cmd, bool) {
 	m, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return a, nil, false
@@ -1101,39 +1101,39 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	// Modal overlays intercept all keys while open.
 	if a.themePickerOpen {
 		model, cmd := a.handleThemePickerKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.themeEditorOpen {
 		model, cmd := a.handleThemeEditorKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.pathPromptOpen {
 		model, cmd := a.handlePathPromptKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.helpModalOpen {
 		model, cmd := a.handleHelpModalKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.urlPickerOpen {
 		model, cmd := a.handleURLPickerKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.iconPickerOpen {
 		model, cmd := a.handleIconPickerKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.attachURLPromptOpen {
 		model, cmd := a.handleAttachURLPromptKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.songPromptOpen {
 		model, cmd := a.handleSongPromptKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.keywordEditorOpen {
 		model, cmd := a.handleKeywordEditorKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	// When a screen has a focused text input, let it consume all keys.
 	// ctrl+c is kept as a hard escape hatch; a handful of other global
@@ -1186,7 +1186,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			if s, ok := screenForMnemonic(m.String()); ok && (s != screenGlobe || a.showGlobeTab) {
 				var cmd tea.Cmd
-				a, cmd = activateScreen(a, s)
+				*a, cmd = activateScreen(*a, s)
 				if s == screenSearch {
 					// activateScreen leaves Search in whatever state it was
 					// last left in (correct for arrow-cycling, which no
@@ -1244,7 +1244,8 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 					a.chatrooms = a.chatrooms.AppendSystemMessage(a.chatrooms.ActiveRoomSlug(), "*** song attachments require supporter status")
 					return a, nil, true
 				}
-				a, cmd := a.notify(notifyWarn, "song attachments require supporter status")
+				var cmd tea.Cmd
+				*a, cmd = a.notify(notifyWarn, "song attachments require supporter status")
 				return a, cmd, true
 			}
 			a.songPromptOpen = true
@@ -1276,7 +1277,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	case "o", "ctrl+o":
 		if a.active != screenLogin {
 			app, cmd := a.handleOpenURL(a.getFocusedURLs())
-			return app, cmd, true
+			return &app, cmd, true
 		}
 	case "/":
 		if a.active != screenLogin {
@@ -1298,11 +1299,11 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, tea.Quit, true
 		}
 	}
-	return a.layout.HandleNav(m, a)
+	return ptrCmd3(a.layout.HandleNav(m, *a))
 }
 
 // handleAuth processes login/registration flow messages.
-func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleAuth(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.SubmitLoginMsg:
 		return a, a.loginCmd(msg.Email, msg.Password), true
@@ -1334,7 +1335,7 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleFeed processes feed and post-navigation messages.
-func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleFeed(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case feedLoadedMsg:
 		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
@@ -1411,7 +1412,7 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handlePostDetail processes post detail, reply, and compose messages.
-func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handlePostDetail(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case repliesLoadedMsg:
 		if msg.postID != a.postDetail.PostID() {
@@ -1435,18 +1436,21 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadFeedCmd(), true
 	case postConvertedToNoteMsg:
 		a.feed = a.feed.CloseComposeAfterSuccess()
-		a, notifyCmd := a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
+		var notifyCmd tea.Cmd
+		*a, notifyCmd = a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
 		return a, tea.Batch(notifyCmd, a.loadFeedCmd()), true
 	case postSubmitFailedMsg:
 		a.feed = a.feed.ClearComposeSubmitting()
-		a, notifyCmd := a.notify(notifyError, composeFailText(msg.err, "ctrl+d"))
+		var notifyCmd tea.Cmd
+		*a, notifyCmd = a.notify(notifyError, composeFailText(msg.err, "ctrl+d"))
 		return a, notifyCmd, true
 	case screens.SaveNewPostAsNoteMsg:
 		return a, a.saveNewPostAsNoteCmd(msg.Content, msg.Topics), true
 	case noteFromComposeSavedMsg:
 		a.feed = a.feed.CloseComposeAfterSuccess()
 		a.journal = a.journal.PrependNote(msg.note)
-		a, notifyCmd := a.notify(notifyInfo, "saved to your Journal")
+		var notifyCmd tea.Cmd
+		*a, notifyCmd = a.notify(notifyInfo, "saved to your Journal")
 		return a, notifyCmd, true
 	case screens.SubmitPostEditMsg:
 		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentTouched, msg.AudioAttachment, msg.OtherAttachments), true
@@ -1519,7 +1523,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleChatrooms processes chatroom messages.
-func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleChatrooms(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case roomsLoadedMsg:
 		a.chatrooms = a.chatrooms.SetRooms(msg.rooms)
@@ -1541,7 +1545,8 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.chatrooms = a.chatrooms.SetPendingRoomSlug(msg.RoomSlug)
 		// activateScreen resets canGoBack for ordinary tab/leader entry into
 		// Chatrooms, so it must be set true *after* that call, not before.
-		a, activateCmd := activateScreen(a, screenChatrooms)
+		var activateCmd tea.Cmd
+		*a, activateCmd = activateScreen(*a, screenChatrooms)
 		a.chatrooms = a.chatrooms.SetCanGoBack(true)
 		return a, tea.Batch(markReadCmd, activateCmd), true
 	case screens.SendRoomMessageMsg:
@@ -1555,7 +1560,8 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		// already does after a command completes. Without it the room keeps
 		// showing the just-muted user's messages until something else happens
 		// to reload settings.
-		a, notifyCmd := a.notify(notifyInfo, "muted "+msg.username)
+		var notifyCmd tea.Cmd
+		*a, notifyCmd = a.notify(notifyInfo, "muted "+msg.username)
 		return a, tea.Batch(notifyCmd, a.loadSettingsCmd()), true
 	case screens.FlagMessageMsg:
 		return a, a.flagRoomMessageCmd(msg.RoomID, msg.MessageID, msg.Reason), true
@@ -1595,7 +1601,8 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, desktopNotifyCmd(msg.RoomName, toastBody), true
 	case screens.RoomReconnectedMsg:
-		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
 	case roomCommandReplyMsg:
 		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, sanitize.Strip(msg.reply))
@@ -1626,7 +1633,7 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 // handleCMail processes C-Mail messages. DM subscription lifecycle is managed
 // entirely within CMailModel; only the conversation list load and message send
 // are coordinated here.
-func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleCMail(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
@@ -1662,7 +1669,8 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 			},
 		), true
 	case screens.CMailReconnectedMsg:
-		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
 	case cmailCommandReplyMsg:
 		a.cmail = a.cmail.AppendSystemMessage(msg.convID, sanitize.Strip(msg.reply))
@@ -1722,7 +1730,7 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 // screens.ChatroomsModel.RefreshRelativeTimestamps for why this is a no-op
 // everywhere else (wrong screen active, or not in "relative" display mode).
 // Always reschedules, mirroring schedulePollCmd's shape.
-func (a App) handleRelativeTimeTick(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleRelativeTimeTick(msg tea.Msg) (*App, tea.Cmd, bool) {
 	t, ok := msg.(relativeTimeTickMsg)
 	if !ok {
 		return a, nil, false
@@ -1740,7 +1748,7 @@ func (a App) handleRelativeTimeTick(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleProfile processes profile load, save, and sub-tab messages.
-func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleProfile(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case profileLoadedMsg:
 		a.currentUser = msg.user
@@ -1859,7 +1867,7 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 	return a, nil, false
 }
 
-func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case settingsLoadedMsg:
 		a.settings = msg.settings
@@ -1967,7 +1975,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
-		a, notifyCmd = a.notify(notifyInfo, "settings saved")
+		*a, notifyCmd = a.notify(notifyInfo, "settings saved")
 		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ln, ka := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName, msg.keywordAlerts
 		hb := msg.hardBreakKey
 		saveCmd := func() tea.Msg {
@@ -2031,7 +2039,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 	case updateAvailableMsg:
 		var cmd tea.Cmd
 		// threatcrush-disable-next-line sql-format-call  UI notification string, no SQL anywhere in this codebase
-		a, cmd = a.notify(notifyWarn, fmt.Sprintf("update available: %s (you have %s) — %s", msg.tag, version.Version, msg.url))
+		*a, cmd = a.notify(notifyWarn, fmt.Sprintf("update available: %s (you have %s) — %s", msg.tag, version.Version, msg.url))
 		return a, cmd, true
 	}
 	return a, nil, false
@@ -2039,7 +2047,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 
 // handleThemeEditor processes messages emitted by the theme editor modal:
 // live preview on every edit, persisting on save, and reverting on close.
-func (a App) handleThemeEditor(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleThemeEditor(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.PreviewPaletteMsg:
 		theme.SetCustomPalette(msg.Palette)
@@ -2096,7 +2104,7 @@ func (a App) handleThemeEditor(msg tea.Msg) (App, tea.Cmd, bool) {
 // file via theme.ImportFromFile and, on success, hands off to the theme
 // editor exactly like PreviewPostThemeMsg — reviewed and confirmed with
 // ctrl+s, never applied blind.
-func (a App) handlePathPrompt(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handlePathPrompt(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.PathPromptSubmitMsg:
 		switch a.pathPromptPurpose {
@@ -2110,17 +2118,17 @@ func (a App) handlePathPrompt(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.pathPromptOpen = false
 			if err := theme.ExportToFile(msg.Path, a.pathPromptExportPalette); err != nil {
 				a2, cmd := a.notify(notifyError, "export failed: "+err.Error())
-				return a2, cmd, true
+				return &a2, cmd, true
 			}
 			a2, cmd := a.notify(notifyInfo, "theme exported to "+msg.Path)
-			return a2, cmd, true
+			return &a2, cmd, true
 
 		case pathPromptImport:
 			a.pathPromptOpen = false
 			p, err := theme.ImportFromFile(msg.Path)
 			if err != nil {
 				a2, cmd := a.notify(notifyError, "import failed: "+err.Error())
-				return a2, cmd, true
+				return &a2, cmd, true
 			}
 			a.themeEditorOrig = theme.CurrentName()
 			a.themeEditorOrigPalette = theme.CurrentPalette()
@@ -2148,7 +2156,7 @@ func (a App) handlePathPrompt(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleBookmarks processes bookmark load, create, and delete messages.
-func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleBookmarks(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case bookmarksLoadedMsg:
 		a.bookmarks = a.bookmarks.SetBookmarks(msg.items, msg.cursor)
@@ -2189,24 +2197,29 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		// user's clipboard at all (same reason inline images are gated on
 		// a.ephemeral). Gate it here rather than silently claim success.
 		if a.ephemeral {
-			a, cmd := a.notify(notifyInfo, "Copying links is disabled in SSH sessions")
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyInfo, "Copying links is disabled in SSH sessions")
 			return a, cmd, true
 		}
 		termenv.Copy(urlutil.PostPermalink(msg.Post.AuthorUsername, msg.Post.Slug))
-		a, cmd := a.notify(notifyInfo, "Copied link to clipboard")
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyInfo, "Copied link to clipboard")
 		return a, cmd, true
 	case screens.CopyMessageTextMsg:
 		// Same SSH gate as CopyLinkMsg — see its comment.
 		if a.ephemeral {
-			a, cmd := a.notify(notifyInfo, "Copying is disabled in SSH sessions")
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyInfo, "Copying is disabled in SSH sessions")
 			return a, cmd, true
 		}
 		if msg.Text == "" {
-			a, cmd := a.notify(notifyInfo, "nothing to copy")
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyInfo, "nothing to copy")
 			return a, cmd, true
 		}
 		termenv.Copy(msg.Text)
-		a, cmd := a.notify(notifyInfo, "Copied message to clipboard")
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyInfo, "Copied message to clipboard")
 		return a, cmd, true
 	case screens.BookmarkPostMsg:
 		if msg.ReplyID != "" {
@@ -2280,7 +2293,8 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.bookmarkedPostIDs = newPostIDs
 			}
 			a.broadcastBookmarkedIDs()
-			a, cmd := a.notify(notifyError, msg.err.Error())
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyError, msg.err.Error())
 			return a, cmd, true
 		}
 		a.bookmarks = a.bookmarks.SetFetching()
@@ -2340,7 +2354,7 @@ type watchResultMsg struct {
 }
 
 // handleWatches processes progressive watch-page loads and watch/unwatch toggle messages.
-func (a App) handleWatches(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleWatches(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case watchPageMsg:
 		if msg.err != nil {
@@ -2399,7 +2413,7 @@ func (a App) handleWatches(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.watchedPostIDs = newIDs
 			a.broadcastWatchedIDs()
 			a2, cmd := a.notify(notifyError, msg.err.Error())
-			return a2, cmd, true
+			return &a2, cmd, true
 		}
 		return a, nil, true
 	}
@@ -2457,7 +2471,7 @@ func mergeBookmarkIDSets(postIDs, replyIDs map[string]struct{}, postBookmarks, r
 }
 
 // handleGuilds processes guild list, guild posts, pagination, and post selection messages.
-func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleGuilds(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.RefreshGuildsMsg:
 		return a, a.loadGuildsCmd(""), true
@@ -2599,7 +2613,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.guilds = a.guilds.SetOwnGuildSlug(msg.slug)
 		}
 		var notifyCmd tea.Cmd
-		a, notifyCmd = a.notify(notifyInfo, "✓ "+verb+" #"+msg.name)
+		*a, notifyCmd = a.notify(notifyInfo, "✓ "+verb+" #"+msg.name)
 		return a, tea.Batch(notifyCmd, a.loadGuildsCmd(""), a.loadUserGuildsCmd(a.currentUser.Username)), true
 
 	case guildLeftMsg:
@@ -2612,7 +2626,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.guilds = a.guilds.SetOwnGuildSlug("")
 		}
 		var notifyCmd tea.Cmd
-		a, notifyCmd = a.notify(notifyInfo, "✓ Left #"+msg.name)
+		*a, notifyCmd = a.notify(notifyInfo, "✓ Left #"+msg.name)
 		return a, tea.Batch(notifyCmd, a.loadGuildsCmd(""), a.loadUserGuildsCmd(a.currentUser.Username)), true
 
 	case guildPromotedMsg:
@@ -2625,14 +2639,14 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.currentUser.GuildIcon = detail.Icon
 		a.guilds = a.guilds.SetOwnGuildSlug(msg.slug)
 		var notifyCmd tea.Cmd
-		a, notifyCmd = a.notify(notifyInfo, "✓ #"+msg.name+" is now your guild badge")
+		*a, notifyCmd = a.notify(notifyInfo, "✓ #"+msg.name+" is now your guild badge")
 		return a, tea.Batch(notifyCmd, a.loadGuildsCmd(""), a.loadUserGuildsCmd(a.currentUser.Username)), true
 	}
 	return a, nil, false
 }
 
 // handleTopics processes topic list, topic posts, pagination, and post selection messages.
-func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleTopics(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.RefreshTopicsMsg:
 		return a, a.loadTopicsCmd(), true
@@ -2674,7 +2688,8 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.settings.MutedTopics = append([]string(nil), a.mutedTopicsSaved...)
 			a.mutedTopicsSaveSeq++
 			a.broadcastConfig()
-			a, cmd := a.notify(notifyError, mutedTopicsSaveFailText(msg.err))
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyError, mutedTopicsSaveFailText(msg.err))
 			return a, cmd, true
 		}
 		a.mutedTopicsSaved = msg.topics
@@ -2740,7 +2755,7 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleJournal processes journal (Notes) load, save, delete, and publish messages.
-func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleJournal(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case journalLoadedMsg:
 		a.journal = a.journal.SetNotes(msg.notes, msg.cursor)
@@ -2770,7 +2785,8 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case notePublishFailedMsg:
 		a.journal = a.journal.ClearPublishing()
-		a, notifyCmd := a.notify(notifyError, composeFailText(msg.err, "ctrl+s"))
+		var notifyCmd tea.Cmd
+		*a, notifyCmd = a.notify(notifyError, composeFailText(msg.err, "ctrl+s"))
 		return a, notifyCmd, true
 	case screens.LoadNoteRevisionsMsg:
 		return a, a.loadNoteRevisionsCmd(msg.NoteID, ""), true
@@ -2787,7 +2803,7 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleSearch processes search query, preview, drill-down, and pagination messages.
-func (a App) handleSearch(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleSearch(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.SubmitSearchMsg:
 		return a, a.searchCmd(msg.Query), true
@@ -2838,7 +2854,7 @@ func (a App) handleSearch(msg tea.Msg) (App, tea.Cmd, bool) {
 			// into Search (see handleGlobe's gen/active guards) need restarting
 			// here explicitly, same as activateScreen's screenGlobe case does.
 			var cmd tea.Cmd
-			a, cmd = a.maybeStartGlobeFetch()
+			*a, cmd = a.maybeStartGlobeFetch()
 			return a, tea.Batch(cmd, a.scheduleGlobeAngleTickCmd()), true
 		}
 		return a, nil, true
@@ -2863,7 +2879,7 @@ func (a App) notify(level notifyLevel, text string) (App, tea.Cmd) {
 	})
 }
 
-func (a App) handleLogoAnim(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleLogoAnim(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case logoAnimTickMsg:
 		if m.gen != a.sessionGen {
@@ -2918,13 +2934,15 @@ func (a App) handleLogoAnim(msg tea.Msg) (App, tea.Cmd, bool) {
 	return a, nil, false
 }
 
-func (a App) handleNotify(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleNotify(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case actionErrMsg:
-		a, cmd := a.notify(notifyError, m.err.Error())
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyError, m.err.Error())
 		return a, cmd, true
 	case notifyMsg:
-		a, cmd := a.notify(m.level, m.text)
+		var cmd tea.Cmd
+		*a, cmd = a.notify(m.level, m.text)
 		return a, cmd, true
 	case notifyExpireMsg:
 		if m.gen == a.notifyGen {
@@ -2940,7 +2958,7 @@ func (a App) handleNotify(msg tea.Msg) (App, tea.Cmd, bool) {
 // fails — and routes the user back to the login screen instead of leaving them
 // stranded on an errored screen. The dead refresh token is cleared so the next
 // launch starts at the login form rather than retrying a doomed auto-login.
-func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleUnauthorized(msg tea.Msg) (*App, tea.Cmd, bool) {
 	var err error
 	switch m := msg.(type) {
 	case errMsg:
@@ -2972,11 +2990,12 @@ func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
 	a.focus = focusMenu
 	a.login = screens.NewLoginModel(a.currentUser.Email)
 
-	a, cmd := a.notify(notifyWarn, "session expired — please log in again")
+	var cmd tea.Cmd
+	*a, cmd = a.notify(notifyWarn, "session expired — please log in again")
 	return a, cmd, true
 }
 
-func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleErr(msg tea.Msg) (*App, tea.Cmd, bool) {
 	m, ok := msg.(errMsg)
 	if !ok {
 		return a, nil, false
@@ -3010,7 +3029,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 	// Errors never block a screen: the per-screen SetError above only feeds an
 	// inline "couldn't load" empty-state, while the failure is announced in the
 	// transient global banner so it is visible even when content is already shown.
-	a, cmd := a.notify(notifyError, friendlyErr(m.err))
+	var cmd tea.Cmd
+	*a, cmd = a.notify(notifyError, friendlyErr(m.err))
 	return a, cmd, true
 }
 
@@ -3913,7 +3933,7 @@ const inlineImageFailureCooldown = 60 * time.Second
 // it on every subsequent Update — there's no modal to fall back to here, the
 // slot simply stays blank until either the cooldown lapses or something
 // invalidates the key outright (e.g. a resize changing its column budget).
-func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleInlineImageFetched(msg tea.Msg) (*App, tea.Cmd, bool) {
 	m, ok := msg.(inlineImageFetchedMsg)
 	if !ok {
 		return a, nil, false
@@ -3927,8 +3947,8 @@ func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	}
 	delete(a.inlineImageFailedAt, m.key)
-	a = a.cacheInlineImage(m.key, m.encoded)
-	a = a.recordInlineImageRealRows(m.slotKey, m.rows)
+	*a = a.cacheInlineImage(m.key, m.encoded)
+	*a = a.recordInlineImageRealRows(m.slotKey, m.rows)
 	return a, nil, true
 }
 
@@ -4227,7 +4247,7 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 // carousel is already showing an image, in which case it just notifies and
 // leaves the current image displayed rather than surprising the user with a
 // browser tab mid-cycle.
-func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleImageViewer(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case imageFetchedMsg:
 		if m.gen != a.imageFetchGen {
@@ -4236,7 +4256,7 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		if m.err != nil {
 			if a.imageModalOpen {
 				a2, cmd := a.notify(notifyInfo, "couldn't load image")
-				return a2, cmd, true
+				return &a2, cmd, true
 			}
 			return a, openExternalURL(m.rawURL), true
 		}
@@ -4292,7 +4312,7 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true // superseded by a later left/right press
 		}
 		a2, cmd := a.openImageInTerminal(a.imageCarouselItems[a.imageCarouselIndex])
-		return a2, cmd, true
+		return &a2, cmd, true
 	}
 	return a, nil, false
 }
@@ -4598,7 +4618,7 @@ func (a App) fetchSongMetadataCmd(rawURL string) tea.Cmd {
 // handleSongMetadataFetched applies a resolved songMetadataFetchedMsg to the
 // still-open song prompt. If the prompt was closed (cancelled) before the
 // fetch resolved, the result is simply dropped.
-func (a App) handleSongMetadataFetched(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleSongMetadataFetched(msg tea.Msg) (*App, tea.Cmd, bool) {
 	m, ok := msg.(songMetadataFetchedMsg)
 	if !ok {
 		return a, nil, false
@@ -5726,15 +5746,18 @@ func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
 // --- notifications ---
 
 // handleNotifications processes notification load, mark-read, jump-to-post, and poll messages.
-func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleNotifications(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case notifsLoadedMsg:
-		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
-		a, dnCmd := a.desktopNotifyForNewNotifs(msg.notifs)
+		var cmd tea.Cmd
+		*a, cmd = a.suppressActiveRoomMentions(msg.notifs)
+		var dnCmd tea.Cmd
+		*a, dnCmd = a.desktopNotifyForNewNotifs(msg.notifs)
 		a.notifications = a.notifications.SetNotifs(msg.notifs, msg.cursor)
 		return a, tea.Batch(cmd, dnCmd), true
 	case notifsPageMsg:
-		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
+		var cmd tea.Cmd
+		*a, cmd = a.suppressActiveRoomMentions(msg.notifs)
 		a.notifications = a.notifications.AppendNotifs(msg.notifs, msg.cursor)
 		return a, cmd, true
 	case screens.RefreshNotifsMsg:
@@ -5774,10 +5797,12 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		// transient banner and leave the notifications list untouched.
 		var apiErr *api.APIError
 		if errors.As(msg.err, &apiErr) && apiErr.Status == 404 {
-			a, cmd := a.notify(notifyWarn, "This post has been deleted")
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyWarn, "This post has been deleted")
 			return a, cmd, true
 		}
-		a, cmd := a.notify(notifyError, msg.err.Error())
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyError, msg.err.Error())
 		return a, cmd, true
 	case urlPostLoadedMsg:
 		if a.active == screenPostDetail {
@@ -5798,10 +5823,12 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		var apiErr *api.APIError
 		if errors.As(msg.err, &apiErr) && apiErr.Status == 404 {
-			a, cmd := a.notify(notifyWarn, "This post has been deleted")
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyWarn, "This post has been deleted")
 			return a, cmd, true
 		}
-		a, cmd := a.notify(notifyError, msg.err.Error())
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyError, msg.err.Error())
 		return a, cmd, true
 	case screens.ShowUserProfileMsg:
 		if a.active != screenNotifications {
@@ -5843,7 +5870,8 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, tea.Batch(a.fetchFeedPeekCmd(), a.scheduleFeedPollCmd()), true
 	case feedPeekMsg:
 		a.feed = a.feed.SetPendingNew(msg.posts)
-		a, cmd := a.scanPeekedPostsForKeywords(msg.posts)
+		var cmd tea.Cmd
+		*a, cmd = a.scanPeekedPostsForKeywords(msg.posts)
 		return a, cmd, true
 	case keywordReplyPollTickMsg:
 		if msg.gen != a.sessionGen {
@@ -5861,7 +5889,8 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, tea.Batch(cmds...), true
 	case keywordReplyMatchMsg:
-		a, cmd := a.scanKeywordReplyMatches(msg.keyword, msg.replies)
+		var cmd tea.Cmd
+		*a, cmd = a.scanKeywordReplyMatches(msg.keyword, msg.replies)
 		return a, cmd, true
 	}
 	return a, nil, false
@@ -6353,11 +6382,12 @@ func (a App) maybeStartGlobeFetch() (App, tea.Cmd) {
 	return a, a.scheduleGlobeFetchTickCmd()
 }
 
-func (a App) handleGlobe(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleGlobe(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case globeGuildMembersMsg:
 		a.globe = a.globe.SetGuildMembers(msg.usernames)
-		a, cmd := a.maybeStartGlobeFetch()
+		var cmd tea.Cmd
+		*a, cmd = a.maybeStartGlobeFetch()
 		return a, cmd, true
 
 	case globeFetchTickMsg:
@@ -6934,3 +6964,9 @@ func (a *App) loadProfilePostCmd(postID string) tea.Cmd {
 		return profilePostLoadedMsg{post: post}
 	}
 }
+
+func ptrTo(a App) *App { return &a }
+
+func ptrCmd(a App, cmd tea.Cmd) (*App, tea.Cmd) { return &a, cmd }
+
+func ptrCmd3(a App, cmd tea.Cmd, ok bool) (*App, tea.Cmd, bool) { return &a, cmd, ok }

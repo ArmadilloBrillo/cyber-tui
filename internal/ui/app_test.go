@@ -752,7 +752,7 @@ func TestHandleKeys_CtrlLeft_CyclesTabsWhileChatroomsInputFocused(t *testing.T) 
 	if !consumed {
 		t.Error("expected ctrl+left to be consumed even while chatrooms input is focused")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected ctrl+left to cycle to a different tab")
 	}
 }
@@ -764,7 +764,7 @@ func TestHandleKeys_CtrlRight_CyclesTabsWhileChatroomsInputFocused(t *testing.T)
 	if !consumed {
 		t.Error("expected ctrl+right to be consumed even while chatrooms input is focused")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected ctrl+right to cycle to a different tab")
 	}
 }
@@ -788,7 +788,7 @@ func TestHandleKeys_Left_CyclesTabs_WhileChatroomsInputFocusedAndComposeEmpty(t 
 	if !consumed {
 		t.Error("expected plain left arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain left arrow to cycle to a different tab")
 	}
 }
@@ -800,7 +800,7 @@ func TestHandleKeys_Right_CyclesTabs_WhileChatroomsInputFocusedAndComposeEmpty(t
 	if !consumed {
 		t.Error("expected plain right arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain right arrow to cycle to a different tab")
 	}
 }
@@ -880,7 +880,7 @@ func TestHandleKeys_Left_CyclesTabs_WhileCMailInputFocusedAndComposeEmpty(t *tes
 	if !consumed {
 		t.Error("expected plain left arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain left arrow to cycle to a different tab")
 	}
 }
@@ -892,7 +892,7 @@ func TestHandleKeys_Right_CyclesTabs_WhileCMailInputFocusedAndComposeEmpty(t *te
 	if !consumed {
 		t.Error("expected plain right arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain right arrow to cycle to a different tab")
 	}
 }
@@ -1252,7 +1252,7 @@ func TestHandleKeys_Left_CyclesTabs_FromPostDetail(t *testing.T) {
 	if !consumed {
 		t.Error("expected plain left arrow to be consumed (tab-cycle) from PostDetail")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain left arrow to cycle to a different tab")
 	}
 }
@@ -1264,7 +1264,7 @@ func TestHandleKeys_Right_CyclesTabs_FromPostDetail(t *testing.T) {
 	if !consumed {
 		t.Error("expected plain right arrow to be consumed (tab-cycle) from PostDetail")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain right arrow to cycle to a different tab")
 	}
 }
@@ -1887,7 +1887,7 @@ func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) 
 	if !ok {
 		t.Fatal("expected urlPostLoadedMsg to be handled")
 	}
-	a = m
+	a = *m
 
 	if a.postDetail.PostID() != "p2" {
 		t.Fatalf("expected p2 open, got %q", a.postDetail.PostID())
@@ -1904,7 +1904,7 @@ func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) 
 	if !ok {
 		t.Fatal("expected BackToFeedMsg to be handled")
 	}
-	a = m
+	a = *m
 	if a.active != screenPostDetail {
 		t.Errorf("active = %v, want screenPostDetail (still nested)", a.active)
 	}
@@ -1923,7 +1923,7 @@ func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) 
 	if !ok {
 		t.Fatal("expected BackToFeedMsg to be handled")
 	}
-	a = m
+	a = *m
 	if a.active != screenFeed {
 		t.Errorf("active = %v, want screenFeed", a.active)
 	}
@@ -2170,7 +2170,7 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 	a := loggedInApp()
 	a.feedManualRefreshOnly = true
 
-	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		FeedManualRefreshOnly: false,
 		ImageViewer:           "terminal",
 	})
@@ -2212,7 +2212,7 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 func TestHandleTopics_SetMutedTopics_AppliesAndDebouncesSave(t *testing.T) {
 	a := loggedInApp()
 
-	a, cmd, ok := a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"crypto"}})
+	_, cmd, ok := a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"crypto"}})
 	if !ok {
 		t.Fatal("expected handleTopics to handle SetMutedTopicsMsg")
 	}
@@ -2240,7 +2240,7 @@ func TestHandleTopics_SetMutedTopics_AppliesAndDebouncesSave(t *testing.T) {
 	if !ok || res.err != nil {
 		t.Fatalf("expected a successful mutedTopicsSaveResultMsg, got %#v", c())
 	}
-	a, _, _ = a.handleTopics(res)
+	_, _, _ = a.handleTopics(res)
 	if len(a.mutedTopicsSaved) != 1 || a.mutedTopicsSaved[0] != "crypto" {
 		t.Errorf("mutedTopicsSaved = %v, want [crypto]", a.mutedTopicsSaved)
 	}
@@ -2270,10 +2270,10 @@ func TestHandleTopics_SetMutedTopics_RollsBackOnSaveFailure(t *testing.T) {
 	a.active = screenFeed
 	a.focus = focusMenu
 	// Login baseline: "news" is already muted and persisted.
-	a, _, _ = a.handleSettings(settingsLoadedMsg{settings: model.Settings{MutedTopics: []string{"news"}}})
+	_, _, _ = a.handleSettings(settingsLoadedMsg{settings: model.Settings{MutedTopics: []string{"news"}}})
 
 	// User mutes "crypto" too — optimistic.
-	a, _, _ = a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"news", "crypto"}})
+	_, _, _ = a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"news", "crypto"}})
 	if len(a.settings.MutedTopics) != 2 {
 		t.Fatalf("optimistic MutedTopics = %v, want [news crypto]", a.settings.MutedTopics)
 	}
@@ -2286,7 +2286,7 @@ func TestHandleTopics_SetMutedTopics_RollsBackOnSaveFailure(t *testing.T) {
 	}
 
 	seqBefore := a.mutedTopicsSaveSeq
-	a, cmd, ok := a.handleTopics(res)
+	_, cmd, ok := a.handleTopics(res)
 	if !ok {
 		t.Fatal("expected handleTopics to handle the failed result")
 	}
@@ -6179,7 +6179,7 @@ func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T
 		t.Fatal("setup: expected the first sync to schedule a fetch")
 	}
 
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
 	if _, failed := a.inlineImageFailedAt[key]; !failed {
 		t.Fatal("expected the failure to be recorded")
 	}
@@ -6208,7 +6208,7 @@ func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T
 func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 	a, key := feedAppWithOneImage(t)
 
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
 	if _, cached := a.inlineImageCache[key]; !cached {
 		t.Fatal("setup: expected the encode to be cached under the no-dither key")
 	}
@@ -6239,12 +6239,12 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 // leave a stale cooldown blocking future retries after the URL recovers.
 func TestInlineImageFailureCooldown_ClearedBySubsequentSuccess(t *testing.T) {
 	a, key := feedAppWithOneImage(t)
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
 	if _, failed := a.inlineImageFailedAt[key]; !failed {
 		t.Fatal("setup: expected the failure to be recorded")
 	}
 
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
 	if _, failed := a.inlineImageFailedAt[key]; failed {
 		t.Error("expected the failure record to be cleared after a subsequent success")
 	}
@@ -7062,7 +7062,7 @@ func TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol(t *testing
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = "" // auto — the only way DetectProtocol() ever gets consulted
 
-	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		GraphicsProtocol: "", // unchanged
 		Dithering:        true,
 		ImageViewer:      "terminal",
@@ -7106,7 +7106,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 
 	var cmd1 tea.Cmd
 	var ok bool
-	a, cmd1, ok = a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd1, ok = a.handleSettings(screens.SaveSettingsMsg{
 		WanderLust:       true,
 		Timezone:         "UTC+2",
 		ImageViewer:      "terminal",
@@ -7117,7 +7117,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 	}
 
 	var cmd2 tea.Cmd
-	a, cmd2, ok = a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd2, ok = a.handleSettings(screens.SaveSettingsMsg{
 		WanderLust:       true,
 		Timezone:         "UTC+5:30",
 		MaxThreadDepth:   7,
@@ -7131,7 +7131,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 	// Second (newer) save completes first.
 	saved2 := cmd2().(settingsSavedMsg)
 	var diskCmd2 tea.Cmd
-	a, diskCmd2, ok = a.handleSettings(saved2)
+	_, diskCmd2, ok = a.handleSettings(saved2)
 	if !ok {
 		t.Fatal("expected settingsSavedMsg to be handled")
 	}
@@ -7142,7 +7142,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 
 	// First (now-stale) save completes afterward.
 	saved1 := cmd1().(settingsSavedMsg)
-	a, cmd, ok := a.handleSettings(saved1)
+	_, cmd, ok := a.handleSettings(saved1)
 	if !ok {
 		t.Fatal("expected stale settingsSavedMsg to still report handled=true")
 	}
@@ -7248,7 +7248,7 @@ func TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves(t *testing.T)
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = ""
 
-	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		GraphicsProtocol: "kitty", // changed
 		ImageViewer:      "terminal",
 	})
@@ -7321,7 +7321,7 @@ func TestCheckForUpdateCmd_SkipsEphemeralSession(t *testing.T) {
 func TestHandleSettings_UpdateAvailableMsgShowsBanner(t *testing.T) {
 	a := loggedInApp()
 
-	a, cmd, ok := a.handleSettings(updateAvailableMsg{tag: "v9.9.9", url: "https://example.com/releases/v9.9.9"})
+	_, cmd, ok := a.handleSettings(updateAvailableMsg{tag: "v9.9.9", url: "https://example.com/releases/v9.9.9"})
 	if !ok {
 		t.Fatal("handleSettings did not claim updateAvailableMsg")
 	}
