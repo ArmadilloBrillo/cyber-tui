@@ -865,11 +865,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// briefly hold back inline image draws right after a screen switch.
 		a2.screenSwitchedAt = time.Now()
 	}
-	a3, syncCmd := a2.syncInlineImages()
+	syncCmd := a2.syncInlineImages()
 	if syncCmd == nil {
-		return a3, cmd
+		return *a2, cmd
 	}
-	return a3, tea.Batch(cmd, syncCmd)
+	return *a2, tea.Batch(cmd, syncCmd)
 }
 
 // maybeNotifyNewCMail fires a "C-Mail: new message" desktop toast when the total
@@ -3078,9 +3078,7 @@ func composeFailText(err error, saveKey string) string {
 }
 
 func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
-	var cmd tea.Cmd
-	*a, cmd = a.layout.DelegateUpdate(msg, *a)
-	return cmd
+	return a.layout.DelegateUpdate(msg, a)
 }
 
 // --- view ---
@@ -3407,7 +3405,7 @@ func (a App) ditheringEnabled() bool {
 // ditherOptions builds the imgview.DitherOptions to pass to Encode* when
 // ditheringEnabled is true, resolving the current theme's colors. Returns
 // nil when dithering is off.
-func (a App) ditherOptions() *imgview.DitherOptions {
+func (a *App) ditherOptions() *imgview.DitherOptions {
 	if !a.ditheringEnabled() {
 		return nil
 	}
@@ -3631,7 +3629,7 @@ const kittyModalPlacementID = 999000000
 // delete for a revived id before it can wipe out that key's freshly redrawn
 // placement. Returns the updated App, the current key->id mapping (for
 // fetchInlineImageCmd to look up), toDelete, and revived.
-func (a App) syncKittyPlacements(slots []screens.InlineImageSlot) (App, map[string]int, []int, []int) {
+func (a *App) syncKittyPlacements(slots []screens.InlineImageSlot) (map[string]int, []int, []int) {
 	if a.kittyPlacementIDs == nil {
 		a.kittyPlacementIDs = make(map[string]int)
 	}
@@ -3659,7 +3657,7 @@ func (a App) syncKittyPlacements(slots []screens.InlineImageSlot) (App, map[stri
 		visible[key] = struct{}{}
 	}
 	a.kittyVisibleKeys = visible
-	return a, a.kittyPlacementIDs, toDelete, revived
+	return a.kittyPlacementIDs, toDelete, revived
 }
 
 // accumulateKittyDeletes merges newlyDropped ids into pending. Merging
@@ -3751,12 +3749,12 @@ func accumulateStaleRows(pending, fresh []int) []int {
 //     bytes purely because its row/col changed, so Bubble Tea's line-diff
 //     already resends it, and a changed inlineImageStaleRows set
 //     independently forces the affected rows dirty too.
-func (a App) syncInlineImages() (App, tea.Cmd) {
+func (a *App) syncInlineImages() tea.Cmd {
 	var slots []screens.InlineImageSlot
 	var rowOrigin, colOrigin int
 	var selKey string
 	if a.canInlineImages() {
-		slots, rowOrigin, colOrigin, selKey = a.layout.InlineImageSlots(a)
+		slots, rowOrigin, colOrigin, selKey = a.layout.InlineImageSlots(*a)
 	}
 	var cmds []tea.Cmd
 
@@ -3764,7 +3762,7 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 	var placementIDs map[string]int
 	if isKitty {
 		var toDelete, revived []int
-		a, placementIDs, toDelete, revived = a.syncKittyPlacements(slots)
+		placementIDs, toDelete, revived = a.syncKittyPlacements(slots)
 		for _, id := range revived {
 			delete(a.pendingKittyDeletes, id)
 		}
@@ -3847,9 +3845,9 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		cmds = append(cmds, a.fetchInlineImageCmd(slot, key, placementID, ditherOpts))
 	}
 	if len(cmds) == 0 {
-		return a, nil
+		return nil
 	}
-	return a, tea.Batch(cmds...)
+	return tea.Batch(cmds...)
 }
 
 // inlineImageFetchedMsg reports the result of one fetchInlineImageCmd.

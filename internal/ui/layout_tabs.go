@@ -100,7 +100,7 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 }
 
 // DelegateUpdate routes a tea.Msg to the currently active screen model.
-func (l TabsLayout) DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
+func (l TabsLayout) DelegateUpdate(msg tea.Msg, a *App) tea.Cmd {
 	return delegateScreenUpdate(msg, a)
 }
 

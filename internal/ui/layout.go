@@ -20,7 +20,7 @@ import (
 type Layout interface {
 	View(a App) string
 	HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool)
-	DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd)
+	DelegateUpdate(msg tea.Msg, a *App) tea.Cmd
 	HasFocusedInput(a App) bool
 	ContentWidth(termWidth int) int
 	// ContentHeight returns the height to send to screens in WindowSizeMsg. Screens subtract
@@ -828,7 +828,7 @@ func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 // delegateScreenUpdate routes a message to the currently active screen model.
 // Both TabsLayout and MillerLayout have identical routing; this function
 // centralises it so adding a new screen only requires one edit here.
-func delegateScreenUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
+func delegateScreenUpdate(msg tea.Msg, a *App) tea.Cmd {
 	var cmd tea.Cmd
 	switch a.active {
 	case screenLogin:
@@ -860,5 +860,5 @@ func delegateScreenUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
 	case screenGlobe:
 		a.globe, cmd = a.globe.Update(msg)
 	}
-	return a, cmd
+	return cmd
 }

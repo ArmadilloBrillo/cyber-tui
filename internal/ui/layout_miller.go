@@ -262,7 +262,7 @@ func (l MillerLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 }
 
 // DelegateUpdate routes a tea.Msg to the currently active screen model.
-func (l MillerLayout) DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
+func (l MillerLayout) DelegateUpdate(msg tea.Msg, a *App) tea.Cmd {
 	return delegateScreenUpdate(msg, a)
 }
 

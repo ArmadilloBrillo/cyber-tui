@@ -6089,7 +6089,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 	// The very first sync reports every slot as "revived" too (nothing was
 	// visible before), which is harmless: the caller's revive step just
 	// deletes from an empty pendingKittyDeletes map, a no-op.
-	a, ids1, toDelete1, _ := a.syncKittyPlacements(slots1)
+	ids1, toDelete1, _ := a.syncKittyPlacements(slots1)
 	if len(toDelete1) != 0 {
 		t.Errorf("expected no deletes on first sync, got %v", toDelete1)
 	}
@@ -6099,7 +6099,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 	}
 
 	// Same slots again: ids must stay stable, no deletes/revives.
-	a, ids2, toDelete2, revived2 := a.syncKittyPlacements(slots1)
+	ids2, toDelete2, revived2 := a.syncKittyPlacements(slots1)
 	if ids2["post:p1:0"] != id1 || ids2["post:p2:0"] != id2 {
 		t.Errorf("expected ids to stay stable across syncs, got %v", ids2)
 	}
@@ -6109,7 +6109,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 
 	// p1 scrolls out of view, p3 comes into view.
 	slots2 := []screens.InlineImageSlot{{Key: "post:p2:0"}, {Key: "post:p3:0"}}
-	a, ids3, toDelete3, revived3 := a.syncKittyPlacements(slots2)
+	ids3, toDelete3, revived3 := a.syncKittyPlacements(slots2)
 	if len(toDelete3) != 1 || toDelete3[0] != id1 {
 		t.Errorf("expected exactly p1's id (%d) to be reported for deletion, got %v", id1, toDelete3)
 	}
@@ -6129,7 +6129,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 	// inlineImageCacheKey) valid, and is reported as revived so the caller
 	// cancels its still-pending delete.
 	slots3 := []screens.InlineImageSlot{{Key: "post:p1:0"}, {Key: "post:p2:0"}, {Key: "post:p3:0"}}
-	_, ids4, toDelete4, revived4 := a.syncKittyPlacements(slots3)
+	ids4, toDelete4, revived4 := a.syncKittyPlacements(slots3)
 	if ids4["post:p1:0"] != id1 {
 		t.Errorf("expected p1 to be revived with its original id %d, got %d", id1, ids4["post:p1:0"])
 	}
@@ -6174,7 +6174,7 @@ func feedAppWithOneImage(t *testing.T) (a App, key string) {
 func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T) {
 	a, key := feedAppWithOneImage(t)
 
-	a, cmd := a.syncInlineImages()
+	cmd := a.syncInlineImages()
 	if cmd == nil || !a.inlineImageFetching[key] {
 		t.Fatal("setup: expected the first sync to schedule a fetch")
 	}
@@ -6187,14 +6187,14 @@ func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T
 		t.Error("expected the in-flight marker to be cleared after the failure")
 	}
 
-	a, _ = a.syncInlineImages()
+	a.syncInlineImages()
 	if a.inlineImageFetching[key] {
 		t.Error("expected syncInlineImages to skip refetching within the cooldown window")
 	}
 
 	// Backdate the failure past the cooldown and confirm it retries.
 	a.inlineImageFailedAt[key] = time.Now().Add(-inlineImageFailureCooldown - time.Second)
-	a, _ = a.syncInlineImages()
+	a.syncInlineImages()
 	if !a.inlineImageFetching[key] {
 		t.Error("expected syncInlineImages to retry once the cooldown has lapsed")
 	}
@@ -6213,7 +6213,7 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 		t.Fatal("setup: expected the encode to be cached under the no-dither key")
 	}
 
-	a, cmd := a.syncInlineImages()
+	cmd := a.syncInlineImages()
 	if cmd != nil {
 		t.Fatal("setup: expected a cache hit (no fetch) before enabling dithering")
 	}
@@ -6221,7 +6221,7 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 	a.dithering = true
 	a.ditherSharpness = "sharp"
 
-	a, cmd = a.syncInlineImages()
+	cmd = a.syncInlineImages()
 	if cmd == nil {
 		t.Fatal("expected enabling dithering to invalidate the cached key and schedule a fresh fetch")
 	}
@@ -6270,7 +6270,7 @@ func TestSyncInlineImages_DisablingClearsStaleKittyPlacements(t *testing.T) {
 		},
 	}
 
-	a, _ = a.syncInlineImages()
+	a.syncInlineImages()
 
 	if len(a.kittyVisibleKeys) != 0 {
 		t.Errorf("expected kittyVisibleKeys to be cleared, got %v", a.kittyVisibleKeys)
@@ -6308,7 +6308,8 @@ func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
 		inlineImages:            false, // canInlineImages() false: current slots stay empty, so the tracked entry above reads as stale
 		inlineImageVisibleRects: stale,
 	}
-	sixelOut, cmd := sixel.syncInlineImages()
+	sixelOut := sixel
+	cmd := sixelOut.syncInlineImages()
 	if cmd != nil {
 		t.Error("expected no cmd for Sixel — the repaint decision is made in View(), not queued here")
 	}
@@ -6324,7 +6325,8 @@ func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
 		inlineImages:            false,
 		inlineImageVisibleRects: stale,
 	}
-	itermOut, cmd := iterm.syncInlineImages()
+	itermOut := iterm
+	cmd = itermOut.syncInlineImages()
 	if cmd != nil {
 		t.Error("expected no cmd for a stale iTerm2 row — it relies on forceRowsDirty in View(), not a cmd")
 	}
@@ -6363,7 +6365,8 @@ func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 		},
 	}
 
-	a1, _ := a.syncInlineImages()
+	a1 := a
+	a1.syncInlineImages()
 	if !slices.Contains(a1.inlineImageStaleRows, 10) {
 		t.Fatalf("setup: expected row 10 stale after the first call, got %v", a1.inlineImageStaleRows)
 	}
@@ -6375,7 +6378,8 @@ func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 	a1.inlineImageVisibleRects = map[string]inlineImageRect{
 		"post:B:0": {Row: 20, Col: 1, Cols: 10, Rows: 4},
 	}
-	a2, _ := a1.syncInlineImages()
+	a2 := a1
+	a2.syncInlineImages()
 	if !slices.Contains(a2.inlineImageStaleRows, 10) {
 		t.Errorf("expected row 10 from the first call to survive into the second call's accumulated staleRows, got %v", a2.inlineImageStaleRows)
 	}
@@ -6386,14 +6390,16 @@ func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 	// A quiet call (nothing newly stale — a2.inlineImageVisibleRects is
 	// already {}) immediately afterward, well within inlineImageStaleGrace,
 	// must NOT clear the accumulated set yet.
-	a3, _ := a2.syncInlineImages()
+	a3 := a2
+	a3.syncInlineImages()
 	if len(a3.inlineImageStaleRows) == 0 {
 		t.Fatalf("expected accumulated staleRows to survive a quiet call within the grace period, got %v", a3.inlineImageStaleRows)
 	}
 
 	// Once the grace period has elapsed, the next quiet call clears it.
 	a3.inlineImageStaleSince = time.Now().Add(-inlineImageStaleGrace - time.Second)
-	a4, _ := a3.syncInlineImages()
+	a4 := a3
+	a4.syncInlineImages()
 	if len(a4.inlineImageStaleRows) != 0 {
 		t.Errorf("expected accumulated staleRows cleared after the grace period elapsed, got %v", a4.inlineImageStaleRows)
 	}
@@ -6420,7 +6426,8 @@ func TestSyncInlineImages_StaleRowsSurviveQuietTick(t *testing.T) {
 		},
 	}
 
-	a1, _ := a.syncInlineImages()
+	a1 := a
+	a1.syncInlineImages()
 	if len(a1.inlineImageStaleRows) == 0 {
 		t.Fatalf("setup: expected staleRows populated after the first call, got %v", a1.inlineImageStaleRows)
 	}
@@ -6428,7 +6435,8 @@ func TestSyncInlineImages_StaleRowsSurviveQuietTick(t *testing.T) {
 	// An unrelated quiet call — a1.inlineImageVisibleRects is already {},
 	// so this computes zero new staleRows, standing in for an unrelated
 	// background tick's Update firing before the resend has flushed.
-	a2, _ := a1.syncInlineImages()
+	a2 := a1
+	a2.syncInlineImages()
 	if !slices.Contains(a2.inlineImageStaleRows, 10) {
 		t.Errorf("expected row 10 to survive an unrelated quiet Update within the grace period, got %v", a2.inlineImageStaleRows)
 	}
