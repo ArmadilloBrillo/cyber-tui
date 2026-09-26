@@ -72,7 +72,7 @@ Prefer not to pipe to a shell? Download [`install.sh`](install.sh), read it, the
 - **Feed** — browse posts from people you follow; compose new posts with topics; open any post for threaded replies; edit or delete your own posts and replies
 - **Notifications** — reply, follow, poke, bookmark, and chat-mention alerts; mark individual or all as read; jump straight to the referenced post, guild thread, or chatroom
 - **C-Mail** — direct messages with live updates via Firebase RTDB (SSE), typing indicators, sent-line recall, and IRC-style slash commands
-- **CIRC** — public chatrooms with live presence (who's online, idle status), `@mention` completion, and the same slash-command set as C-Mail (`/me`, `/dice`, `/8ball`, `/fortune`, `/poke`, text-style commands, and more)
+- **CIRC** — public chatrooms with live presence (who's online, idle status), `@mention` completion, and the same slash-command set as C-Mail (`/me`, `/dice`, `/8ball`, `/fortune`, `/poke`, `/bork`, text-style commands, and more)
 - **Journal** — private notes visible only to you; create, edit, and delete notes; browse full revision history
 - **Bookmarks** — save and browse bookmarked posts and replies; remove bookmarks inline
 - **Topics** — browse all tags sorted by post count, drill into a topic feed, and mute topics you don't want to see anywhere in the app
@@ -163,11 +163,16 @@ You can add any of the following fields manually. Most are also editable live fr
 |---|---|---|
 | `theme` | `"cyber"` | `"cyber"`, `"c64"`, `"vt320"`, `"bland"`, or `"custom"` |
 | `customPalette` | `null` | Your saved palette for the `"custom"` theme (written by the in-TUI theme editor — not hand-edited) |
-| `layout` | `""` | `""`/`"tabs"` = tab bar (default), `"miller"` = sidebar columns |
 | `density` | `""` | `""` = dense, `"relaxed"` = blank lines between list items |
 | `timezone` | `"UTC"` | Display timezone as a UTC offset label, e.g. `"UTC+2:00"` |
 | `hideGlobeTab` | `false` | Hide the Globe tab from the tab bar and navigation |
 | `maxThreadDepth` | `3` | How many levels of reply nesting are visually indented in post detail |
+
+**Compose**
+
+| Field | Default | Description |
+|---|---|---|
+| `hardBreakKey` | `"alt+enter"` | Key that inserts a hard line break while writing a post or reply (Enter inserts a paragraph break). A key combo with ctrl, alt or shift, e.g. `"ctrl+l"` for terminals that intercept `alt+enter`. Also editable in Settings under "compose": Enter on the row, then press the combo |
 
 **Images** (config-file-only except `imageViewer`, which also has a Settings toggle)
 

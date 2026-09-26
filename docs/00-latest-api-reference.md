@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.8.10
+# ᑕ¥βєяรקค¢є API v0.8.11
 
 ## Access
 
@@ -856,7 +856,7 @@ GET /v1/notifications/unread-count
 
 Returns `{ "data": { "count": 7, "exact": true } }` -- the number of unread notifications for the authenticated user.
 
-The count covers the same set `GET /v1/notifications` returns, so a badge built on it matches the list. `exact` is `false` once you have more than 100 unread, where `count` covers only the 100 most recent -- render "99+" instead of the number when that happens.
+The count covers the same set `GET /v1/notifications` returns, so a badge built on it matches the list. `count` stops at 100. `exact` is `false` when `count` is a lower bound rather than the real number -- render "99+" when `exact` is `false` and `count` is 100, otherwise show `count`. Notifications you have switched off never affect `exact`: someone with two visible unread and a pile of muted ones gets `{ "count": 2, "exact": true }`.
 
 Cached for 5 seconds. Marking anything read clears the cache, so the count drops immediately.
 

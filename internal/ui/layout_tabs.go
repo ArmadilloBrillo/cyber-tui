@@ -31,10 +31,8 @@ func hintRows(hints []hint, rowFn func(string, string) string) []string {
 // TabsLayout implements the classic horizontal tab bar layout.
 type TabsLayout struct{}
 
-func (l TabsLayout) NeedsCompactAutoFill(termHeight int) int { return 0 }
-
 // View renders the full terminal output for the tabs layout.
-func (l TabsLayout) View(a App) string {
+func (l TabsLayout) View(a *App) string {
 	contentHeight := a.height - theme.ChromeHeight
 	content := lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(l.renderActiveScreen(a))
 	base := lipgloss.JoinVertical(lipgloss.Left,
@@ -73,20 +71,15 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 		// now it cycles the same as everywhere else (tabIndexOf anchors on
 		// postDetailReturn, so this never lands back on the origin tab in one
 		// step; see activateScreen's escape hatch for how that's reached).
-		if a.focus == focusMenu {
-			var cmd tea.Cmd
-			a, cmd = navigateTabBy(a, -1)
-			return a, cmd, true
-		}
+		var cmd tea.Cmd
+		a, cmd = navigateTabBy(a, -1)
+		return a, cmd, true
 	case "right":
-		if a.focus == focusMenu {
-			var cmd tea.Cmd
-			a, cmd = navigateTabBy(a, +1)
-			return a, cmd, true
-		}
+		var cmd tea.Cmd
+		a, cmd = navigateTabBy(a, +1)
+		return a, cmd, true
 	case "ctrl+left":
-		// Unlike plain "left", not gated on focus == focusMenu: this is the
-		// ctrl-twin that reaches tab-cycling from CMail/CIRC detail mode,
+		// The ctrl-twin that reaches tab-cycling from CMail/CIRC detail mode,
 		// where the compose input holds focus for the entire view.
 		var cmd tea.Cmd
 		a, cmd = navigateTabBy(a, -1)
@@ -100,7 +93,7 @@ func (l TabsLayout) HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool) {
 }
 
 // DelegateUpdate routes a tea.Msg to the currently active screen model.
-func (l TabsLayout) DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
+func (l TabsLayout) DelegateUpdate(msg tea.Msg, a *App) tea.Cmd {
 	return delegateScreenUpdate(msg, a)
 }
 
@@ -123,6 +116,8 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 		return a.journal.ComposeActive()
 	case screenSearch:
 		return a.search.InputFocused()
+	case screenSettings:
+		return a.settingsScreen.Capturing()
 	}
 	return false
 }
@@ -130,11 +125,7 @@ func (l TabsLayout) HasFocusedInput(a App) bool {
 func (l TabsLayout) ContentWidth(termWidth int) int   { return termWidth }
 func (l TabsLayout) ContentHeight(termHeight int) int { return termHeight }
 
-// ModalMaxWidth: no side chrome in this layout (the tab bar is a top row,
-// not a side pane), so a modal can use the full terminal width.
-func (l TabsLayout) ModalMaxWidth(termWidth int) int { return termWidth }
-
-func (l TabsLayout) renderTabBar(a App) string {
+func (l TabsLayout) renderTabBar(a *App) string {
 	var tabs string
 	for _, t := range visibleTabs(a) {
 		badge := ""
@@ -193,7 +184,7 @@ func (l TabsLayout) renderTabBar(a App) string {
 // the "N new entries" message while posts are staged from the background
 // feed poll. Hidden during an active refresh so it doesn't sit alongside the
 // viewport's own "fetching new posts..." message for that instant.
-func (l TabsLayout) renderFeedPendingBar(a App) string {
+func (l TabsLayout) renderFeedPendingBar(a *App) string {
 	if a.active != screenFeed || a.feed.IsRefreshing() {
 		return ""
 	}
@@ -203,7 +194,7 @@ func (l TabsLayout) renderFeedPendingBar(a App) string {
 	return ""
 }
 
-func (l TabsLayout) renderActiveScreen(a App) string {
+func (l TabsLayout) renderActiveScreen(a *App) string {
 	switch a.active {
 	case screenFeed:
 		return a.feed.View()
@@ -235,14 +226,14 @@ func (l TabsLayout) renderActiveScreen(a App) string {
 	return ""
 }
 
-func (l TabsLayout) renderBottomBar(a App) string {
+func (l TabsLayout) renderBottomBar(a *App) string {
 	if a.notifyText == "" {
 		return l.renderStatusBar(a)
 	}
 	return l.renderNotification(a)
 }
 
-func (l TabsLayout) renderNotification(a App) string {
+func (l TabsLayout) renderNotification(a *App) string {
 	color := theme.ColorGreen
 	prefix := "✓ "
 	switch a.notifyLevel {
@@ -265,7 +256,7 @@ func (l TabsLayout) renderNotification(a App) string {
 		Render(prefix + text + suffix)
 }
 
-func (l TabsLayout) renderStatusBar(a App) string {
+func (l TabsLayout) renderStatusBar(a *App) string {
 	user := sbStyle().Foreground(theme.ColorCyan).Bold(true)
 	meta := sbStyle().Foreground(theme.ColorMeta)
 	sep := sbStyle().Foreground(theme.ColorMuted).Render(" · ")
@@ -328,7 +319,7 @@ func (l TabsLayout) renderStatusBar(a App) string {
 	return bg.Padding(0, 1).Render(bar)
 }
 
-func (l TabsLayout) screenHints(a App) []hint {
+func (l TabsLayout) screenHints(a *App) []hint {
 	more := hint{"?", "more"}
 	switch a.active {
 	case screenFeed:
@@ -508,7 +499,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 	globalSection := lipgloss.JoinVertical(lipgloss.Left, globalRows...)
 
 	section := func(title string, extra ...string) string {
-		parts := append([]string{sectionStyle.Render(title)}, hintRows(l.screenHints(a), row)...)
+		parts := append([]string{sectionStyle.Render(title)}, hintRows(l.screenHints(&a), row)...)
 		parts = append(parts, extra...)
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
@@ -517,7 +508,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			localSection = section("feed (compose)", row("Enter", "paragraph"))
+			localSection = section("feed (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"), row("tab, space", "tick public / nsfw / bork"))
 		} else {
 			localSection = section("feed",
 				row("p", "view profile"),
@@ -528,7 +519,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		}
 	case screenPostDetail:
 		if a.postDetail.ComposeActive() {
-			localSection = section("post detail (compose)", row("Enter", "paragraph"))
+			localSection = section("post detail (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"))
 		} else {
 			localSection = section("post detail",
 				row("d", "delete own"),
@@ -559,7 +550,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		)
 	case screenJournal:
 		if a.journal.ComposeActive() {
-			localSection = section("journal (editing)", row("Enter", "paragraph"))
+			localSection = section("journal (editing)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"))
 		} else {
 			localSection = section("journal",
 				row("h", "revision history"),
@@ -569,7 +560,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		localSection = section("bookmarks")
 	case screenGuilds:
 		if a.guilds.ComposeActive() {
-			localSection = section("guilds (compose)", row("Enter", "paragraph"))
+			localSection = section("guilds (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"))
 		} else if a.guilds.IsBrowsingMembers() {
 			localSection = section("guilds (members)", row("enter", "view profile"))
 		} else if a.guilds.IsBrowsingGuild() {
@@ -597,12 +588,16 @@ func (l TabsLayout) renderHelpModal(a App) string {
 		localSection = section(t)
 	case screenChatrooms:
 		if a.chatrooms.IsShowingDetail() {
-			localSection = section("circ (room)")
+			localSection = section("circ (room)", row("/bork <text>", "speak like a swedish chef"))
 		} else {
 			localSection = section("circ")
 		}
 	case screenCMail:
-		localSection = section("c-mail")
+		if a.cmail.IsShowingDetail() {
+			localSection = section("c-mail", row("/bork <text>", "speak like a swedish chef"))
+		} else {
+			localSection = section("c-mail")
+		}
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
@@ -647,6 +642,10 @@ func (l TabsLayout) renderIconPicker(a App) string {
 
 func (l TabsLayout) renderSongPrompt(a App) string {
 	return a.songPrompt.View()
+}
+
+func (l TabsLayout) renderKeywordEditor(a App) string {
+	return a.keywordEditor.View()
 }
 
 // renderImageModal returns the bordered text-only shell for the image overlay.

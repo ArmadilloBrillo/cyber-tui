@@ -85,9 +85,6 @@ type Config struct {
 	// fullscreen image viewer.
 	InlineImages bool `json:"inlineImages,omitempty"`
 
-	// Layout selects the UI layout. "" or "tabs" = tab bar (default); "miller" = sidebar columns.
-	Layout string `json:"layout,omitempty"`
-
 	// GraphicsProtocol overrides automatic terminal graphics-protocol
 	// detection. "" (default) autodetects via env vars and a DA1 probe; set
 	// to "kitty", "iterm2", "sixel", or "none" to force a choice when
@@ -120,6 +117,13 @@ type Config struct {
 	// from an SSH-hosted (ephemeral) session — the toast would pop on the host.
 	DesktopNotifications bool `json:"desktopNotifications,omitempty"`
 
+	// KeywordAlerts is a user-edited list of words/phrases that raise a
+	// Notifications-tab entry (and, subject to DesktopNotifications, an OSC 9
+	// toast) whenever they appear as a whole word anywhere content is scanned
+	// — cIRC, C-Mail, posts, replies, and post topics/tags. Edited via the
+	// Settings screen. Empty by default.
+	KeywordAlerts []string `json:"keywordAlerts,omitempty"`
+
 	// TypingIndicatorsDisabled turns off C-Mail's whole typing-indicator
 	// subsystem (see docs/00-battery-audit.md item #6): the inbound
 	// typing-presence RTDB subscription, the outbound announce/clear calls
@@ -145,6 +149,12 @@ type Config struct {
 	// can detect — see docs/46-image-modal-scale.md. Also adjustable live
 	// with +/- while the modal is open, for the current session only.
 	ImageScale float64 `json:"imageScale,omitempty"`
+
+	// HardBreakKey is the compose key that inserts a markdown hard line break,
+	// as a Bubble Tea key string with a ctrl, alt or shift modifier
+	// ("alt+enter", "ctrl+l"). Empty means the default. The value is validated
+	// where it is used, since the key rules live with the compose screens.
+	HardBreakKey string `json:"hardBreakKey,omitempty"`
 }
 
 // MinImageScale and MaxImageScale bound both the config value and live +/-
@@ -191,6 +201,15 @@ func (c Config) GetMaxThreadDepth() int {
 		return 3
 	}
 	return c.MaxThreadDepth
+}
+
+// GetHardBreakKey returns HardBreakKey, substituting the default
+// ("alt+enter") when the field is empty (absent from the config file).
+func (c Config) GetHardBreakKey() string {
+	if c.HardBreakKey == "" {
+		return "alt+enter"
+	}
+	return c.HardBreakKey
 }
 
 // DefaultPath returns the canonical path for the config file: ~/.cyber-tui.json.

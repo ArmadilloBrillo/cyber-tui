@@ -65,7 +65,7 @@ type notifCategory struct {
 }
 
 var notifCategories = []notifCategory{
-	{label: "mentions", types: []string{"reply_mention", "post_mention", "chat_mention", "graffiti_mention"}},
+	{label: "mentions", types: []string{"reply_mention", "post_mention", "chat_mention", "graffiti_mention", "keyword_match"}},
 	{label: "social", types: []string{"new_follower", "unfollowed", "poke", "bookmark"}},
 	{label: "threads", types: []string{"reply", "thread_reply", "guild_new_thread", "guild_chat_message", "new_post_friend", "new_post_following"}},
 	{label: "c-mail", types: []string{"dm_message"}},
@@ -94,6 +94,7 @@ func notifFilterOptionLabel(i int) string {
 
 type NotificationsModel struct {
 	notifs              []model.Notification
+	localMentions       []model.Notification // client-synthesized notifications (bare-word mentions, keyword matches), read or unread; never returned by the server, re-merged into notifs across every SetNotifs reload so they last the whole session
 	notifOffsets        []int // start line of each notification within the viewport content
 	viewport            viewport.Model
 	width               int
@@ -105,6 +106,7 @@ type NotificationsModel struct {
 	refreshing          bool
 	exhausted           bool
 	nextCursor          string
+	loaded              bool // true once the first page has ever come back; distinct from hasPaginated
 	hasPaginated        bool
 	showUnreadOnly      bool
 	err                 error
@@ -124,6 +126,12 @@ func NewNotificationsModel() NotificationsModel {
 // IsReady reports whether the viewport has been initialised.
 func (m NotificationsModel) IsReady() bool { return m.ready }
 
+// IsLoaded reports whether the first page has ever been fetched, so
+// activateScreen (layout.go) only refetches on genuinely first entry —
+// mirrors BookmarksModel/GuildsModel/TopicsModel's IsLoaded. Deliberately
+// separate from HasPaginated, which tracks scroll depth, not load state.
+func (m NotificationsModel) IsLoaded() bool { return m.loaded }
+
 func (m NotificationsModel) SetFetching() NotificationsModel {
 	m.fetching = true
 	m.err = nil
@@ -134,13 +142,14 @@ func (m NotificationsModel) SetFetching() NotificationsModel {
 }
 
 func (m NotificationsModel) SetNotifs(notifs []model.Notification, cursor string) NotificationsModel {
-	m.notifs = notifs
+	m.notifs = mergeNotifsByTime(m.localMentions, notifs)
 	m.nextCursor = cursor
 	m.exhausted = cursor == ""
 	m.err = nil
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
+	m.loaded = true
 	m.hasPaginated = false
 	m.selectedIndex = 0
 	if m.ready {
@@ -161,6 +170,43 @@ func (m NotificationsModel) AppendNotifs(notifs []model.Notification, cursor str
 		m = m.refreshContent() // selectedIndex preserved; scroll position preserved
 	}
 	return m
+}
+
+// AddLocalMention inserts a client-synthesized notification (a bare-word
+// cIRC mention the server never creates) into the list at its correct
+// chronological position. Every entry, read or unread, is also tracked in
+// localMentions so SetNotifs re-merges it across a server reload — the
+// server never returns these, so otherwise they'd vanish for good.
+func (m NotificationsModel) AddLocalMention(n model.Notification) NotificationsModel {
+	m.localMentions = mergeNotifsByTime([]model.Notification{n}, m.localMentions)
+	m.notifs = mergeNotifsByTime([]model.Notification{n}, m.notifs)
+	if m.ready {
+		m = m.refreshContent()
+	}
+	return m
+}
+
+// mergeNotifsByTime merges two notification slices that are each already
+// sorted newest-first into one newest-first slice. Used to fold
+// client-synthesized local mentions into the server-sourced list without
+// pinning them above genuinely newer server notifications — a plain prepend
+// would leave a local mention stuck at the top indefinitely once real
+// notifications arrive after it.
+func mergeNotifsByTime(a, b []model.Notification) []model.Notification {
+	merged := make([]model.Notification, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		if b[j].CreatedAt.After(a[i].CreatedAt) {
+			merged = append(merged, b[j])
+			j++
+		} else {
+			merged = append(merged, a[i])
+			i++
+		}
+	}
+	merged = append(merged, a[i:]...)
+	merged = append(merged, b[j:]...)
+	return merged
 }
 
 func (m NotificationsModel) SetError(err error) NotificationsModel {
@@ -232,6 +278,18 @@ func (m NotificationsModel) UnreadCount() int {
 	return n
 }
 
+// LocalUnreadCount returns the number of client-synthesized (never
+// server-created) unread notifications currently tracked.
+func (m NotificationsModel) LocalUnreadCount() int {
+	n := 0
+	for _, l := range m.localMentions {
+		if !l.Read {
+			n++
+		}
+	}
+	return n
+}
+
 func (m NotificationsModel) location() *time.Location {
 	if m.loc == nil {
 		return time.UTC
@@ -244,6 +302,12 @@ func (m NotificationsModel) MarkRead(id string) NotificationsModel {
 	for i, n := range m.notifs {
 		if n.ID == id {
 			m.notifs[i].Read = true
+			break
+		}
+	}
+	for i, n := range m.localMentions {
+		if n.ID == id {
+			m.localMentions[i].Read = true
 			break
 		}
 	}
@@ -261,6 +325,9 @@ func (m NotificationsModel) MarkRead(id string) NotificationsModel {
 func (m NotificationsModel) MarkAllRead() NotificationsModel {
 	for i := range m.notifs {
 		m.notifs[i].Read = true
+	}
+	for i := range m.localMentions {
+		m.localMentions[i].Read = true
 	}
 	if m.ready {
 		m = m.refreshContent()
@@ -429,6 +496,24 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 			}
 			n := visible[m.selectedIndex]
 			switch n.Type {
+			case "keyword_match":
+				switch {
+				case n.RoomSlug != "":
+					// cIRC keyword match — jump straight to the room.
+					m = m.MarkRead(n.ID)
+					notifID, slug := n.ID, n.RoomSlug
+					return m, func() tea.Msg { return OpenRoomMsg{RoomSlug: slug, NotifID: notifID} }
+				case n.MessageContent != "":
+					// C-Mail keyword match — open the conversation.
+					m = m.MarkRead(n.ID)
+					notifID, username := n.ID, n.Actor.Username
+					return m, tea.Batch(
+						func() tea.Msg { return MarkNotifReadMsg{ID: notifID} },
+						func() tea.Msg { return StartConversationMsg{Username: username} },
+					)
+				}
+				// Post/reply keyword matches fall through to the
+				// TargetID-based post navigation below.
 			case "chat_mention":
 				// Jump straight to the cIRC room the mention happened in.
 				m = m.MarkRead(n.ID)
@@ -743,6 +828,22 @@ func baseNotifSummary(n model.Notification) string {
 		return "sent you a gift."
 	case "gift_sent":
 		return "gift sent."
+	case "keyword_match":
+		kw := `"` + n.MatchedKeyword + `"`
+		switch {
+		case n.RoomName != "":
+			return "keyword " + kw + " matched in #" + n.RoomName + "."
+		case n.RoomSlug != "":
+			return "keyword " + kw + " matched in #" + n.RoomSlug + "."
+		case n.ReplyContent != "":
+			return "keyword " + kw + " matched in a reply."
+		case n.PostContent != "":
+			return "keyword " + kw + " matched in a post."
+		case n.MessageContent != "":
+			return "keyword " + kw + " matched in a C-Mail message."
+		default:
+			return "keyword " + kw + " matched."
+		}
 	default:
 		return n.Type
 	}
@@ -796,6 +897,8 @@ func notifIcon(n model.Notification) string {
 		sym = "⚠"
 	case "gift_received", "gift_sent":
 		sym = "¤"
+	case "keyword_match":
+		sym = "⚑"
 	default:
 		sym = "·"
 	}

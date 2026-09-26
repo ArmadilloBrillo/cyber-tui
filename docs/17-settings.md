@@ -72,6 +72,12 @@ type Settings struct {
 
 ---
 
+## Local Setting: Hard Line Break Key
+
+Not part of the API settings. Stored as `hardBreakKey` in `~/.cyber-tui.json` and edited in the Settings screen under "compose" ("hard line break key"). It is the compose key that inserts a hard line break (default `alt+enter`), any combo with a ctrl, alt or shift modifier. The row captures a keypress instead of offering a list: `enter` on the row, then press the combo, and it is bound at once; `esc` cancels. The value reaches every compose box through `SharedConfigMsg.HardBreakKey`. See `docs/00-project-reference.md` (Compose) for the rules on which keys can be bound.
+
+---
+
 ## API Endpoints
 
 | Method | Path | Purpose |

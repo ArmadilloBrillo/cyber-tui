@@ -1,9 +1,12 @@
 package screens
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/model"
 )
 
@@ -145,6 +148,41 @@ func TestPostComposePanel_Open_ResetsAttachment(t *testing.T) {
 	}
 }
 
+func TestPostComposePanel_Bork_TabReachesToggleAndSpaceFlipsIt(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.Open(false)
+	m.focus = postFieldNSFW
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != postFieldBork {
+		t.Fatalf("focus after Tab from nsfw = %v, want postFieldBork", m.focus)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if !m.IsBork() {
+		t.Error("IsBork() = false after Space on the bork toggle, want true")
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "[x] bork") {
+		t.Errorf("expected a ticked bork box in the view, got: %q", view)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if m.IsBork() {
+		t.Error("IsBork() = true after a second Space, want false")
+	}
+}
+
+func TestPostComposePanel_Bork_ResetsOnOpenAndOpenForEdit(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m.isBork = true
+	m, _ = m.Open(false)
+	if m.IsBork() {
+		t.Error("IsBork() = true after Open(), want false")
+	}
+	m.isBork = true
+	m, _ = m.OpenForEdit(model.Post{Content: "hi"})
+	if m.IsBork() {
+		t.Error("IsBork() = true after OpenForEdit(), want false")
+	}
+}
+
 // TestPostComposePanel_PanelHeight_GrowsForPendingAudio guards the layout
 // math: a pending audio attachment adds exactly one row, the same as an
 // image attachment does, so App's viewport-height recalculation stays in
@@ -155,5 +193,163 @@ func TestPostComposePanel_PanelHeight_GrowsForPendingAudio(t *testing.T) {
 	m = m.SetPendingAudio(&model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Artist: "a", Title: "t"})
 	if got := m.PanelHeight(); got != base+1 {
 		t.Errorf("PanelHeight() = %d after SetPendingAudio, want %d", got, base+1)
+	}
+}
+
+var (
+	altEnter = tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+	plainEnt = tea.KeyMsg{Type: tea.KeyEnter}
+	ctrlL    = tea.KeyMsg{Type: tea.KeyCtrlL}
+)
+
+func openReply(t *testing.T, spec string) ComposeModel {
+	t.Helper()
+	m := NewComposeModel(80)
+	if spec != "" {
+		m = m.SetHardBreakKey(spec)
+	}
+	m, _ = m.Open("reply", "write")
+	return m
+}
+
+func TestCompose_HardBreak_DefaultAltEnterInsertsHardBreak(t *testing.T) {
+	m := openReply(t, "")
+	m, _ = m.Update(runesMsg("a"))
+	m, _ = m.Update(altEnter)
+	m, _ = m.Update(runesMsg("b"))
+	if got := m.Content(); got != "a  \nb" {
+		t.Errorf("Content = %q, want %q", got, "a  \nb")
+	}
+}
+
+func TestCompose_HardBreak_EnterStillInsertsParagraphBreak(t *testing.T) {
+	m := openReply(t, "")
+	m, _ = m.Update(runesMsg("a"))
+	m, _ = m.Update(plainEnt)
+	m, _ = m.Update(runesMsg("b"))
+	if got := m.Content(); got != "a\n\nb" {
+		t.Errorf("Content = %q, want %q", got, "a\n\nb")
+	}
+}
+
+func TestCompose_HardBreak_ConfiguredKeyReplacesDefault(t *testing.T) {
+	m := openReply(t, "ctrl+l")
+	m, _ = m.Update(runesMsg("a"))
+	m, _ = m.Update(altEnter)
+	m, _ = m.Update(ctrlL)
+	m, _ = m.Update(runesMsg("b"))
+	if got := m.Content(); got != "a  \nb" {
+		t.Errorf("Content = %q, want %q", got, "a  \nb")
+	}
+}
+
+func TestCompose_HardBreak_InvalidSpecFallsBackToDefault(t *testing.T) {
+	m := openReply(t, "ctrl+s")
+	m, _ = m.Update(runesMsg("a"))
+	m, _ = m.Update(altEnter)
+	if got := m.Content(); got != "a  \n" {
+		t.Errorf("Content = %q, want %q", got, "a  \n")
+	}
+}
+
+func TestCompose_Paste_ConvertsSingleNewlines(t *testing.T) {
+	m := openReply(t, "")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("one\ntwo\n\nthree"), Paste: true})
+	if got := m.Content(); got != "one  \ntwo\n\nthree" {
+		t.Errorf("Content = %q, want %q", got, "one  \ntwo\n\nthree")
+	}
+}
+
+func TestCompose_Typing_NotConvertedLikePaste(t *testing.T) {
+	m := openReply(t, "")
+	m, _ = m.Update(runesMsg("a\nb"))
+	if got := m.Content(); got != "a\nb" {
+		t.Errorf("Content = %q, want %q", got, "a\nb")
+	}
+}
+
+func openBodyPanel(t *testing.T, spec string) PostComposePanel {
+	t.Helper()
+	m := NewPostComposePanel(80)
+	if spec != "" {
+		m = m.SetHardBreakKey(spec)
+	}
+	m, _ = m.Open(false)
+	m.focus = postFieldBody
+	m.textarea.Focus()
+	return m
+}
+
+func TestPostComposePanel_HardBreak_BodyInsertsHardBreak(t *testing.T) {
+	m := openBodyPanel(t, "")
+	m, _ = m.Update(runesMsg("a"))
+	m, _ = m.Update(altEnter)
+	m, _ = m.Update(runesMsg("b"))
+	if got := m.textarea.Value(); got != "a  \nb" {
+		t.Errorf("body = %q, want %q", got, "a  \nb")
+	}
+}
+
+func TestPostComposePanel_HardBreak_NotInsertedOutsideBody(t *testing.T) {
+	m := openBodyPanel(t, "")
+	m.focus = postFieldTitle
+	m, _ = m.Update(altEnter)
+	if got := m.textarea.Value(); got != "" {
+		t.Errorf("body = %q, want empty", got)
+	}
+}
+
+func TestPostComposePanel_Paste_ConvertsSingleNewlines(t *testing.T) {
+	m := openBodyPanel(t, "")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a\nb"), Paste: true})
+	if got := m.textarea.Value(); got != "a  \nb" {
+		t.Errorf("body = %q, want %q", got, "a  \nb")
+	}
+}
+
+// rowAfterTail returns the rendered row directly below the one containing
+// "tail", or "" when there is none.
+func rowAfterTail(view string) string {
+	rows := strings.Split(ansi.Strip(view), "\n")
+	for i, r := range rows {
+		if strings.Contains(r, "tail") && i+1 < len(rows) {
+			return rows[i+1]
+		}
+	}
+	return ""
+}
+
+// The hard-break key must keep the new cursor row in view once the editor has
+// reached its maximum height, like Enter does. The app renders between
+// keypresses, so the tests do too.
+func TestCompose_HardBreak_ScrollsWhenEditorAtMaxHeight(t *testing.T) {
+	m := openReply(t, "")
+	for i := 1; i <= composeMaxLines+4; i++ {
+		m, _ = m.Update(runesMsg(fmt.Sprintf("line%d", i)))
+		_ = m.View()
+		m, _ = m.Update(altEnter)
+		_ = m.View()
+	}
+	m, _ = m.Update(runesMsg("tail"))
+	_ = m.View()
+	m, _ = m.Update(altEnter)
+	if row := rowAfterTail(m.View()); !strings.Contains(row, "┃") {
+		t.Errorf("the new line after a hard break is out of view; row below tail = %q", row)
+	}
+}
+
+func TestPostComposePanel_HardBreak_ScrollsWhenBodyAtMaxHeight(t *testing.T) {
+	m := openBodyPanel(t, "")
+	for i := 1; i <= composeMaxLines+4; i++ {
+		m, _ = m.Update(runesMsg(fmt.Sprintf("line%d", i)))
+		_ = m.View()
+		m, _ = m.Update(altEnter)
+		_ = m.View()
+	}
+	m, _ = m.Update(runesMsg("tail"))
+	_ = m.View()
+	m, _ = m.Update(altEnter)
+	if row := rowAfterTail(m.View()); !strings.Contains(row, "┃") {
+		t.Errorf("the new line after a hard break is out of view; row below tail = %q", row)
 	}
 }

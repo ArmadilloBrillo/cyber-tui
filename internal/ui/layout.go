@@ -18,28 +18,15 @@ import (
 // Layout arranges the app's screens and handles navigation for a specific UI paradigm.
 // All application state lives on App; Layout provides only method implementations.
 type Layout interface {
-	View(a App) string
+	View(a *App) string
 	HandleNav(msg tea.KeyMsg, a App) (App, tea.Cmd, bool)
-	DelegateUpdate(msg tea.Msg, a App) (App, tea.Cmd)
+	DelegateUpdate(msg tea.Msg, a *App) tea.Cmd
 	HasFocusedInput(a App) bool
 	ContentWidth(termWidth int) int
 	// ContentHeight returns the height to send to screens in WindowSizeMsg. Screens subtract
 	// theme.ChromeHeight to get viewport height; layouts that use fewer chrome rows must compensate
 	// so the viewport fills the available content pane exactly.
 	ContentHeight(termHeight int) int
-	// ModalMaxWidth returns the widest a modal can be rendered at without its
-	// left edge dipping into reserved side chrome (e.g. Miller layout's nav
-	// sidebar), given every modal is centered against the *full* termWidth by
-	// compositeOverlays/overlayCenter, not just the content pane. Centering
-	// splits the unused space evenly on both sides, so avoiding a left-side
-	// obstruction of width r requires reserving 2*r off the total, not just
-	// r — see MillerLayout's implementation. Layouts with no side chrome
-	// (TabsLayout) return termWidth unchanged.
-	ModalMaxWidth(termWidth int) int
-	// NeedsCompactAutoFill returns the minimum number of items needed to fill the compact list
-	// column at the given terminal height. Returns 0 if the layout has no compact list column.
-	// App uses this to auto-fetch additional pages after the initial load.
-	NeedsCompactAutoFill(termHeight int) int
 	// InlineImageSlots returns the active screen's visible inline-image slots,
 	// this layout's screen origin for them, and a selection identity for the
 	// active screen — see modalRenderer's method of the same name (Layout and
@@ -51,14 +38,9 @@ type Layout interface {
 	InlineImageSlots(a App) (slots []screens.InlineImageSlot, rowOrigin, colOrigin int, selKey string)
 }
 
-// modalRenderer is implemented by both TabsLayout and MillerLayout so
-// compositeOverlays can render each layout's own modal content while the
-// compositing order — and, critically, the inline-image injection step —
-// lives in exactly one place. Everything here genuinely varies per layout
-// (chrome, colors, sizing); the order overlays get checked and composited
-// in does not, and used to be duplicated by hand between layout_tabs.go and
-// layout_miller.go, which is how MillerLayout ended up never calling
-// injectInlineImages at all.
+// modalRenderer is implemented by TabsLayout so compositeOverlays can render
+// the layout's own modal content while the compositing order — and,
+// critically, the inline-image injection step — lives in exactly one place.
 type modalRenderer interface {
 	renderThemePicker(a App) string
 	renderThemeEditor(a App) string
@@ -68,11 +50,11 @@ type modalRenderer interface {
 	renderIconPicker(a App) string
 	renderAttachURLPrompt(a App) string
 	renderSongPrompt(a App) string
+	renderKeywordEditor(a App) string
 	renderImageModal(a App) string
 	// InlineImageSlots returns the active screen's visible inline-image
 	// slots plus this layout's screen origin (rowOrigin, colOrigin) for
-	// them — the origin varies per layout (and, within Miller, per screen)
-	// since it depends on chrome that differs between layouts. selKey is
+	// them. selKey is
 	// unused by compositeOverlays (it only needs positioning) but is part of
 	// the signature since this is the same physical method as Layout's.
 	InlineImageSlots(a App) (slots []screens.InlineImageSlot, rowOrigin, colOrigin int, selKey string)
@@ -83,26 +65,28 @@ type modalRenderer interface {
 // image injection — on top of base, in that fixed order. Called once as the
 // last line of each Layout's View(), so no implementation can skip a step
 // or return early partway through.
-func compositeOverlays(l modalRenderer, a App, base string) string {
+func compositeOverlays(l modalRenderer, a *App, base string) string {
 	switch {
 	case a.themePickerOpen:
-		return overlayCenter(base, l.renderThemePicker(a), a.width, a.height)
+		return overlayCenter(base, l.renderThemePicker(*a), a.width, a.height)
 	case a.themeEditorOpen:
-		return overlayCenter(base, l.renderThemeEditor(a), a.width, a.height)
+		return overlayCenter(base, l.renderThemeEditor(*a), a.width, a.height)
 	case a.pathPromptOpen:
-		return overlayCenter(base, l.renderPathPrompt(a), a.width, a.height)
+		return overlayCenter(base, l.renderPathPrompt(*a), a.width, a.height)
 	case a.helpModalOpen:
-		return overlayCenter(base, l.renderHelpModal(a), a.width, a.height)
+		return overlayCenter(base, l.renderHelpModal(*a), a.width, a.height)
 	case a.urlPickerOpen:
-		return overlayCenter(base, l.renderURLPicker(a), a.width, a.height)
+		return overlayCenter(base, l.renderURLPicker(*a), a.width, a.height)
 	case a.iconPickerOpen:
-		return overlayCenter(base, l.renderIconPicker(a), a.width, a.height)
+		return overlayCenter(base, l.renderIconPicker(*a), a.width, a.height)
 	case a.attachURLPromptOpen:
-		return overlayCenter(base, l.renderAttachURLPrompt(a), a.width, a.height)
+		return overlayCenter(base, l.renderAttachURLPrompt(*a), a.width, a.height)
 	case a.songPromptOpen:
-		return overlayCenter(base, l.renderSongPrompt(a), a.width, a.height)
+		return overlayCenter(base, l.renderSongPrompt(*a), a.width, a.height)
+	case a.keywordEditorOpen:
+		return overlayCenter(base, l.renderKeywordEditor(*a), a.width, a.height)
 	}
-	slots, rowOrigin, colOrigin, _ := l.InlineImageSlots(a)
+	slots, rowOrigin, colOrigin, _ := l.InlineImageSlots(*a)
 	if a.imageModalOpen {
 		// Redraw inline-image thumbnails behind the modal before compositing
 		// it on top. Previously skipped entirely while the modal was open —
@@ -113,7 +97,7 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		// this fix). Harmless no-op for iTerm2/Kitty, which don't erase
 		// anything behind the modal.
 		if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 || len(a.inlineImageStaleRows) > 0 {
-			base = injectInlineImages(a, base, slots, rowOrigin, colOrigin)
+			base = injectInlineImages(*a, base, slots, rowOrigin, colOrigin)
 		}
 		cycled := a.imageModalPrevRows != 0 &&
 			(a.imageModalPrevRows != a.imageModalRows || a.imageModalPrevCols != a.imageModalCols)
@@ -130,11 +114,11 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 			// l.renderImageModal with the previous dimensions substituted
 			// in, not a duplicated size formula, since the rendered height
 			// differs by layout (TabsLayout adds a carousel-index hint
-			// line, MillerLayout doesn't). Uses imageDirtyMarker(a.imageRepaintGen)
+			// line). Uses imageDirtyMarker(a.imageRepaintGen)
 			// rather than a fixed marker for the same collision-proofing
 			// reason as injectInlineImages' stale-row resend — see its doc
 			// comment.
-			prevApp := a
+			prevApp := *a
 			prevApp.imageModalRows = a.imageModalPrevRows
 			prevApp.imageModalCols = a.imageModalPrevCols
 			prevModal := l.renderImageModal(prevApp)
@@ -160,7 +144,7 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 			// is needed rather than a fixed marker.
 			base = sixelFullRepaint(base, a.height, a.imageRepaintGen)
 		}
-		textModal := l.renderImageModal(a)
+		textModal := l.renderImageModal(*a)
 		composed := overlayCenter(base, textModal, a.width, a.height)
 		// Compute the same offsets overlayCenter used so we can position
 		// the image sequence inside the border without embedding it in the
@@ -214,7 +198,7 @@ func compositeOverlays(l modalRenderer, a App, base string) string {
 		base = strings.Join(lines, "\n")
 	}
 	if len(slots) > 0 || len(a.pendingKittyDeletes) > 0 || len(a.inlineImageStaleRows) > 0 {
-		return injectInlineImages(a, base, slots, rowOrigin, colOrigin)
+		return injectInlineImages(*a, base, slots, rowOrigin, colOrigin)
 	}
 	return base
 }
@@ -306,8 +290,7 @@ func sixelFullRepaint(base string, height, gen int) string {
 // A slot with no cache hit yet is skipped — its reserved band just stays the
 // blank text the screen already rendered into base. rowOrigin/colOrigin are
 // the calling layout's screen origin for slot-relative coordinates (see
-// modalRenderer.InlineImageSlots) — they differ per layout, and within
-// Miller, per which screen/pane is active.
+// modalRenderer.InlineImageSlots).
 //
 // Kitty's pendingKittyDeletes don't need cursor positioning — placements are
 // addressed by id, not screen coordinates — so they're just appended
@@ -419,29 +402,6 @@ func injectInlineImages(a App, base string, slots []screens.InlineImageSlot, row
 	return sb.String()
 }
 
-// CompactListRenderer is optionally implemented by screens that can display as a compact
-// item list beside a detail reading pane. Layouts supporting 3-pane views should
-// retrieve the active screen via activeCompactRenderer rather than casting concrete types.
-type CompactListRenderer interface {
-	// IsCompactListActive reports whether the screen is currently in a state where a
-	// compact list should be shown (e.g., a guild/topic has been drilled into).
-	IsCompactListActive() bool
-	// ListTitle returns the column header for the compact list pane.
-	ListTitle() string
-	CompactListView(width, height int) string
-	DetailView(width, height int) string
-}
-
-// CompactComposer is an optional extension of CompactListRenderer for screens that have
-// a compose panel. In Miller mode the layout pulls the panel out of DetailView and
-// renders it as a full-width row spanning the list and detail columns, making it clear
-// the user is composing a new post rather than a reply.
-type CompactComposer interface {
-	ComposeActive() bool
-	ComposeHeight() int           // total rows the panel occupies (for contentH budget)
-	ComposeView(width int) string // panel rendered at the given spanning width
-}
-
 // navTab is one entry in menuTabs.
 type navTab struct {
 	label    string
@@ -460,7 +420,7 @@ type navTab struct {
 // truth for tab-bar rendering, the "1"-"9" numeric aliases (the first 9
 // entries, by index), and the "g"+mnemonic leader-key chords (all entries,
 // via their mnemonic rune). Keeping all three derived from this one slice is
-// what keeps TabsLayout and MillerLayout from drifting apart. mnemonic must
+// what keeps them from drifting apart. mnemonic must
 // be a rune that appears in label, since the tab bar renders it highlighted
 // inline within the label text.
 var menuTabs = []navTab{
@@ -481,7 +441,7 @@ var menuTabs = []navTab{
 // visibleTabs returns the menuTabs entries shown on the tab bar/nav sidebar
 // and reachable by arrow-key cycling — i.e. everything except hidden entries
 // and, when the user has hidden it via Settings, Globe (a.showGlobeTab).
-func visibleTabs(a App) []navTab {
+func visibleTabs(a *App) []navTab {
 	out := make([]navTab, 0, len(menuTabs))
 	for _, t := range menuTabs {
 		if t.hidden {
@@ -499,9 +459,7 @@ func visibleTabs(a App) []navTab {
 // whether it's one level deep in a detail sub-view — an open Circ room, an
 // open C-Mail conversation, a Guilds/Topics browse, or PostDetail opened from
 // t (postDetailReturn == t, since PostDetail is a single shared screen reused
-// by six origin tabs rather than duplicated per-origin). Both TabsLayout and
-// MillerLayout call this so the two layouts can never disagree about which
-// state a tab is in.
+// by six origin tabs rather than duplicated per-origin).
 //
 // detail is reported even while t isn't selected for Circ/C-Mail/Guilds/
 // Topics/PostDetail, since their detail state is genuinely still
@@ -512,7 +470,7 @@ func visibleTabs(a App) []navTab {
 // and a post opened via t stays open (PostDetailModel.HasPost) until closed
 // via Esc or re-navigating to t from PostDetail itself (activateScreen's
 // escape hatch).
-func tabVisualState(a App, t screen) (selected, detail bool) {
+func tabVisualState(a *App, t screen) (selected, detail bool) {
 	selected = a.active == t || (a.active == screenPostDetail && a.postDetailReturn == t)
 
 	switch t {
@@ -622,7 +580,7 @@ func tabIndexOf(a App) int {
 	if active == screenPostDetail {
 		active = a.postDetailReturn
 	}
-	for i, t := range visibleTabs(a) {
+	for i, t := range visibleTabs(&a) {
 		if t.s == active {
 			return i
 		}
@@ -674,7 +632,7 @@ func splitMnemonic(label string, mnemonic rune) (before, ch, after string) {
 }
 
 // leaderRows formats every "g"+mnemonic chord as a help-modal row via row
-// (see TabsLayout/MillerLayout's renderHelpModal), derived from menuTabs so
+// (see TabsLayout's renderHelpModal), derived from menuTabs so
 // the help text can never drift from what the leader key actually does.
 func leaderRows(a App, row func(key, desc string) string) []string {
 	rows := make([]string, 0, len(menuTabs))
@@ -758,7 +716,7 @@ func activateScreen(a App, s screen) (App, tea.Cmd) {
 	case screenProfile:
 		return a, a.loadProfileCmd()
 	case screenNotifications:
-		if !a.notifications.HasPaginated() {
+		if !a.notifications.IsLoaded() {
 			a.notifications = a.notifications.SetFetching()
 			return a, a.loadNotifsCmd()
 		}
@@ -817,15 +775,13 @@ func navigateTabBy(a App, delta int) (App, tea.Cmd) {
 	if a.active == screenSearch {
 		return a, nil
 	}
-	tabs := visibleTabs(a)
+	tabs := visibleTabs(&a)
 	idx := (tabIndexOf(a) + delta + len(tabs)) % len(tabs)
 	return activateScreen(a, tabs[idx].s)
 }
 
 // delegateScreenUpdate routes a message to the currently active screen model.
-// Both TabsLayout and MillerLayout have identical routing; this function
-// centralises it so adding a new screen only requires one edit here.
-func delegateScreenUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
+func delegateScreenUpdate(msg tea.Msg, a *App) tea.Cmd {
 	var cmd tea.Cmd
 	switch a.active {
 	case screenLogin:
@@ -857,5 +813,5 @@ func delegateScreenUpdate(msg tea.Msg, a App) (App, tea.Cmd) {
 	case screenGlobe:
 		a.globe, cmd = a.globe.Update(msg)
 	}
-	return a, cmd
+	return cmd
 }

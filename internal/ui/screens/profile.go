@@ -590,6 +590,7 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 		return m, nil
 
 	case SharedConfigMsg:
+		m.compose = m.compose.SetHardBreakKey(msg.HardBreakKey)
 		m.width = msg.Width
 		m.height = msg.Height
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat

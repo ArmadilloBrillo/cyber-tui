@@ -371,6 +371,39 @@ func TestFeed_ComposeSubmit_KeepsPanelOpenUntilOutcome(t *testing.T) {
 	}
 }
 
+func TestFeed_ComposeSubmit_BorksContentOnlyWhenTicked(t *testing.T) {
+	for _, tick := range []bool{false, true} {
+		want := "the nation"
+		if tick {
+			want = "zee nashun Bork Bork Bork!"
+		}
+		t.Run("ticked="+strconv.FormatBool(tick), func(t *testing.T) {
+			m := screens.NewFeedModel()
+			m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+			m, _ = m.Update(keyRune("n"))
+			if tick {
+				// title -> slug -> body -> topics -> public -> nsfw -> bork
+				for range 6 {
+					m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+				}
+				m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+			}
+
+			_, cmd := m.Update(screens.ComposeSubmitMsg{Content: "the nation"})
+			if cmd == nil {
+				t.Fatal("expected a SubmitNewPostMsg cmd from ComposeSubmitMsg")
+			}
+			got, ok := cmd().(screens.SubmitNewPostMsg)
+			if !ok {
+				t.Fatalf("submit cmd produced %T, want screens.SubmitNewPostMsg", cmd())
+			}
+			if got.Content != want {
+				t.Errorf("Content = %q, want %q", got.Content, want)
+			}
+		})
+	}
+}
+
 func TestFeed_ComposeSaveAsNote_EmitsMsgWithTitleHeading(t *testing.T) {
 	m := screens.NewFeedModel()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -634,92 +667,6 @@ func TestFeed_VisibleInlineImages_CapsAtFirstImage(t *testing.T) {
 	}
 	if slots[0].URL != "https://example.com/a.png" {
 		t.Errorf("expected the first image only, got %q", slots[0].URL)
-	}
-}
-
-// --- VisibleDetailInlineImages (Miller reading pane) ---
-
-// TestFeed_VisibleDetailInlineImages_DisabledByDefault mirrors
-// TestFeed_VisibleInlineImages_DisabledByDefault for Miller's detail pane.
-func TestFeed_VisibleDetailInlineImages_DisabledByDefault(t *testing.T) {
-	m := screens.NewFeedModel()
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
-	m = m.SetPosts([]model.Post{
-		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
-	}, "")
-
-	if slots := m.VisibleDetailInlineImages(76, 40); slots != nil {
-		t.Errorf("expected no slots while disabled, got %+v", slots)
-	}
-}
-
-// TestFeed_VisibleDetailInlineImages_PostImage confirms the selected post's
-// own image is located, using renderDetailPost's inline-image-aware
-// rendering rather than RenderPost's (which always disables it for every
-// non-Feed-list caller — this is the one Feed opts into for Miller).
-func TestFeed_VisibleDetailInlineImages_PostImage(t *testing.T) {
-	m := screens.NewFeedModel()
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
-	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
-	m = m.SetPosts([]model.Post{
-		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)\n\nbye"},
-	}, "")
-
-	slots := m.VisibleDetailInlineImages(76, 40)
-	if len(slots) != 1 {
-		t.Fatalf("expected 1 slot for the post's own image, got %d: %+v", len(slots), slots)
-	}
-	if slots[0].Key != "post:p1:0" {
-		t.Errorf("expected key %q, got %q", "post:p1:0", slots[0].Key)
-	}
-	if slots[0].URL != "https://example.com/a.png" {
-		t.Errorf("expected the post's image URL, got %q", slots[0].URL)
-	}
-}
-
-// TestFeed_VisibleDetailInlineImages_ReplyImage confirms a reply's image is
-// located below the post, keyed by reply ID — reply image extraction has no
-// Tabs-side equivalent to mirror (Tabs' Feed view never shows replies
-// inline), so this is new logic ported from PostDetailModel's pattern.
-func TestFeed_VisibleDetailInlineImages_ReplyImage(t *testing.T) {
-	m := screens.NewFeedModel()
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
-	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
-	m = m.SetPosts([]model.Post{
-		{ID: "p1", AuthorUsername: "alice", Content: "hello", RepliesCount: 1},
-	}, "")
-	m, _ = m.Update(screens.FeedDetailRepliesMsg{PostID: "p1", Replies: []model.Reply{
-		{ID: "r1", PostID: "p1", AuthorUsername: "bob", Content: "check this\n\n![b](https://example.com/b.png)"},
-	}})
-
-	slots := m.VisibleDetailInlineImages(76, 60)
-	if len(slots) != 1 {
-		t.Fatalf("expected 1 slot for the reply's image, got %d: %+v", len(slots), slots)
-	}
-	if slots[0].Key != "reply:r1:0" {
-		t.Errorf("expected key %q, got %q", "reply:r1:0", slots[0].Key)
-	}
-	if slots[0].Row <= 0 {
-		t.Errorf("expected the reply's image below the post card (row > 0), got %d", slots[0].Row)
-	}
-}
-
-// TestFeed_VisibleDetailInlineImages_OutOfViewHiddenBySmallHeight confirms
-// the visibility window is respected: the same reply image from the test
-// above must be excluded when height is too small to reach it.
-func TestFeed_VisibleDetailInlineImages_OutOfViewHiddenBySmallHeight(t *testing.T) {
-	m := screens.NewFeedModel()
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
-	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
-	m = m.SetPosts([]model.Post{
-		{ID: "p1", AuthorUsername: "alice", Content: "hello", RepliesCount: 1},
-	}, "")
-	m, _ = m.Update(screens.FeedDetailRepliesMsg{PostID: "p1", Replies: []model.Reply{
-		{ID: "r1", PostID: "p1", AuthorUsername: "bob", Content: "check this\n\n![b](https://example.com/b.png)"},
-	}})
-
-	if slots := m.VisibleDetailInlineImages(76, 2); slots != nil {
-		t.Errorf("expected the reply's image to be out of view at height=2, got %+v", slots)
 	}
 }
 

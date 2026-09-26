@@ -336,6 +336,55 @@ func TestRender_Mention(t *testing.T) {
 	}
 }
 
+func TestMentionsUserBare(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		username string
+		want     bool
+	}{
+		{"bare lowercase", "hey ragnar check this out", "ragnar", true},
+		{"bare uppercase first letter", "hey Ragnar check this out", "ragnar", true},
+		{"bare mixed case", "hey RaGnAr check this out", "ragnar", true},
+		{"at-prefixed only", "hey @ragnar check this out", "ragnar", false},
+		{"substring not a whole word", "ragnarwessels was here", "ragnar", false},
+		{"mixed: at-mention and separate bare word", "@ragnar ragnar are you there", "ragnar", true},
+		{"no match", "hello there", "ragnar", false},
+		{"empty username", "hey ragnar", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MentionsUserBare(tt.body, tt.username); got != tt.want {
+				t.Errorf("MentionsUserBare(%q, %q) = %v, want %v", tt.body, tt.username, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchKeywords(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		keywords []string
+		want     string
+	}{
+		{"single match", "hey check out cyberdeck stuff", []string{"cyberdeck"}, "cyberdeck"},
+		{"case insensitive", "hey check out CyberDeck stuff", []string{"cyberdeck"}, "cyberdeck"},
+		{"substring not a whole word", "cyberdecks are cool", []string{"cyberdeck"}, ""},
+		{"first matching keyword wins", "hello world", []string{"nope", "world", "hello"}, "world"},
+		{"no match", "hello there", []string{"cyberdeck"}, ""},
+		{"empty keyword list", "hello there", nil, ""},
+		{"empty keyword entries skipped", "hello there", []string{"", "there"}, "there"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchKeywords(tt.text, tt.keywords); got != tt.want {
+				t.Errorf("MatchKeywords(%q, %v) = %q, want %q", tt.text, tt.keywords, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRender_MentionInCodeBlockNotHighlighted(t *testing.T) {
 	md := "```\n@alice is here\n```"
 	raw := Render(md, 80)
@@ -806,5 +855,60 @@ func TestRenderInline_NoHighlightUserUnaffected(t *testing.T) {
 	}
 	if !strings.Contains(raw, "\x1b[") {
 		t.Errorf("expected the line to still carry theme.Base ANSI styling, got: %q", raw)
+	}
+}
+
+func TestRender_ParagraphsSeparatedByBlankLine(t *testing.T) {
+	lines := strings.Split(strip(Render("first\n\nsecond\n\n\n\nthird", 80)), "\n")
+	got := make([]string, len(lines))
+	for i, l := range lines {
+		got[i] = strings.TrimSpace(l)
+	}
+	want := []string{"first", "", "second", "", "third"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("expected one blank line between paragraphs, got %q", got)
+	}
+}
+
+func TestRender_BlocksSeparatedByBlankLine(t *testing.T) {
+	out := strip(Render("intro\n\n- one\n- two\n\nouter", 80))
+	if !strings.Contains(out, "intro") || !strings.Contains(out, "outer") {
+		t.Fatalf("unexpected output %q", out)
+	}
+	lines := strings.Split(out, "\n")
+	if strings.TrimSpace(lines[1]) != "" {
+		t.Errorf("expected blank line between paragraph and list, got %q", lines[1])
+	}
+	if strings.TrimSpace(lines[len(lines)-2]) != "" {
+		t.Errorf("expected blank line between list and paragraph, got %q", lines[len(lines)-2])
+	}
+	for i, l := range lines {
+		if strings.Contains(l, "two") && strings.TrimSpace(lines[i-1]) == "" {
+			t.Errorf("list items must stay adjacent, got blank before %q", l)
+		}
+	}
+}
+
+func TestRender_SoftBreakStaysSpace(t *testing.T) {
+	out := strip(Render("one\ntwo", 80))
+	if strings.Contains(out, "\n") && strings.TrimSpace(strings.SplitN(out, "\n", 2)[1]) != "" {
+		t.Errorf("single newline must not split the paragraph, got %q", out)
+	}
+	if !strings.Contains(out, "one two") {
+		t.Errorf("expected soft break rendered as a space, got %q", out)
+	}
+}
+
+func TestRender_HardBreakKeepsLineBreak(t *testing.T) {
+	lines := strings.Split(strip(Render("one  \ntwo", 80)), "\n")
+	if len(lines) != 2 || strings.TrimSpace(lines[0]) != "one" || strings.TrimSpace(lines[1]) != "two" {
+		t.Errorf("expected two adjacent lines, got %q", lines)
+	}
+}
+
+func TestRender_NoLeadingOrTrailingBlankLines(t *testing.T) {
+	out := strip(Render("a\n\nb\n\n", 80))
+	if strings.HasPrefix(out, "\n") || strings.HasSuffix(strings.TrimRight(out, " "), "\n") {
+		t.Errorf("unexpected leading/trailing newline in %q", out)
 	}
 }

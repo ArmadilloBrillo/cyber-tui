@@ -53,7 +53,6 @@ func newTestApp() App {
 func loggedInApp() App {
 	a := newTestApp()
 	a.active = screenFeed
-	a.focus = focusMenu
 	return a
 }
 
@@ -218,6 +217,156 @@ func TestActiveScreenHasFocusedInput_ChatroomsDefault(t *testing.T) {
 	}
 }
 
+func TestActiveScreenHasFocusedInput_SettingsFalseUnlessCapturing(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSettings
+	if a.activeScreenHasFocusedInput() {
+		t.Error("settings screen should not report a focused input outside key capture — keyword editing happens in the popup, not inline")
+	}
+}
+
+// capturingSettingsApp returns an App on the Settings screen with the hard
+// line break row selected and waiting for a keypress.
+func capturingSettingsApp(t *testing.T) App {
+	t.Helper()
+	a := loggedInApp()
+	a.active = screenSettings
+	m, _ := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a = m.(App)
+	for i := 0; i < 60 && !strings.Contains(a.settingsScreen.View(), "enter · set combo"); i++ {
+		m, _ = a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		a = m.(App)
+	}
+	m, _ = a.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a = m.(App)
+	if !a.settingsScreen.Capturing() {
+		t.Fatal("setup: expected the hard line break row to be capturing")
+	}
+	return a
+}
+
+// While the hard-break row captures, global shortcuts such as ctrl+q must be
+// rejected as unbindable rather than quitting or opening pickers.
+func TestSettingsCapture_GlobalKeysDoNotFire(t *testing.T) {
+	for _, k := range []tea.KeyType{tea.KeyCtrlQ, tea.KeyCtrlO, tea.KeyCtrlT, tea.KeyCtrlG, tea.KeyCtrlJ, tea.KeyCtrlCloseBracket} {
+		a := capturingSettingsApp(t)
+		m, cmd := a.Update(tea.KeyMsg{Type: k})
+		got := m.(App)
+		if cmd != nil {
+			if _, quit := cmd().(tea.QuitMsg); quit {
+				t.Errorf("key %v quit the app during capture", k)
+			}
+		}
+		if !got.settingsScreen.Capturing() {
+			t.Errorf("key %v ended capture; it should have been rejected in place", k)
+		}
+		if got.iconPickerOpen || got.attachURLPromptOpen {
+			t.Errorf("key %v opened a picker or prompt during capture", k)
+		}
+	}
+}
+
+func TestSettingsCapture_CtrlCStillQuits(t *testing.T) {
+	a := capturingSettingsApp(t)
+	_, cmd := a.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c must still quit during capture")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("ctrl+c produced %T, want tea.QuitMsg", cmd())
+	}
+}
+
+// --- keyword-alerts popup (Settings' "alert keywords" row) ---
+
+func TestOpenKeywordEditorMsg_OpensPopupSeededFromSettings(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSettings
+	a.settingsScreen = a.settingsScreen.SetKeywordAlerts([]string{"foo", "bar"})
+
+	m, _ := a.Update(screens.OpenKeywordEditorMsg{})
+	got := m.(App)
+	if !got.keywordEditorOpen {
+		t.Fatal("expected keywordEditorOpen to be true")
+	}
+	if !stringSliceEqual(got.keywordEditor.Keywords(), []string{"foo", "bar"}) {
+		t.Errorf("keywordEditor seeded with %v, want [foo bar]", got.keywordEditor.Keywords())
+	}
+}
+
+// TestHandleKeywordEditorKey_LetterShortcutTypesIntoAddRow guards against the
+// exact regression this popup replaced: a plain-letter global shortcut (here
+// "t" for the theme picker) must not be swallowed before reaching the
+// popup's add-row input.
+func TestHandleKeywordEditorKey_LetterShortcutTypesIntoAddRow(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSettings
+	a.keywordEditorOpen = true
+	a.keywordEditor = a.keywordEditor.Open(nil)
+
+	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	got := m.(App)
+	if got.themePickerOpen {
+		t.Error("'t' should type into the popup's add-row, not open the theme picker")
+	}
+	if !got.keywordEditorOpen {
+		t.Error("expected the popup to remain open after typing 't'")
+	}
+}
+
+func TestHandleKeywordEditorKey_CtrlS_CommitsAndSaves(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSettings
+	a.settingsScreen, _ = a.settingsScreen.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a.keywordEditorOpen = true
+	a.keywordEditor = a.keywordEditor.Open(nil)
+	a.keywordEditor, _ = a.keywordEditor.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("cyberdeck")})
+	a.keywordEditor, _ = a.keywordEditor.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m, cmd := a.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	got := m.(App)
+	if got.keywordEditorOpen {
+		t.Error("expected the popup to close on ctrl+s")
+	}
+	if !stringSliceEqual(got.settingsScreen.KeywordAlerts(), []string{"cyberdeck"}) {
+		t.Errorf("settingsScreen.KeywordAlerts() = %v, want [cyberdeck]", got.settingsScreen.KeywordAlerts())
+	}
+	if cmd == nil {
+		t.Error("expected a save cmd (SaveSettingsMsg) since the list is now dirty")
+	}
+}
+
+func TestHandleKeywordEditorKey_Esc_DiscardsAndCloses(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSettings
+	a.settingsScreen = a.settingsScreen.SetKeywordAlerts([]string{"foo"})
+	a.keywordEditorOpen = true
+	a.keywordEditor = a.keywordEditor.Open([]string{"foo"})
+	a.keywordEditor, _ = a.keywordEditor.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("bar")})
+	a.keywordEditor, _ = a.keywordEditor.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m, _ := a.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := m.(App)
+	if got.keywordEditorOpen {
+		t.Error("expected the popup to close on esc")
+	}
+	if !stringSliceEqual(got.settingsScreen.KeywordAlerts(), []string{"foo"}) {
+		t.Errorf("settingsScreen.KeywordAlerts() = %v, want unchanged [foo] (esc must discard)", got.settingsScreen.KeywordAlerts())
+	}
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // --- leader key ("g" + mnemonic) ---
 
 func TestHandleKeys_Leader_G_ArmsAndConsumes(t *testing.T) {
@@ -347,26 +496,22 @@ func TestHandleKeys_Leader_NotArmed_WhileInputFocused(t *testing.T) {
 
 func TestHandleKeys_Leader_NumericAliasAndLeaderAgree(t *testing.T) {
 	// "1" through "9" and their equivalent "g"+mnemonic chord must land on
-	// the same screen in both layouts — the drift this feature fixes.
+	// the same screen.
 	for i, tab := range menuTabs[:9] {
 		num := string(rune('1' + i))
-		for _, layout := range []Layout{TabsLayout{}, MillerLayout{}} {
-			a := loggedInApp()
-			a.layout = layout
-			a.active = screenProfile
-			a2, _, _ := a.handleKeys(keyMsg(num))
-			if a2.active != tab.s {
-				t.Errorf("layout %T: key %q: expected %v, got %v", layout, num, tab.s, a2.active)
-			}
+		a := loggedInApp()
+		a.active = screenProfile
+		a2, _, _ := a.handleKeys(keyMsg(num))
+		if a2.active != tab.s {
+			t.Errorf("key %q: expected %v, got %v", num, tab.s, a2.active)
+		}
 
-			b := loggedInApp()
-			b.layout = layout
-			b.active = screenProfile
-			b2, _, _ := b.handleKeys(keyMsg("g"))
-			b3, _, _ := b2.handleKeys(keyMsg(string(tab.mnemonic)))
-			if b3.active != tab.s {
-				t.Errorf("layout %T: chord \"g %c\": expected %v, got %v", layout, tab.mnemonic, tab.s, b3.active)
-			}
+		b := loggedInApp()
+		b.active = screenProfile
+		b2, _, _ := b.handleKeys(keyMsg("g"))
+		b3, _, _ := b2.handleKeys(keyMsg(string(tab.mnemonic)))
+		if b3.active != tab.s {
+			t.Errorf("chord \"g %c\": expected %v, got %v", tab.mnemonic, tab.s, b3.active)
 		}
 	}
 }
@@ -602,7 +747,7 @@ func TestHandleKeys_CtrlLeft_CyclesTabsWhileChatroomsInputFocused(t *testing.T) 
 	if !consumed {
 		t.Error("expected ctrl+left to be consumed even while chatrooms input is focused")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected ctrl+left to cycle to a different tab")
 	}
 }
@@ -614,7 +759,7 @@ func TestHandleKeys_CtrlRight_CyclesTabsWhileChatroomsInputFocused(t *testing.T)
 	if !consumed {
 		t.Error("expected ctrl+right to be consumed even while chatrooms input is focused")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected ctrl+right to cycle to a different tab")
 	}
 }
@@ -638,7 +783,7 @@ func TestHandleKeys_Left_CyclesTabs_WhileChatroomsInputFocusedAndComposeEmpty(t 
 	if !consumed {
 		t.Error("expected plain left arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain left arrow to cycle to a different tab")
 	}
 }
@@ -650,7 +795,7 @@ func TestHandleKeys_Right_CyclesTabs_WhileChatroomsInputFocusedAndComposeEmpty(t
 	if !consumed {
 		t.Error("expected plain right arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain right arrow to cycle to a different tab")
 	}
 }
@@ -730,7 +875,7 @@ func TestHandleKeys_Left_CyclesTabs_WhileCMailInputFocusedAndComposeEmpty(t *tes
 	if !consumed {
 		t.Error("expected plain left arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain left arrow to cycle to a different tab")
 	}
 }
@@ -742,7 +887,7 @@ func TestHandleKeys_Right_CyclesTabs_WhileCMailInputFocusedAndComposeEmpty(t *te
 	if !consumed {
 		t.Error("expected plain right arrow to be consumed (tab-cycle) while the compose box is empty")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain right arrow to cycle to a different tab")
 	}
 }
@@ -1102,7 +1247,7 @@ func TestHandleKeys_Left_CyclesTabs_FromPostDetail(t *testing.T) {
 	if !consumed {
 		t.Error("expected plain left arrow to be consumed (tab-cycle) from PostDetail")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain left arrow to cycle to a different tab")
 	}
 }
@@ -1114,7 +1259,7 @@ func TestHandleKeys_Right_CyclesTabs_FromPostDetail(t *testing.T) {
 	if !consumed {
 		t.Error("expected plain right arrow to be consumed (tab-cycle) from PostDetail")
 	}
-	if tabIndexOf(a2) == before {
+	if tabIndexOf(*a2) == before {
 		t.Error("expected plain right arrow to cycle to a different tab")
 	}
 }
@@ -1363,7 +1508,7 @@ func hasHint(hints []hint, key string) bool {
 
 func TestScreenHints_ChatroomsDetail_NoHelpButHasCtrlO(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if hasHint(hints, "?") {
 		t.Error("expected no '?' hint in chatrooms detail mode — it's unreachable while the compose input is focused")
 	}
@@ -1376,7 +1521,7 @@ func TestScreenHints_ChatroomsList_StillHasHelp(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenChatrooms
 	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if !hasHint(hints, "?") {
 		t.Error("expected '?' hint in chatrooms list mode — no input is focused there")
 	}
@@ -1392,7 +1537,7 @@ func TestScreenHints_CMailDetail_NoHelpButHasCtrlO(t *testing.T) {
 	a.cmail = cm
 	a.active = screenCMail
 
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if hasHint(hints, "?") {
 		t.Error("expected no '?' hint in c-mail detail mode — it's unreachable while the compose input is focused")
 	}
@@ -1404,7 +1549,7 @@ func TestScreenHints_CMailDetail_NoHelpButHasCtrlO(t *testing.T) {
 func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenCMail
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	if !hasHint(hints, "?") {
 		t.Error("expected '?' hint in c-mail list mode — no input is focused there")
 	}
@@ -1412,7 +1557,7 @@ func TestScreenHints_CMailList_StillHasHelp(t *testing.T) {
 
 func TestScreenHints_ChatroomsDetail_HasCtrlTwins(t *testing.T) {
 	a := setupChatroomsDetailWithURL(loggedInApp())
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+←→"} {
 		if !hasHint(hints, key) {
 			t.Errorf("expected a %q hint in chatrooms detail mode", key)
@@ -1433,7 +1578,7 @@ func TestScreenHints_CMailDetail_HasCtrlTwins(t *testing.T) {
 	a.cmail = cm
 	a.active = screenCMail
 
-	hints := TabsLayout{}.screenHints(a)
+	hints := TabsLayout{}.screenHints(&a)
 	for _, key := range []string{"ctrl+q", "ctrl+t", "ctrl+←→"} {
 		if !hasHint(hints, key) {
 			t.Errorf("expected a %q hint in c-mail detail mode", key)
@@ -1737,7 +1882,7 @@ func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) 
 	if !ok {
 		t.Fatal("expected urlPostLoadedMsg to be handled")
 	}
-	a = m
+	a = *m
 
 	if a.postDetail.PostID() != "p2" {
 		t.Fatalf("expected p2 open, got %q", a.postDetail.PostID())
@@ -1754,7 +1899,7 @@ func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) 
 	if !ok {
 		t.Fatal("expected BackToFeedMsg to be handled")
 	}
-	a = m
+	a = *m
 	if a.active != screenPostDetail {
 		t.Errorf("active = %v, want screenPostDetail (still nested)", a.active)
 	}
@@ -1773,7 +1918,7 @@ func TestUrlPostLoadedMsg_NestedLink_PushesStackAndRestoresOnBack(t *testing.T) 
 	if !ok {
 		t.Fatal("expected BackToFeedMsg to be handled")
 	}
-	a = m
+	a = *m
 	if a.active != screenFeed {
 		t.Errorf("active = %v, want screenFeed", a.active)
 	}
@@ -2020,7 +2165,7 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 	a := loggedInApp()
 	a.feedManualRefreshOnly = true
 
-	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		FeedManualRefreshOnly: false,
 		ImageViewer:           "terminal",
 	})
@@ -2062,7 +2207,7 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 func TestHandleTopics_SetMutedTopics_AppliesAndDebouncesSave(t *testing.T) {
 	a := loggedInApp()
 
-	a, cmd, ok := a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"crypto"}})
+	_, cmd, ok := a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"crypto"}})
 	if !ok {
 		t.Fatal("expected handleTopics to handle SetMutedTopicsMsg")
 	}
@@ -2090,7 +2235,7 @@ func TestHandleTopics_SetMutedTopics_AppliesAndDebouncesSave(t *testing.T) {
 	if !ok || res.err != nil {
 		t.Fatalf("expected a successful mutedTopicsSaveResultMsg, got %#v", c())
 	}
-	a, _, _ = a.handleTopics(res)
+	_, _, _ = a.handleTopics(res)
 	if len(a.mutedTopicsSaved) != 1 || a.mutedTopicsSaved[0] != "crypto" {
 		t.Errorf("mutedTopicsSaved = %v, want [crypto]", a.mutedTopicsSaved)
 	}
@@ -2118,12 +2263,11 @@ func (c updateSettingsFailClient) UpdateSettings(model.Settings) error {
 func TestHandleTopics_SetMutedTopics_RollsBackOnSaveFailure(t *testing.T) {
 	a := NewApp(updateSettingsFailClient{api.NewMockClient()})
 	a.active = screenFeed
-	a.focus = focusMenu
 	// Login baseline: "news" is already muted and persisted.
-	a, _, _ = a.handleSettings(settingsLoadedMsg{settings: model.Settings{MutedTopics: []string{"news"}}})
+	_, _, _ = a.handleSettings(settingsLoadedMsg{settings: model.Settings{MutedTopics: []string{"news"}}})
 
 	// User mutes "crypto" too — optimistic.
-	a, _, _ = a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"news", "crypto"}})
+	_, _, _ = a.handleTopics(screens.SetMutedTopicsMsg{Topics: []string{"news", "crypto"}})
 	if len(a.settings.MutedTopics) != 2 {
 		t.Fatalf("optimistic MutedTopics = %v, want [news crypto]", a.settings.MutedTopics)
 	}
@@ -2136,7 +2280,7 @@ func TestHandleTopics_SetMutedTopics_RollsBackOnSaveFailure(t *testing.T) {
 	}
 
 	seqBefore := a.mutedTopicsSaveSeq
-	a, cmd, ok := a.handleTopics(res)
+	_, cmd, ok := a.handleTopics(res)
 	if !ok {
 		t.Fatal("expected handleTopics to handle the failed result")
 	}
@@ -2450,6 +2594,56 @@ func TestUnreadCountMsg_PropagatesExactFlag(t *testing.T) {
 	}
 	if got.polledUnreadCountExact {
 		t.Error("polledUnreadCountExact = true, want false")
+	}
+}
+
+func TestUnreadCountMsg_DoesNotClobberLocalMentionBadge(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo", MessageID: "msg1"})
+	a = m.(App)
+	if a.polledUnreadCount != 1 {
+		t.Fatalf("setup: expected polledUnreadCount 1 after the mention, got %d", a.polledUnreadCount)
+	}
+
+	// The server has no idea the local mention exists — its own count is 0.
+	m2, _ := a.Update(unreadCountMsg{count: 0, exact: true})
+	got := m2.(App)
+
+	if got.polledUnreadCount != 1 {
+		t.Errorf("polledUnreadCount = %d, want 1 (the poll must not drop the local mention's contribution)", got.polledUnreadCount)
+	}
+}
+
+func TestUnreadCountMsg_ServerIncreaseStillTriggersReload_WithLocalMentionOutstanding(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenFeed
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Baseline poll: server already at 5, nothing local yet.
+	m, _ := a.Update(unreadCountMsg{count: 5, exact: true})
+	a = m.(App)
+
+	// A local mention arrives independently of the poll cycle.
+	m2, _ := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo", MessageID: "msg1"})
+	a = m2.(App)
+	if a.polledUnreadCount != 6 {
+		t.Fatalf("setup: expected polledUnreadCount 6 (5 server + 1 local), got %d", a.polledUnreadCount)
+	}
+
+	// A genuine new server notification raises the server's own count by
+	// exactly the same amount the local mention already padded the badge by
+	// — comparing against the mixed total would mask this as "no increase".
+	m3, cmd := a.Update(unreadCountMsg{count: 6, exact: true})
+	got := m3.(App)
+
+	if cmd == nil {
+		t.Error("expected loadNotifsCmd to fire for the genuine server-side increase, even with a local mention already outstanding")
+	}
+	if got.polledUnreadCount != 7 {
+		t.Errorf("polledUnreadCount = %d, want 7 (6 server + 1 local)", got.polledUnreadCount)
 	}
 }
 
@@ -3679,6 +3873,494 @@ func TestNotifsLoaded_DoesNotSuppress_ForADifferentRoom(t *testing.T) {
 	}
 }
 
+// --- client-side bare-word mention toast (RoomMentionedMsg) ---
+
+func TestShouldNotifyRoomMention(t *testing.T) {
+	inRoom := func(a App, slug string) App {
+		a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: slug, Name: slug}})
+		cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		a.chatrooms = cm
+		if a.chatrooms.ActiveRoomSlug() != slug {
+			t.Fatalf("setup: expected %q open in detail mode", slug)
+		}
+		return a
+	}
+
+	t.Run("disabled", func(t *testing.T) {
+		a := loggedInApp()
+		if a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want false when desktop notifications disabled")
+		}
+	})
+
+	t.Run("ephemeral SSH session", func(t *testing.T) {
+		a := loggedInApp()
+		a.desktopNotifications = true
+		a.ephemeral = true
+		if a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want false for an ephemeral session")
+		}
+	})
+
+	t.Run("unfocused", func(t *testing.T) {
+		a := loggedInApp()
+		a.desktopNotifications = true
+		if !a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want true when window focus is unknown/unfocused")
+		}
+	})
+
+	t.Run("focused, different tab", func(t *testing.T) {
+		a := loggedInApp()
+		a.desktopNotifications = true
+		a.focusReported, a.focused = true, true
+		a.active = screenFeed
+		if !a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want true when not on the Chatrooms tab")
+		}
+	})
+
+	t.Run("focused, exact room open in detail", func(t *testing.T) {
+		a := loggedInApp()
+		a.desktopNotifications = true
+		a.focusReported, a.focused = true, true
+		a.active = screenChatrooms
+		a = inRoom(a, "cyberspace")
+		if a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want false while actively viewing the mentioned room")
+		}
+	})
+
+	t.Run("focused, Chatrooms tab but back at the room list", func(t *testing.T) {
+		a := loggedInApp()
+		a.desktopNotifications = true
+		a.focusReported, a.focused = true, true
+		a.active = screenChatrooms
+		a = inRoom(a, "cyberspace")
+		a.chatrooms = a.chatrooms.ResetToList() // e.g. the re-press escape hatch; subscription stays live
+		if !a.shouldNotifyRoomMention("cyberspace") {
+			t.Error("want true when back at the room list even though the subscription is still live")
+		}
+	})
+}
+
+func TestHandleChatrooms_RoomMentionedMsg_FiresToast(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.active = screenFeed // not viewing Chatrooms at all
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, cmd := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo", MessageID: "msg1"})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd when not viewing the mentioned room")
+	}
+	if got.polledUnreadCount != 1 {
+		t.Errorf("polledUnreadCount = %d, want 1", got.polledUnreadCount)
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+	if !strings.Contains(got.notifications.View(), "trinity") {
+		t.Errorf("expected the mention entry to render in the Notifications tab, got: %q", got.notifications.View())
+	}
+}
+
+func TestHandleChatrooms_RoomMentionedMsg_KeywordMatch(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.active = screenFeed // not viewing Chatrooms at all
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, cmd := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "check this cyberdeck out", MessageID: "msg1", Keyword: "cyberdeck"})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd for a keyword match when not viewing the room")
+	}
+	if got.polledUnreadCount != 1 {
+		t.Errorf("polledUnreadCount = %d, want 1", got.polledUnreadCount)
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+	view := got.notifications.View()
+	if !strings.Contains(view, "cyberdeck") {
+		t.Errorf("expected the matched keyword to render in the Notifications tab, got: %q", view)
+	}
+}
+
+// TestHandleChatrooms_RoomMentionedMsg_MentionAndKeywordDontCollide verifies
+// a mention and a keyword match on the same underlying message get distinct
+// local notification IDs (localMentionIDPrefix vs localKeywordIDPrefix) —
+// without that, the second AddLocalMention would silently merge onto the
+// first as an update instead of adding a second entry.
+func TestHandleChatrooms_RoomMentionedMsg_MentionAndKeywordDontCollide(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.active = screenFeed
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo, cyberdeck?", MessageID: "msg1"})
+	a = m.(App)
+	m, _ = a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo, cyberdeck?", MessageID: "msg1", Keyword: "cyberdeck"})
+	got := m.(App)
+
+	if got.notifications.UnreadCount() != 2 {
+		t.Errorf("notifications.UnreadCount() = %d, want 2 (mention and keyword match must not collide on ID)", got.notifications.UnreadCount())
+	}
+}
+
+func TestHandleCMail_DMKeywordMsg_FiresToast(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.active = screenFeed // not viewing C-Mail at all
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, cmd := a.Update(screens.DMKeywordMsg{ConvID: "c1", From: "trinity", Body: "check this cyberdeck out", MessageID: "msg1", Keyword: "cyberdeck"})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd when not viewing C-Mail")
+	}
+	if got.polledUnreadCount != 1 {
+		t.Errorf("polledUnreadCount = %d, want 1", got.polledUnreadCount)
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+	view := got.notifications.View()
+	if !strings.Contains(view, "cyberdeck") {
+		t.Errorf("expected the matched keyword to render in the Notifications tab, got: %q", view)
+	}
+}
+
+func TestHandleCMail_DMKeywordMsg_SuppressedWhileViewingCMail(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.focusReported, a.focused = true, true
+	a.active = screenCMail
+
+	m, cmd := a.Update(screens.DMKeywordMsg{ConvID: "c1", From: "trinity", Body: "check this cyberdeck out", MessageID: "msg1", Keyword: "cyberdeck"})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast while actively viewing C-Mail")
+	}
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0 (entry created already read)", got.polledUnreadCount)
+	}
+}
+
+// --- keyword alerts on the feed peek poll (posts, topics, tags) ---
+
+func TestScanPeekedPosts_FirstLoadSeedsBaseline_NoAlert(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	post := model.Post{ID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
+	m, _ := a.Update(feedLoadedMsg{posts: []model.Post{post}})
+	a = m.(App)
+
+	// The same post reappearing via the peek poll must not alert — it was
+	// already accounted for on load, not newly arrived.
+	m, cmd := a.Update(feedPeekMsg{posts: []model.Post{post}})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast for a post already seen on initial load")
+	}
+	if got.notifications.UnreadCount() != 0 {
+		t.Errorf("notifications.UnreadCount() = %d, want 0", got.notifications.UnreadCount())
+	}
+}
+
+func TestScanPeekedPosts_EmitsKeywordMatch_ForNewPost(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ := a.Update(feedLoadedMsg{posts: []model.Post{{ID: "p1", Content: "hello"}}})
+	a = m.(App)
+
+	m, cmd := a.Update(feedPeekMsg{posts: []model.Post{
+		{ID: "p2", Content: "check out this cyberdeck build", AuthorUsername: "trinity", Slug: "p2-slug"},
+	}})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd for a new keyword-matching post")
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+	view := got.notifications.View()
+	if !strings.Contains(view, "cyberdeck") {
+		t.Errorf("expected the matched keyword to render in the Notifications tab, got: %q", view)
+	}
+}
+
+func TestScanPeekedPosts_MatchesTopics(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"retrocomputing"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, cmd := a.Update(feedPeekMsg{posts: []model.Post{
+		{ID: "p1", Content: "just a normal post", Topics: []string{"retrocomputing"}},
+	}})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd for a keyword match in a post's topics/tags")
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+}
+
+func TestScanPeekedPosts_NoAlert_WithoutKeywordsConfigured(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+
+	_, cmd := a.Update(feedPeekMsg{posts: []model.Post{
+		{ID: "p1", Content: "check out this cyberdeck build"},
+	}})
+	if cmd != nil {
+		t.Error("expected no toast with an empty keyword list")
+	}
+}
+
+func TestScanPeekedPosts_SuppressedWhileViewingFeed(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.focusReported, a.focused = true, true
+	a.active = screenFeed
+
+	m, cmd := a.Update(feedPeekMsg{posts: []model.Post{
+		{ID: "p1", Content: "check out this cyberdeck build"},
+	}})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast while actively viewing Feed")
+	}
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0 (entry created already read)", got.polledUnreadCount)
+	}
+}
+
+// --- keyword alerts on the replies poll (SearchReplies) ---
+
+func TestKeywordReplyMatch_FirstResponseSeedsBaseline_NoAlert(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	reply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
+	m, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{reply}})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast on the first (baseline) response for a keyword")
+	}
+	if got.notifications.UnreadCount() != 0 {
+		t.Errorf("notifications.UnreadCount() = %d, want 0", got.notifications.UnreadCount())
+	}
+}
+
+func TestKeywordReplyMatch_EmitsForNewReply(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// Baseline: nothing yet.
+	m, _ := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: nil})
+	a = m.(App)
+
+	newReply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
+	m, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{newReply}})
+	got := m.(App)
+	if cmd == nil {
+		t.Error("expected a toast cmd for a newly-seen matching reply")
+	}
+	if got.notifications.UnreadCount() != 1 {
+		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
+	}
+	view := got.notifications.View()
+	if !strings.Contains(view, "cyberdeck") {
+		t.Errorf("expected the matched keyword to render in the Notifications tab, got: %q", view)
+	}
+}
+
+func TestKeywordReplyMatch_NoAlert_ForAlreadySeenReply(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	reply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
+	m, _ := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{reply}}) // baseline
+	a = m.(App)
+
+	// Same reply ID reappearing in a later poll must not alert again.
+	_, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{reply}})
+	if cmd != nil {
+		t.Error("expected no repeat toast for an already-seen reply")
+	}
+}
+
+func TestKeywordReplyMatch_SuppressedWhileViewingFeed(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.keywordAlerts = []string{"cyberdeck"}
+	a.focusReported, a.focused = true, true
+	a.active = screenFeed
+
+	m, _ := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: nil}) // baseline
+	a = m.(App)
+
+	newReply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
+	m, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{newReply}})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast while actively viewing Feed")
+	}
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0 (entry created already read)", got.polledUnreadCount)
+	}
+}
+
+func TestKeywordReplyPollTick_DeadChainWithoutKeywords(t *testing.T) {
+	a := loggedInApp()
+	a.sessionGen = 3
+	_, cmd := a.Update(keywordReplyPollTickMsg{gen: 3})
+	if cmd != nil {
+		t.Error("expected the poll chain to die when no keywords are configured")
+	}
+}
+
+func TestKeywordReplyPollTick_FetchesPerKeywordAndReschedules(t *testing.T) {
+	a := loggedInApp()
+	a.sessionGen = 3
+	a.keywordAlerts = []string{"cyberdeck", "wetware"}
+
+	_, cmd := a.Update(keywordReplyPollTickMsg{gen: 3})
+	if cmd == nil {
+		t.Fatal("expected a batched cmd (reschedule + one fetch per keyword)")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected tea.BatchMsg, got %T", cmd())
+	}
+	if len(batch) != 1+len(a.keywordAlerts) {
+		t.Fatalf("expected %d cmds (1 reschedule + %d fetches), got %d", 1+len(a.keywordAlerts), len(a.keywordAlerts), len(batch))
+	}
+	// batch[0] is the reschedule tick — invoking it would block for
+	// keywordReplyPollInterval, so only the fetch cmds (batch[1:]) run here.
+	var matchCount int
+	for _, c := range batch[1:] {
+		if _, ok := c().(keywordReplyMatchMsg); ok {
+			matchCount++
+		}
+	}
+	if matchCount != len(a.keywordAlerts) {
+		t.Errorf("expected %d keywordReplyMatchMsg (one per keyword), got %d", len(a.keywordAlerts), matchCount)
+	}
+}
+
+func TestHandleChatrooms_RoomMentionedMsg_SuppressedWhileViewingRoom(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.focusReported, a.focused = true, true
+	a.active = screenChatrooms
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "cyberspace", Name: "Cyberspace"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+	if a.chatrooms.ActiveRoomSlug() != "cyberspace" {
+		t.Fatal("setup: expected the room open in detail mode")
+	}
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	// Turn off the default unread-only filter so an already-read entry still
+	// renders in View() below — this only flips the filter flag before any
+	// mention has been added, so it has no other effect on this test. The
+	// "u" key also sets fetching=true (it normally triggers a reload); clear
+	// it back out via SetNotifs(nil, "") to simulate that reload completing.
+	a.notifications, _ = a.notifications.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	a.notifications = a.notifications.SetNotifs(nil, "")
+
+	m, cmd := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo", MessageID: "msg1"})
+	got := m.(App)
+	if cmd != nil {
+		t.Error("expected no toast while actively viewing the mentioned room")
+	}
+	if got.polledUnreadCount != 0 {
+		t.Errorf("polledUnreadCount = %d, want 0 (entry created already read)", got.polledUnreadCount)
+	}
+	if got.notifications.UnreadCount() != 0 {
+		t.Errorf("notifications.UnreadCount() = %d, want 0", got.notifications.UnreadCount())
+	}
+	if !strings.Contains(got.notifications.View(), "trinity") {
+		t.Errorf("expected the entry to still be created (already read, not skipped), got: %q", got.notifications.View())
+	}
+}
+
+func TestHandleChatrooms_RoomMentionedMsg_SurvivesNotifsReload(t *testing.T) {
+	a := loggedInApp()
+	a.desktopNotifications = true
+	a.active = screenFeed
+	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ := a.Update(screens.RoomMentionedMsg{RoomID: "cyberspace", RoomName: "Cyberspace", From: "trinity", Body: "hey neo", MessageID: "msg1"})
+	a = m.(App)
+	if a.notifications.UnreadCount() != 1 {
+		t.Fatal("setup: expected the local mention to be unread")
+	}
+
+	// An unrelated server reload must not wipe out the still-unread local mention.
+	m2, _ := a.Update(notifsLoadedMsg{notifs: []model.Notification{
+		{ID: "n1", Type: "reply", Read: false, CreatedAt: time.Now()},
+	}})
+	got := m2.(App)
+
+	if !strings.Contains(got.notifications.View(), "trinity") {
+		t.Error("expected the unread local mention to survive a server notifsLoadedMsg reload")
+	}
+}
+
+// markReadSpyClient counts MarkNotificationRead calls.
+type markReadSpyClient struct {
+	*api.MockClient
+	calls int
+}
+
+func (c *markReadSpyClient) MarkNotificationRead(id string) error {
+	c.calls++
+	return nil
+}
+
+func TestMarkNotifReadCmd_SkipsAPIForSyntheticID(t *testing.T) {
+	spy := &markReadSpyClient{MockClient: api.NewMockClient()}
+	a := NewApp(spy)
+
+	a.markNotifReadCmd(localMentionIDPrefix + "msg1")()
+
+	if spy.calls != 0 {
+		t.Errorf("expected no MarkNotificationRead call for a synthetic ID, got %d", spy.calls)
+	}
+}
+
+func TestMarkNotifReadCmd_CallsAPIForRealID(t *testing.T) {
+	spy := &markReadSpyClient{MockClient: api.NewMockClient()}
+	a := NewApp(spy)
+
+	a.markNotifReadCmd("n1")()
+
+	if spy.calls != 1 {
+		t.Errorf("expected one MarkNotificationRead call for a real ID, got %d", spy.calls)
+	}
+}
+
 func TestHandleCMail_ConvReconnected_ShowsToast(t *testing.T) {
 	a := loggedInApp()
 	m, _ := a.Update(screens.CMailReconnectedMsg{})
@@ -3720,6 +4402,69 @@ func TestHandleCMail_CommandReply_AppendsSystemMessage(t *testing.T) {
 	got := m.(App)
 	if view := got.cmail.View(); !strings.Contains(view, "Commands: /me, /dice, /help") {
 		t.Errorf("expected the /help reply in the c-mail view, got: %q", view)
+	}
+}
+
+// TestHandleChatrooms_HelpReply_BorkOnItsOwnLine guards the layout: the /bork
+// entry must render on a separate line, not trailing the server's command list.
+func TestHandleChatrooms_HelpReply_BorkOnItsOwnLine(t *testing.T) {
+	a := loggedInApp()
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+
+	m, _ := a.Update(roomCommandReplyMsg{roomID: "zion", reply: withBorkHelp("/help", "Commands: /me, /dice, /help")})
+	found := false
+	for _, line := range strings.Split(m.(App).chatrooms.View(), "\n") {
+		if strings.Contains(line, "/bork") {
+			found = true
+			if strings.Contains(line, "/help") {
+				t.Errorf("/bork shares a line with /help: %q", line)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a /bork line in the chatrooms view")
+	}
+}
+
+func TestSendRoomMessageCmd_HelpReplyListsBork(t *testing.T) {
+	a := loggedInApp()
+	msg, ok := a.sendRoomMessageCmd("zion", "/help")().(roomCommandReplyMsg)
+	if !ok {
+		t.Fatal("expected a roomCommandReplyMsg for /help")
+	}
+	if !strings.HasSuffix(msg.reply, "/bork <text> (Speak like-a a Svedish cheff Bork Bork Bork!)") {
+		t.Errorf("reply = %q, want it to end with the /bork entry", msg.reply)
+	}
+}
+
+func TestSendCMailCmd_HelpReplyListsBork(t *testing.T) {
+	a := loggedInApp()
+	msg, ok := a.sendCMailCmd("c1", "/help")().(cmailCommandReplyMsg)
+	if !ok {
+		t.Fatal("expected a cmailCommandReplyMsg for /help")
+	}
+	if !strings.HasSuffix(msg.reply, "/bork <text> (Speak like-a a Svedish cheff Bork Bork Bork!)") {
+		t.Errorf("reply = %q, want it to end with the /bork entry", msg.reply)
+	}
+}
+
+func TestWithBorkHelp_OnlyForHelp(t *testing.T) {
+	tests := []struct {
+		body string
+		want string
+	}{
+		{"/help", "R" + borkHelpEntry},
+		{" /HELP ", "R" + borkHelpEntry},
+		{"/muted", "R"},
+		{"/helpme", "R"},
+	}
+	for _, tt := range tests {
+		if got := withBorkHelp(tt.body, "R"); got != tt.want {
+			t.Errorf("withBorkHelp(%q) = %q, want %q", tt.body, got, tt.want)
+		}
 	}
 }
 
@@ -4483,75 +5228,33 @@ func TestOpenImageInTerminal_Scale_ChangesComputedBox(t *testing.T) {
 	}
 }
 
-// TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap confirms a
-// high-scale image modal never grows wide enough, in Miller layout, for its
-// centered position (compositeOverlays centers against the full terminal
-// width, not the content pane — see Layout.ModalMaxWidth's doc comment) to
-// splice into the nav sidebar. TabsLayout, with no side chrome, is
-// unaffected and still clamps to the full terminal width.
-func TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap(t *testing.T) {
-	bigImg := image.NewRGBA(image.Rect(0, 0, 2000, 2000))
-
-	render := func(layout Layout) int {
-		a := loggedInApp()
-		a.graphicsProtocol = imgview.ProtocolKitty
-		a.layout = layout
-		a.width, a.height = 120, 50
-		a.imageScale = config.MaxImageScale
-		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{bigImg}}}
-		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
-		msg := cmd().(imageFetchedMsg)
-		if msg.err != nil {
-			t.Fatalf("unexpected error: %v", msg.err)
-		}
-		return msg.cols
-	}
-
-	tabsCols := render(TabsLayout{})
-	millerCols := render(MillerLayout{})
-
-	if tabsCols > 120 {
-		t.Errorf("TabsLayout: cols=%d, want <= terminal width 120", tabsCols)
-	}
-	if want := (MillerLayout{}).ModalMaxWidth(120); millerCols > want {
-		t.Errorf("MillerLayout: cols=%d, want <= ModalMaxWidth(120)=%d (would splice into the sidebar when centered)", millerCols, want)
-	}
-	if millerCols >= tabsCols {
-		t.Errorf("expected MillerLayout to clamp narrower than TabsLayout for the same terminal width, got miller=%d tabs=%d", millerCols, tabsCols)
-	}
-}
-
 // TestOpenImageInTerminal_NeverExceedsScreenMargin confirms the modal never
 // occupies more than modalScreenMarginFrac (80%) of the terminal in either
-// dimension, on any layout, even at max scale with a huge source image —
-// see modalScreenMarginFrac's doc comment for why this headroom matters
-// beyond just avoiding Miller's sidebar (a documented class of terminal
-// rendering desync around large raw image payloads, reported live as
-// surrounding UI chrome getting visibly corrupted at close to full-screen
-// modal size).
+// dimension, even at max scale with a huge source image — see
+// modalScreenMarginFrac's doc comment for why this headroom matters (a
+// documented class of terminal rendering desync around large raw image
+// payloads, reported live as surrounding UI chrome getting visibly corrupted
+// at close to full-screen modal size).
 func TestOpenImageInTerminal_NeverExceedsScreenMargin(t *testing.T) {
 	hugeImg := image.NewRGBA(image.Rect(0, 0, 6000, 6000))
 
-	for _, layout := range []Layout{TabsLayout{}, MillerLayout{}} {
-		a := loggedInApp()
-		a.graphicsProtocol = imgview.ProtocolKitty
-		a.layout = layout
-		a.width, a.height = 300, 100
-		a.imageScale = config.MaxImageScale
-		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{hugeImg}}}
-		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
-		msg := cmd().(imageFetchedMsg)
-		if msg.err != nil {
-			t.Fatalf("unexpected error: %v", msg.err)
-		}
-		maxCols := int(float64(a.width) * modalScreenMarginFrac)
-		maxRows := int(float64(a.height) * modalScreenMarginFrac)
-		if msg.cols > maxCols {
-			t.Errorf("%T: cols=%d, want <= %d (80%% of width %d)", layout, msg.cols, maxCols, a.width)
-		}
-		if msg.rows > maxRows {
-			t.Errorf("%T: rows=%d, want <= %d (80%% of height %d)", layout, msg.rows, maxRows, a.height)
-		}
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.width, a.height = 300, 100
+	a.imageScale = config.MaxImageScale
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{hugeImg}}}
+	_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+	msg := cmd().(imageFetchedMsg)
+	if msg.err != nil {
+		t.Fatalf("unexpected error: %v", msg.err)
+	}
+	maxCols := int(float64(a.width) * modalScreenMarginFrac)
+	maxRows := int(float64(a.height) * modalScreenMarginFrac)
+	if msg.cols > maxCols {
+		t.Errorf("cols=%d, want <= %d (80%% of width %d)", msg.cols, maxCols, a.width)
+	}
+	if msg.rows > maxRows {
+		t.Errorf("rows=%d, want <= %d (80%% of height %d)", msg.rows, maxRows, a.height)
 	}
 }
 
@@ -5401,7 +6104,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 	// The very first sync reports every slot as "revived" too (nothing was
 	// visible before), which is harmless: the caller's revive step just
 	// deletes from an empty pendingKittyDeletes map, a no-op.
-	a, ids1, toDelete1, _ := a.syncKittyPlacements(slots1)
+	ids1, toDelete1, _ := a.syncKittyPlacements(slots1)
 	if len(toDelete1) != 0 {
 		t.Errorf("expected no deletes on first sync, got %v", toDelete1)
 	}
@@ -5411,7 +6114,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 	}
 
 	// Same slots again: ids must stay stable, no deletes/revives.
-	a, ids2, toDelete2, revived2 := a.syncKittyPlacements(slots1)
+	ids2, toDelete2, revived2 := a.syncKittyPlacements(slots1)
 	if ids2["post:p1:0"] != id1 || ids2["post:p2:0"] != id2 {
 		t.Errorf("expected ids to stay stable across syncs, got %v", ids2)
 	}
@@ -5421,7 +6124,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 
 	// p1 scrolls out of view, p3 comes into view.
 	slots2 := []screens.InlineImageSlot{{Key: "post:p2:0"}, {Key: "post:p3:0"}}
-	a, ids3, toDelete3, revived3 := a.syncKittyPlacements(slots2)
+	ids3, toDelete3, revived3 := a.syncKittyPlacements(slots2)
 	if len(toDelete3) != 1 || toDelete3[0] != id1 {
 		t.Errorf("expected exactly p1's id (%d) to be reported for deletion, got %v", id1, toDelete3)
 	}
@@ -5441,7 +6144,7 @@ func TestSyncKittyPlacements_AssignsStableIDsAndDetectsDrops(t *testing.T) {
 	// inlineImageCacheKey) valid, and is reported as revived so the caller
 	// cancels its still-pending delete.
 	slots3 := []screens.InlineImageSlot{{Key: "post:p1:0"}, {Key: "post:p2:0"}, {Key: "post:p3:0"}}
-	_, ids4, toDelete4, revived4 := a.syncKittyPlacements(slots3)
+	ids4, toDelete4, revived4 := a.syncKittyPlacements(slots3)
 	if ids4["post:p1:0"] != id1 {
 		t.Errorf("expected p1 to be revived with its original id %d, got %d", id1, ids4["post:p1:0"])
 	}
@@ -5486,12 +6189,12 @@ func feedAppWithOneImage(t *testing.T) (a App, key string) {
 func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T) {
 	a, key := feedAppWithOneImage(t)
 
-	a, cmd := a.syncInlineImages()
+	cmd := a.syncInlineImages()
 	if cmd == nil || !a.inlineImageFetching[key] {
 		t.Fatal("setup: expected the first sync to schedule a fetch")
 	}
 
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
 	if _, failed := a.inlineImageFailedAt[key]; !failed {
 		t.Fatal("expected the failure to be recorded")
 	}
@@ -5499,14 +6202,14 @@ func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T
 		t.Error("expected the in-flight marker to be cleared after the failure")
 	}
 
-	a, _ = a.syncInlineImages()
+	a.syncInlineImages()
 	if a.inlineImageFetching[key] {
 		t.Error("expected syncInlineImages to skip refetching within the cooldown window")
 	}
 
 	// Backdate the failure past the cooldown and confirm it retries.
 	a.inlineImageFailedAt[key] = time.Now().Add(-inlineImageFailureCooldown - time.Second)
-	a, _ = a.syncInlineImages()
+	a.syncInlineImages()
 	if !a.inlineImageFetching[key] {
 		t.Error("expected syncInlineImages to retry once the cooldown has lapsed")
 	}
@@ -5520,12 +6223,12 @@ func TestInlineImageFailureCooldown_SkipsRefetchUntilCooldownLapses(t *testing.T
 func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 	a, key := feedAppWithOneImage(t)
 
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
 	if _, cached := a.inlineImageCache[key]; !cached {
 		t.Fatal("setup: expected the encode to be cached under the no-dither key")
 	}
 
-	a, cmd := a.syncInlineImages()
+	cmd := a.syncInlineImages()
 	if cmd != nil {
 		t.Fatal("setup: expected a cache hit (no fetch) before enabling dithering")
 	}
@@ -5533,7 +6236,7 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 	a.dithering = true
 	a.ditherSharpness = "sharp"
 
-	a, cmd = a.syncInlineImages()
+	cmd = a.syncInlineImages()
 	if cmd == nil {
 		t.Fatal("expected enabling dithering to invalidate the cached key and schedule a fresh fetch")
 	}
@@ -5551,12 +6254,12 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 // leave a stale cooldown blocking future retries after the URL recovers.
 func TestInlineImageFailureCooldown_ClearedBySubsequentSuccess(t *testing.T) {
 	a, key := feedAppWithOneImage(t)
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, err: errors.New("boom")})
 	if _, failed := a.inlineImageFailedAt[key]; !failed {
 		t.Fatal("setup: expected the failure to be recorded")
 	}
 
-	a, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
+	_, _, _ = a.handleInlineImageFetched(inlineImageFetchedMsg{key: key, encoded: "\x1b_Gfake\x1b\\"})
 	if _, failed := a.inlineImageFailedAt[key]; failed {
 		t.Error("expected the failure record to be cleared after a subsequent success")
 	}
@@ -5582,7 +6285,7 @@ func TestSyncInlineImages_DisablingClearsStaleKittyPlacements(t *testing.T) {
 		},
 	}
 
-	a, _ = a.syncInlineImages()
+	a.syncInlineImages()
 
 	if len(a.kittyVisibleKeys) != 0 {
 		t.Errorf("expected kittyVisibleKeys to be cleared, got %v", a.kittyVisibleKeys)
@@ -5620,7 +6323,8 @@ func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
 		inlineImages:            false, // canInlineImages() false: current slots stay empty, so the tracked entry above reads as stale
 		inlineImageVisibleRects: stale,
 	}
-	sixelOut, cmd := sixel.syncInlineImages()
+	sixelOut := sixel
+	cmd := sixelOut.syncInlineImages()
 	if cmd != nil {
 		t.Error("expected no cmd for Sixel — the repaint decision is made in View(), not queued here")
 	}
@@ -5636,7 +6340,8 @@ func TestSyncInlineImages_SixelTracksStaleRowsSameAsITerm2(t *testing.T) {
 		inlineImages:            false,
 		inlineImageVisibleRects: stale,
 	}
-	itermOut, cmd := iterm.syncInlineImages()
+	itermOut := iterm
+	cmd = itermOut.syncInlineImages()
 	if cmd != nil {
 		t.Error("expected no cmd for a stale iTerm2 row — it relies on forceRowsDirty in View(), not a cmd")
 	}
@@ -5675,7 +6380,8 @@ func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 		},
 	}
 
-	a1, _ := a.syncInlineImages()
+	a1 := a
+	a1.syncInlineImages()
 	if !slices.Contains(a1.inlineImageStaleRows, 10) {
 		t.Fatalf("setup: expected row 10 stale after the first call, got %v", a1.inlineImageStaleRows)
 	}
@@ -5687,7 +6393,8 @@ func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 	a1.inlineImageVisibleRects = map[string]inlineImageRect{
 		"post:B:0": {Row: 20, Col: 1, Cols: 10, Rows: 4},
 	}
-	a2, _ := a1.syncInlineImages()
+	a2 := a1
+	a2.syncInlineImages()
 	if !slices.Contains(a2.inlineImageStaleRows, 10) {
 		t.Errorf("expected row 10 from the first call to survive into the second call's accumulated staleRows, got %v", a2.inlineImageStaleRows)
 	}
@@ -5698,14 +6405,16 @@ func TestSyncInlineImages_StaleRowsSurviveCoalescedUpdates(t *testing.T) {
 	// A quiet call (nothing newly stale — a2.inlineImageVisibleRects is
 	// already {}) immediately afterward, well within inlineImageStaleGrace,
 	// must NOT clear the accumulated set yet.
-	a3, _ := a2.syncInlineImages()
+	a3 := a2
+	a3.syncInlineImages()
 	if len(a3.inlineImageStaleRows) == 0 {
 		t.Fatalf("expected accumulated staleRows to survive a quiet call within the grace period, got %v", a3.inlineImageStaleRows)
 	}
 
 	// Once the grace period has elapsed, the next quiet call clears it.
 	a3.inlineImageStaleSince = time.Now().Add(-inlineImageStaleGrace - time.Second)
-	a4, _ := a3.syncInlineImages()
+	a4 := a3
+	a4.syncInlineImages()
 	if len(a4.inlineImageStaleRows) != 0 {
 		t.Errorf("expected accumulated staleRows cleared after the grace period elapsed, got %v", a4.inlineImageStaleRows)
 	}
@@ -5732,7 +6441,8 @@ func TestSyncInlineImages_StaleRowsSurviveQuietTick(t *testing.T) {
 		},
 	}
 
-	a1, _ := a.syncInlineImages()
+	a1 := a
+	a1.syncInlineImages()
 	if len(a1.inlineImageStaleRows) == 0 {
 		t.Fatalf("setup: expected staleRows populated after the first call, got %v", a1.inlineImageStaleRows)
 	}
@@ -5740,7 +6450,8 @@ func TestSyncInlineImages_StaleRowsSurviveQuietTick(t *testing.T) {
 	// An unrelated quiet call — a1.inlineImageVisibleRects is already {},
 	// so this computes zero new staleRows, standing in for an unrelated
 	// background tick's Update firing before the resend has flushed.
-	a2, _ := a1.syncInlineImages()
+	a2 := a1
+	a2.syncInlineImages()
 	if !slices.Contains(a2.inlineImageStaleRows, 10) {
 		t.Errorf("expected row 10 to survive an unrelated quiet Update within the grace period, got %v", a2.inlineImageStaleRows)
 	}
@@ -6374,7 +7085,7 @@ func TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol(t *testing
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = "" // auto — the only way DetectProtocol() ever gets consulted
 
-	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		GraphicsProtocol: "", // unchanged
 		Dithering:        true,
 		ImageViewer:      "terminal",
@@ -6418,7 +7129,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 
 	var cmd1 tea.Cmd
 	var ok bool
-	a, cmd1, ok = a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd1, ok = a.handleSettings(screens.SaveSettingsMsg{
 		WanderLust:       true,
 		Timezone:         "UTC+2",
 		ImageViewer:      "terminal",
@@ -6429,7 +7140,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 	}
 
 	var cmd2 tea.Cmd
-	a, cmd2, ok = a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd2, ok = a.handleSettings(screens.SaveSettingsMsg{
 		WanderLust:       true,
 		Timezone:         "UTC+5:30",
 		MaxThreadDepth:   7,
@@ -6443,7 +7154,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 	// Second (newer) save completes first.
 	saved2 := cmd2().(settingsSavedMsg)
 	var diskCmd2 tea.Cmd
-	a, diskCmd2, ok = a.handleSettings(saved2)
+	_, diskCmd2, ok = a.handleSettings(saved2)
 	if !ok {
 		t.Fatal("expected settingsSavedMsg to be handled")
 	}
@@ -6454,7 +7165,7 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 
 	// First (now-stale) save completes afterward.
 	saved1 := cmd1().(settingsSavedMsg)
-	a, cmd, ok := a.handleSettings(saved1)
+	_, cmd, ok := a.handleSettings(saved1)
 	if !ok {
 		t.Fatal("expected stale settingsSavedMsg to still report handled=true")
 	}
@@ -6560,7 +7271,7 @@ func TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves(t *testing.T)
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = ""
 
-	a, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
 		GraphicsProtocol: "kitty", // changed
 		ImageViewer:      "terminal",
 	})
@@ -6633,7 +7344,7 @@ func TestCheckForUpdateCmd_SkipsEphemeralSession(t *testing.T) {
 func TestHandleSettings_UpdateAvailableMsgShowsBanner(t *testing.T) {
 	a := loggedInApp()
 
-	a, cmd, ok := a.handleSettings(updateAvailableMsg{tag: "v9.9.9", url: "https://example.com/releases/v9.9.9"})
+	_, cmd, ok := a.handleSettings(updateAvailableMsg{tag: "v9.9.9", url: "https://example.com/releases/v9.9.9"})
 	if !ok {
 		t.Fatal("handleSettings did not claim updateAvailableMsg")
 	}
@@ -6644,4 +7355,126 @@ func TestHandleSettings_UpdateAvailableMsgShowsBanner(t *testing.T) {
 		t.Errorf("notifyText = %q, want it to mention v9.9.9", a.notifyText)
 	}
 	runCmd(t, cmd) // just confirm the expire-tick cmd doesn't panic
+}
+
+func TestHelpModal_ComposeShowsConfiguredHardBreakKey(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.hardBreakKey = "ctrl+l"
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", AuthorUsername: "op", Content: "hi"})
+	a.postDetail, _ = a.postDetail.OpenCompose()
+
+	help := ansi.Strip(TabsLayout{}.renderHelpModal(a))
+	if !strings.Contains(help, "ctrl+l") || !strings.Contains(help, "line break") {
+		t.Errorf("help should list the configured hard-break key, got:\n%s", help)
+	}
+}
+
+func TestHelpModal_ListsBork(t *testing.T) {
+	t.Run("feed compose", func(t *testing.T) {
+		a := loggedInApp()
+		f, _ := a.feed.Update(keyMsg("n"))
+		a.feed = f
+		if help := ansi.Strip(TabsLayout{}.renderHelpModal(a)); !strings.Contains(help, "tick public / nsfw / bork") {
+			t.Errorf("help should list the bork checkbox while composing a post, got:\n%s", help)
+		}
+	})
+	t.Run("circ room", func(t *testing.T) {
+		a := loggedInApp()
+		a.active = screenChatrooms
+		a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+		cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		a.chatrooms = cm
+		if help := ansi.Strip(TabsLayout{}.renderHelpModal(a)); !strings.Contains(help, "/bork <text>") {
+			t.Errorf("help should list /bork inside a room, got:\n%s", help)
+		}
+	})
+	t.Run("circ room list", func(t *testing.T) {
+		a := loggedInApp()
+		a.active = screenChatrooms
+		if help := ansi.Strip(TabsLayout{}.renderHelpModal(a)); strings.Contains(help, "/bork") {
+			t.Errorf("help should not list /bork on the room list, got:\n%s", help)
+		}
+	})
+	t.Run("cmail conversation", func(t *testing.T) {
+		a := loggedInApp()
+		a.active = screenCMail
+		a.cmail = a.cmail.SetConversations([]model.Conversation{
+			{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+		})
+		cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		a.cmail = cm
+		if help := ansi.Strip(TabsLayout{}.renderHelpModal(a)); !strings.Contains(help, "/bork <text>") {
+			t.Errorf("help should list /bork inside a conversation, got:\n%s", help)
+		}
+	})
+}
+
+func TestHandleLogoAnim_SkipsScrambleWhileComposeOpen(t *testing.T) {
+	a := loggedInApp()
+	_, cmd, handled := a.handleLogoAnim(logoAnimTickMsg{gen: a.sessionGen})
+	if !handled || cmd == nil || a.logoPhase != logoPhaseScrambling {
+		t.Fatalf("setup: expected the scramble to start with no compose open, got handled=%v phase=%v", handled, a.logoPhase)
+	}
+
+	a = loggedInApp()
+	f, _ := a.feed.Update(keyMsg("n"))
+	a.feed = f
+	_, cmd, handled = a.handleLogoAnim(logoAnimTickMsg{gen: a.sessionGen})
+	if !handled {
+		t.Error("expected the tick to be consumed")
+	}
+	if a.logoPhase != logoPhaseIdle {
+		t.Errorf("expected the scramble not to start while the editor is open, got phase %v", a.logoPhase)
+	}
+	if cmd == nil {
+		t.Error("expected the idle timer to be re-armed so the animation resumes after the editor closes")
+	}
+}
+
+func TestRoot_MatchesValueUpdatePath(t *testing.T) {
+	var byValue tea.Model = loggedInApp()
+	root := NewRoot(loggedInApp())
+	var byRoot tea.Model = root
+
+	msgs := []tea.Msg{
+		tea.WindowSizeMsg{Width: 120, Height: 40},
+		keyMsg("n"),
+		keyMsg("h"),
+		keyMsg("i"),
+	}
+	for i, msg := range msgs {
+		byValue, _ = byValue.Update(msg)
+		var cmd tea.Cmd
+		byRoot, cmd = byRoot.Update(msg)
+		_ = cmd
+		if byRoot != tea.Model(root) {
+			t.Fatalf("msg %d: expected Root.Update to return the same *Root, not a copy", i)
+		}
+		if got, want := byRoot.View(), byValue.View(); got != want {
+			t.Fatalf("msg %d: Root.View differs from the value-path View", i)
+		}
+	}
+	if !root.app.feed.PanelActive() {
+		t.Error("expected the feed composer to be open after 'n'")
+	}
+}
+
+// The command runs on a background goroutine, so it must work on a snapshot of
+// the current user and never write through to the live App.
+func TestSaveProfileCmd_DoesNotMutateLiveApp(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "alice", Bio: "old"}
+
+	msg := a.saveProfileCmd(screens.SaveProfileMsg{Bio: "new"})()
+
+	if a.currentUser.Bio != "old" {
+		t.Errorf("expected the live App's Bio untouched by the command, got %q", a.currentUser.Bio)
+	}
+	loaded, ok := msg.(profileLoadedMsg)
+	if !ok || loaded.user.Bio != "new" || loaded.user.Username != "alice" {
+		t.Errorf("expected profileLoadedMsg carrying the updated user, got %#v", msg)
+	}
 }

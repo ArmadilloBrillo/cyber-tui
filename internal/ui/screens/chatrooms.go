@@ -14,7 +14,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/api"
+	"github.com/ragnar/cyber-tui/internal/bork"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
 
@@ -215,6 +217,7 @@ type ChatroomsModel struct {
 	err          error // last message-load/subscribe failure for the active room; cleared on success
 
 	mutedUsersByRoom map[string][]string // roomID -> muted usernames, from Settings
+	keywordAlerts    []string            // user's configured keyword alerts, from SharedConfigMsg
 
 	serverRooms []model.Room // rooms from GET /v1/circ, before nsfwRoom injection
 	roomsLoaded bool         // true once SetRooms has been called with a real fetch result
@@ -339,11 +342,12 @@ type SendRoomMessageMsg struct {
 // baseSlashCommands are the slash commands the server recognizes for both
 // CIRC and C-Mail. Checked client-side so a typo'd command shows a local
 // error instead of being sent as a literal chat message. Command *syntax*
-// validation stays server-side.
+// validation stays server-side. "/bork" is the one client-side entry: the
+// text is rewritten locally by borkCommand and sent as a plain message.
 var baseSlashCommands = map[string]bool{
 	"/me": true, "/poke": true, "/hug": true, "/hi5": true, "/slap": true,
 	"/dice": true, "/8ball": true, "/fortune": true, "/help": true,
-	"/gif": true, "/song": true,
+	"/gif": true, "/song": true, "/bork": true,
 }
 
 // circOnlySlashCommands are additionally recognized in CIRC only — C-Mail's
@@ -392,9 +396,64 @@ func isKnownSlashCommand(cmd string, extra map[string]bool) bool {
 		strings.HasPrefix(cmd, "/dice:")
 }
 
+// borkCommand turns the input of a "/bork <text>" line into the body to send.
+// It returns a non-empty notice instead when there is nothing to send, or when
+// the text is itself a "/" command, which borking would mangle.
+func borkCommand(val string) (body, notice string) {
+	rest := strings.TrimSpace(val[len(strings.Fields(val)[0]):])
+	switch {
+	case rest == "":
+		return "", "*** /bork: nothing to send"
+	case strings.HasPrefix(rest, "/"):
+		return "", "*** /bork: cannot wrap another command"
+	}
+	return bork.Bork(rest), ""
+}
+
 // RoomOpenedMsg is emitted when the user enters a chatroom. App uses it to call MarkRoomRead.
 type RoomOpenedMsg struct {
 	RoomID string
+}
+
+// RoomMentionedMsg is emitted when a live incoming message in the room the
+// user is subscribed to either contains their username as a bare word (no
+// "@") — the server's chat_mention notification already covers the
+// "@username" form, so this only carries what that pipeline misses — or
+// matches one of the user's configured keyword alerts. Keyword is empty for
+// a username mention, non-empty for a keyword match; a message can produce
+// one of each as two separate RoomMentionedMsg values. App uses it to fire a
+// desktop toast and insert a Notifications-tab entry, gated on whether the
+// user is actively viewing this room.
+type RoomMentionedMsg struct {
+	RoomID    string // room slug
+	RoomName  string
+	From      string // sender's username
+	Body      string // raw message body; desktopNotifyCmd truncates
+	MessageID string // the underlying model.Message.ID; used to build a stable synthetic notification ID
+	Keyword   string // non-empty: which configured keyword matched, instead of a username mention
+}
+
+// mentionsCurrentUser reports whether msg is a live chat message (not a
+// local system notice) from someone other than currentUser that contains
+// currentUser's username as a bare word.
+func mentionsCurrentUser(msg model.Message, currentUser string) bool {
+	if currentUser == "" || msg.IsSystem {
+		return false
+	}
+	if strings.EqualFold(msg.From.Username, currentUser) {
+		return false // never self-notify
+	}
+	return markdown.MentionsUserBare(msg.Body, currentUser)
+}
+
+// matchedKeywordInMessage reports the first configured keyword found in msg,
+// or "" if none match — same self/system exclusion as mentionsCurrentUser,
+// so a user's own messages never trigger their own keyword alerts.
+func matchedKeywordInMessage(msg model.Message, currentUser string, keywords []string) string {
+	if msg.IsSystem || strings.EqualFold(msg.From.Username, currentUser) {
+		return ""
+	}
+	return markdown.MatchKeywords(msg.Body, keywords)
 }
 
 // NewChatroomsModel creates a new ChatroomsModel for the given authenticated user.
@@ -1251,6 +1310,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	case SharedConfigMsg:
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.mutedUsersByRoom = msg.Settings.MutedUsersByRoom
+		m.keywordAlerts = msg.KeywordAlerts
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m.filterNSFW = msg.Settings.FilterNSFW
 		m = m.SetLocation(msg.Loc)
@@ -1282,6 +1342,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		return m.PrependMessages(msg.roomID, msg.msgs), nil
 
 	case roomReceivedMsg:
+		var cmds []tea.Cmd
 		if msg.msg.Deleted {
 			// A delete patch — from us in another session, or from another
 			// user — carries only {ID, Deleted}; merge onto the existing
@@ -1296,11 +1357,26 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			if !m.focused || !m.viewport.AtBottom() {
 				m.unreadCount++
 			}
+			roomID, roomName := m.activeRoomID, m.activeRoomID
+			if m.activeRoom != nil {
+				roomName = m.activeRoom.Name
+			}
+			from, body, messageID := msg.msg.From.Username, msg.msg.Body, msg.msg.ID
+			if mentionsCurrentUser(msg.msg, m.currentUser) {
+				cmds = append(cmds, func() tea.Msg {
+					return RoomMentionedMsg{RoomID: roomID, RoomName: roomName, From: from, Body: body, MessageID: messageID}
+				})
+			}
+			if kw := matchedKeywordInMessage(msg.msg, m.currentUser, m.keywordAlerts); kw != "" {
+				cmds = append(cmds, func() tea.Msg {
+					return RoomMentionedMsg{RoomID: roomID, RoomName: roomName, From: from, Body: body, MessageID: messageID, Keyword: kw}
+				})
+			}
 		}
 		if m.sub != nil {
-			return m, waitForRoomMsg(m.sub)
+			cmds = append(cmds, waitForRoomMsg(m.sub))
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 
 	case roomStreamClosedMsg:
 		if msg.roomID != m.activeRoomID {
@@ -1627,6 +1703,14 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 								m.input.Reset()
 								return m.AppendSystemMessage(roomID, "*** unknown command: "+cmd), nil
 							}
+							if cmd == "/bork" {
+								body, notice := borkCommand(val)
+								if notice != "" {
+									m.input.Reset()
+									return m.AppendSystemMessage(roomID, notice), nil
+								}
+								val = body
+							}
 							if cmd == "/mute" || cmd == "/unmute" {
 								if fields := strings.Fields(val); len(fields) >= 2 {
 									val = cmd + " " + strings.ToLower(strings.Join(fields[1:], " "))
@@ -1917,7 +2001,7 @@ func findMessageByID(msgs []model.Message, id string) (model.Message, bool) {
 
 // selOffsets/selHeights project offsets/heights (1:1 with a message list)
 // through sel (the selectable-only index list), for feeding into
-// millerPageNav. Shared by ChatroomsModel and CMailModel browsing.
+// pageNav. Shared by ChatroomsModel and CMailModel browsing.
 func selOffsets(offsets []int, sel []int) []int {
 	out := make([]int, len(sel))
 	for i, idx := range sel {
@@ -2023,7 +2107,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		if curPos == 0 {
 			return m.maybeLoadOlderMessages()
 		}
-		newPos, newOffset := millerPageNav(-1, m.viewport.Height, 0,
+		newPos, newOffset := pageNav(-1, m.viewport.Height, 0,
 			selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), curPos, m.viewport.YOffset)
 		if newPos < 0 {
 			newPos = 0
@@ -2043,7 +2127,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 			m.viewport.GotoBottom()
 			return m, nil
 		}
-		newPos, newOffset := millerPageNav(+1, m.viewport.Height, 0,
+		newPos, newOffset := pageNav(+1, m.viewport.Height, 0,
 			selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), curPos, m.viewport.YOffset)
 		m.selectedMsgID = m.messages[sel[newPos]].ID
 		m.viewport.SetYOffset(newOffset)
@@ -2054,7 +2138,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		}
 		newPos, newOffset := curPos, m.viewport.YOffset
 		for i := 0; i < m.viewport.Height && newPos > 0; i++ {
-			newPos, newOffset = millerPageNav(-1, m.viewport.Height, 0,
+			newPos, newOffset = pageNav(-1, m.viewport.Height, 0,
 				selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), newPos, newOffset)
 		}
 		if newPos < 0 {
@@ -2077,7 +2161,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 		}
 		newPos, newOffset := curPos, m.viewport.YOffset
 		for i := 0; i < m.viewport.Height && newPos < len(sel)-1; i++ {
-			newPos, newOffset = millerPageNav(+1, m.viewport.Height, 0,
+			newPos, newOffset = pageNav(+1, m.viewport.Height, 0,
 				selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), newPos, newOffset)
 		}
 		m.selectedMsgID = m.messages[sel[newPos]].ID

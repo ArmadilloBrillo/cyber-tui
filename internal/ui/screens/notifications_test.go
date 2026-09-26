@@ -173,6 +173,158 @@ func TestNotifs_MarkAllRead_OptimisticUpdate(t *testing.T) {
 	}
 }
 
+// --- local (client-synthesized) mentions ---
+
+func TestNotifs_AddLocalMention_InsertsAtTopWhenNewest(t *testing.T) {
+	notifs := []model.Notification{makeNotif("n1", "reply", "p1", false)}
+	m := initNotifs(notifs)
+
+	local := makeNotif("local-mention-m1", "chat_mention", "", false) // created after n1, so it's newer
+	m = m.AddLocalMention(local)
+
+	if len(m.notifs) != 2 || m.notifs[0].ID != "local-mention-m1" {
+		t.Fatalf("expected the newer local mention at the top, got %+v", m.notifs)
+	}
+}
+
+func TestNotifs_AddLocalMention_InsertsByTime_NotAlwaysAtTop(t *testing.T) {
+	now := time.Now()
+	newer := makeNotif("n-newer", "reply", "p1", false)
+	newer.CreatedAt = now
+	m := initNotifs([]model.Notification{newer})
+
+	local := makeNotif("local-mention-m1", "chat_mention", "", false)
+	local.CreatedAt = now.Add(-time.Hour) // older than the already-listed server notification
+	m = m.AddLocalMention(local)
+
+	if len(m.notifs) != 2 || m.notifs[0].ID != "n-newer" || m.notifs[1].ID != "local-mention-m1" {
+		t.Fatalf("expected the local mention to sort below the newer server notification, got %+v", m.notifs)
+	}
+}
+
+func TestNotifs_AddLocalMention_UnreadSurvivesSetNotifs(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", false))
+
+	// A fresh server reload that knows nothing about the local mention.
+	m = m.SetNotifs([]model.Notification{makeNotif("n1", "reply", "p1", false)}, "")
+
+	if len(m.notifs) != 2 {
+		t.Fatalf("expected the unread local mention to survive SetNotifs, got %+v", m.notifs)
+	}
+	var found bool
+	for _, n := range m.notifs {
+		found = found || n.ID == "local-mention-m1"
+	}
+	if !found {
+		t.Errorf("expected local-mention-m1 to still be present, got %+v", m.notifs)
+	}
+}
+
+func TestNotifs_SetNotifs_OrdersLocalMentionsByTime(t *testing.T) {
+	now := time.Now()
+	m := initNotifs(nil)
+
+	// The local mention was created a while ago and is still unread.
+	old := makeNotif("local-mention-old", "chat_mention", "", false)
+	old.CreatedAt = now.Add(-time.Hour)
+	m = m.AddLocalMention(old)
+
+	// A server reload brings in a genuinely newer notification, plus an
+	// older one — the local mention must sort between them by time, not
+	// stay pinned at the top just because it's client-only.
+	newer := makeNotif("n-newer", "reply", "p1", false)
+	newer.CreatedAt = now
+	older := makeNotif("n-older", "reply", "p2", false)
+	older.CreatedAt = now.Add(-2 * time.Hour)
+	m = m.SetNotifs([]model.Notification{newer, older}, "")
+
+	want := []string{"n-newer", "local-mention-old", "n-older"}
+	if len(m.notifs) != len(want) {
+		t.Fatalf("notifs = %+v, want %d entries", m.notifs, len(want))
+	}
+	for i, id := range want {
+		if m.notifs[i].ID != id {
+			t.Errorf("notifs[%d].ID = %q, want %q, got order %+v", i, m.notifs[i].ID, id, m.notifs)
+		}
+	}
+}
+
+// survivesRead returns the entry with the given ID after a SetNotifs reload,
+// or nil if it was dropped.
+func survivesRead(m NotificationsModel, id string) *model.Notification {
+	m = m.SetNotifs([]model.Notification{makeNotif("n1", "reply", "p1", false)}, "")
+	for i := range m.notifs {
+		if m.notifs[i].ID == id {
+			return &m.notifs[i]
+		}
+	}
+	return nil
+}
+
+func TestNotifs_AddLocalMention_ReadSurvivesSetNotifs(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", true)) // already read (viewed live)
+
+	if len(m.notifs) != 1 || m.notifs[0].ID != "local-mention-m1" {
+		t.Fatalf("expected the read local mention to be visible immediately, got %+v", m.notifs)
+	}
+	n := survivesRead(m, "local-mention-m1")
+	if n == nil || !n.Read {
+		t.Errorf("expected the already-read local mention to survive a reload as read, got %+v", n)
+	}
+}
+
+func TestNotifs_MarkRead_LocalMentionSurvivesSetNotifsAsRead(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.AddLocalMention(makeNotif("local-keyword-m1", "keyword_match", "", false))
+	m = m.MarkRead("local-keyword-m1")
+
+	n := survivesRead(m, "local-keyword-m1")
+	if n == nil || !n.Read {
+		t.Errorf("expected a marked-read local entry to survive a reload as read, got %+v", n)
+	}
+}
+
+func TestNotifs_MarkAllRead_LocalMentionsSurviveSetNotifsAsRead(t *testing.T) {
+	m := initNotifs(nil)
+	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", false))
+	m = m.MarkAllRead()
+
+	n := survivesRead(m, "local-mention-m1")
+	if n == nil || !n.Read {
+		t.Errorf("expected MarkAllRead'd local entry to survive a reload as read, got %+v", n)
+	}
+}
+
+func TestNotifs_LocalUnreadCount(t *testing.T) {
+	m := initNotifs(nil)
+	if m.LocalUnreadCount() != 0 {
+		t.Fatalf("expected 0 with none added, got %d", m.LocalUnreadCount())
+	}
+
+	m = m.AddLocalMention(makeNotif("local-mention-m1", "chat_mention", "", false))
+	if m.LocalUnreadCount() != 1 {
+		t.Errorf("expected 1 after adding an unread mention, got %d", m.LocalUnreadCount())
+	}
+
+	m = m.AddLocalMention(makeNotif("local-mention-m2", "chat_mention", "", true)) // already read
+	if m.LocalUnreadCount() != 1 {
+		t.Errorf("expected an already-read mention not to count, got %d", m.LocalUnreadCount())
+	}
+
+	m = m.MarkRead("local-mention-m1")
+	if m.LocalUnreadCount() != 0 {
+		t.Errorf("expected 0 after marking the unread one read, got %d", m.LocalUnreadCount())
+	}
+
+	m = m.AddLocalMention(makeNotif("local-mention-m3", "chat_mention", "", false))
+	m = m.MarkAllRead()
+	if m.LocalUnreadCount() != 0 {
+		t.Errorf("expected 0 after MarkAllRead, got %d", m.LocalUnreadCount())
+	}
+}
+
 // --- jump to post ---
 
 func TestNotifs_Enter_Reply_EmitsShowPost(t *testing.T) {
@@ -851,7 +1003,7 @@ var allKnownNotifTypes = []string{
 	"system_ban_lifted", "graffiti_mention", "moderator_granted", "moderator_removed",
 	"moderator_permissions_changed", "api_access_granted", "api_access_removed",
 	"edit_access_granted", "edit_access_removed", "post_cooldown", "rate_limit_warning",
-	"gift_received", "gift_sent",
+	"gift_received", "gift_sent", "keyword_match",
 }
 
 func TestNotifCategories_CoverAllKnownTypesExactlyOnce(t *testing.T) {

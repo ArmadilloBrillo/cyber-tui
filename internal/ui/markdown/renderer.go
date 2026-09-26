@@ -263,6 +263,54 @@ func compiledHighlightRegex(username string) *regexp.Regexp {
 	return actual.(*regexp.Regexp)
 }
 
+// MentionsUserBare reports whether body contains username as a bare word —
+// case-insensitive, word-bounded, but NOT prefixed by "@". An "@username"
+// occurrence is deliberately excluded: the server's chat_mention
+// notification already covers that form, so this only needs to catch what
+// that pipeline misses. compiledHighlightRegex's own "@?" is part of the
+// match, not a lookaround, so an "@username" match's loc[0] lands on the
+// "@" itself — checking that leading byte is enough to tell bare and
+// "@"-prefixed matches apart without a second regex.
+func MentionsUserBare(body, username string) bool {
+	if username == "" {
+		return false
+	}
+	for _, loc := range compiledHighlightRegex(username).FindAllStringIndex(body, -1) {
+		if body[loc[0]] != '@' {
+			return true
+		}
+	}
+	return false
+}
+
+// keywordRegexCache memoizes per-keyword regexes for MatchKeywords, the same
+// way highlightRegexCache does for usernames.
+var keywordRegexCache sync.Map // string (keyword) -> *regexp.Regexp
+
+func compiledKeywordRegex(keyword string) *regexp.Regexp {
+	if v, ok := keywordRegexCache.Load(keyword); ok {
+		return v.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(keyword) + `\b`)
+	actual, _ := keywordRegexCache.LoadOrStore(keyword, re)
+	return actual.(*regexp.Regexp)
+}
+
+// MatchKeywords returns the first entry of keywords that occurs in text as a
+// case-insensitive whole word, or "" if none match. Empty entries are
+// skipped.
+func MatchKeywords(text string, keywords []string) string {
+	for _, kw := range keywords {
+		if kw == "" {
+			continue
+		}
+		if compiledKeywordRegex(kw).MatchString(text) {
+			return kw
+		}
+	}
+	return ""
+}
+
 func renderInlineLine(line string, highlightRe *regexp.Regexp) string {
 	if strings.TrimSpace(line) == "" {
 		return line
@@ -345,10 +393,10 @@ func (r *renderer) renderDocument(doc *ast.Document) string {
 		rendered := r.renderBlock(child)
 		if rendered != "" {
 			parts = append(parts, rendered)
-			lineOffset += strings.Count(rendered, "\n") + 1
+			lineOffset += strings.Count(rendered, "\n") + 2
 		}
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n\n")
 }
 
 func (r *renderer) renderBlock(node ast.Node) string {

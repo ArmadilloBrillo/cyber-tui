@@ -224,6 +224,7 @@ func (m JournalModel) Update(msg tea.Msg) (JournalModel, tea.Cmd) {
 		return m, nil
 
 	case SharedConfigMsg:
+		m.compose = m.compose.SetHardBreakKey(msg.HardBreakKey)
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		if msg.Loc != nil {
 			m.loc = msg.Loc

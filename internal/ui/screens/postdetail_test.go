@@ -299,7 +299,7 @@ func TestPostDetail_VisibleInlineImages_MultipleImagesInOnePost(t *testing.T) {
 // failing to reappear on real iTerm2 — confirmed live to reproduce via
 // pure in-screen scrolling alone, no tab switch involved, and confirmed
 // here as a genuine viewport-positioning bug, not a redraw/timing issue:
-// millerPageNav's revealAbove (miller_pager.go) bottom-aligned the
+// pageNav's revealAbove (pager.go) bottom-aligned the
 // viewport when scrolling back onto an item taller than the pane, leaving
 // its top — where an image band usually sits — still scrolled out of view.
 // Fixed by top-aligning revealAbove unconditionally, matching revealBelow.
@@ -307,9 +307,9 @@ func TestPostDetail_VisibleInlineImages_MultipleImagesInOnePost(t *testing.T) {
 func TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack(t *testing.T) {
 	m := initPostDetail()
 	// Small pane so the post (image band + text) is taller than it —
-	// otherwise millerPageNav's reveal-above/below logic for tall items
+	// otherwise pageNav's reveal-above/below logic for tall items
 	// never engages.
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 15})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
 
 	post := pdPost("p1")
@@ -327,7 +327,7 @@ func TestPostDetail_VisibleInlineImages_SurvivesScrollAwayAndBack(t *testing.T) 
 
 	// Press down enough times to move selection off the post and onto a
 	// reply (scrolling the image out of view). The post is taller than the
-	// pane by design (see above), so millerPageNav scrolls one line at a
+	// pane by design (see above), so pageNav scrolls one line at a
 	// time before it crosses into the reply — needs many presses, not few.
 	for i := 0; i < 60 && m.SelectedReplyID() == ""; i++ {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
@@ -642,10 +642,7 @@ func TestPostDetail_EKey_OpensReplyEdit_WhenEligible(t *testing.T) {
 	m = m.SetReplies([]model.Reply{pdReply("r1", "", "alice", time.Now())})
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select r1
 
-	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
-	if cmd == nil {
-		t.Fatal("expected a focus cmd from opening the reply editor")
-	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
 	if !m.ComposeActive() {
 		t.Error("expected ComposeActive true after pressing 'e' on an editable own reply")
 	}
@@ -790,5 +787,37 @@ func TestPostDetail_ComposeSubmit_CarriesReplyAudioAttachment(t *testing.T) {
 	}
 	if msg2.Attachment != nil {
 		t.Errorf("expected the next reply to start with no attachment, got Attachment=%v", msg2.Attachment)
+	}
+}
+
+// TestPostDetail_HardBreakKey_FromSharedConfig: the configured key reaches
+// the reply box through SharedConfigMsg.
+func TestPostDetail_HardBreakKey_FromSharedConfig(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetPost(pdPost("p1"))
+	m, _ = m.Update(screens.SharedConfigMsg{HardBreakKey: "ctrl+l"})
+	m, _ = m.OpenCompose()
+
+	for _, msg := range []tea.Msg{
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")},
+		tea.KeyMsg{Type: tea.KeyCtrlL},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")},
+	} {
+		m, _ = m.Update(msg)
+	}
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd == nil {
+		t.Fatal("ctrl+s produced no command")
+	}
+	_, cmd = m.Update(cmd())
+	if cmd == nil {
+		t.Fatal("ComposeSubmitMsg produced no command")
+	}
+	sub, ok := cmd().(screens.SubmitReplyMsg)
+	if !ok {
+		t.Fatalf("submit produced %T, want SubmitReplyMsg", cmd())
+	}
+	if sub.Content != "a  \nb" {
+		t.Errorf("reply content = %q, want %q", sub.Content, "a  \nb")
 	}
 }

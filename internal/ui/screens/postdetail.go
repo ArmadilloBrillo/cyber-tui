@@ -579,6 +579,8 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		return m, nil
 
 	case SharedConfigMsg:
+		m.compose = m.compose.SetHardBreakKey(msg.HardBreakKey)
+		m.editPanel = m.editPanel.SetHardBreakKey(msg.HardBreakKey)
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
@@ -874,7 +876,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			}
 			return m, nil
 		case "up", "k":
-			newReply, newOffset := millerPageNav(-1, m.viewport.Height, m.postHeight,
+			newReply, newOffset := pageNav(-1, m.viewport.Height, m.postHeight,
 				m.replyOffsets, m.replyHeights, m.selectedReply, m.viewport.YOffset)
 			if newReply != m.selectedReply {
 				m.selectedReply = newReply
@@ -883,7 +885,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			m.viewport.SetYOffset(newOffset)
 			return m, nil
 		case "down", "j":
-			newReply, newOffset := millerPageNav(+1, m.viewport.Height, m.postHeight,
+			newReply, newOffset := pageNav(+1, m.viewport.Height, m.postHeight,
 				m.replyOffsets, m.replyHeights, m.selectedReply, m.viewport.YOffset)
 			if newReply != m.selectedReply {
 				m.selectedReply = newReply
@@ -894,7 +896,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		case "pgup":
 			newReply, newOffset := m.selectedReply, m.viewport.YOffset
 			for i := 0; i < m.viewport.Height && newReply > -1; i++ {
-				newReply, newOffset = millerPageNav(-1, m.viewport.Height, m.postHeight,
+				newReply, newOffset = pageNav(-1, m.viewport.Height, m.postHeight,
 					m.replyOffsets, m.replyHeights, newReply, newOffset)
 			}
 			if newReply != m.selectedReply {
@@ -906,7 +908,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		case "pgdown":
 			newReply, newOffset := m.selectedReply, m.viewport.YOffset
 			for i := 0; i < m.viewport.Height && newReply < len(m.replyOffsets)-1; i++ {
-				newReply, newOffset = millerPageNav(+1, m.viewport.Height, m.postHeight,
+				newReply, newOffset = pageNav(+1, m.viewport.Height, m.postHeight,
 					m.replyOffsets, m.replyHeights, newReply, newOffset)
 			}
 			if newReply != m.selectedReply {

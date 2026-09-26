@@ -23,6 +23,7 @@ import (
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/sanitize"
 	"github.com/ragnar/cyber-tui/internal/ui/imgview"
+	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
@@ -48,14 +49,6 @@ const (
 	screenJournal
 	screenSearch
 	screenGlobe
-)
-
-type focusTarget int
-
-const (
-	focusMenu   focusTarget = iota
-	focusList               // list pane (compact post list in 3-pane Miller)
-	focusDetail             // reading pane (full post view in 3-pane Miller)
 )
 
 // availableThemes is the ordered list of selectable themes shown in the picker.
@@ -104,7 +97,6 @@ const (
 
 type App struct {
 	layout      Layout
-	layoutName  string // "tabs" (default) or "miller"; used when persisting to config
 	client      api.Client
 	tokens      model.Tokens
 	currentUser model.User
@@ -114,7 +106,6 @@ type App struct {
 	// overwritten when viewing another user's profile.
 	ownApprenticeSlugs []string
 	active             screen
-	focus              focusTarget
 	width              int
 	height             int
 
@@ -200,6 +191,12 @@ type App struct {
 	// attach uses — see applyAttachURL and submitSongPrompt.
 	songPromptOpen bool
 	songPrompt     screens.SongPromptModel
+
+	// keywordEditor state — open with Enter on Settings' "alert keywords"
+	// row (screens.OpenKeywordEditorMsg), closed by Esc (discard) or ctrl+s
+	// (commit + save, see handleKeywordEditorKey).
+	keywordEditorOpen bool
+	keywordEditor     screens.KeywordEditorModel
 
 	// imageCarousel state — populated when an image is opened from a picker
 	// containing more than one image, letting left/right cycle between them
@@ -461,11 +458,28 @@ type App struct {
 
 	// polledUnreadCount is the single source of truth for the tab badge unread count.
 	// It is synced from: 60-second server poll, m/M key, and enter on a notification.
-	// Never overwrite with the local list count — the server count is always authoritative.
+	// Never overwrite with the local list count — the server count is authoritative.
+	// (Between v0.8.10 and v0.8.11 the server count included muted/disabled
+	// notification types the visible list excludes, so this briefly derived from
+	// a paginated GET /v1/notifications?read=false walk instead — see the
+	// CountUnreadNotifications workaround removed in the same change as this
+	// comment, and docs/00-api-backlog.md, for that history.)
+	// It also carries a client-only delta on top of the server count: the
+	// unreadCountMsg handler adds NotificationsModel.LocalUnreadCount() (bare-word
+	// cIRC mentions the server never creates) each poll. That's additive layering
+	// of a delta the server can't know about, not recomputing the total from local
+	// state — the class of bug the paragraph above warns against — so it doesn't
+	// contradict "server count is authoritative."
 	polledUnreadCount int
 	// polledUnreadCountExact is false once polledUnreadCount was capped at 100 by the
 	// server (v0.8.5+); the badge renders "99+" instead of the number in that case.
 	polledUnreadCountExact bool
+	// lastServerUnreadCount is the server's own unread-count from the most recent
+	// poll, tracked separately from polledUnreadCount (which also includes local-only
+	// mention entries) so unreadCountMsg's reload-trigger comparison stays an
+	// apples-to-apples server-to-server delta — comparing against the mixed total
+	// would let an outstanding local mention mask a genuine new server notification.
+	lastServerUnreadCount int
 
 	// settings holds the user's preferences fetched from GET /v1/settings on login.
 	settings model.Settings
@@ -474,6 +488,9 @@ type App struct {
 	wanderLust bool
 	// maxThreadDepth is the local config value for reply nesting depth. Defaults to 3.
 	maxThreadDepth int
+	// hardBreakKey is the local config value for the compose hard-break key.
+	// Defaults to "alt+enter".
+	hardBreakKey string
 	// feedManualRefreshOnly is the local config value disabling Feed's
 	// background poll (see docs/39-feed-background-poll.md). Defaults to
 	// false (auto-poll on).
@@ -489,6 +506,28 @@ type App struct {
 	// (an OSC 9 escape to stdout) for new C-Mail / activity while backgrounded
 	// — see docs/53-desktop-notifications.md. Off by default.
 	desktopNotifications bool
+	// keywordSeenPostIDs tracks which post IDs the keyword-alert scan (see
+	// feedPeekMsg) has already accounted for — seeded (marked seen, not
+	// scanned) whenever the user loads or paginates the feed normally, so
+	// only content that arrives via the background peek poll after that gets
+	// scanned/alerted on. Mirrors FeedModel.SetPendingNew's own "diff against
+	// what's already known" baseline approach, kept separately here since
+	// FeedModel has no notion of keyword alerts.
+	keywordSeenPostIDs map[string]struct{}
+	// keywordReplySeen tracks, per configured keyword, the set of reply IDs
+	// already accounted for by the replies keyword-alert poll (see
+	// keywordReplyPollTickMsg) — a set rather than a "last seen id" cursor
+	// because SearchReplies' result ordering isn't documented, so a cursor
+	// would risk missing replies depending on how the server orders them.
+	// The first response for a given keyword only seeds this (baseline, no
+	// alert), same reasoning as keywordSeenPostIDs above.
+	keywordReplySeen map[string]map[string]struct{}
+	// keywordAlerts is the local config value (config.Config.KeywordAlerts):
+	// user-edited words/phrases that raise a Notifications-tab entry (and,
+	// subject to desktopNotifications, an OSC 9 toast) wherever content is
+	// scanned — cIRC, C-Mail, posts, replies, and post topics/tags. Empty by
+	// default.
+	keywordAlerts []string
 	// showGlobeTab is the local config value (inverted from
 	// config.Config.HideGlobeTab) controlling whether the Globe tab appears
 	// on the tab bar/nav sidebar and in arrow-key cycling and the "g l"
@@ -636,10 +675,8 @@ type App struct {
 func NewApp(client api.Client) App {
 	return App{
 		layout:             TabsLayout{},
-		layoutName:         "tabs",
 		client:             client,
 		active:             screenLogin,
-		focus:              focusMenu,
 		loc:                time.UTC,
 		wanderLust:         false,
 		showGlobeTab:       true,
@@ -661,6 +698,7 @@ func NewApp(client api.Client) App {
 		iconPicker:         screens.NewIconPickerModel(),
 		attachURLPrompt:    screens.NewPathPromptModel(),
 		songPrompt:         screens.NewSongPromptModel(),
+		keywordEditor:      screens.NewKeywordEditorModel(),
 		bookmarkedPostIDs:  make(map[string]struct{}),
 		bookmarkedReplyIDs: make(map[string]struct{}),
 		postBookmarkIDs:    make(map[string]string),
@@ -701,16 +739,16 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	a.feedManualRefreshOnly = s.FeedManualRefreshOnly
 	a.typingIndicatorsEnabled = !s.TypingIndicatorsDisabled
 	a.desktopNotifications = s.DesktopNotifications
+	a.keywordAlerts = s.KeywordAlerts
 	a.showGlobeTab = !s.HideGlobeTab
 	a.maxThreadDepth = s.GetMaxThreadDepth()
+	a.hardBreakKey = s.GetHardBreakKey()
 	a.imageViewer = s.ImageViewer
 	a.graphicsProtocolName = s.GraphicsProtocol
 	a.inlineImages = s.InlineImages
 	a.dithering = s.Dithering
 	a.ditherSharpness = s.GetDitherSharpness()
 	a.imageScale = s.GetImageScale()
-	a.layoutName = s.Layout
-	a.layout = layoutFromName(s.Layout)
 	a.customPalette = s.CustomPalette
 	return a
 }
@@ -722,13 +760,6 @@ func (a App) WithSavedSession(s config.Config) App {
 	a.savedSession = &s
 	a = a.WithSavedPreferences(s)
 	return a
-}
-
-func layoutFromName(name string) Layout {
-	if name == "miller" {
-		return MillerLayout{}
-	}
-	return TabsLayout{}
 }
 
 // WithGraphicsProtocol sets the terminal graphics protocol detected at startup.
@@ -794,6 +825,13 @@ func (a App) Init() tea.Cmd {
 // change from this same message — batching its command (if any) with
 // whatever updateInner returned.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	cmd := a.step(msg)
+	return a, cmd
+}
+
+// step is Update applied in place. Root drives it directly so bubbletea never
+// copies or re-boxes the (very large) App between messages.
+func (a *App) step(msg tea.Msg) tea.Cmd {
 	prevActive := a.active
 	// C-Mail unread is RTDB-driven and never reaches the notifications list, so
 	// its desktop toast is detected here by an exact before/after TotalUnread()
@@ -804,21 +842,39 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmailUnreadBefore = a.cmail.TotalUnread()
 	}
 	a2, cmd := a.updateInner(msg)
-	if cmailUnreadBefore >= 0 {
-		a2, cmd = a2.maybeNotifyNewCMail(cmailUnreadBefore, cmd)
+	if a2 != a {
+		*a = *a2
 	}
-	if a2.active != prevActive {
+	if cmailUnreadBefore >= 0 {
+		*a, cmd = a.maybeNotifyNewCMail(cmailUnreadBefore, cmd)
+	}
+	if a.active != prevActive {
 		// See screenSwitchedAt's doc comment (App struct) and
 		// inlineImageSwitchSettleDelay's — injectInlineImages uses this to
 		// briefly hold back inline image draws right after a screen switch.
-		a2.screenSwitchedAt = time.Now()
+		a.screenSwitchedAt = time.Now()
 	}
-	a3, syncCmd := a2.syncInlineImages()
+	syncCmd := a.syncInlineImages()
 	if syncCmd == nil {
-		return a3, cmd
+		return cmd
 	}
-	return a3, tea.Batch(cmd, syncCmd)
+	return tea.Batch(cmd, syncCmd)
 }
+
+// Root is the tea.Model the program runs. It holds App by pointer so each
+// message mutates it in place instead of copying it out of, and back into, a
+// tea.Model interface value.
+type Root struct{ app *App }
+
+func NewRoot(a App) *Root { return &Root{app: &a} }
+
+func (r *Root) Init() tea.Cmd { return r.app.Init() }
+
+func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	return r, r.app.step(msg)
+}
+
+func (r *Root) View() string { return r.app.view() }
 
 // maybeNotifyNewCMail fires a "C-Mail: new message" desktop toast when the total
 // C-Mail unread count rose while handling a DM-stream message and the focus/tab
@@ -833,9 +889,9 @@ func (a App) maybeNotifyNewCMail(before int, cmd tea.Cmd) (App, tea.Cmd) {
 	return a, cmd
 }
 
-func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
+func (a *App) updateInner(msg tea.Msg) (*App, tea.Cmd) {
 	if m, ok := msg.(tea.WindowSizeMsg); ok {
-		a = a.applyWindowSize(m)
+		*a = a.applyWindowSize(m)
 		contentMsg := tea.WindowSizeMsg{Width: a.layout.ContentWidth(m.Width), Height: a.layout.ContentHeight(m.Height)}
 		return a, a.delegateUpdate(contentMsg)
 	}
@@ -865,16 +921,16 @@ func (a App) updateInner(msg tea.Msg) (App, tea.Cmd) {
 		if len(a.imageCarouselItems) > 1 {
 			switch km.String() {
 			case "left":
-				return a.cycleImageCarousel(-1)
+				return ptrCmd(a.cycleImageCarousel(-1))
 			case "right":
-				return a.cycleImageCarousel(+1)
+				return ptrCmd(a.cycleImageCarousel(+1))
 			}
 		}
 		switch km.String() {
 		case "+", "=":
-			return a.adjustImageScale(imageScaleStep)
+			return ptrCmd(a.adjustImageScale(imageScaleStep))
 		case "-":
-			return a.adjustImageScale(-imageScaleStep)
+			return ptrCmd(a.adjustImageScale(-imageScaleStep))
 		}
 		a.imageModalOpen = false
 		a.chatrooms = a.chatrooms.SetAnimPaused(false)
@@ -998,7 +1054,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, LayoutName: a.layoutName}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, KeywordAlerts: a.keywordAlerts, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, HardBreakKey: a.hardBreakKey}
 	*a = a.updateAll(msg)
 }
 
@@ -1041,7 +1097,7 @@ func (a App) applyWindowSize(m tea.WindowSizeMsg) App {
 
 // handleKeys processes tea.KeyMsg events: modal intercepts, focused-input
 // bypass, and all global keyboard shortcuts.
-func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleKeys(msg tea.Msg) (*App, tea.Cmd, bool) {
 	m, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return a, nil, false
@@ -1049,35 +1105,39 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	// Modal overlays intercept all keys while open.
 	if a.themePickerOpen {
 		model, cmd := a.handleThemePickerKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.themeEditorOpen {
 		model, cmd := a.handleThemeEditorKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.pathPromptOpen {
 		model, cmd := a.handlePathPromptKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.helpModalOpen {
 		model, cmd := a.handleHelpModalKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.urlPickerOpen {
 		model, cmd := a.handleURLPickerKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.iconPickerOpen {
 		model, cmd := a.handleIconPickerKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.attachURLPromptOpen {
 		model, cmd := a.handleAttachURLPromptKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
 	}
 	if a.songPromptOpen {
 		model, cmd := a.handleSongPromptKey(m)
-		return model.(App), cmd, true
+		return ptrTo(model.(App)), cmd, true
+	}
+	if a.keywordEditorOpen {
+		model, cmd := a.handleKeywordEditorKey(m)
+		return ptrTo(model.(App)), cmd, true
 	}
 	// When a screen has a focused text input, let it consume all keys.
 	// ctrl+c is kept as a hard escape hatch; a handful of other global
@@ -1094,6 +1154,11 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	if a.activeScreenHasFocusedInput() {
 		if m.String() == "ctrl+c" {
 			return a, tea.Quit, true
+		}
+		// The settings key-capture row wants every other key, including the
+		// global ones below, so it can reject or bind them.
+		if a.active == screenSettings {
+			return a, nil, false
 		}
 		// A backgrounded Circ room or C-Mail conversation resumes detail mode
 		// (and its "always focused" compose input, see
@@ -1125,7 +1190,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 		if a.active != screenLogin {
 			if s, ok := screenForMnemonic(m.String()); ok && (s != screenGlobe || a.showGlobeTab) {
 				var cmd tea.Cmd
-				a, cmd = activateScreen(a, s)
+				*a, cmd = activateScreen(*a, s)
 				if s == screenSearch {
 					// activateScreen leaves Search in whatever state it was
 					// last left in (correct for arrow-cycling, which no
@@ -1156,9 +1221,6 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	case "ctrl+]":
 		if a.activeScreenHasFocusedInput() {
 			width := int(float64(a.width) * modalScreenMarginFrac)
-			if mw := a.layout.ModalMaxWidth(a.width); width > mw {
-				width = mw
-			}
 			height := int(float64(a.height) * modalScreenMarginFrac)
 			a.iconPickerOpen = true
 			var cmd tea.Cmd
@@ -1183,7 +1245,8 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 					a.chatrooms = a.chatrooms.AppendSystemMessage(a.chatrooms.ActiveRoomSlug(), "*** song attachments require supporter status")
 					return a, nil, true
 				}
-				a, cmd := a.notify(notifyWarn, "song attachments require supporter status")
+				var cmd tea.Cmd
+				*a, cmd = a.notify(notifyWarn, "song attachments require supporter status")
 				return a, cmd, true
 			}
 			a.songPromptOpen = true
@@ -1215,7 +1278,7 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 	case "o", "ctrl+o":
 		if a.active != screenLogin {
 			app, cmd := a.handleOpenURL(a.getFocusedURLs())
-			return app, cmd, true
+			return &app, cmd, true
 		}
 	case "/":
 		if a.active != screenLogin {
@@ -1237,11 +1300,11 @@ func (a App) handleKeys(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, tea.Quit, true
 		}
 	}
-	return a.layout.HandleNav(m, a)
+	return ptrCmd3(a.layout.HandleNav(m, *a))
 }
 
 // handleAuth processes login/registration flow messages.
-func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleAuth(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.SubmitLoginMsg:
 		return a, a.loginCmd(msg.Email, msg.Password), true
@@ -1273,36 +1336,20 @@ func (a App) handleAuth(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleFeed processes feed and post-navigation messages.
-func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleFeed(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case feedLoadedMsg:
 		a.feed = a.feed.SetPosts(msg.posts, msg.cursor)
-		var detailCmd tea.Cmd
-		a.feed, detailCmd = a.feed.CurrentDetailCmd()
-		// Auto-fill the compact list column if the initial page is shorter than it.
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.feed.PostCount() < min {
-			return a, tea.Batch(detailCmd, a.loadFeedPageCmd(msg.cursor)), true
-		}
-		return a, detailCmd, true
+		a.markPostsSeenForKeywords(msg.posts)
+		return a, nil, true
 	case feedPageMsg:
 		a.feed = a.feed.AppendPosts(msg.posts, msg.cursor)
-		// Keep auto-filling until the compact list column is full.
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.feed.PostCount() < min {
-			return a, a.loadFeedPageCmd(msg.cursor), true
-		}
+		a.markPostsSeenForKeywords(msg.posts)
 		return a, nil, true
 	case screens.RefreshFeedMsg:
 		return a, a.loadFeedCmd(), true
 	case screens.LoadMoreFeedMsg:
 		return a, a.loadFeedPageCmd(msg.Cursor), true
-	case screens.LoadFeedDetailMsg:
-		return a, a.loadFeedDetailCmd(msg.PostID), true
-	case screens.FeedDetailRepliesMsg:
-		a.feed, _ = a.feed.Update(msg)
-		return a, nil, true
-	case screens.FeedDetailNavMsg:
-		a.feed, _ = a.feed.Update(msg)
-		return a, nil, true
 	case screens.ShowPostMsg:
 		a.postDetailReturn = a.active
 		a.active = screenPostDetail
@@ -1348,7 +1395,7 @@ func (a App) handleFeed(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handlePostDetail processes post detail, reply, and compose messages.
-func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handlePostDetail(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case repliesLoadedMsg:
 		if msg.postID != a.postDetail.PostID() {
@@ -1372,18 +1419,21 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, a.loadFeedCmd(), true
 	case postConvertedToNoteMsg:
 		a.feed = a.feed.CloseComposeAfterSuccess()
-		a, notifyCmd := a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
+		var notifyCmd tea.Cmd
+		*a, notifyCmd = a.notify(notifyWarn, "posted too soon after your last entry — saved to your Journal instead")
 		return a, tea.Batch(notifyCmd, a.loadFeedCmd()), true
 	case postSubmitFailedMsg:
 		a.feed = a.feed.ClearComposeSubmitting()
-		a, notifyCmd := a.notify(notifyError, composeFailText(msg.err, "ctrl+d"))
+		var notifyCmd tea.Cmd
+		*a, notifyCmd = a.notify(notifyError, composeFailText(msg.err, "ctrl+d"))
 		return a, notifyCmd, true
 	case screens.SaveNewPostAsNoteMsg:
 		return a, a.saveNewPostAsNoteCmd(msg.Content, msg.Topics), true
 	case noteFromComposeSavedMsg:
 		a.feed = a.feed.CloseComposeAfterSuccess()
 		a.journal = a.journal.PrependNote(msg.note)
-		a, notifyCmd := a.notify(notifyInfo, "saved to your Journal")
+		var notifyCmd tea.Cmd
+		*a, notifyCmd = a.notify(notifyInfo, "saved to your Journal")
 		return a, notifyCmd, true
 	case screens.SubmitPostEditMsg:
 		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentTouched, msg.AudioAttachment, msg.OtherAttachments), true
@@ -1456,7 +1506,7 @@ func (a App) handlePostDetail(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleChatrooms processes chatroom messages.
-func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleChatrooms(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case roomsLoadedMsg:
 		a.chatrooms = a.chatrooms.SetRooms(msg.rooms)
@@ -1478,7 +1528,8 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.chatrooms = a.chatrooms.SetPendingRoomSlug(msg.RoomSlug)
 		// activateScreen resets canGoBack for ordinary tab/leader entry into
 		// Chatrooms, so it must be set true *after* that call, not before.
-		a, activateCmd := activateScreen(a, screenChatrooms)
+		var activateCmd tea.Cmd
+		*a, activateCmd = activateScreen(*a, screenChatrooms)
 		a.chatrooms = a.chatrooms.SetCanGoBack(true)
 		return a, tea.Batch(markReadCmd, activateCmd), true
 	case screens.SendRoomMessageMsg:
@@ -1492,7 +1543,8 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		// already does after a command completes. Without it the room keeps
 		// showing the just-muted user's messages until something else happens
 		// to reload settings.
-		a, notifyCmd := a.notify(notifyInfo, "muted "+msg.username)
+		var notifyCmd tea.Cmd
+		*a, notifyCmd = a.notify(notifyInfo, "muted "+msg.username)
 		return a, tea.Batch(notifyCmd, a.loadSettingsCmd()), true
 	case screens.FlagMessageMsg:
 		return a, a.flagRoomMessageCmd(msg.RoomID, msg.MessageID, msg.Reason), true
@@ -1503,8 +1555,37 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case screens.RoomOpenedMsg:
 		return a, a.markRoomReadCmd(msg.RoomID), true
+	case screens.RoomMentionedMsg:
+		idPrefix, notifType := localMentionIDPrefix, "chat_mention"
+		if msg.Keyword != "" {
+			idPrefix, notifType = localKeywordIDPrefix, "keyword_match"
+		}
+		n := model.Notification{
+			ID:             idPrefix + msg.MessageID,
+			Type:           notifType,
+			Read:           a.viewingRoom(msg.RoomID),
+			CreatedAt:      time.Now(),
+			Actor:          model.NotificationActor{Username: msg.From},
+			RoomSlug:       msg.RoomID,
+			RoomName:       msg.RoomName,
+			MessageContent: msg.Body,
+			MatchedKeyword: msg.Keyword,
+		}
+		a.notifications = a.notifications.AddLocalMention(n)
+		if !n.Read {
+			a.polledUnreadCount++
+		}
+		if !a.shouldNotifyRoomMention(msg.RoomID) {
+			return a, nil, true
+		}
+		toastBody := "@" + msg.From + ": " + msg.Body
+		if msg.Keyword != "" {
+			toastBody = `"` + msg.Keyword + `" — ` + msg.From + ": " + msg.Body
+		}
+		return a, desktopNotifyCmd(msg.RoomName, toastBody), true
 	case screens.RoomReconnectedMsg:
-		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
 	case roomCommandReplyMsg:
 		a.chatrooms = a.chatrooms.AppendSystemMessage(msg.roomID, sanitize.Strip(msg.reply))
@@ -1535,7 +1616,7 @@ func (a App) handleChatrooms(msg tea.Msg) (App, tea.Cmd, bool) {
 // handleCMail processes C-Mail messages. DM subscription lifecycle is managed
 // entirely within CMailModel; only the conversation list load and message send
 // are coordinated here.
-func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleCMail(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.SendCMailMsg:
 		return a, a.sendCMailCmd(msg.ConversationID, msg.Body), true
@@ -1571,7 +1652,8 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 			},
 		), true
 	case screens.CMailReconnectedMsg:
-		a, cmd := a.notify(notifyInfo, "reconnected to live chat")
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyInfo, "reconnected to live chat")
 		return a, cmd, true
 	case cmailCommandReplyMsg:
 		a.cmail = a.cmail.AppendSystemMessage(msg.convID, sanitize.Strip(msg.reply))
@@ -1585,6 +1667,29 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 	case screens.LeaveCMailMsg:
 		a.active = a.cmailReturn
 		return a, nil, true
+	case screens.DMKeywordMsg:
+		id := msg.MessageID
+		if id == "" {
+			id = msg.ConvID
+		}
+		viewing := a.active == screenCMail && a.focusReported && a.focused
+		n := model.Notification{
+			ID:             localKeywordIDPrefix + id,
+			Type:           "keyword_match",
+			Read:           viewing,
+			CreatedAt:      time.Now(),
+			Actor:          model.NotificationActor{Username: msg.From},
+			MessageContent: msg.Body,
+			MatchedKeyword: msg.Keyword,
+		}
+		a.notifications = a.notifications.AddLocalMention(n)
+		if !n.Read {
+			a.polledUnreadCount++
+		}
+		if !a.shouldDesktopNotify(screenCMail) {
+			return a, nil, true
+		}
+		return a, desktopNotifyCmd("C-Mail", `"`+msg.Keyword+`" — `+msg.From+": "+msg.Body), true
 	default:
 		// Keep the open conversation's RTDB subscription (and its typing/
 		// reconnect chains) alive while another tab is active — see
@@ -1608,7 +1713,7 @@ func (a App) handleCMail(msg tea.Msg) (App, tea.Cmd, bool) {
 // screens.ChatroomsModel.RefreshRelativeTimestamps for why this is a no-op
 // everywhere else (wrong screen active, or not in "relative" display mode).
 // Always reschedules, mirroring schedulePollCmd's shape.
-func (a App) handleRelativeTimeTick(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleRelativeTimeTick(msg tea.Msg) (*App, tea.Cmd, bool) {
 	t, ok := msg.(relativeTimeTickMsg)
 	if !ok {
 		return a, nil, false
@@ -1626,7 +1731,7 @@ func (a App) handleRelativeTimeTick(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleProfile processes profile load, save, and sub-tab messages.
-func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleProfile(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case profileLoadedMsg:
 		a.currentUser = msg.user
@@ -1745,13 +1850,18 @@ func (a App) handleProfile(msg tea.Msg) (App, tea.Cmd, bool) {
 	return a, nil, false
 }
 
-func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case settingsLoadedMsg:
 		a.settings = msg.settings
 		a.mutedTopicsSaved = msg.settings.MutedTopics // rollback baseline for Topics-tab mute/unmute
 		a.settingsScreen = a.settingsScreen.SetSettings(msg.settings)
 		a.broadcastConfig()
+		return a, nil, true
+
+	case screens.OpenKeywordEditorMsg:
+		a.keywordEditor = a.keywordEditor.Open(a.settingsScreen.KeywordAlerts())
+		a.keywordEditorOpen = true
 		return a, nil, true
 
 	case screens.SaveSettingsMsg:
@@ -1768,7 +1878,8 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		ii := msg.InlineImages
 		dt := msg.Dithering
 		ds := msg.DitherSharpness
-		ln := msg.LayoutName
+		ka := msg.KeywordAlerts
+		hb := msg.HardBreakKey
 		a.settingsSaveSeq++
 		seq := a.settingsSaveSeq
 		return a, func() tea.Msg {
@@ -1777,7 +1888,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, layoutName: ln}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, keywordAlerts: ka, hardBreakKey: hb}
 		}, true
 
 	case settingsSavedMsg:
@@ -1805,6 +1916,11 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		// subsystem, see cmail.go's SharedConfigMsg handler.
 		a.typingIndicatorsEnabled = msg.typingIndicatorsEnabled
 		a.desktopNotifications = msg.desktopNotifications
+		// hadNoKeywords detects an empty→non-empty transition so the
+		// (possibly dead) replies keyword-alert poll chain gets restarted
+		// immediately below — same reasoning as wasManual above.
+		hadNoKeywords := len(a.keywordAlerts) == 0
+		a.keywordAlerts = msg.keywordAlerts
 		a.showGlobeTab = msg.showGlobeTab
 		a.maxThreadDepth = msg.maxThreadDepth
 		a.timezone = msg.timezone
@@ -1831,22 +1947,24 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.inlineImages = msg.inlineImages
 		a.dithering = msg.dithering
 		a.ditherSharpness = msg.ditherSharpness
-		a.layoutName = msg.layoutName
-		a.layout = layoutFromName(msg.layoutName)
-		a.focus = focusMenu
+		a.hardBreakKey = msg.hardBreakKey
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.keywordAlerts)
+		a.settingsScreen = a.settingsScreen.SetSavedHardBreakKey(msg.hardBreakKey)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
-		a, notifyCmd = a.notify(notifyInfo, "settings saved")
-		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ln := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.layoutName
+		*a, notifyCmd = a.notify(notifyInfo, "settings saved")
+		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ka := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.keywordAlerts
+		hb := msg.hardBreakKey
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
+				cfg.HardBreakKey = hb
 				cfg.WanderLust = wl
 				cfg.FeedManualRefreshOnly = fmro
 				cfg.TypingIndicatorsDisabled = !tie
 				cfg.DesktopNotifications = dn
+				cfg.KeywordAlerts = ka
 				cfg.HideGlobeTab = !sgt
 				cfg.MaxThreadDepth = td
 				cfg.Timezone = tz
@@ -1855,7 +1973,6 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 				cfg.InlineImages = ii
 				cfg.Dithering = dt
 				cfg.DitherSharpness = ds
-				cfg.Layout = ln
 			})
 			return nil
 		}
@@ -1863,20 +1980,8 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 		if wasManual && !a.feedManualRefreshOnly {
 			cmds = append(cmds, a.scheduleFeedPollCmd())
 		}
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 {
-			if cursor := a.feed.NextCursor(); cursor != "" && a.feed.PostCount() < min {
-				cmds = append(cmds, a.loadFeedPageCmd(cursor))
-			}
-			if a.guilds.IsViewingGuildPosts() {
-				if cursor := a.guilds.PostsNextCursor(); cursor != "" && a.guilds.PostCount() < min {
-					cmds = append(cmds, a.loadGuildPostsPageCmd(a.guilds.ActiveGuild(), cursor))
-				}
-			}
-			if a.topics.IsViewingTopicPosts() {
-				if cursor := a.topics.PostsNextCursor(); cursor != "" && a.topics.PostCount() < min {
-					cmds = append(cmds, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), cursor))
-				}
-			}
+		if hadNoKeywords && len(a.keywordAlerts) > 0 {
+			cmds = append(cmds, a.scheduleKeywordReplyPollCmd())
 		}
 		return a, tea.Batch(cmds...), true
 
@@ -1897,7 +2002,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 	case updateAvailableMsg:
 		var cmd tea.Cmd
 		// threatcrush-disable-next-line sql-format-call  UI notification string, no SQL anywhere in this codebase
-		a, cmd = a.notify(notifyWarn, fmt.Sprintf("update available: %s (you have %s) — %s", msg.tag, version.Version, msg.url))
+		*a, cmd = a.notify(notifyWarn, fmt.Sprintf("update available: %s (you have %s) — %s", msg.tag, version.Version, msg.url))
 		return a, cmd, true
 	}
 	return a, nil, false
@@ -1905,7 +2010,7 @@ func (a App) handleSettings(msg tea.Msg) (App, tea.Cmd, bool) {
 
 // handleThemeEditor processes messages emitted by the theme editor modal:
 // live preview on every edit, persisting on save, and reverting on close.
-func (a App) handleThemeEditor(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleThemeEditor(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.PreviewPaletteMsg:
 		theme.SetCustomPalette(msg.Palette)
@@ -1962,7 +2067,7 @@ func (a App) handleThemeEditor(msg tea.Msg) (App, tea.Cmd, bool) {
 // file via theme.ImportFromFile and, on success, hands off to the theme
 // editor exactly like PreviewPostThemeMsg — reviewed and confirmed with
 // ctrl+s, never applied blind.
-func (a App) handlePathPrompt(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handlePathPrompt(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.PathPromptSubmitMsg:
 		switch a.pathPromptPurpose {
@@ -1976,17 +2081,17 @@ func (a App) handlePathPrompt(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.pathPromptOpen = false
 			if err := theme.ExportToFile(msg.Path, a.pathPromptExportPalette); err != nil {
 				a2, cmd := a.notify(notifyError, "export failed: "+err.Error())
-				return a2, cmd, true
+				return &a2, cmd, true
 			}
 			a2, cmd := a.notify(notifyInfo, "theme exported to "+msg.Path)
-			return a2, cmd, true
+			return &a2, cmd, true
 
 		case pathPromptImport:
 			a.pathPromptOpen = false
 			p, err := theme.ImportFromFile(msg.Path)
 			if err != nil {
 				a2, cmd := a.notify(notifyError, "import failed: "+err.Error())
-				return a2, cmd, true
+				return &a2, cmd, true
 			}
 			a.themeEditorOrig = theme.CurrentName()
 			a.themeEditorOrigPalette = theme.CurrentPalette()
@@ -2014,7 +2119,7 @@ func (a App) handlePathPrompt(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleBookmarks processes bookmark load, create, and delete messages.
-func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleBookmarks(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case bookmarksLoadedMsg:
 		a.bookmarks = a.bookmarks.SetBookmarks(msg.items, msg.cursor)
@@ -2055,24 +2160,29 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 		// user's clipboard at all (same reason inline images are gated on
 		// a.ephemeral). Gate it here rather than silently claim success.
 		if a.ephemeral {
-			a, cmd := a.notify(notifyInfo, "Copying links is disabled in SSH sessions")
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyInfo, "Copying links is disabled in SSH sessions")
 			return a, cmd, true
 		}
 		termenv.Copy(urlutil.PostPermalink(msg.Post.AuthorUsername, msg.Post.Slug))
-		a, cmd := a.notify(notifyInfo, "Copied link to clipboard")
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyInfo, "Copied link to clipboard")
 		return a, cmd, true
 	case screens.CopyMessageTextMsg:
 		// Same SSH gate as CopyLinkMsg — see its comment.
 		if a.ephemeral {
-			a, cmd := a.notify(notifyInfo, "Copying is disabled in SSH sessions")
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyInfo, "Copying is disabled in SSH sessions")
 			return a, cmd, true
 		}
 		if msg.Text == "" {
-			a, cmd := a.notify(notifyInfo, "nothing to copy")
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyInfo, "nothing to copy")
 			return a, cmd, true
 		}
 		termenv.Copy(msg.Text)
-		a, cmd := a.notify(notifyInfo, "Copied message to clipboard")
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyInfo, "Copied message to clipboard")
 		return a, cmd, true
 	case screens.BookmarkPostMsg:
 		if msg.ReplyID != "" {
@@ -2146,7 +2256,8 @@ func (a App) handleBookmarks(msg tea.Msg) (App, tea.Cmd, bool) {
 				a.bookmarkedPostIDs = newPostIDs
 			}
 			a.broadcastBookmarkedIDs()
-			a, cmd := a.notify(notifyError, msg.err.Error())
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyError, msg.err.Error())
 			return a, cmd, true
 		}
 		a.bookmarks = a.bookmarks.SetFetching()
@@ -2206,7 +2317,7 @@ type watchResultMsg struct {
 }
 
 // handleWatches processes progressive watch-page loads and watch/unwatch toggle messages.
-func (a App) handleWatches(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleWatches(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case watchPageMsg:
 		if msg.err != nil {
@@ -2265,7 +2376,7 @@ func (a App) handleWatches(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.watchedPostIDs = newIDs
 			a.broadcastWatchedIDs()
 			a2, cmd := a.notify(notifyError, msg.err.Error())
-			return a2, cmd, true
+			return &a2, cmd, true
 		}
 		return a, nil, true
 	}
@@ -2323,7 +2434,7 @@ func mergeBookmarkIDSets(postIDs, replyIDs map[string]struct{}, postBookmarks, r
 }
 
 // handleGuilds processes guild list, guild posts, pagination, and post selection messages.
-func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleGuilds(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.RefreshGuildsMsg:
 		return a, a.loadGuildsCmd(""), true
@@ -2367,25 +2478,6 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 		a.guilds = a.guilds.SetGuildPosts(msg.posts, msg.cursor)
-		var detailCmd tea.Cmd
-		a.guilds, detailCmd = a.guilds.CurrentDetailCmd()
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.guilds.PostCount() < min {
-			return a, tea.Batch(detailCmd, a.loadGuildPostsPageCmd(msg.slug, msg.cursor)), true
-		}
-		if detailCmd != nil {
-			return a, detailCmd, true
-		}
-		return a, nil, true
-
-	case screens.LoadGuildThreadMsg:
-		return a, a.loadGuildThreadCmd(msg.PostID), true
-
-	case screens.GuildThreadRepliesMsg:
-		a.guilds, _ = a.guilds.Update(msg)
-		return a, nil, true
-
-	case screens.GuildThreadNavMsg:
-		a.guilds, _ = a.guilds.Update(msg)
 		return a, nil, true
 
 	case screens.LoadMoreGuildPostsMsg:
@@ -2396,9 +2488,6 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true
 		}
 		a.guilds = a.guilds.AppendGuildPosts(msg.posts, msg.cursor)
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.guilds.PostCount() < min {
-			return a, a.loadGuildPostsPageCmd(msg.slug, msg.cursor), true
-		}
 		return a, nil, true
 
 	case screens.RefreshGuildPostsMsg:
@@ -2465,7 +2554,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.guilds = a.guilds.SetOwnGuildSlug(msg.slug)
 		}
 		var notifyCmd tea.Cmd
-		a, notifyCmd = a.notify(notifyInfo, "✓ "+verb+" #"+msg.name)
+		*a, notifyCmd = a.notify(notifyInfo, "✓ "+verb+" #"+msg.name)
 		return a, tea.Batch(notifyCmd, a.loadGuildsCmd(""), a.loadUserGuildsCmd(a.currentUser.Username)), true
 
 	case guildLeftMsg:
@@ -2478,7 +2567,7 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.guilds = a.guilds.SetOwnGuildSlug("")
 		}
 		var notifyCmd tea.Cmd
-		a, notifyCmd = a.notify(notifyInfo, "✓ Left #"+msg.name)
+		*a, notifyCmd = a.notify(notifyInfo, "✓ Left #"+msg.name)
 		return a, tea.Batch(notifyCmd, a.loadGuildsCmd(""), a.loadUserGuildsCmd(a.currentUser.Username)), true
 
 	case guildPromotedMsg:
@@ -2491,14 +2580,14 @@ func (a App) handleGuilds(msg tea.Msg) (App, tea.Cmd, bool) {
 		a.currentUser.GuildIcon = detail.Icon
 		a.guilds = a.guilds.SetOwnGuildSlug(msg.slug)
 		var notifyCmd tea.Cmd
-		a, notifyCmd = a.notify(notifyInfo, "✓ #"+msg.name+" is now your guild badge")
+		*a, notifyCmd = a.notify(notifyInfo, "✓ #"+msg.name+" is now your guild badge")
 		return a, tea.Batch(notifyCmd, a.loadGuildsCmd(""), a.loadUserGuildsCmd(a.currentUser.Username)), true
 	}
 	return a, nil, false
 }
 
 // handleTopics processes topic list, topic posts, pagination, and post selection messages.
-func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleTopics(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.RefreshTopicsMsg:
 		return a, a.loadTopicsCmd(), true
@@ -2540,7 +2629,8 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 			a.settings.MutedTopics = append([]string(nil), a.mutedTopicsSaved...)
 			a.mutedTopicsSaveSeq++
 			a.broadcastConfig()
-			a, cmd := a.notify(notifyError, mutedTopicsSaveFailText(msg.err))
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyError, mutedTopicsSaveFailText(msg.err))
 			return a, cmd, true
 		}
 		a.mutedTopicsSaved = msg.topics
@@ -2562,25 +2652,6 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case topicPostsLoadedMsg:
 		a.topics = a.topics.SetTopicPosts(msg.posts, msg.cursor)
-		var detailCmd tea.Cmd
-		a.topics, detailCmd = a.topics.CurrentDetailCmd()
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.topics.PostCount() < min {
-			return a, tea.Batch(detailCmd, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor)), true
-		}
-		if detailCmd != nil {
-			return a, detailCmd, true
-		}
-		return a, nil, true
-
-	case screens.LoadTopicThreadMsg:
-		return a, a.loadTopicThreadCmd(msg.PostID), true
-
-	case screens.TopicThreadRepliesMsg:
-		a.topics, _ = a.topics.Update(msg)
-		return a, nil, true
-
-	case screens.TopicThreadNavMsg:
-		a.topics, _ = a.topics.Update(msg)
 		return a, nil, true
 
 	case screens.LoadMoreTopicPostsMsg:
@@ -2588,9 +2659,6 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 
 	case topicPostsPageMsg:
 		a.topics = a.topics.AppendTopicPosts(msg.posts, msg.cursor)
-		if min := a.layout.NeedsCompactAutoFill(a.height); min > 0 && msg.cursor != "" && a.topics.PostCount() < min {
-			return a, a.loadTopicPostsPageCmd(a.topics.ActiveTopicName(), msg.cursor), true
-		}
 		return a, nil, true
 
 	case screens.RefreshTopicPostsMsg:
@@ -2606,7 +2674,7 @@ func (a App) handleTopics(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleJournal processes journal (Notes) load, save, delete, and publish messages.
-func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleJournal(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case journalLoadedMsg:
 		a.journal = a.journal.SetNotes(msg.notes, msg.cursor)
@@ -2636,7 +2704,8 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	case notePublishFailedMsg:
 		a.journal = a.journal.ClearPublishing()
-		a, notifyCmd := a.notify(notifyError, composeFailText(msg.err, "ctrl+s"))
+		var notifyCmd tea.Cmd
+		*a, notifyCmd = a.notify(notifyError, composeFailText(msg.err, "ctrl+s"))
 		return a, notifyCmd, true
 	case screens.LoadNoteRevisionsMsg:
 		return a, a.loadNoteRevisionsCmd(msg.NoteID, ""), true
@@ -2653,7 +2722,7 @@ func (a App) handleJournal(msg tea.Msg) (App, tea.Cmd, bool) {
 }
 
 // handleSearch processes search query, preview, drill-down, and pagination messages.
-func (a App) handleSearch(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleSearch(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case screens.SubmitSearchMsg:
 		return a, a.searchCmd(msg.Query), true
@@ -2704,7 +2773,7 @@ func (a App) handleSearch(msg tea.Msg) (App, tea.Cmd, bool) {
 			// into Search (see handleGlobe's gen/active guards) need restarting
 			// here explicitly, same as activateScreen's screenGlobe case does.
 			var cmd tea.Cmd
-			a, cmd = a.maybeStartGlobeFetch()
+			*a, cmd = a.maybeStartGlobeFetch()
 			return a, tea.Batch(cmd, a.scheduleGlobeAngleTickCmd()), true
 		}
 		return a, nil, true
@@ -2729,11 +2798,14 @@ func (a App) notify(level notifyLevel, text string) (App, tea.Cmd) {
 	})
 }
 
-func (a App) handleLogoAnim(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleLogoAnim(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case logoAnimTickMsg:
 		if m.gen != a.sessionGen {
 			return a, nil, true
+		}
+		if a.composeActive() {
+			return a, a.scheduleLogoAnimCmd(), true
 		}
 		positions := make([]int, len(logoOrigRunes))
 		for i := range positions {
@@ -2784,13 +2856,15 @@ func (a App) handleLogoAnim(msg tea.Msg) (App, tea.Cmd, bool) {
 	return a, nil, false
 }
 
-func (a App) handleNotify(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleNotify(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case actionErrMsg:
-		a, cmd := a.notify(notifyError, m.err.Error())
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyError, m.err.Error())
 		return a, cmd, true
 	case notifyMsg:
-		a, cmd := a.notify(m.level, m.text)
+		var cmd tea.Cmd
+		*a, cmd = a.notify(m.level, m.text)
 		return a, cmd, true
 	case notifyExpireMsg:
 		if m.gen == a.notifyGen {
@@ -2806,7 +2880,7 @@ func (a App) handleNotify(msg tea.Msg) (App, tea.Cmd, bool) {
 // fails — and routes the user back to the login screen instead of leaving them
 // stranded on an errored screen. The dead refresh token is cleared so the next
 // launch starts at the login form rather than retrying a doomed auto-login.
-func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleUnauthorized(msg tea.Msg) (*App, tea.Cmd, bool) {
 	var err error
 	switch m := msg.(type) {
 	case errMsg:
@@ -2835,14 +2909,14 @@ func (a App) handleUnauthorized(msg tea.Msg) (App, tea.Cmd, bool) {
 	a.sessionGen++
 
 	a.active = screenLogin
-	a.focus = focusMenu
 	a.login = screens.NewLoginModel(a.currentUser.Email)
 
-	a, cmd := a.notify(notifyWarn, "session expired — please log in again")
+	var cmd tea.Cmd
+	*a, cmd = a.notify(notifyWarn, "session expired — please log in again")
 	return a, cmd, true
 }
 
-func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleErr(msg tea.Msg) (*App, tea.Cmd, bool) {
 	m, ok := msg.(errMsg)
 	if !ok {
 		return a, nil, false
@@ -2876,7 +2950,8 @@ func (a App) handleErr(msg tea.Msg) (App, tea.Cmd, bool) {
 	// Errors never block a screen: the per-screen SetError above only feeds an
 	// inline "couldn't load" empty-state, while the failure is announced in the
 	// transient global banner so it is visible even when content is already shown.
-	a, cmd := a.notify(notifyError, friendlyErr(m.err))
+	var cmd tea.Cmd
+	*a, cmd = a.notify(notifyError, friendlyErr(m.err))
 	return a, cmd, true
 }
 
@@ -2924,14 +2999,14 @@ func composeFailText(err error, saveKey string) string {
 }
 
 func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
-	var cmd tea.Cmd
-	*a, cmd = a.layout.DelegateUpdate(msg, *a)
-	return cmd
+	return a.layout.DelegateUpdate(msg, a)
 }
 
 // --- view ---
 
-func (a App) View() string {
+func (a App) View() string { return a.view() }
+
+func (a *App) view() string {
 	if a.active == screenLogin {
 		return a.login.View()
 	}
@@ -3234,7 +3309,7 @@ func (a App) canProbeImageInline() bool {
 // same protocol/imageViewer/ephemeral gates as the fullscreen image viewer
 // (see canRenderImageInline). There's no URL to check yet here — this gates
 // the feature as a whole, per-attachment checks happen when rendering.
-func (a App) canInlineImages() bool {
+func (a *App) canInlineImages() bool {
 	return a.inlineImages &&
 		!a.ephemeral &&
 		a.graphicsProtocol != imgview.ProtocolNone &&
@@ -3246,14 +3321,14 @@ func (a App) canInlineImages() bool {
 // the user's Dithering preference is on, gated by the same imageViewer
 // check as graphicsProtocol/inlineImages — dithering is meaningless when
 // images open in the OS browser instead.
-func (a App) ditheringEnabled() bool {
+func (a *App) ditheringEnabled() bool {
 	return a.dithering && a.imageViewer != "browser"
 }
 
 // ditherOptions builds the imgview.DitherOptions to pass to Encode* when
 // ditheringEnabled is true, resolving the current theme's colors. Returns
 // nil when dithering is off.
-func (a App) ditherOptions() *imgview.DitherOptions {
+func (a *App) ditherOptions() *imgview.DitherOptions {
 	if !a.ditheringEnabled() {
 		return nil
 	}
@@ -3273,10 +3348,7 @@ func (a App) ditherOptions() *imgview.DitherOptions {
 
 // activeInlineImageSlots returns the active screen's currently visible
 // inline image slots, or nil for screens that don't support inline images.
-// Used by TabsLayout.InlineImageSlots; MillerLayout has its own equivalent
-// since its screen geometry (and, for Feed/Guilds/Topics, which screen
-// method even has the current content — see FeedModel.VisibleDetailInlineImages)
-// differs from Tabs'.
+// Used by TabsLayout.InlineImageSlots.
 func (a App) activeInlineImageSlots() []screens.InlineImageSlot {
 	switch a.active {
 	case screenPostDetail:
@@ -3477,7 +3549,7 @@ const kittyModalPlacementID = 999000000
 // delete for a revived id before it can wipe out that key's freshly redrawn
 // placement. Returns the updated App, the current key->id mapping (for
 // fetchInlineImageCmd to look up), toDelete, and revived.
-func (a App) syncKittyPlacements(slots []screens.InlineImageSlot) (App, map[string]int, []int, []int) {
+func (a *App) syncKittyPlacements(slots []screens.InlineImageSlot) (map[string]int, []int, []int) {
 	if a.kittyPlacementIDs == nil {
 		a.kittyPlacementIDs = make(map[string]int)
 	}
@@ -3505,7 +3577,7 @@ func (a App) syncKittyPlacements(slots []screens.InlineImageSlot) (App, map[stri
 		visible[key] = struct{}{}
 	}
 	a.kittyVisibleKeys = visible
-	return a, a.kittyPlacementIDs, toDelete, revived
+	return a.kittyPlacementIDs, toDelete, revived
 }
 
 // accumulateKittyDeletes merges newlyDropped ids into pending. Merging
@@ -3597,12 +3669,12 @@ func accumulateStaleRows(pending, fresh []int) []int {
 //     bytes purely because its row/col changed, so Bubble Tea's line-diff
 //     already resends it, and a changed inlineImageStaleRows set
 //     independently forces the affected rows dirty too.
-func (a App) syncInlineImages() (App, tea.Cmd) {
+func (a *App) syncInlineImages() tea.Cmd {
 	var slots []screens.InlineImageSlot
 	var rowOrigin, colOrigin int
 	var selKey string
 	if a.canInlineImages() {
-		slots, rowOrigin, colOrigin, selKey = a.layout.InlineImageSlots(a)
+		slots, rowOrigin, colOrigin, selKey = a.layout.InlineImageSlots(*a)
 	}
 	var cmds []tea.Cmd
 
@@ -3610,7 +3682,7 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 	var placementIDs map[string]int
 	if isKitty {
 		var toDelete, revived []int
-		a, placementIDs, toDelete, revived = a.syncKittyPlacements(slots)
+		placementIDs, toDelete, revived = a.syncKittyPlacements(slots)
 		for _, id := range revived {
 			delete(a.pendingKittyDeletes, id)
 		}
@@ -3693,9 +3765,9 @@ func (a App) syncInlineImages() (App, tea.Cmd) {
 		cmds = append(cmds, a.fetchInlineImageCmd(slot, key, placementID, ditherOpts))
 	}
 	if len(cmds) == 0 {
-		return a, nil
+		return nil
 	}
-	return a, tea.Batch(cmds...)
+	return tea.Batch(cmds...)
 }
 
 // inlineImageFetchedMsg reports the result of one fetchInlineImageCmd.
@@ -3779,7 +3851,7 @@ const inlineImageFailureCooldown = 60 * time.Second
 // it on every subsequent Update — there's no modal to fall back to here, the
 // slot simply stays blank until either the cooldown lapses or something
 // invalidates the key outright (e.g. a resize changing its column budget).
-func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleInlineImageFetched(msg tea.Msg) (*App, tea.Cmd, bool) {
 	m, ok := msg.(inlineImageFetchedMsg)
 	if !ok {
 		return a, nil, false
@@ -3793,8 +3865,8 @@ func (a App) handleInlineImageFetched(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, nil, true
 	}
 	delete(a.inlineImageFailedAt, m.key)
-	a = a.cacheInlineImage(m.key, m.encoded)
-	a = a.recordInlineImageRealRows(m.slotKey, m.rows)
+	*a = a.cacheInlineImage(m.key, m.encoded)
+	*a = a.recordInlineImageRealRows(m.slotKey, m.rows)
 	return a, nil, true
 }
 
@@ -3935,7 +4007,7 @@ const modalScreenMarginFrac = 0.8
 // The step is based on a.imageModalCols — the box actually on screen right
 // now — not on a value recomputed from a.imageScale. Those two can diverge:
 // openImageInTerminal additionally clamps the rendered box to
-// modalScreenMarginFrac/Layout.ModalMaxWidth, which is a tighter ceiling
+// modalScreenMarginFrac, which is a tighter ceiling
 // than config.MaxImageScale in a small terminal. Stepping from the
 // unclamped scale let repeated "+" presses at that ceiling keep inflating
 // a.imageScale with no visible effect (correctly, since the box was already
@@ -4004,14 +4076,9 @@ func (a App) adjustImageScale(delta float64) (App, tea.Cmd) {
 // (encoders called with allowUpscale=true) — unlike inline thumbnails, this
 // is a user-driven zoom the caller explicitly asked for.
 //
-// width is clamped through a.layout.ModalMaxWidth rather than raw a.width:
-// the modal is centered against the full terminal width by
-// compositeOverlays regardless of layout, so in Miller layout a box wide
-// enough to approach a.width would have its left edge splice into the nav
-// sidebar — see ModalMaxWidth's doc comment. Both width and height are then
-// additionally capped at modalScreenMarginFrac of the terminal size — see
-// its doc comment for why the modal must stay well clear of the real screen
-// edges, not just merely within them.
+// Both width and height are capped at modalScreenMarginFrac of the terminal
+// size — see its doc comment for why the modal must stay well clear of the
+// real screen edges, not just merely within them.
 func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	proto := a.graphicsProtocol
 	ditherOpts := a.ditherOptions()
@@ -4019,7 +4086,7 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 	if scale <= 0 {
 		scale = 1.0
 	}
-	width := min(a.layout.ModalMaxWidth(a.width), int(float64(a.width)*modalScreenMarginFrac))
+	width := int(float64(a.width) * modalScreenMarginFrac)
 	height := min(a.height-2, int(float64(a.height)*modalScreenMarginFrac)) // reserve 2 rows for the modal border
 	a.imageFetchGen++
 	gen := a.imageFetchGen
@@ -4093,7 +4160,7 @@ func (a App) openImageInTerminal(rawURL string) (App, tea.Cmd) {
 // carousel is already showing an image, in which case it just notifies and
 // leaves the current image displayed rather than surprising the user with a
 // browser tab mid-cycle.
-func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleImageViewer(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch m := msg.(type) {
 	case imageFetchedMsg:
 		if m.gen != a.imageFetchGen {
@@ -4102,7 +4169,7 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 		if m.err != nil {
 			if a.imageModalOpen {
 				a2, cmd := a.notify(notifyInfo, "couldn't load image")
-				return a2, cmd, true
+				return &a2, cmd, true
 			}
 			return a, openExternalURL(m.rawURL), true
 		}
@@ -4158,7 +4225,7 @@ func (a App) handleImageViewer(msg tea.Msg) (App, tea.Cmd, bool) {
 			return a, nil, true // superseded by a later left/right press
 		}
 		a2, cmd := a.openImageInTerminal(a.imageCarouselItems[a.imageCarouselIndex])
-		return a2, cmd, true
+		return &a2, cmd, true
 	}
 	return a, nil, false
 }
@@ -4388,6 +4455,29 @@ func (a App) handleSongPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
+// handleKeywordEditorKey processes input while the keyword-alerts popup is
+// open (Settings' "alert keywords" row, screens.OpenKeywordEditorMsg).
+// esc/ctrl+s are handled here; everything else forwards to the model.
+func (a App) handleKeywordEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.keywordEditorOpen = false
+		return a, nil
+	case "ctrl+s":
+		a.settingsScreen = a.settingsScreen.SetKeywordAlerts(a.keywordEditor.Keywords())
+		a.keywordEditorOpen = false
+		// Reuse SettingsModel's own ctrl+s handling (IsDirty check +
+		// SaveSettingsMsg construction) verbatim via a synthetic key,
+		// instead of duplicating that snapshot/build logic here.
+		var cmd tea.Cmd
+		a.settingsScreen, cmd = a.settingsScreen.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+		return a, cmd
+	}
+	var cmd tea.Cmd
+	a.keywordEditor, cmd = a.keywordEditor.Update(msg)
+	return a, cmd
+}
+
 // submitSongPrompt validates the song prompt's fields and, if valid, closes
 // the modal and dispatches the built attachment per target: Feed's new-post
 // panel / Post Detail's edit panel / Post Detail's reply compose each get a
@@ -4441,7 +4531,7 @@ func (a App) fetchSongMetadataCmd(rawURL string) tea.Cmd {
 // handleSongMetadataFetched applies a resolved songMetadataFetchedMsg to the
 // still-open song prompt. If the prompt was closed (cancelled) before the
 // fetch resolved, the result is simply dropped.
-func (a App) handleSongMetadataFetched(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleSongMetadataFetched(msg tea.Msg) (*App, tea.Cmd, bool) {
 	m, ok := msg.(songMetadataFetchedMsg)
 	if !ok {
 		return a, nil, false
@@ -4492,6 +4582,7 @@ func (a *App) resendVerificationCmd(idToken string) tea.Cmd {
 }
 
 func (a *App) loginCmd(email, password string) tea.Cmd {
+	relaxed := a.relaxed
 	return func() tea.Msg {
 		tokens, err := a.client.Login(email, password)
 		if err != nil {
@@ -4512,7 +4603,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		// Persist the refresh token so subsequent launches auto-login.
 		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
-		if a.relaxed {
+		if relaxed {
 			density = "relaxed"
 		}
 		a.saveConfig(func(cfg *config.Config) {
@@ -4530,6 +4621,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 // for fresh API tokens, then fetches the user profile. On failure it falls back
 // to the login screen by returning a LoginErrMsg.
 func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
+	relaxed := a.relaxed
 	return func() tea.Msg {
 		tokens, err := a.client.LoginWithRefreshToken(refreshToken)
 		if err != nil {
@@ -4548,7 +4640,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		// Update savedAt so we know when the session was last used.
 		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
-		if a.relaxed {
+		if relaxed {
 			density = "relaxed"
 		}
 		a.saveConfig(func(cfg *config.Config) {
@@ -4584,6 +4676,13 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	if !a.feedManualRefreshOnly {
 		feedPollCmd = a.scheduleFeedPollCmd()
 	}
+	// Same dead-chain-unless-restarted reasoning as feedPollCmd above: only
+	// start the replies keyword-alert poll when there's actually something to
+	// search for. settingsSavedMsg restarts it if a keyword is added later.
+	var keywordReplyPollCmd tea.Cmd
+	if len(a.keywordAlerts) > 0 {
+		keywordReplyPollCmd = a.scheduleKeywordReplyPollCmd()
+	}
 	return tea.Batch(
 		a.loadFeedCmd(),
 		a.loadBookmarksCmd(""),
@@ -4600,6 +4699,7 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.loadNotifsCmd(),
 		a.schedulePollCmd(),
 		feedPollCmd,
+		keywordReplyPollCmd,
 		a.loadSettingsCmd(),
 		a.scheduleWanderCmd(),
 		a.checkAndWanderCmd(),
@@ -4730,7 +4830,8 @@ type settingsSavedMsg struct {
 	inlineImages            bool
 	dithering               bool
 	ditherSharpness         string
-	layoutName              string
+	keywordAlerts           []string
+	hardBreakKey            string
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
@@ -5065,6 +5166,90 @@ func (a *App) scheduleFeedPollCmd() tea.Cmd {
 	return tea.Tick(feedPollInterval, func(time.Time) tea.Msg { return feedPollTickMsg{gen: gen} })
 }
 
+// keywordReplyPollInterval is how often the replies keyword-alert poll (see
+// keywordReplyPollTickMsg) checks each configured keyword via SearchReplies
+// — same cadence as the feed peek poll.
+const keywordReplyPollInterval = 60 * time.Second
+
+type keywordReplyPollTickMsg struct{ gen int }
+
+// keywordReplyMatchMsg carries one keyword's SearchReplies results back from
+// fetchKeywordRepliesCmd for scanKeywordReplyMatches to diff against what's
+// already been seen for that keyword.
+type keywordReplyMatchMsg struct {
+	keyword string
+	replies []model.Reply
+}
+
+func (a *App) scheduleKeywordReplyPollCmd() tea.Cmd {
+	gen := a.sessionGen
+	return tea.Tick(keywordReplyPollInterval, func(time.Time) tea.Msg { return keywordReplyPollTickMsg{gen: gen} })
+}
+
+// fetchKeywordRepliesCmd searches replies for keyword — one call per
+// configured keyword per poll tick, independent of feed size or platform
+// activity (see the plan's cost comparison against fanning out
+// GetPostReplies per post). Errors are swallowed (nil msg), same as
+// fetchFeedPeekCmd — a missed poll just tries again next tick.
+func (a *App) fetchKeywordRepliesCmd(keyword string) tea.Cmd {
+	return func() tea.Msg {
+		replies, _, err := a.client.SearchReplies(keyword, "")
+		if err != nil {
+			return nil
+		}
+		return keywordReplyMatchMsg{keyword: keyword, replies: replies}
+	}
+}
+
+// scanKeywordReplyMatches diffs a keyword's fresh SearchReplies results
+// against keywordReplySeen[keyword], alerting only for reply IDs not seen
+// before. The first call for a given keyword only seeds the set (baseline,
+// no alerts) so enabling keyword alerts doesn't replay every existing
+// matching reply on the platform.
+func (a App) scanKeywordReplyMatches(keyword string, replies []model.Reply) (App, tea.Cmd) {
+	if a.keywordReplySeen == nil {
+		a.keywordReplySeen = make(map[string]map[string]struct{})
+	}
+	seen, seeded := a.keywordReplySeen[keyword]
+	if !seeded {
+		seen = make(map[string]struct{}, len(replies))
+		for _, r := range replies {
+			seen[r.ID] = struct{}{}
+		}
+		a.keywordReplySeen[keyword] = seen
+		return a, nil
+	}
+	var cmds []tea.Cmd
+	for _, r := range replies {
+		if _, known := seen[r.ID]; known {
+			continue
+		}
+		seen[r.ID] = struct{}{}
+		viewing := a.active == screenFeed && a.focusReported && a.focused
+		n := model.Notification{
+			ID:             localKeywordIDPrefix + r.ID,
+			Type:           "keyword_match",
+			Read:           viewing,
+			CreatedAt:      time.Now(),
+			Actor:          model.NotificationActor{Username: r.AuthorUsername},
+			TargetID:       r.PostID,
+			TargetType:     "reply",
+			ReplyID:        r.ID,
+			ReplyContent:   r.Content,
+			MatchedKeyword: keyword,
+		}
+		a.notifications = a.notifications.AddLocalMention(n)
+		if !n.Read {
+			a.polledUnreadCount++
+		}
+		if !a.shouldDesktopNotify(screenFeed) {
+			continue
+		}
+		cmds = append(cmds, desktopNotifyCmd("keyword \""+keyword+"\"", "@"+r.AuthorUsername+": "+r.Content))
+	}
+	return a, tea.Batch(cmds...)
+}
+
 func (a *App) loadFeedPageCmd(cursor string) tea.Cmd {
 	return func() tea.Msg {
 		posts, nextCursor, err := a.client.GetFeed(cursor)
@@ -5111,10 +5296,11 @@ func (a *App) loadProfileCmd() tea.Cmd {
 const followingScanMaxPages = 40
 
 func (a *App) loadUserProfileCmd(username string) tea.Cmd {
+	self := a.currentUser
 	return func() tea.Msg {
 		// Skip the API call if this is the logged-in user's own profile.
-		if username == a.currentUser.Username {
-			return userProfileLoadedMsg{user: a.currentUser}
+		if username == self.Username {
+			return userProfileLoadedMsg{user: self}
 		}
 		user, err := a.client.GetProfile(username)
 		if err != nil {
@@ -5288,6 +5474,17 @@ func (a *App) loadUserFollowersCmd(userID, cursor string) tea.Cmd {
 	}
 }
 
+// borkHelpEntry is the client-side /bork entry, appended to the server's /help
+// reply because the server does not know the command.
+const borkHelpEntry = "\n/bork <text> (Speak like-a a Svedish cheff Bork Bork Bork!)"
+
+func withBorkHelp(body, reply string) string {
+	if strings.EqualFold(strings.TrimSpace(body), "/help") {
+		return reply + borkHelpEntry
+	}
+	return reply
+}
+
 func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	return func() tea.Msg {
 		reply, err := a.client.SendRoomMessage(roomID, body)
@@ -5295,7 +5492,7 @@ func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 			return actionErrMsg{err}
 		}
 		if reply != "" {
-			return roomCommandReplyMsg{roomID: roomID, reply: reply}
+			return roomCommandReplyMsg{roomID: roomID, reply: withBorkHelp(body, reply)}
 		}
 		return nil
 	}
@@ -5329,7 +5526,7 @@ func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 			return actionErrMsg{err}
 		}
 		if reply != "" {
-			return cmailCommandReplyMsg{convID: convID, reply: reply}
+			return cmailCommandReplyMsg{convID: convID, reply: withBorkHelp(body, reply)}
 		}
 		return nil
 	}
@@ -5359,36 +5556,6 @@ func (a *App) loadRepliesCmd(postID string) tea.Cmd {
 			return errMsg{err}
 		}
 		return repliesLoadedMsg{postID: postID, replies: replies}
-	}
-}
-
-func (a *App) loadFeedDetailCmd(postID string) tea.Cmd {
-	return func() tea.Msg {
-		replies, err := a.client.GetPostReplies(postID)
-		if err != nil {
-			return screens.FeedDetailRepliesMsg{PostID: postID}
-		}
-		return screens.FeedDetailRepliesMsg{PostID: postID, Replies: replies}
-	}
-}
-
-func (a *App) loadGuildThreadCmd(postID string) tea.Cmd {
-	return func() tea.Msg {
-		replies, err := a.client.GetPostReplies(postID)
-		if err != nil {
-			return screens.GuildThreadRepliesMsg{PostID: postID}
-		}
-		return screens.GuildThreadRepliesMsg{PostID: postID, Replies: replies}
-	}
-}
-
-func (a *App) loadTopicThreadCmd(postID string) tea.Cmd {
-	return func() tea.Msg {
-		replies, err := a.client.GetPostReplies(postID)
-		if err != nil {
-			return screens.TopicThreadRepliesMsg{PostID: postID}
-		}
-		return screens.TopicThreadRepliesMsg{PostID: postID, Replies: replies}
 	}
 }
 
@@ -5434,6 +5601,7 @@ func (a *App) createPostCmd(content, title, slug string, topics []string, isPubl
 }
 
 func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
+	user := a.currentUser
 	return func() tea.Msg {
 		update := model.ProfileUpdate{
 			Bio:          &msg.Bio,
@@ -5458,32 +5626,35 @@ func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
 		if err := a.client.UpdateProfile(update); err != nil {
 			return actionErrMsg{err}
 		}
-		a.currentUser.Bio = msg.Bio
-		a.currentUser.WebsiteName = msg.WebsiteName
-		a.currentUser.WebsiteUrl = msg.WebsiteUrl
-		a.currentUser.LocationName = msg.LocationName
+		user.Bio = msg.Bio
+		user.WebsiteName = msg.WebsiteName
+		user.WebsiteUrl = msg.WebsiteUrl
+		user.LocationName = msg.LocationName
 		if update.LocationLatitude != nil {
-			a.currentUser.LocationLatitude = *update.LocationLatitude
+			user.LocationLatitude = *update.LocationLatitude
 		}
 		if update.LocationLongitude != nil {
-			a.currentUser.LocationLongitude = *update.LocationLongitude
+			user.LocationLongitude = *update.LocationLongitude
 		}
-		return profileLoadedMsg{a.currentUser}
+		return profileLoadedMsg{user}
 	}
 }
 
 // --- notifications ---
 
 // handleNotifications processes notification load, mark-read, jump-to-post, and poll messages.
-func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleNotifications(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case notifsLoadedMsg:
-		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
-		a, dnCmd := a.desktopNotifyForNewNotifs(msg.notifs)
+		var cmd tea.Cmd
+		*a, cmd = a.suppressActiveRoomMentions(msg.notifs)
+		var dnCmd tea.Cmd
+		*a, dnCmd = a.desktopNotifyForNewNotifs(msg.notifs)
 		a.notifications = a.notifications.SetNotifs(msg.notifs, msg.cursor)
 		return a, tea.Batch(cmd, dnCmd), true
 	case notifsPageMsg:
-		a, cmd := a.suppressActiveRoomMentions(msg.notifs)
+		var cmd tea.Cmd
+		*a, cmd = a.suppressActiveRoomMentions(msg.notifs)
 		a.notifications = a.notifications.AppendNotifs(msg.notifs, msg.cursor)
 		return a, cmd, true
 	case screens.RefreshNotifsMsg:
@@ -5523,10 +5694,12 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		// transient banner and leave the notifications list untouched.
 		var apiErr *api.APIError
 		if errors.As(msg.err, &apiErr) && apiErr.Status == 404 {
-			a, cmd := a.notify(notifyWarn, "This post has been deleted")
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyWarn, "This post has been deleted")
 			return a, cmd, true
 		}
-		a, cmd := a.notify(notifyError, msg.err.Error())
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyError, msg.err.Error())
 		return a, cmd, true
 	case urlPostLoadedMsg:
 		if a.active == screenPostDetail {
@@ -5547,10 +5720,12 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		var apiErr *api.APIError
 		if errors.As(msg.err, &apiErr) && apiErr.Status == 404 {
-			a, cmd := a.notify(notifyWarn, "This post has been deleted")
+			var cmd tea.Cmd
+			*a, cmd = a.notify(notifyWarn, "This post has been deleted")
 			return a, cmd, true
 		}
-		a, cmd := a.notify(notifyError, msg.err.Error())
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyError, msg.err.Error())
 		return a, cmd, true
 	case screens.ShowUserProfileMsg:
 		if a.active != screenNotifications {
@@ -5568,13 +5743,14 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		}
 		return a, tea.Batch(a.fetchUnreadCountCmd(), a.schedulePollCmd()), true
 	case unreadCountMsg:
-		prev := a.polledUnreadCount
-		a.polledUnreadCount = msg.count
+		prevServer := a.lastServerUnreadCount
+		a.lastServerUnreadCount = msg.count
+		a.polledUnreadCount = msg.count + a.notifications.LocalUnreadCount()
 		a.polledUnreadCountExact = msg.exact
 		// The desktop toast for new activity fires from the notifsLoadedMsg
 		// handler (desktopNotifyForNewNotifs) so it can carry the real
 		// per-notification text; this poll just triggers that list refresh.
-		if msg.count > prev && !a.notifications.HasPaginated() {
+		if msg.count > prevServer && !a.notifications.HasPaginated() {
 			return a, a.loadNotifsCmd(), true
 		}
 		return a, nil, true
@@ -5591,9 +5767,94 @@ func (a App) handleNotifications(msg tea.Msg) (App, tea.Cmd, bool) {
 		return a, tea.Batch(a.fetchFeedPeekCmd(), a.scheduleFeedPollCmd()), true
 	case feedPeekMsg:
 		a.feed = a.feed.SetPendingNew(msg.posts)
-		return a, nil, true
+		var cmd tea.Cmd
+		*a, cmd = a.scanPeekedPostsForKeywords(msg.posts)
+		return a, cmd, true
+	case keywordReplyPollTickMsg:
+		if msg.gen != a.sessionGen {
+			return a, nil, true
+		}
+		if len(a.keywordAlerts) == 0 {
+			// Chain dies here — restarted from settingsSavedMsg when a
+			// keyword is added mid-session (mirrors feedPollTickMsg's own
+			// manual-refresh-only dead-chain handling above).
+			return a, nil, true
+		}
+		cmds := []tea.Cmd{a.scheduleKeywordReplyPollCmd()}
+		for _, kw := range a.keywordAlerts {
+			cmds = append(cmds, a.fetchKeywordRepliesCmd(kw))
+		}
+		return a, tea.Batch(cmds...), true
+	case keywordReplyMatchMsg:
+		var cmd tea.Cmd
+		*a, cmd = a.scanKeywordReplyMatches(msg.keyword, msg.replies)
+		return a, cmd, true
 	}
 	return a, nil, false
+}
+
+// markPostsSeenForKeywords records posts the user has just loaded or
+// paginated into view as already-accounted-for, so scanPeekedPostsForKeywords
+// below only ever fires for content that arrives via the background peek
+// poll after that — not a normal load or "load more" page, which the user is
+// already looking at.
+func (a *App) markPostsSeenForKeywords(posts []model.Post) {
+	if a.keywordSeenPostIDs == nil {
+		a.keywordSeenPostIDs = make(map[string]struct{}, len(posts))
+	}
+	for _, p := range posts {
+		a.keywordSeenPostIDs[p.ID] = struct{}{}
+	}
+}
+
+// scanPeekedPostsForKeywords checks each not-yet-seen post from a feedPeekMsg
+// against the user's configured keyword alerts — title, content, and topics
+// (topics/tags share the one Post.Topics field) in a single scan. A post
+// already accounted for by markPostsSeenForKeywords (normal load/pagination)
+// is skipped, same baseline reasoning as SetPendingNew's own "new posts"
+// diff.
+func (a App) scanPeekedPostsForKeywords(posts []model.Post) (App, tea.Cmd) {
+	if len(a.keywordAlerts) == 0 {
+		return a, nil
+	}
+	if a.keywordSeenPostIDs == nil {
+		a.keywordSeenPostIDs = make(map[string]struct{}, len(posts))
+	}
+	var cmds []tea.Cmd
+	for _, p := range posts {
+		if _, known := a.keywordSeenPostIDs[p.ID]; known {
+			continue
+		}
+		a.keywordSeenPostIDs[p.ID] = struct{}{}
+		text := p.Title + "\n" + p.Content + "\n" + strings.Join(p.Topics, " ")
+		kw := markdown.MatchKeywords(text, a.keywordAlerts)
+		if kw == "" {
+			continue
+		}
+		viewing := a.active == screenFeed && a.focusReported && a.focused
+		n := model.Notification{
+			ID:                 localKeywordIDPrefix + p.ID,
+			Type:               "keyword_match",
+			Read:               viewing,
+			CreatedAt:          time.Now(),
+			Actor:              model.NotificationActor{Username: p.AuthorUsername},
+			TargetID:           p.ID,
+			TargetType:         "post",
+			PostSlug:           p.Slug,
+			PostAuthorUsername: p.AuthorUsername,
+			PostContent:        p.Content,
+			MatchedKeyword:     kw,
+		}
+		a.notifications = a.notifications.AddLocalMention(n)
+		if !n.Read {
+			a.polledUnreadCount++
+		}
+		if !a.shouldDesktopNotify(screenFeed) {
+			continue
+		}
+		cmds = append(cmds, desktopNotifyCmd("keyword \""+kw+"\"", "@"+p.AuthorUsername+": "+p.Content))
+	}
+	return a, tea.Batch(cmds...)
 }
 
 // suppressActiveRoomMentions marks read (locally + via API) any unread
@@ -5615,6 +5876,32 @@ func (a App) suppressActiveRoomMentions(notifs []model.Notification) (App, tea.C
 		}
 	}
 	return a, tea.Batch(cmds...)
+}
+
+// viewingRoom reports whether roomID is the exact room the user currently
+// has open in Chatrooms detail view — the same "already seen it in context"
+// condition suppressActiveRoomMentions uses for the server-side chat_mention
+// case. ResetToList (reachable by re-pressing the Chatrooms key while
+// already on it) drops back to the room list without tearing down the live
+// subscription, so being on the Chatrooms tab doesn't by itself mean the
+// user is reading this room — ActiveRoomSlug() is empty in that state.
+func (a App) viewingRoom(roomID string) bool {
+	return a.active == screenChatrooms && a.chatrooms.ActiveRoomSlug() == roomID
+}
+
+// shouldNotifyRoomMention reports whether a client-side bare-word mention
+// (screens.RoomMentionedMsg) in roomID should toast. Same focus gate as
+// shouldDesktopNotify, but with screenChatrooms narrowed via viewingRoom to
+// "is this the exact room open in detail" rather than just "is Chatrooms
+// the active tab".
+func (a App) shouldNotifyRoomMention(roomID string) bool {
+	if a.ephemeral || !a.desktopNotifications {
+		return false
+	}
+	if !a.focusReported || !a.focused {
+		return true
+	}
+	return !a.viewingRoom(roomID)
 }
 
 // desktopNotifyForNewNotifs fires a desktop toast for every notification in the
@@ -5684,8 +5971,22 @@ func (a *App) loadNotifsPageCmd(cursor string) tea.Cmd {
 	}
 }
 
+// localMentionIDPrefix marks a client-synthesized notification ID (a
+// bare-word cIRC mention; see screens.RoomMentionedMsg) — the server never
+// issued this ID, so markNotifReadCmd must not try to PATCH it.
+const localMentionIDPrefix = "local-mention-"
+
+// localKeywordIDPrefix marks a client-synthesized keyword-alert notification
+// ID — same reasoning as localMentionIDPrefix, kept distinct so a keyword
+// match and a username mention on the same underlying message/post/reply
+// never collide on ID.
+const localKeywordIDPrefix = "local-keyword-"
+
 func (a *App) markNotifReadCmd(id string) tea.Cmd {
 	return func() tea.Msg {
+		if strings.HasPrefix(id, localMentionIDPrefix) || strings.HasPrefix(id, localKeywordIDPrefix) {
+			return nil
+		}
 		_ = a.client.MarkNotificationRead(id) // fire-and-forget; UI already updated
 		return nil
 	}
@@ -5978,11 +6279,12 @@ func (a App) maybeStartGlobeFetch() (App, tea.Cmd) {
 	return a, a.scheduleGlobeFetchTickCmd()
 }
 
-func (a App) handleGlobe(msg tea.Msg) (App, tea.Cmd, bool) {
+func (a *App) handleGlobe(msg tea.Msg) (*App, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case globeGuildMembersMsg:
 		a.globe = a.globe.SetGuildMembers(msg.usernames)
-		a, cmd := a.maybeStartGlobeFetch()
+		var cmd tea.Cmd
+		*a, cmd = a.maybeStartGlobeFetch()
 		return a, cmd, true
 
 	case globeFetchTickMsg:
@@ -6436,6 +6738,23 @@ func (a *App) scheduleWanderCmd() tea.Cmd {
 	return tea.Tick(1*time.Hour, func(time.Time) tea.Msg { return wanderTickMsg{gen: gen} })
 }
 
+// composeActive reports whether the visible screen has a post/reply editor open.
+func (a *App) composeActive() bool {
+	switch a.active {
+	case screenFeed:
+		return a.feed.ComposeActive()
+	case screenPostDetail:
+		return a.postDetail.ComposeActive()
+	case screenGuilds:
+		return a.guilds.ComposeActive()
+	case screenProfile:
+		return a.profile.ComposeActive()
+	case screenJournal:
+		return a.journal.ComposeActive()
+	}
+	return false
+}
+
 func (a *App) scheduleLogoAnimCmd() tea.Cmd {
 	gen := a.sessionGen
 	return tea.Tick(30*time.Second, func(time.Time) tea.Msg { return logoAnimTickMsg{gen: gen} })
@@ -6559,3 +6878,9 @@ func (a *App) loadProfilePostCmd(postID string) tea.Cmd {
 		return profilePostLoadedMsg{post: post}
 	}
 }
+
+func ptrTo(a App) *App { return &a }
+
+func ptrCmd(a App, cmd tea.Cmd) (*App, tea.Cmd) { return &a, cmd }
+
+func ptrCmd3(a App, cmd tea.Cmd, ok bool) (*App, tea.Cmd, bool) { return &a, cmd, ok }

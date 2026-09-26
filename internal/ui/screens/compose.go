@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -66,12 +67,16 @@ type ComposeModel struct {
 	focused      bool // true = active border; false = dimmed border (topics input has focus)
 	width        int
 	contentLines int // current textarea height in lines, clamped [composeMinLines, composeMaxLines]
+	hardBreak    string
 }
 
 // NewComposeModel creates a ComposeModel. Width is set correctly when the first
 // WindowSizeMsg arrives (compose.SetWidth is called by the host screen).
 func NewComposeModel(width int) ComposeModel {
 	ta := textarea.New()
+	// View re-Focuses the textarea every render (which resets Blink), so a blinking
+	// cursor never actually blinks but still costs a cancelled-blink message per key.
+	ta.Cursor.SetMode(cursor.CursorStatic)
 	ta.CharLimit = 32768
 	ta.ShowLineNumbers = false
 	innerW := width - 4
@@ -85,6 +90,7 @@ func NewComposeModel(width int) ComposeModel {
 		textarea:     ta,
 		width:        width,
 		contentLines: composeMinLines,
+		hardBreak:    DefaultHardBreakKey,
 	}
 }
 
@@ -171,6 +177,13 @@ func (m ComposeModel) SetCharLimit(n int) ComposeModel {
 	return m
 }
 
+// SetHardBreakKey sets the key that inserts a hard line break. An
+// empty or invalid value falls back to the default.
+func (m ComposeModel) SetHardBreakKey(key string) ComposeModel {
+	m.hardBreak = resolveHardBreakKey(key)
+	return m
+}
+
 // SetWidth resizes the compose area to fit the new terminal width.
 func (m ComposeModel) SetWidth(w int) ComposeModel {
 	m.width = w
@@ -192,7 +205,7 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 
 	if km, ok := msg.(tea.KeyMsg); ok {
 		var keep bool
-		km, keep = filterAmbiguousKeyMsg(km)
+		km, keep = filterAmbiguousKeyMsg(convertPaste(km))
 		if !keep {
 			return m, nil
 		}
@@ -200,6 +213,10 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 	}
 
 	if key, ok := msg.(tea.KeyMsg); ok {
+		if key.String() == m.hardBreak {
+			m.textarea = insertHardBreak(m.textarea)
+			return m.recalcHeight(), nil
+		}
 		switch key.String() {
 		case "ctrl+s":
 			content := m.textarea.Value()
@@ -209,9 +226,8 @@ func (m ComposeModel) Update(msg tea.Msg) (ComposeModel, tea.Cmd) {
 		case "enter":
 			// Paragraph break: insert \n\n so the website renderer (GFM breaks: true)
 			// wraps this in <p> tags, matching the website's own Enter behaviour.
-			// Note: shift+enter cannot be distinguished from enter in most terminals
-			// without Kitty keyboard protocol, so hard line breaks (\n → <br>) are
-			// not supported unless the terminal negotiates Kitty.
+			// shift+enter cannot be told apart from enter without the Kitty keyboard
+			// protocol, so hard line breaks use the configurable hard-break key.
 			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			return m.recalcHeight(), nil
@@ -301,13 +317,14 @@ const (
 	postFieldTopics
 	postFieldPublic
 	postFieldNSFW
+	postFieldBork
 	postFieldCount
 )
 
 // PostComposePanel is a unified single-box compose panel for new posts.
 // It combines title, body, and topics inputs with public/NSFW toggles
 // into a single bordered panel. Tab cycles through all fields; Space
-// toggles the public and NSFW checkboxes.
+// toggles the public, NSFW and bork checkboxes.
 type PostComposePanel struct {
 	titleInput  textinput.Model
 	slugInput   textinput.Model
@@ -316,11 +333,13 @@ type PostComposePanel struct {
 	slugError   string
 	isPublic    bool
 	isNSFW      bool
+	isBork      bool
 	focus       postField
 	active      bool
 	editing     bool // true when editing an existing post rather than creating one
 	width       int
 	bodyLines   int
+	hardBreak   string
 
 	// attachmentTouched distinguishes "never touched this session" from
 	// "explicitly cleared" so an edit submit can tell whether to send the
@@ -359,6 +378,9 @@ func NewPostComposePanel(width int) PostComposePanel {
 	sl.CharLimit = 60
 
 	ta := textarea.New()
+	// View re-Focuses the textarea every render (which resets Blink), so a blinking
+	// cursor never actually blinks but still costs a cancelled-blink message per key.
+	ta.Cursor.SetMode(cursor.CursorStatic)
 	ta.CharLimit = 32768
 	ta.ShowLineNumbers = false
 	ta.Placeholder = "what's on your mind…"
@@ -373,6 +395,7 @@ func NewPostComposePanel(width int) PostComposePanel {
 		textarea:    ta,
 		topicsInput: top,
 		bodyLines:   composeMinLines,
+		hardBreak:   DefaultHardBreakKey,
 	}
 	return m.SetWidth(width)
 }
@@ -384,6 +407,7 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.focus = postFieldTitle
 	m.isPublic = defaultPublic
 	m.isNSFW = false
+	m.isBork = false
 	m.titleInput.SetValue("")
 	m.slugInput.SetValue("")
 	m.slugError = ""
@@ -411,6 +435,7 @@ func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cm
 	m.focus = postFieldBody
 	m.isPublic = post.IsPublic
 	m.isNSFW = post.IsNSFW
+	m.isBork = false
 	m.titleInput.SetValue(post.Title)
 	m.slugInput.SetValue("")
 	m.slugError = ""
@@ -508,6 +533,7 @@ func (m PostComposePanel) SlugValue() string {
 func (m PostComposePanel) TopicsRaw() string { return m.topicsInput.Value() }
 func (m PostComposePanel) IsPublic() bool    { return m.isPublic }
 func (m PostComposePanel) IsNSFW() bool      { return m.isNSFW }
+func (m PostComposePanel) IsBork() bool      { return m.isBork }
 
 // PanelHeight returns the total terminal rows the panel renders:
 // 2 (border) + 1 (title row) + 1 (slug row) + 1 (sep) + bodyLines + 1 (sep) + 1 (topics row).
@@ -532,7 +558,7 @@ func (m PostComposePanel) SetWidth(w int) PostComposePanel {
 	}
 	const (
 		labelW   = 7  // "title  " or "topics " or "slug   "
-		togglesW = 22 // "  [x] public  [ ] nsfw"
+		togglesW = 33 // "  [x] public  [ ] nsfw  [ ] bork"
 		cursorW  = 1  // textinput.View() renders Width+1 (cursor always occupies one extra slot)
 	)
 	titleInputW := innerW - labelW - cursorW
@@ -577,7 +603,7 @@ func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
 		return m, m.textarea.Focus()
 	case postFieldTopics:
 		return m, m.topicsInput.Focus()
-	default: // postFieldPublic, postFieldNSFW
+	default: // postFieldPublic, postFieldNSFW, postFieldBork
 		return m, nil
 	}
 }
@@ -605,12 +631,23 @@ func (m PostComposePanel) recalcBodyHeight() PostComposePanel {
 	return m
 }
 
+// SetHardBreakKey sets the key that inserts a hard line break in the body. An
+// empty or invalid value falls back to the default.
+func (m PostComposePanel) SetHardBreakKey(key string) PostComposePanel {
+	m.hardBreak = resolveHardBreakKey(key)
+	return m
+}
+
 // Update handles key events and routes them to the focused field.
 func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 	if !m.active {
 		return m, nil
 	}
 	if key, ok := msg.(tea.KeyMsg); ok {
+		if m.focus == postFieldBody && key.String() == m.hardBreak {
+			m.textarea = insertHardBreak(m.textarea)
+			return m.recalcBodyHeight(), nil
+		}
 		// While a submit is in flight the panel stays open and populated, but
 		// the keys that would start another one (or throw the work away) are
 		// inert until the App reports the outcome.
@@ -657,6 +694,9 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 			case postFieldNSFW:
 				m.isNSFW = !m.isNSFW
 				return m, nil
+			case postFieldBork:
+				m.isBork = !m.isBork
+				return m, nil
 			}
 		}
 	}
@@ -695,7 +735,7 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 				m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnter})
 				return m.recalcBodyHeight(), nil
 			}
-			filtered, keep := filterAmbiguousKeyMsg(km)
+			filtered, keep := filterAmbiguousKeyMsg(convertPaste(km))
 			if !keep {
 				return m, nil
 			}
@@ -779,6 +819,10 @@ func (m PostComposePanel) View() string {
 	if m.isNSFW {
 		nsfwCheck = "[x]"
 	}
+	borkCheck := "[ ]"
+	if m.isBork {
+		borkCheck = "[x]"
+	}
 	pubStyle := inactive
 	if m.focus == postFieldPublic {
 		pubStyle = active
@@ -787,10 +831,15 @@ func (m PostComposePanel) View() string {
 	if m.focus == postFieldNSFW {
 		nsfwStyle = active
 	}
+	borkStyle := inactive
+	if m.focus == postFieldBork {
+		borkStyle = active
+	}
 	topicsRow := topicsStyle.Render("topics ") +
 		m.topicsInput.View() +
 		"  " + pubStyle.Render(pubCheck+" public") +
-		"  " + nsfwStyle.Render(nsfwCheck+" nsfw")
+		"  " + nsfwStyle.Render(nsfwCheck+" nsfw") +
+		"  " + borkStyle.Render(borkCheck+" bork")
 
 	rows := []string{titleRow}
 	if !m.editing {
