@@ -7354,3 +7354,25 @@ func TestHelpModal_ComposeShowsConfiguredHardBreakKey(t *testing.T) {
 		t.Errorf("help should list the configured hard-break key, got:\n%s", help)
 	}
 }
+
+func TestHandleLogoAnim_SkipsScrambleWhileComposeOpen(t *testing.T) {
+	a := loggedInApp()
+	_, cmd, handled := a.handleLogoAnim(logoAnimTickMsg{gen: a.sessionGen})
+	if !handled || cmd == nil || a.logoPhase != logoPhaseScrambling {
+		t.Fatalf("setup: expected the scramble to start with no compose open, got handled=%v phase=%v", handled, a.logoPhase)
+	}
+
+	a = loggedInApp()
+	f, _ := a.feed.Update(keyMsg("n"))
+	a.feed = f
+	_, cmd, handled = a.handleLogoAnim(logoAnimTickMsg{gen: a.sessionGen})
+	if !handled {
+		t.Error("expected the tick to be consumed")
+	}
+	if a.logoPhase != logoPhaseIdle {
+		t.Errorf("expected the scramble not to start while the editor is open, got phase %v", a.logoPhase)
+	}
+	if cmd == nil {
+		t.Error("expected the idle timer to be re-armed so the animation resumes after the editor closes")
+	}
+}

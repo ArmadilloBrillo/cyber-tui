@@ -642,10 +642,7 @@ func TestPostDetail_EKey_OpensReplyEdit_WhenEligible(t *testing.T) {
 	m = m.SetReplies([]model.Reply{pdReply("r1", "", "alice", time.Now())})
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // select r1
 
-	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
-	if cmd == nil {
-		t.Fatal("expected a focus cmd from opening the reply editor")
-	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
 	if !m.ComposeActive() {
 		t.Error("expected ComposeActive true after pressing 'e' on an editable own reply")
 	}

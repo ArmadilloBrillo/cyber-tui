@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -73,6 +74,9 @@ type ComposeModel struct {
 // WindowSizeMsg arrives (compose.SetWidth is called by the host screen).
 func NewComposeModel(width int) ComposeModel {
 	ta := textarea.New()
+	// View re-Focuses the textarea every render (which resets Blink), so a blinking
+	// cursor never actually blinks but still costs a cancelled-blink message per key.
+	ta.Cursor.SetMode(cursor.CursorStatic)
 	ta.CharLimit = 32768
 	ta.ShowLineNumbers = false
 	innerW := width - 4
@@ -372,6 +376,9 @@ func NewPostComposePanel(width int) PostComposePanel {
 	sl.CharLimit = 60
 
 	ta := textarea.New()
+	// View re-Focuses the textarea every render (which resets Blink), so a blinking
+	// cursor never actually blinks but still costs a cancelled-blink message per key.
+	ta.Cursor.SetMode(cursor.CursorStatic)
 	ta.CharLimit = 32768
 	ta.ShowLineNumbers = false
 	ta.Placeholder = "what's on your mind…"

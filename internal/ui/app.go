@@ -2885,6 +2885,9 @@ func (a *App) handleLogoAnim(msg tea.Msg) (*App, tea.Cmd, bool) {
 		if m.gen != a.sessionGen {
 			return a, nil, true
 		}
+		if a.composeActive() {
+			return a, a.scheduleLogoAnimCmd(), true
+		}
 		positions := make([]int, len(logoOrigRunes))
 		for i := range positions {
 			positions[i] = i
@@ -6837,6 +6840,23 @@ func (a *App) scheduleRelativeTimeTickCmd() tea.Cmd {
 func (a *App) scheduleWanderCmd() tea.Cmd {
 	gen := a.sessionGen
 	return tea.Tick(1*time.Hour, func(time.Time) tea.Msg { return wanderTickMsg{gen: gen} })
+}
+
+// composeActive reports whether the visible screen has a post/reply editor open.
+func (a *App) composeActive() bool {
+	switch a.active {
+	case screenFeed:
+		return a.feed.ComposeActive()
+	case screenPostDetail:
+		return a.postDetail.ComposeActive()
+	case screenGuilds:
+		return a.guilds.ComposeActive()
+	case screenProfile:
+		return a.profile.ComposeActive()
+	case screenJournal:
+		return a.journal.ComposeActive()
+	}
+	return false
 }
 
 func (a *App) scheduleLogoAnimCmd() tea.Cmd {
