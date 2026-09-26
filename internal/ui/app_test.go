@@ -7404,3 +7404,20 @@ func TestRoot_MatchesValueUpdatePath(t *testing.T) {
 		t.Error("expected the feed composer to be open after 'n'")
 	}
 }
+
+// The command runs on a background goroutine, so it must work on a snapshot of
+// the current user and never write through to the live App.
+func TestSaveProfileCmd_DoesNotMutateLiveApp(t *testing.T) {
+	a := loggedInApp()
+	a.currentUser = model.User{Username: "alice", Bio: "old"}
+
+	msg := a.saveProfileCmd(screens.SaveProfileMsg{Bio: "new"})()
+
+	if a.currentUser.Bio != "old" {
+		t.Errorf("expected the live App's Bio untouched by the command, got %q", a.currentUser.Bio)
+	}
+	loaded, ok := msg.(profileLoadedMsg)
+	if !ok || loaded.user.Bio != "new" || loaded.user.Username != "alice" {
+		t.Errorf("expected profileLoadedMsg carrying the updated user, got %#v", msg)
+	}
+}

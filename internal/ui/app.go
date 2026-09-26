@@ -4697,6 +4697,7 @@ func (a *App) resendVerificationCmd(idToken string) tea.Cmd {
 }
 
 func (a *App) loginCmd(email, password string) tea.Cmd {
+	relaxed := a.relaxed
 	return func() tea.Msg {
 		tokens, err := a.client.Login(email, password)
 		if err != nil {
@@ -4717,7 +4718,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 		// Persist the refresh token so subsequent launches auto-login.
 		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
-		if a.relaxed {
+		if relaxed {
 			density = "relaxed"
 		}
 		a.saveConfig(func(cfg *config.Config) {
@@ -4735,6 +4736,7 @@ func (a *App) loginCmd(email, password string) tea.Cmd {
 // for fresh API tokens, then fetches the user profile. On failure it falls back
 // to the login screen by returning a LoginErrMsg.
 func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
+	relaxed := a.relaxed
 	return func() tea.Msg {
 		tokens, err := a.client.LoginWithRefreshToken(refreshToken)
 		if err != nil {
@@ -4753,7 +4755,7 @@ func (a *App) tokenLoginCmd(refreshToken string) tea.Cmd {
 		// Update savedAt so we know when the session was last used.
 		// Load first so app settings (APIBaseURL, etc.) are preserved.
 		density := ""
-		if a.relaxed {
+		if relaxed {
 			density = "relaxed"
 		}
 		a.saveConfig(func(cfg *config.Config) {
@@ -5410,10 +5412,11 @@ func (a *App) loadProfileCmd() tea.Cmd {
 const followingScanMaxPages = 40
 
 func (a *App) loadUserProfileCmd(username string) tea.Cmd {
+	self := a.currentUser
 	return func() tea.Msg {
 		// Skip the API call if this is the logged-in user's own profile.
-		if username == a.currentUser.Username {
-			return userProfileLoadedMsg{user: a.currentUser}
+		if username == self.Username {
+			return userProfileLoadedMsg{user: self}
 		}
 		user, err := a.client.GetProfile(username)
 		if err != nil {
@@ -5733,6 +5736,7 @@ func (a *App) createPostCmd(content, title, slug string, topics []string, isPubl
 }
 
 func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
+	user := a.currentUser
 	return func() tea.Msg {
 		update := model.ProfileUpdate{
 			Bio:          &msg.Bio,
@@ -5757,17 +5761,17 @@ func (a *App) saveProfileCmd(msg screens.SaveProfileMsg) tea.Cmd {
 		if err := a.client.UpdateProfile(update); err != nil {
 			return actionErrMsg{err}
 		}
-		a.currentUser.Bio = msg.Bio
-		a.currentUser.WebsiteName = msg.WebsiteName
-		a.currentUser.WebsiteUrl = msg.WebsiteUrl
-		a.currentUser.LocationName = msg.LocationName
+		user.Bio = msg.Bio
+		user.WebsiteName = msg.WebsiteName
+		user.WebsiteUrl = msg.WebsiteUrl
+		user.LocationName = msg.LocationName
 		if update.LocationLatitude != nil {
-			a.currentUser.LocationLatitude = *update.LocationLatitude
+			user.LocationLatitude = *update.LocationLatitude
 		}
 		if update.LocationLongitude != nil {
-			a.currentUser.LocationLongitude = *update.LocationLongitude
+			user.LocationLongitude = *update.LocationLongitude
 		}
-		return profileLoadedMsg{a.currentUser}
+		return profileLoadedMsg{user}
 	}
 }
 
