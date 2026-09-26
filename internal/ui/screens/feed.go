@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ragnar/cyber-tui/internal/bork"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
 )
@@ -547,6 +548,9 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 
 	case ComposeSubmitMsg:
 		content := msg.Content
+		if m.panel.IsBork() {
+			content = bork.Bork(content)
+		}
 		title := m.panel.TitleValue()
 		topics := ParseTopics(m.panel.TopicsRaw())
 		isPublic := m.panel.IsPublic()

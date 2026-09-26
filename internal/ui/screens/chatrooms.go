@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ragnar/cyber-tui/internal/api"
+	"github.com/ragnar/cyber-tui/internal/bork"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/markdown"
 	"github.com/ragnar/cyber-tui/internal/ui/theme"
@@ -341,11 +342,12 @@ type SendRoomMessageMsg struct {
 // baseSlashCommands are the slash commands the server recognizes for both
 // CIRC and C-Mail. Checked client-side so a typo'd command shows a local
 // error instead of being sent as a literal chat message. Command *syntax*
-// validation stays server-side.
+// validation stays server-side. "/bork" is the one client-side entry: the
+// text is rewritten locally by borkCommand and sent as a plain message.
 var baseSlashCommands = map[string]bool{
 	"/me": true, "/poke": true, "/hug": true, "/hi5": true, "/slap": true,
 	"/dice": true, "/8ball": true, "/fortune": true, "/help": true,
-	"/gif": true, "/song": true,
+	"/gif": true, "/song": true, "/bork": true,
 }
 
 // circOnlySlashCommands are additionally recognized in CIRC only — C-Mail's
@@ -392,6 +394,20 @@ func isKnownStyleCombo(cmd string) bool {
 func isKnownSlashCommand(cmd string, extra map[string]bool) bool {
 	return baseSlashCommands[cmd] || extra[cmd] || isKnownStyleCombo(cmd) ||
 		strings.HasPrefix(cmd, "/dice:")
+}
+
+// borkCommand turns the input of a "/bork <text>" line into the body to send.
+// It returns a non-empty notice instead when there is nothing to send, or when
+// the text is itself a "/" command, which borking would mangle.
+func borkCommand(val string) (body, notice string) {
+	rest := strings.TrimSpace(val[len(strings.Fields(val)[0]):])
+	switch {
+	case rest == "":
+		return "", "*** /bork: nothing to send"
+	case strings.HasPrefix(rest, "/"):
+		return "", "*** /bork: cannot wrap another command"
+	}
+	return bork.Bork(rest), ""
 }
 
 // RoomOpenedMsg is emitted when the user enters a chatroom. App uses it to call MarkRoomRead.
@@ -1686,6 +1702,14 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 							if !isKnownSlashCommand(cmd, circOnlySlashCommands) {
 								m.input.Reset()
 								return m.AppendSystemMessage(roomID, "*** unknown command: "+cmd), nil
+							}
+							if cmd == "/bork" {
+								body, notice := borkCommand(val)
+								if notice != "" {
+									m.input.Reset()
+									return m.AppendSystemMessage(roomID, notice), nil
+								}
+								val = body
 							}
 							if cmd == "/mute" || cmd == "/unmute" {
 								if fields := strings.Fields(val); len(fields) >= 2 {

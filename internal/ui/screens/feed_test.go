@@ -371,6 +371,39 @@ func TestFeed_ComposeSubmit_KeepsPanelOpenUntilOutcome(t *testing.T) {
 	}
 }
 
+func TestFeed_ComposeSubmit_BorksContentOnlyWhenTicked(t *testing.T) {
+	for _, tick := range []bool{false, true} {
+		want := "the nation"
+		if tick {
+			want = "zee nashun Bork Bork Bork!"
+		}
+		t.Run("ticked="+strconv.FormatBool(tick), func(t *testing.T) {
+			m := screens.NewFeedModel()
+			m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+			m, _ = m.Update(keyRune("n"))
+			if tick {
+				// title -> slug -> body -> topics -> public -> nsfw -> bork
+				for range 6 {
+					m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+				}
+				m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+			}
+
+			_, cmd := m.Update(screens.ComposeSubmitMsg{Content: "the nation"})
+			if cmd == nil {
+				t.Fatal("expected a SubmitNewPostMsg cmd from ComposeSubmitMsg")
+			}
+			got, ok := cmd().(screens.SubmitNewPostMsg)
+			if !ok {
+				t.Fatalf("submit cmd produced %T, want screens.SubmitNewPostMsg", cmd())
+			}
+			if got.Content != want {
+				t.Errorf("Content = %q, want %q", got.Content, want)
+			}
+		})
+	}
+}
+
 func TestFeed_ComposeSaveAsNote_EmitsMsgWithTitleHeading(t *testing.T) {
 	m := screens.NewFeedModel()
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})

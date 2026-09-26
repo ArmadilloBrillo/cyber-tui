@@ -4405,6 +4405,69 @@ func TestHandleCMail_CommandReply_AppendsSystemMessage(t *testing.T) {
 	}
 }
 
+// TestHandleChatrooms_HelpReply_BorkOnItsOwnLine guards the layout: the /bork
+// entry must render on a separate line, not trailing the server's command list.
+func TestHandleChatrooms_HelpReply_BorkOnItsOwnLine(t *testing.T) {
+	a := loggedInApp()
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+
+	m, _ := a.Update(roomCommandReplyMsg{roomID: "zion", reply: withBorkHelp("/help", "Commands: /me, /dice, /help")})
+	found := false
+	for _, line := range strings.Split(m.(App).chatrooms.View(), "\n") {
+		if strings.Contains(line, "/bork") {
+			found = true
+			if strings.Contains(line, "/help") {
+				t.Errorf("/bork shares a line with /help: %q", line)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a /bork line in the chatrooms view")
+	}
+}
+
+func TestSendRoomMessageCmd_HelpReplyListsBork(t *testing.T) {
+	a := loggedInApp()
+	msg, ok := a.sendRoomMessageCmd("zion", "/help")().(roomCommandReplyMsg)
+	if !ok {
+		t.Fatal("expected a roomCommandReplyMsg for /help")
+	}
+	if !strings.HasSuffix(msg.reply, "/bork <text> (Speak like-a a Svedish cheff Bork Bork Bork!)") {
+		t.Errorf("reply = %q, want it to end with the /bork entry", msg.reply)
+	}
+}
+
+func TestSendCMailCmd_HelpReplyListsBork(t *testing.T) {
+	a := loggedInApp()
+	msg, ok := a.sendCMailCmd("c1", "/help")().(cmailCommandReplyMsg)
+	if !ok {
+		t.Fatal("expected a cmailCommandReplyMsg for /help")
+	}
+	if !strings.HasSuffix(msg.reply, "/bork <text> (Speak like-a a Svedish cheff Bork Bork Bork!)") {
+		t.Errorf("reply = %q, want it to end with the /bork entry", msg.reply)
+	}
+}
+
+func TestWithBorkHelp_OnlyForHelp(t *testing.T) {
+	tests := []struct {
+		body string
+		want string
+	}{
+		{"/help", "R" + borkHelpEntry},
+		{" /HELP ", "R" + borkHelpEntry},
+		{"/muted", "R"},
+		{"/helpme", "R"},
+	}
+	for _, tt := range tests {
+		if got := withBorkHelp(tt.body, "R"); got != tt.want {
+			t.Errorf("withBorkHelp(%q) = %q, want %q", tt.body, got, tt.want)
+		}
+	}
+}
+
 // --- ESC from a deep-linked C-Mail/Chatrooms conversation returns to origin ---
 //
 // Reported behavior: pressing 'c' on a post opens a C-Mail conversation with
@@ -7305,6 +7368,48 @@ func TestHelpModal_ComposeShowsConfiguredHardBreakKey(t *testing.T) {
 	if !strings.Contains(help, "ctrl+l") || !strings.Contains(help, "line break") {
 		t.Errorf("help should list the configured hard-break key, got:\n%s", help)
 	}
+}
+
+func TestHelpModal_ListsBork(t *testing.T) {
+	t.Run("feed compose", func(t *testing.T) {
+		a := loggedInApp()
+		f, _ := a.feed.Update(keyMsg("n"))
+		a.feed = f
+		if help := ansi.Strip(TabsLayout{}.renderHelpModal(a)); !strings.Contains(help, "tick public / nsfw / bork") {
+			t.Errorf("help should list the bork checkbox while composing a post, got:\n%s", help)
+		}
+	})
+	t.Run("circ room", func(t *testing.T) {
+		a := loggedInApp()
+		a.active = screenChatrooms
+		a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+		cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		a.chatrooms = cm
+		if help := ansi.Strip(TabsLayout{}.renderHelpModal(a)); !strings.Contains(help, "/bork <text>") {
+			t.Errorf("help should list /bork inside a room, got:\n%s", help)
+		}
+	})
+	t.Run("circ room list", func(t *testing.T) {
+		a := loggedInApp()
+		a.active = screenChatrooms
+		if help := ansi.Strip(TabsLayout{}.renderHelpModal(a)); strings.Contains(help, "/bork") {
+			t.Errorf("help should not list /bork on the room list, got:\n%s", help)
+		}
+	})
+	t.Run("cmail conversation", func(t *testing.T) {
+		a := loggedInApp()
+		a.active = screenCMail
+		a.cmail = a.cmail.SetConversations([]model.Conversation{
+			{ID: "c1", Participants: []model.User{{Username: a.currentUser.Username}, {Username: "molly"}}},
+		})
+		cm, _ := a.cmail.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		a.cmail = cm
+		if help := ansi.Strip(TabsLayout{}.renderHelpModal(a)); !strings.Contains(help, "/bork <text>") {
+			t.Errorf("help should list /bork inside a conversation, got:\n%s", help)
+		}
+	})
 }
 
 func TestHandleLogoAnim_SkipsScrambleWhileComposeOpen(t *testing.T) {

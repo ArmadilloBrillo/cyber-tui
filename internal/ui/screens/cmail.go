@@ -1407,6 +1407,14 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 								m.input.Reset()
 								return m.AppendSystemMessage(convID, "*** unknown command: "+cmd), nil
 							}
+							if cmd == "/bork" {
+								body, notice := borkCommand(val)
+								if notice != "" {
+									m.input.Reset()
+									return m.AppendSystemMessage(convID, notice), nil
+								}
+								val = body
+							}
 						}
 						m.input.Reset()
 						m.announcingTyping = false // server auto-clears typing on send; no DELETE needed

@@ -5474,6 +5474,17 @@ func (a *App) loadUserFollowersCmd(userID, cursor string) tea.Cmd {
 	}
 }
 
+// borkHelpEntry is the client-side /bork entry, appended to the server's /help
+// reply because the server does not know the command.
+const borkHelpEntry = "\n/bork <text> (Speak like-a a Svedish cheff Bork Bork Bork!)"
+
+func withBorkHelp(body, reply string) string {
+	if strings.EqualFold(strings.TrimSpace(body), "/help") {
+		return reply + borkHelpEntry
+	}
+	return reply
+}
+
 func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 	return func() tea.Msg {
 		reply, err := a.client.SendRoomMessage(roomID, body)
@@ -5481,7 +5492,7 @@ func (a *App) sendRoomMessageCmd(roomID, body string) tea.Cmd {
 			return actionErrMsg{err}
 		}
 		if reply != "" {
-			return roomCommandReplyMsg{roomID: roomID, reply: reply}
+			return roomCommandReplyMsg{roomID: roomID, reply: withBorkHelp(body, reply)}
 		}
 		return nil
 	}
@@ -5515,7 +5526,7 @@ func (a *App) sendCMailCmd(convID, body string) tea.Cmd {
 			return actionErrMsg{err}
 		}
 		if reply != "" {
-			return cmailCommandReplyMsg{convID: convID, reply: reply}
+			return cmailCommandReplyMsg{convID: convID, reply: withBorkHelp(body, reply)}
 		}
 		return nil
 	}

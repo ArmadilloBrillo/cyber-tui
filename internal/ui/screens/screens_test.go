@@ -393,6 +393,63 @@ func TestChatrooms_Send_KnownCommandStillSends(t *testing.T) {
 	}
 }
 
+func TestChatrooms_Send_BorkRewritesBody(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/bork the nation", "zee nashun Bork Bork Bork!"},
+		{"/BORK The nation", "Zee nashun Bork Bork Bork!"},
+		{"/bork  @bob the", "@bob zee Bork Bork Bork!"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.in, func(t *testing.T) {
+			m := screens.NewChatroomsModel("neuromancer", nil)
+			m = m.SetRooms(sampleRooms())
+			m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // open room
+
+			for _, r := range tt.in {
+				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			}
+			_, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+			if cmd == nil {
+				t.Fatalf("expected a command for %q", tt.in)
+			}
+			sendMsg, ok := cmd().(screens.SendRoomMessageMsg)
+			if !ok {
+				t.Fatalf("expected SendRoomMessageMsg, got %T", cmd())
+			}
+			if sendMsg.Body != tt.want {
+				t.Errorf("body = %q, want %q", sendMsg.Body, tt.want)
+			}
+		})
+	}
+}
+
+func TestChatrooms_Send_BorkRejectsNothingOrCommand(t *testing.T) {
+	cases := []struct{ in, notice string }{
+		{"/bork", "/bork: nothing to send"},
+		{"/bork   ", "/bork: nothing to send"},
+		{"/bork /me waves", "/bork: cannot wrap another command"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.in, func(t *testing.T) {
+			m := screens.NewChatroomsModel("neuromancer", nil)
+			m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+			m = m.SetRooms(sampleRooms())
+			m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // open room
+
+			for _, r := range tt.in {
+				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			}
+			m, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+			if cmd != nil {
+				t.Fatalf("expected no command for %q", tt.in)
+			}
+			if view := m.View(); !strings.Contains(view, tt.notice) {
+				t.Errorf("expected notice %q in the view, got: %q", tt.notice, view)
+			}
+		})
+	}
+}
+
 // TestChatrooms_Send_SpoilerCannotChain guards against a bug where the
 // client-side whitelist accepted "/spoiler+rainbow" (each part individually
 // a known style) even though the server rejects /spoiler chained with any
