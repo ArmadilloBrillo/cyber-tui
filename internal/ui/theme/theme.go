@@ -125,14 +125,6 @@ var (
 				Foreground(ColorCyan).
 				Bold(true)
 
-	// NavMnemonic highlights a leader-key mnemonic letter within the Miller
-	// layout's vertical nav sidebar, where rows have no background to
-	// preserve, so a single foreground-only style suffices for both the
-	// active and inactive row states.
-	NavMnemonic = lipgloss.NewStyle().
-			Foreground(ColorCyan).
-			Bold(true)
-
 	SelectedRow = lipgloss.NewStyle().
 			Background(ColorDimGreen).
 			Foreground(ColorGreen).
@@ -618,7 +610,6 @@ func setBland() {
 	ActiveBorder = ActiveBorder.BorderStyle(lipgloss.ThickBorder())
 	TabMnemonic = TabMnemonic.Underline(true)
 	ActiveTabMnemonic = ActiveTabMnemonic.Underline(true)
-	NavMnemonic = NavMnemonic.Underline(true)
 }
 
 // applyStyles rebuilds all style vars from the current color vars.
@@ -685,10 +676,6 @@ func applyStyles() {
 
 	ActiveTabMnemonic = lipgloss.NewStyle().
 		Background(ColorDimGreen).
-		Foreground(ColorCyan).
-		Bold(true)
-
-	NavMnemonic = lipgloss.NewStyle().
 		Foreground(ColorCyan).
 		Bold(true)
 

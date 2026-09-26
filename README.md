@@ -163,7 +163,6 @@ You can add any of the following fields manually. Most are also editable live fr
 |---|---|---|
 | `theme` | `"cyber"` | `"cyber"`, `"c64"`, `"vt320"`, `"bland"`, or `"custom"` |
 | `customPalette` | `null` | Your saved palette for the `"custom"` theme (written by the in-TUI theme editor — not hand-edited) |
-| `layout` | `""` | `""`/`"tabs"` = tab bar (default), `"miller"` = sidebar columns |
 | `density` | `""` | `""` = dense, `"relaxed"` = blank lines between list items |
 | `timezone` | `"UTC"` | Display timezone as a UTC offset label, e.g. `"UTC+2:00"` |
 | `hideGlobeTab` | `false` | Hide the Globe tab from the tab bar and navigation |

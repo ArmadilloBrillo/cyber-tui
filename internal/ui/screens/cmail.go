@@ -1522,7 +1522,7 @@ func (m CMailModel) updateCMailBrowsingKey(msg tea.KeyMsg) (CMailModel, tea.Cmd)
 		if curPos == 0 {
 			return m.maybeLoadOlderConvMessages()
 		}
-		newPos, newOffset := millerPageNav(-1, m.viewport.Height, 0,
+		newPos, newOffset := pageNav(-1, m.viewport.Height, 0,
 			selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), curPos, m.viewport.YOffset)
 		if newPos < 0 {
 			newPos = 0
@@ -1542,7 +1542,7 @@ func (m CMailModel) updateCMailBrowsingKey(msg tea.KeyMsg) (CMailModel, tea.Cmd)
 			m.viewport.GotoBottom()
 			return m, nil
 		}
-		newPos, newOffset := millerPageNav(+1, m.viewport.Height, 0,
+		newPos, newOffset := pageNav(+1, m.viewport.Height, 0,
 			selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), curPos, m.viewport.YOffset)
 		m.selectedMsgID = m.activeConv.Messages[sel[newPos]].ID
 		m.viewport.SetYOffset(newOffset)
@@ -1553,7 +1553,7 @@ func (m CMailModel) updateCMailBrowsingKey(msg tea.KeyMsg) (CMailModel, tea.Cmd)
 		}
 		newPos, newOffset := curPos, m.viewport.YOffset
 		for i := 0; i < m.viewport.Height && newPos > 0; i++ {
-			newPos, newOffset = millerPageNav(-1, m.viewport.Height, 0,
+			newPos, newOffset = pageNav(-1, m.viewport.Height, 0,
 				selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), newPos, newOffset)
 		}
 		if newPos < 0 {
@@ -1576,7 +1576,7 @@ func (m CMailModel) updateCMailBrowsingKey(msg tea.KeyMsg) (CMailModel, tea.Cmd)
 		}
 		newPos, newOffset := curPos, m.viewport.YOffset
 		for i := 0; i < m.viewport.Height && newPos < len(sel)-1; i++ {
-			newPos, newOffset = millerPageNav(+1, m.viewport.Height, 0,
+			newPos, newOffset = pageNav(+1, m.viewport.Height, 0,
 				selOffsets(m.msgOffsets, sel), selHeights(m.msgHeights, sel), newPos, newOffset)
 		}
 		m.selectedMsgID = m.activeConv.Messages[sel[newPos]].ID

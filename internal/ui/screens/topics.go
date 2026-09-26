@@ -29,26 +29,6 @@ type ShowTopicPostMsg struct{ Post model.Post }
 
 type LoadMoreTopicsMsg struct{ Cursor string }
 
-type LoadTopicThreadMsg struct{ PostID string }
-
-type TopicThreadRepliesMsg struct {
-	PostID  string
-	Replies []model.Reply
-}
-
-// TopicThreadDebounceMsg is the delayed message emitted after topicThreadDebounceDelay
-// when the selected post changes. The fetch only proceeds if PostID still matches
-// the current selection, dropping stale ticks from rapid navigation.
-type TopicThreadDebounceMsg struct{ PostID string }
-
-const topicThreadDebounceDelay = time.Second
-
-type TopicThreadNavMsg struct {
-	Delta      int
-	PaneHeight int
-	PaneWidth  int
-}
-
 // Internal view state for the Topics screen
 type topicsView int
 
@@ -88,15 +68,6 @@ type TopicsModel struct {
 	refreshing  bool
 	loaded      bool
 
-	// Miller 3-pane thread state
-	threadPostID       string
-	maxThreadDepth     int
-	threadReplies      []model.Reply
-	threadFlatTree     []replyNode
-	threadReplyIndex   int
-	threadScrollOffset int
-	threadLoading      bool
-
 	// Shared
 	viewport    viewport.Model
 	itemOffsets []int
@@ -119,21 +90,10 @@ type TopicsModel struct {
 	timeDisplayFormat string
 	filterNSFW        bool
 	mutedTopics       map[string]struct{} // Settings.MutedTopics; posts tagged with any are hidden, rows show a marker
-
-	// postBodyCache/replyBodyCache memoize the Miller detail pane's post
-	// card and thread replies (cachedPostCard/cachedReplyCard, render.go) so
-	// an unrelated re-render doesn't re-parse markdown for content that
-	// hasn't changed — mirrors FeedModel.bodyCache/ChatroomsModel.chatBodyCache.
-	postBodyCache  map[string]feedBodyCacheEntry
-	replyBodyCache map[string]replyBodyCacheEntry
 }
 
 func NewTopicsModel() TopicsModel {
-	return TopicsModel{
-		threadReplyIndex: -1,
-		postBodyCache:    make(map[string]feedBodyCacheEntry),
-		replyBodyCache:   make(map[string]replyBodyCacheEntry),
-	}
+	return TopicsModel{}
 }
 
 func (m TopicsModel) visiblePosts() []model.Post {
@@ -237,38 +197,6 @@ func (m TopicsModel) AppendTopics(items []model.Topic, cursor string) TopicsMode
 	return m
 }
 
-// evictStalePostBodyCache drops postBodyCache entries for posts no longer
-// present in m.posts — mirrors FeedModel.evictStaleBodyCache (feed.go).
-func (m TopicsModel) evictStalePostBodyCache() TopicsModel {
-	live := make(map[string]bool, len(m.posts))
-	for _, p := range m.posts {
-		live[p.ID] = true
-	}
-	for id := range m.postBodyCache {
-		if !live[id] {
-			delete(m.postBodyCache, id)
-		}
-	}
-	return m
-}
-
-// evictStaleReplyBodyCache drops replyBodyCache entries for replies no
-// longer present in m.threadReplies — called whenever a fresh reply page
-// replaces the thread (TopicThreadRepliesMsg), the point a reply can
-// permanently drop out of the loaded thread.
-func (m TopicsModel) evictStaleReplyBodyCache() TopicsModel {
-	live := make(map[string]bool, len(m.threadReplies))
-	for _, r := range m.threadReplies {
-		live[r.ID] = true
-	}
-	for id := range m.replyBodyCache {
-		if !live[id] {
-			delete(m.replyBodyCache, id)
-		}
-	}
-	return m
-}
-
 func (m TopicsModel) SetTopicPosts(posts []model.Post, cursor string) TopicsModel {
 	m.err = nil
 	m.posts = posts
@@ -278,7 +206,6 @@ func (m TopicsModel) SetTopicPosts(posts []model.Post, cursor string) TopicsMode
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
-	m = m.evictStalePostBodyCache()
 	m.view = viewTopicPosts
 	if m.ready {
 		m = m.refreshContent()
@@ -337,12 +264,6 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 		if m.ready {
 			m = m.refreshContent()
 		}
-		if msg.MaxThreadDepth != m.maxThreadDepth {
-			m.maxThreadDepth = msg.MaxThreadDepth
-			if len(m.threadReplies) > 0 {
-				m.threadFlatTree = buildReplyTree(m.threadReplies, m.effectiveMaxDepth())
-			}
-		}
 		return m, nil
 
 	case BookmarkedIDsMsg:
@@ -356,31 +277,6 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 		m.watchedPostIDs = msg.PostIDs
 		if m.ready {
 			m = m.refreshContent()
-		}
-		return m, nil
-
-	case TopicThreadRepliesMsg:
-		if msg.PostID == m.threadPostID {
-			m.threadReplies = msg.Replies
-			m.threadFlatTree = buildReplyTree(msg.Replies, m.effectiveMaxDepth())
-			m.threadReplyIndex = -1
-			m.threadScrollOffset = 0
-			m.threadLoading = false
-			m = m.evictStaleReplyBodyCache()
-		}
-		return m, nil
-
-	case TopicThreadDebounceMsg:
-		visible := m.visiblePosts()
-		if m.postIndex < len(visible) && visible[m.postIndex].ID == msg.PostID {
-			m.threadLoading = true
-			return m, func() tea.Msg { return LoadTopicThreadMsg(msg) }
-		}
-		return m, nil
-
-	case TopicThreadNavMsg:
-		if msg.PaneHeight > 0 && msg.PaneWidth > 0 {
-			m = m.pageThreadNav(msg.Delta, msg.PaneHeight, msg.PaneWidth)
 		}
 		return m, nil
 
@@ -412,9 +308,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					m.postIndex--
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-					var detailCmd tea.Cmd
-					m, detailCmd = m.currentDetailCmd()
-					return m, detailCmd
+					return m, nil
 				} else if !m.loading && !m.refreshing {
 					slug := m.activeTopic
 					m.refreshing = true
@@ -443,9 +337,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					m.postIndex++
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-					var detailCmd tea.Cmd
-					m, detailCmd = m.currentDetailCmd()
-					return m, detailCmd
+					return m, nil
 				} else if !m.exhausted && !m.loading {
 					m.loading = true
 					m = m.refreshContent()
@@ -469,9 +361,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					m.postIndex = max(0, m.postIndex-pageJumpItems)
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-					var detailCmd tea.Cmd
-					m, detailCmd = m.currentDetailCmd()
-					return m, detailCmd
+					return m, nil
 				} else if !m.loading && !m.refreshing {
 					slug := m.activeTopic
 					m.refreshing = true
@@ -500,9 +390,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 					m.postIndex = min(len(m.visiblePosts())-1, m.postIndex+pageJumpItems)
 					m = m.refreshContent()
 					m = m.ensureSelectedVisible()
-					var detailCmd tea.Cmd
-					m, detailCmd = m.currentDetailCmd()
-					return m, detailCmd
+					return m, nil
 				} else if !m.exhausted && !m.loading {
 					m.loading = true
 					m = m.refreshContent()
@@ -768,47 +656,6 @@ func (m TopicsModel) VisibleInlineImages() []InlineImageSlot {
 	return slots
 }
 
-// VisibleDetailInlineImages returns the inline image slots for the selected
-// post card in Miller's reading pane (topic post replies aren't
-// inline-image-aware — renderDetailReply renders plain markdown, so there's
-// nothing to report there). width/height must match what MillerLayout passed
-// to DetailView this frame — see FeedModel.VisibleDetailInlineImages for why
-// this recomputes rather than caching.
-func (m TopicsModel) VisibleDetailInlineImages(width, height int) []InlineImageSlot {
-	if !m.ready || !m.inlineImagesEnabled {
-		return nil
-	}
-	visible := m.visiblePosts()
-	if m.postIndex >= len(visible) {
-		return nil
-	}
-	p := visible[m.postIndex]
-	_, bookmarked := m.bookmarkedPostIDs[p.ID]
-	_, watched := m.watchedPostIDs[p.ID]
-	postSelected := m.threadReplyIndex < 0
-	_, imgSlots := cachedPostCard(m.postBodyCache, p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, true)
-	if len(imgSlots) == 0 {
-		return nil
-	}
-	top := m.threadScrollOffset
-	bottom := top + height
-	var slots []InlineImageSlot
-	for j, img := range imgSlots {
-		if img.Line < top || img.Line+inlineImageMaxRows > bottom {
-			continue
-		}
-		slots = append(slots, InlineImageSlot{
-			URL:       img.URL,
-			Row:       img.Line - top,
-			ColIndent: 2,
-			MaxCols:   width - 4,
-			MaxRows:   inlineImageEncodeMaxRows,
-			Key:       fmt.Sprintf("topicpost:%s:%d", p.ID, j),
-		})
-	}
-	return slots
-}
-
 func (m TopicsModel) ensureSelectedVisible() TopicsModel {
 	if !m.ready || len(m.itemOffsets) == 0 {
 		return m
@@ -883,9 +730,6 @@ func (m TopicsModel) GetFocusedURLs() []string {
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
 }
 
-// IsViewingTopicPosts reports whether the topic post list is currently shown (3-pane applies).
-func (m TopicsModel) IsViewingTopicPosts() bool { return m.view == viewTopicPosts }
-
 // ActiveTopicName returns the slug of the currently active topic.
 func (m TopicsModel) ActiveTopicName() string { return m.activeTopic }
 
@@ -895,209 +739,6 @@ func (m TopicsModel) ActiveTopicName() string { return m.activeTopic }
 func (m TopicsModel) OpenTopic(slug string) TopicsModel {
 	m.activeTopic = slug
 	return m
-}
-
-func (m TopicsModel) IsCompactListActive() bool { return m.IsViewingTopicPosts() }
-func (m TopicsModel) ListTitle() string         { return "posts (# " + m.ActiveTopicName() + ")" }
-
-// IsAtTop reports whether the first post is selected.
-func (m TopicsModel) IsAtTop() bool { return m.postIndex == 0 }
-
-// PostCount returns the number of currently visible topic posts.
-func (m TopicsModel) PostCount() int { return len(m.visiblePosts()) }
-
-// PostsNextCursor returns the pagination cursor for the next page of topic posts.
-func (m TopicsModel) PostsNextCursor() string { return m.nextCursor }
-
-func (m TopicsModel) effectiveMaxDepth() int {
-	if m.maxThreadDepth <= 0 {
-		return 3
-	}
-	return m.maxThreadDepth
-}
-
-// currentDetailCmd clears the detail pane immediately and starts a debounce timer.
-// The API fetch only fires if the selection hasn't changed by the time the timer expires,
-// avoiding a flood of calls when the user scrolls quickly through the post list.
-func (m TopicsModel) currentDetailCmd() (TopicsModel, tea.Cmd) {
-	visible := m.visiblePosts()
-	if m.postIndex >= len(visible) {
-		return m, nil
-	}
-	postID := visible[m.postIndex].ID
-	if postID == m.threadPostID {
-		return m, nil
-	}
-	m.threadPostID = postID
-	m.threadLoading = false
-	m.threadReplies = nil
-	m.threadFlatTree = nil
-	m.threadReplyIndex = -1
-	m.threadScrollOffset = 0
-	return m, tea.Tick(topicThreadDebounceDelay, func(time.Time) tea.Msg {
-		return TopicThreadDebounceMsg{PostID: postID}
-	})
-}
-
-// CurrentDetailCmd is exported so app.go can trigger the initial detail load when topic posts first arrive.
-// Loads immediately without debounce.
-func (m TopicsModel) CurrentDetailCmd() (TopicsModel, tea.Cmd) {
-	visible := m.visiblePosts()
-	if m.postIndex >= len(visible) {
-		return m, nil
-	}
-	postID := visible[m.postIndex].ID
-	if postID == m.threadPostID {
-		return m, nil
-	}
-	m.threadPostID = postID
-	m.threadLoading = true
-	m.threadReplies = nil
-	m.threadFlatTree = nil
-	m.threadReplyIndex = -1
-	m.threadScrollOffset = 0
-	return m, func() tea.Msg { return LoadTopicThreadMsg{PostID: postID} }
-}
-
-func (m TopicsModel) renderDetailReply(node replyNode, selected bool, width int) string {
-	return cachedReplyCard(m.replyBodyCache, node, selected, width, m.location(), m.timeDisplayFormat)
-}
-
-func (m TopicsModel) renderCompactPost(p model.Post, selected bool, width int) string {
-	username := "@" + p.AuthorUsername
-	var preview string
-	if p.Title != "" {
-		preview = p.Title
-	} else {
-		preview = strings.TrimSpace(strings.SplitN(p.Content, "\n", 2)[0])
-	}
-	const sep = "  "
-	var indicatorAndName string
-	if selected {
-		indicatorAndName = theme.Highlight.Render("▶ " + username)
-	} else {
-		indicatorAndName = theme.Subtle.Render("  ") + theme.Base.Render(username)
-	}
-	prefixWidth := 2 + lipgloss.Width(username) + len(sep)
-	remaining := width - prefixWidth
-	if remaining > 1 {
-		preview = ansiTruncate(preview, remaining)
-	} else {
-		preview = ""
-	}
-	return indicatorAndName + theme.Subtle.Render(sep+preview)
-}
-
-// CompactListView returns the compact single-line topic post list for the Miller list pane.
-func (m TopicsModel) CompactListView(width, height int) string {
-	if !m.ready || m.fetching {
-		return theme.Subtle.Render("  loading…")
-	}
-	visible := m.visiblePosts()
-	if len(visible) == 0 {
-		return theme.Subtle.Render("  no posts")
-	}
-	headerLines := 0
-	var header string
-	if m.refreshing {
-		header = theme.Subtle.Render("  fetching new posts...")
-		headerLines = 1
-	}
-	n := len(visible)
-	listH := height - headerLines
-	if listH < 1 {
-		listH = 1
-	}
-	offset := m.postIndex - listH + 1
-	if offset < 0 {
-		offset = 0
-	}
-	if offset+listH > n {
-		offset = n - listH
-		if offset < 0 {
-			offset = 0
-		}
-	}
-	end := offset + listH
-	if end > n {
-		end = n
-	}
-	lines := make([]string, 0, end-offset+headerLines)
-	if header != "" {
-		lines = append(lines, header)
-	}
-	for i := offset; i < end; i++ {
-		lines = append(lines, m.renderCompactPost(visible[i], i == m.postIndex, width))
-	}
-	return strings.Join(lines, "\n")
-}
-
-// pageThreadNav implements pager-style scrolling for the Miller detail pane.
-func (m TopicsModel) pageThreadNav(delta, paneH, paneW int) TopicsModel {
-	visible := m.visiblePosts()
-	if m.postIndex >= len(visible) {
-		return m
-	}
-	p := visible[m.postIndex]
-	_, bookmarked := m.bookmarkedPostIDs[p.ID]
-	_, watched := m.watchedPostIDs[p.ID]
-
-	postCard, _ := cachedPostCard(m.postBodyCache, p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
-	postH := lipgloss.Height(postCard)
-
-	replyStarts := make([]int, len(m.threadFlatTree))
-	replyHeights := make([]int, len(m.threadFlatTree))
-	pos := postH
-	for i, node := range m.threadFlatTree {
-		replyStarts[i] = pos
-		rendered := m.renderDetailReply(node, false, paneW)
-		replyHeights[i] = lipgloss.Height(rendered)
-		pos += replyHeights[i]
-	}
-
-	m.threadReplyIndex, m.threadScrollOffset = millerPageNav(
-		delta, paneH, postH, replyStarts, replyHeights, m.threadReplyIndex, m.threadScrollOffset,
-	)
-	return m
-}
-
-// DetailView returns the full topic post card + threaded replies for the Miller reading pane.
-func (m TopicsModel) DetailView(width, height int) string {
-	if !m.ready {
-		return theme.Subtle.Render("  loading…")
-	}
-	visible := m.visiblePosts()
-	if len(visible) == 0 {
-		return theme.Subtle.Render("  no posts")
-	}
-	if m.postIndex >= len(visible) {
-		return theme.Subtle.Render("  select a post")
-	}
-	p := visible[m.postIndex]
-	_, bookmarked := m.bookmarkedPostIDs[p.ID]
-	_, watched := m.watchedPostIDs[p.ID]
-
-	postSelected := m.threadReplyIndex < 0
-	card, _ := cachedPostCard(m.postBodyCache, p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
-
-	var parts []string
-	startLines := []int{0}
-	lineCount := lipgloss.Height(card)
-	parts = append(parts, card)
-
-	if m.threadLoading {
-		parts = append(parts, theme.Subtle.Render("  loading replies…"))
-	} else {
-		for i, node := range m.threadFlatTree {
-			rendered := m.renderDetailReply(node, i == m.threadReplyIndex, width)
-			startLines = append(startLines, lineCount)
-			lineCount += lipgloss.Height(rendered)
-			parts = append(parts, rendered)
-		}
-	}
-
-	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return sliceContent(fullContent, m.threadScrollOffset, height, lineCount)
 }
 
 // --- Helpers ---

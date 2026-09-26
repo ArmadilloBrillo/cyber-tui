@@ -15,7 +15,7 @@ derived from the same `menuTabs` slice so they can't drift apart:
 
 Search is further set apart from the other 10: it's a **hidden,
 explicit-entry-only destination** — not shown on the tab bar/sidebar and not
-part of `←`/`→` (or MillerLayout's `j`/`k`) cycling at all. The only ways in
+part of `←`/`→` cycling at all. The only ways in
 are `g s` and `/`, and both always land in a focused query box regardless of
 whatever state Search was last left in. This avoids a state the screen
 doesn't actually handle: landing on Search unfocused (which arrow-cycling
@@ -26,9 +26,9 @@ only ever supposed to be entered focused.
 
 ## Menu Bar
 
-- Single fixed line at the top of the screen (TabsLayout) or a vertical
-  sidebar (MillerLayout) — both render from `visibleTabs()` (`menuTabs`
-  minus any entry marked `hidden` — currently just Search)
+- Single fixed line at the top of the screen (TabsLayout), rendered from
+  `visibleTabs()` (`menuTabs` minus any entry marked `hidden` — currently
+  just Search)
 - Active tab: filled dim-green background, bright green bold text
 - Inactive tabs: muted text, no background
 - Each tab's mnemonic letter (the second key of its `g`-chord) is rendered
@@ -37,11 +37,10 @@ only ever supposed to be entered focused.
   help modal (`?`)
 - **"In detail" marker**: a tab that's currently one level deep — an open
   Circ room, an open C-Mail conversation, browsing into a Guild or Topic, or
-  PostDetail opened from that tab — gets a marker: a trailing `›` in
-  TabsLayout (e.g. `circ ›`), or the nav sidebar's `▶`/blank marker becomes
-  `▷` in MillerLayout. Both layouts compute this from one shared function,
-  `tabVisualState(a, screen) (selected, detail bool)` (`internal/ui/layout.go`),
-  so they can't disagree about which state a tab is in. `selected` covers
+  PostDetail opened from that tab — gets a trailing `›` marker
+  (e.g. `circ ›`), computed by
+  `tabVisualState(a, screen) (selected, detail bool)` (`internal/ui/layout.go`).
+  `selected` covers
   both "this screen is `a.active`" and "PostDetail is open and
   `postDetailReturn` points back to this tab" (since PostDetail is a single
   screen shared by six origins — Feed, Bookmarks, Profile, Guilds, Topics,
@@ -74,7 +73,7 @@ only ever supposed to be entered focused.
 
 | Key | Action |
 |---|---|
-| `←` / `→` | Cycle through the 10 visible tabs (TabsLayout, `focusMenu`) — Search is hidden and excluded, see above |
+| `←` / `→` | Cycle through the 10 visible tabs — Search is hidden and excluded, see above |
 | `1`-`9` | Jump directly to one of the first 9 tabs — see the numeric table in `docs/00-project-reference.md` |
 | `g` + letter | Jump directly to any of the 11 screens via its mnemonic, including Search — see the chord table in `docs/00-project-reference.md` |
 
@@ -94,12 +93,10 @@ Anchored to the bottom of the terminal at all times. Resizes correctly with the 
 
 **`theme.ChromeHeight`** — shared constant (`= 3`: tab bar + separator + status bar) used by all screens to calculate their viewport height. Eliminates magic numbers.
 
-**`focusTarget`** — type on `App` (`focusMenu` / `focusList` / `focusDetail`) gates which component consumes arrow keys.
-
 **`HasFocusedInput(a App) bool`** — method on `Layout` (implemented per layout, delegating to each screen's own `InputFocused()`/`ComposeActive()`), queried by the app before consuming keys that would otherwise navigate.
 
-**`menuTabs` var** (`internal/ui/layout.go`) — single source of truth for tab order, label, leader-key mnemonic, and (via the `hidden` field) whether an entry is part of the visible/cyclable tab set. `screenForNumber` and `screenForMnemonic` both derive from the full slice (so Search stays reachable by mnemonic); `visibleTabs()` filters out `hidden` entries for rendering and cycling. `activateScreen` is the shared jump-to-screen implementation both the numeric and leader-key paths call, so the two layouts and both navigation schemes can never disagree about what a given key does. `navigateTabBy` (arrow/j-k cycling) is a no-op while `screenSearch` is active, the same treatment `screenPostDetail` gets — neither is part of the rotation.
+**`menuTabs` var** (`internal/ui/layout.go`) — single source of truth for tab order, label, leader-key mnemonic, and (via the `hidden` field) whether an entry is part of the visible/cyclable tab set. `screenForNumber` and `screenForMnemonic` both derive from the full slice (so Search stays reachable by mnemonic); `visibleTabs()` filters out `hidden` entries for rendering and cycling. `activateScreen` is the shared jump-to-screen implementation both the numeric and leader-key paths call, so both navigation schemes can never disagree about what a given key does. `navigateTabBy` (arrow/j-k cycling) is a no-op while `screenSearch` is active, the same treatment `screenPostDetail` gets — neither is part of the rotation.
 
-**`tabVisualState(a App, t screen) (selected, detail bool)`** (`internal/ui/layout.go`, next to `menuTabs`) — the shared selected/in-detail computation behind the "in detail" marker described above. Called identically by `TabsLayout.renderTabBar` and `MillerLayout.renderNav`.
+**`tabVisualState(a App, t screen) (selected, detail bool)`** (`internal/ui/layout.go`, next to `menuTabs`) — the shared selected/in-detail computation behind the "in detail" marker described above. Called by `TabsLayout.renderTabBar`.
 
 **`leaderPending` field on `App`** — armed by the `g` key in `handleKeys` (`internal/ui/app.go`); the next keypress resolves against `screenForMnemonic` or silently cancels. No timeout is needed since `g` has no other binding of its own, so there's no ambiguity to resolve.

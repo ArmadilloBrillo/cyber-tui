@@ -85,9 +85,6 @@ type Config struct {
 	// fullscreen image viewer.
 	InlineImages bool `json:"inlineImages,omitempty"`
 
-	// Layout selects the UI layout. "" or "tabs" = tab bar (default); "miller" = sidebar columns.
-	Layout string `json:"layout,omitempty"`
-
 	// GraphicsProtocol overrides automatic terminal graphics-protocol
 	// detection. "" (default) autodetects via env vars and a DA1 probe; set
 	// to "kitty", "iterm2", "sixel", or "none" to force a choice when

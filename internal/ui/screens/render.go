@@ -37,109 +37,6 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 	return boxStyle.Render(content), imgSlots
 }
 
-// cachedPostCard renders a post's card exactly like RenderPost, additionally
-// memoizing the pre-border body (via feedBodyCacheEntry, feed.go) by post
-// ID — mirrors FeedModel's renderPost method as a free function, so
-// GuildsModel and TopicsModel's identical Miller detail-pane post card can
-// share the same cache mechanism instead of duplicating it, and each an
-// unrelated re-render (background poll, unrelated selection move) doesn't
-// re-parse markdown for a post that hasn't changed.
-func cachedPostCard(cache map[string]feedBodyCacheEntry, p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled bool) (string, []postImageSlot) {
-	topics := strings.Join(p.Topics, ",")
-	themeName := theme.CurrentName()
-
-	body, imgSlots, ok := "", []postImageSlot(nil), false
-	if e, hit := cache[p.ID]; hit && e.width == width && e.bookmarked == bookmarked && e.watched == watched &&
-		e.content == p.Content && e.title == p.Title && e.topics == topics && e.isPublic == p.IsPublic &&
-		e.isNSFW == p.IsNSFW && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == inlineImagesEnabled &&
-		e.themeName == themeName {
-		body, imgSlots, ok = e.body, e.imgSlots, true
-	}
-	if !ok {
-		body, imgSlots = renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines, inlineImagesEnabled)
-		if cache != nil {
-			cache[p.ID] = feedBodyCacheEntry{
-				body: body, imgSlots: imgSlots, width: width, bookmarked: bookmarked, watched: watched,
-				content: p.Content, title: p.Title, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW,
-				editedAt: p.EditedAt, inlineImagesEnabled: inlineImagesEnabled, themeName: themeName,
-			}
-		}
-	}
-
-	boxStyle := theme.Border
-	if selected {
-		boxStyle = theme.ActiveBorder
-	}
-	if width-4 > 0 {
-		boxStyle = boxStyle.Width(width - 2)
-	}
-	return boxStyle.Render(body), imgSlots
-}
-
-// replyBodyCacheEntry memoizes a single thread reply's rendered header+body
-// (pre-border/indent — those are cheap lipgloss wraps applied fresh every
-// call, only the markdown parse is worth caching), mirroring
-// feedBodyCacheEntry's shape but for model.Reply. Shared by GuildsModel and
-// TopicsModel, whose thread-reply rendering is otherwise byte-identical.
-// Like feedBodyCacheEntry, doesn't track timezone/time-format — neither does
-// the pattern this mirrors, see renderPost's cache in feed.go.
-type replyBodyCacheEntry struct {
-	rendered  string
-	width     int
-	content   string
-	editedAt  time.Time
-	themeName string
-}
-
-// cachedReplyCard renders a single thread reply's card (header + markdown
-// body + border + indent) exactly like GuildsModel/TopicsModel's identical
-// renderDetailReply, additionally memoizing the header+body part by reply
-// ID — extracted once since both screens render the same
-// replyNode/model.Reply shape, mirroring cachedPostCard's approach.
-func cachedReplyCard(cache map[string]replyBodyCacheEntry, node replyNode, selected bool, width int, loc *time.Location, timeDisplayFormat string) string {
-	indentW := node.Depth * 3
-	cardWidth := width - 2 - indentW
-	if cardWidth < 4 {
-		cardWidth = 4
-	}
-	innerWidth := cardWidth - 2
-	if innerWidth < 1 {
-		innerWidth = 1
-	}
-
-	themeName := theme.CurrentName()
-	rendered, ok := "", false
-	if e, hit := cache[node.Reply.ID]; hit && e.width == cardWidth && e.content == node.Reply.Content &&
-		e.editedAt.Equal(node.Reply.EditedAt) && e.themeName == themeName {
-		rendered, ok = e.rendered, true
-	}
-	if !ok {
-		header := theme.Highlight.Render("@" + node.Reply.AuthorUsername)
-		if node.ParentUsername != "" {
-			header += theme.Subtle.Render("  ↩ @" + node.ParentUsername)
-		}
-		header += theme.Subtle.Render("  " + displayTime(node.Reply.CreatedAt, loc, timeDisplayFormat, false) + editedSuffix(node.Reply.EditedAt))
-		body := strings.TrimRight(markdown.Render(node.Reply.Content, innerWidth), "\n")
-		rendered = lipgloss.JoinVertical(lipgloss.Left, header, body)
-		if cache != nil {
-			cache[node.Reply.ID] = replyBodyCacheEntry{rendered: rendered, width: cardWidth, content: node.Reply.Content, editedAt: node.Reply.EditedAt, themeName: themeName}
-		}
-	}
-
-	boxStyle := theme.Border
-	if selected {
-		boxStyle = theme.ActiveBorder
-	}
-	if cardWidth > 0 {
-		boxStyle = boxStyle.Width(cardWidth)
-	}
-	card := boxStyle.Render(rendered)
-	if indentW > 0 {
-		return lipgloss.NewStyle().MarginLeft(indentW).Render(card)
-	}
-	return card
-}
-
 // renderPostBody renders everything in a post's card except the selection
 // border (header, badges, title, markdown body, topics) — the part that's
 // identical whether or not the post is selected. Split out from RenderPost
@@ -658,7 +555,7 @@ func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, t
 		// the viewport does) yields N real lines + 1 trailing empty line
 		// total, not N*(realLines+1). Summing the inflated per-message
 		// heights desyncs these offsets from the viewport's actual line
-		// count, which silently breaks scrolling (millerPageNav computes a
+		// count, which silently breaks scrolling (pageNav computes a
 		// YOffset the viewport's own maxYOffset() clamps right back down).
 		h := strings.Count(rendered, "\n")
 		heights[i] = h

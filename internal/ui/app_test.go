@@ -53,7 +53,6 @@ func newTestApp() App {
 func loggedInApp() App {
 	a := newTestApp()
 	a.active = screenFeed
-	a.focus = focusMenu
 	return a
 }
 
@@ -497,26 +496,22 @@ func TestHandleKeys_Leader_NotArmed_WhileInputFocused(t *testing.T) {
 
 func TestHandleKeys_Leader_NumericAliasAndLeaderAgree(t *testing.T) {
 	// "1" through "9" and their equivalent "g"+mnemonic chord must land on
-	// the same screen in both layouts — the drift this feature fixes.
+	// the same screen.
 	for i, tab := range menuTabs[:9] {
 		num := string(rune('1' + i))
-		for _, layout := range []Layout{TabsLayout{}, MillerLayout{}} {
-			a := loggedInApp()
-			a.layout = layout
-			a.active = screenProfile
-			a2, _, _ := a.handleKeys(keyMsg(num))
-			if a2.active != tab.s {
-				t.Errorf("layout %T: key %q: expected %v, got %v", layout, num, tab.s, a2.active)
-			}
+		a := loggedInApp()
+		a.active = screenProfile
+		a2, _, _ := a.handleKeys(keyMsg(num))
+		if a2.active != tab.s {
+			t.Errorf("key %q: expected %v, got %v", num, tab.s, a2.active)
+		}
 
-			b := loggedInApp()
-			b.layout = layout
-			b.active = screenProfile
-			b2, _, _ := b.handleKeys(keyMsg("g"))
-			b3, _, _ := b2.handleKeys(keyMsg(string(tab.mnemonic)))
-			if b3.active != tab.s {
-				t.Errorf("layout %T: chord \"g %c\": expected %v, got %v", layout, tab.mnemonic, tab.s, b3.active)
-			}
+		b := loggedInApp()
+		b.active = screenProfile
+		b2, _, _ := b.handleKeys(keyMsg("g"))
+		b3, _, _ := b2.handleKeys(keyMsg(string(tab.mnemonic)))
+		if b3.active != tab.s {
+			t.Errorf("chord \"g %c\": expected %v, got %v", tab.mnemonic, tab.s, b3.active)
 		}
 	}
 }
@@ -2268,7 +2263,6 @@ func (c updateSettingsFailClient) UpdateSettings(model.Settings) error {
 func TestHandleTopics_SetMutedTopics_RollsBackOnSaveFailure(t *testing.T) {
 	a := NewApp(updateSettingsFailClient{api.NewMockClient()})
 	a.active = screenFeed
-	a.focus = focusMenu
 	// Login baseline: "news" is already muted and persisted.
 	_, _, _ = a.handleSettings(settingsLoadedMsg{settings: model.Settings{MutedTopics: []string{"news"}}})
 
@@ -5171,75 +5165,33 @@ func TestOpenImageInTerminal_Scale_ChangesComputedBox(t *testing.T) {
 	}
 }
 
-// TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap confirms a
-// high-scale image modal never grows wide enough, in Miller layout, for its
-// centered position (compositeOverlays centers against the full terminal
-// width, not the content pane — see Layout.ModalMaxWidth's doc comment) to
-// splice into the nav sidebar. TabsLayout, with no side chrome, is
-// unaffected and still clamps to the full terminal width.
-func TestOpenImageInTerminal_MillerLayout_ClampsBelowSidebarOverlap(t *testing.T) {
-	bigImg := image.NewRGBA(image.Rect(0, 0, 2000, 2000))
-
-	render := func(layout Layout) int {
-		a := loggedInApp()
-		a.graphicsProtocol = imgview.ProtocolKitty
-		a.layout = layout
-		a.width, a.height = 120, 50
-		a.imageScale = config.MaxImageScale
-		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{bigImg}}}
-		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
-		msg := cmd().(imageFetchedMsg)
-		if msg.err != nil {
-			t.Fatalf("unexpected error: %v", msg.err)
-		}
-		return msg.cols
-	}
-
-	tabsCols := render(TabsLayout{})
-	millerCols := render(MillerLayout{})
-
-	if tabsCols > 120 {
-		t.Errorf("TabsLayout: cols=%d, want <= terminal width 120", tabsCols)
-	}
-	if want := (MillerLayout{}).ModalMaxWidth(120); millerCols > want {
-		t.Errorf("MillerLayout: cols=%d, want <= ModalMaxWidth(120)=%d (would splice into the sidebar when centered)", millerCols, want)
-	}
-	if millerCols >= tabsCols {
-		t.Errorf("expected MillerLayout to clamp narrower than TabsLayout for the same terminal width, got miller=%d tabs=%d", millerCols, tabsCols)
-	}
-}
-
 // TestOpenImageInTerminal_NeverExceedsScreenMargin confirms the modal never
 // occupies more than modalScreenMarginFrac (80%) of the terminal in either
-// dimension, on any layout, even at max scale with a huge source image —
-// see modalScreenMarginFrac's doc comment for why this headroom matters
-// beyond just avoiding Miller's sidebar (a documented class of terminal
-// rendering desync around large raw image payloads, reported live as
-// surrounding UI chrome getting visibly corrupted at close to full-screen
-// modal size).
+// dimension, even at max scale with a huge source image — see
+// modalScreenMarginFrac's doc comment for why this headroom matters (a
+// documented class of terminal rendering desync around large raw image
+// payloads, reported live as surrounding UI chrome getting visibly corrupted
+// at close to full-screen modal size).
 func TestOpenImageInTerminal_NeverExceedsScreenMargin(t *testing.T) {
 	hugeImg := image.NewRGBA(image.Rect(0, 0, 6000, 6000))
 
-	for _, layout := range []Layout{TabsLayout{}, MillerLayout{}} {
-		a := loggedInApp()
-		a.graphicsProtocol = imgview.ProtocolKitty
-		a.layout = layout
-		a.width, a.height = 300, 100
-		a.imageScale = config.MaxImageScale
-		a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{hugeImg}}}
-		_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
-		msg := cmd().(imageFetchedMsg)
-		if msg.err != nil {
-			t.Fatalf("unexpected error: %v", msg.err)
-		}
-		maxCols := int(float64(a.width) * modalScreenMarginFrac)
-		maxRows := int(float64(a.height) * modalScreenMarginFrac)
-		if msg.cols > maxCols {
-			t.Errorf("%T: cols=%d, want <= %d (80%% of width %d)", layout, msg.cols, maxCols, a.width)
-		}
-		if msg.rows > maxRows {
-			t.Errorf("%T: rows=%d, want <= %d (80%% of height %d)", layout, msg.rows, maxRows, a.height)
-		}
+	a := loggedInApp()
+	a.graphicsProtocol = imgview.ProtocolKitty
+	a.width, a.height = 300, 100
+	a.imageScale = config.MaxImageScale
+	a.imageCache = map[string]cachedImage{"https://x.com/a.jpg": {frames: []image.Image{hugeImg}}}
+	_, cmd := a.openImageInTerminal("https://x.com/a.jpg")
+	msg := cmd().(imageFetchedMsg)
+	if msg.err != nil {
+		t.Fatalf("unexpected error: %v", msg.err)
+	}
+	maxCols := int(float64(a.width) * modalScreenMarginFrac)
+	maxRows := int(float64(a.height) * modalScreenMarginFrac)
+	if msg.cols > maxCols {
+		t.Errorf("cols=%d, want <= %d (80%% of width %d)", msg.cols, maxCols, a.width)
+	}
+	if msg.rows > maxRows {
+		t.Errorf("rows=%d, want <= %d (80%% of height %d)", msg.rows, maxRows, a.height)
 	}
 }
 

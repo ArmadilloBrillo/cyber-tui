@@ -58,31 +58,6 @@ type LeaveGuildMsg struct{ Slug string }
 // apprenticeship to their guild badge.
 type PromoteGuildMsg struct{ Slug string }
 
-// LoadGuildThreadMsg is emitted when the selected guild post changes so the app can
-// fetch replies for the Miller reading pane.
-type LoadGuildThreadMsg struct{ PostID string }
-
-// GuildThreadRepliesMsg delivers fetched replies back to GuildsModel for the reading pane.
-type GuildThreadRepliesMsg struct {
-	PostID  string
-	Replies []model.Reply
-}
-
-// GuildThreadNavMsg is emitted by the Miller layout when j/k is pressed in focusDetail
-// while the guilds screen is active. PaneHeight and PaneWidth enable pager-style scrolling.
-type GuildThreadNavMsg struct {
-	Delta      int
-	PaneHeight int
-	PaneWidth  int
-}
-
-// GuildThreadDebounceMsg is the delayed message emitted after guildThreadDebounceDelay
-// when the selected post changes. The fetch only proceeds if PostID still matches
-// the current selection, dropping stale ticks from rapid navigation.
-type GuildThreadDebounceMsg struct{ PostID string }
-
-const guildThreadDebounceDelay = time.Second
-
 // guildsConfirm tracks whether a join/leave confirmation prompt is active.
 type guildsConfirm int
 
@@ -137,15 +112,6 @@ type GuildsModel struct {
 	// Compose panel for new guild threads (visible in posts view).
 	panel PostComposePanel
 
-	// Miller reading pane: replies for the currently selected guild post.
-	threadPostID       string
-	maxThreadDepth     int
-	threadReplies      []model.Reply
-	threadFlatTree     []replyNode
-	threadReplyIndex   int
-	threadScrollOffset int
-	threadLoading      bool
-
 	// Shared
 	viewport          viewport.Model
 	itemOffsets       []int
@@ -165,22 +131,12 @@ type GuildsModel struct {
 	// see TopicsModel's field of the same name for the convention.
 	postImages          [][]postImageSlot
 	inlineImagesEnabled bool
-
-	// postBodyCache/replyBodyCache memoize the Miller detail pane's post
-	// card and thread replies (cachedPostCard/cachedReplyCard, render.go) so
-	// an unrelated re-render doesn't re-parse markdown for content that
-	// hasn't changed — mirrors FeedModel.bodyCache/ChatroomsModel.chatBodyCache.
-	postBodyCache  map[string]feedBodyCacheEntry
-	replyBodyCache map[string]replyBodyCacheEntry
 }
 
 // NewGuildsModel returns a zero-value GuildsModel ready for first use.
 func NewGuildsModel() GuildsModel {
 	return GuildsModel{
-		panel:            NewPostComposePanel(0),
-		threadReplyIndex: -1,
-		postBodyCache:    make(map[string]feedBodyCacheEntry),
-		replyBodyCache:   make(map[string]replyBodyCacheEntry),
+		panel: NewPostComposePanel(0),
 	}
 }
 
@@ -202,9 +158,7 @@ func (m GuildsModel) visiblePosts() []model.Post {
 }
 
 // ComposeActive reports whether the new-thread compose panel is open.
-func (m GuildsModel) ComposeActive() bool          { return m.panel.IsActive() }
-func (m GuildsModel) ComposeHeight() int           { return m.panel.PanelHeight() }
-func (m GuildsModel) ComposeView(width int) string { return m.panel.SetWidth(width).View() }
+func (m GuildsModel) ComposeActive() bool { return m.panel.IsActive() }
 
 // ActiveGuild returns the slug of the guild whose posts are currently displayed, or "" when in list view.
 func (m GuildsModel) ActiveGuild() string { return m.activeGuild }
@@ -262,38 +216,6 @@ func (m GuildsModel) AppendGuilds(items []model.Guild, cursor string) GuildsMode
 	return m
 }
 
-// evictStalePostBodyCache drops postBodyCache entries for posts no longer
-// present in m.posts — mirrors FeedModel.evictStaleBodyCache (feed.go).
-func (m GuildsModel) evictStalePostBodyCache() GuildsModel {
-	live := make(map[string]bool, len(m.posts))
-	for _, p := range m.posts {
-		live[p.ID] = true
-	}
-	for id := range m.postBodyCache {
-		if !live[id] {
-			delete(m.postBodyCache, id)
-		}
-	}
-	return m
-}
-
-// evictStaleReplyBodyCache drops replyBodyCache entries for replies no
-// longer present in m.threadReplies — called whenever a fresh reply page
-// replaces the thread (GuildThreadRepliesMsg), the point a reply can
-// permanently drop out of the loaded thread.
-func (m GuildsModel) evictStaleReplyBodyCache() GuildsModel {
-	live := make(map[string]bool, len(m.threadReplies))
-	for _, r := range m.threadReplies {
-		live[r.ID] = true
-	}
-	for id := range m.replyBodyCache {
-		if !live[id] {
-			delete(m.replyBodyCache, id)
-		}
-	}
-	return m
-}
-
 // SetGuildPosts replaces the post list for a guild and switches to posts view.
 func (m GuildsModel) SetGuildPosts(posts []model.Post, cursor string) GuildsModel {
 	m.err = nil
@@ -304,7 +226,6 @@ func (m GuildsModel) SetGuildPosts(posts []model.Post, cursor string) GuildsMode
 	m.loading = false
 	m.fetching = false
 	m.refreshing = false
-	m = m.evictStalePostBodyCache()
 	if !m.panel.IsActive() {
 		m.panel = m.panel.Close()
 	}
@@ -524,12 +445,6 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 		if m.ready {
 			m = m.refreshContent()
 		}
-		if msg.MaxThreadDepth != m.maxThreadDepth {
-			m.maxThreadDepth = msg.MaxThreadDepth
-			if len(m.threadReplies) > 0 {
-				m.threadFlatTree = buildReplyTree(m.threadReplies, m.effectiveMaxDepth())
-			}
-		}
 		return m, nil
 
 	case BookmarkedIDsMsg:
@@ -543,33 +458,6 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 		m.watchedPostIDs = msg.PostIDs
 		if m.ready {
 			m = m.refreshContent()
-		}
-		return m, nil
-
-	case GuildThreadRepliesMsg:
-		visible := m.visiblePosts()
-		if m.postIndex < len(visible) && visible[m.postIndex].ID == msg.PostID {
-			m.threadPostID = msg.PostID
-			m.threadReplies = msg.Replies
-			m.threadFlatTree = buildReplyTree(msg.Replies, m.effectiveMaxDepth())
-			m.threadReplyIndex = -1
-			m.threadScrollOffset = 0
-			m.threadLoading = false
-			m = m.evictStaleReplyBodyCache()
-		}
-		return m, nil
-
-	case GuildThreadDebounceMsg:
-		visible := m.visiblePosts()
-		if m.postIndex < len(visible) && visible[m.postIndex].ID == msg.PostID {
-			m.threadLoading = true
-			return m, func() tea.Msg { return LoadGuildThreadMsg(msg) }
-		}
-		return m, nil
-
-	case GuildThreadNavMsg:
-		if msg.PaneHeight > 0 && msg.PaneWidth > 0 {
-			m = m.pageThreadNav(msg.Delta, msg.PaneHeight, msg.PaneWidth)
 		}
 		return m, nil
 
@@ -630,9 +518,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 				if m.postIndex > 0 {
 					m.postIndex--
 					m = m.refreshContent()
-					var detailCmd tea.Cmd
-					m, detailCmd = m.currentDetailCmd()
-					return m, detailCmd
+					return m, nil
 				} else if !m.loading && !m.refreshing {
 					slug := m.activeGuild
 					m.refreshing = true
@@ -665,9 +551,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 				if m.postIndex < len(m.visiblePosts())-1 {
 					m.postIndex++
 					m = m.refreshContent()
-					var detailCmd tea.Cmd
-					m, detailCmd = m.currentDetailCmd()
-					return m, detailCmd
+					return m, nil
 				} else if !m.exhausted && !m.loading {
 					slug, cursor := m.activeGuild, m.nextCursor
 					m.loading = true
@@ -703,9 +587,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 				if m.postIndex > 0 {
 					m.postIndex = max(0, m.postIndex-pageJumpItems)
 					m = m.refreshContent()
-					var detailCmd tea.Cmd
-					m, detailCmd = m.currentDetailCmd()
-					return m, detailCmd
+					return m, nil
 				} else if !m.loading && !m.refreshing {
 					slug := m.activeGuild
 					m.refreshing = true
@@ -738,9 +620,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 				if m.postIndex < len(m.visiblePosts())-1 {
 					m.postIndex = min(len(m.visiblePosts())-1, m.postIndex+pageJumpItems)
 					m = m.refreshContent()
-					var detailCmd tea.Cmd
-					m, detailCmd = m.currentDetailCmd()
-					return m, detailCmd
+					return m, nil
 				} else if !m.exhausted && !m.loading {
 					slug, cursor := m.activeGuild, m.nextCursor
 					m.loading = true
@@ -1241,44 +1121,6 @@ func (m GuildsModel) VisibleInlineImages() []InlineImageSlot {
 	return slots
 }
 
-// VisibleDetailInlineImages returns the inline image slots for the selected
-// post card in Miller's reading pane — see TopicsModel.VisibleDetailInlineImages
-// for the full contract (guild post replies aren't inline-image-aware either).
-func (m GuildsModel) VisibleDetailInlineImages(width, height int) []InlineImageSlot {
-	if !m.ready || !m.inlineImagesEnabled {
-		return nil
-	}
-	visible := m.visiblePosts()
-	if m.postIndex >= len(visible) {
-		return nil
-	}
-	p := visible[m.postIndex]
-	_, bookmarked := m.bookmarkedPostIDs[p.ID]
-	_, watched := m.watchedPostIDs[p.ID]
-	postSelected := m.threadReplyIndex < 0
-	_, imgSlots := cachedPostCard(m.postBodyCache, p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, true)
-	if len(imgSlots) == 0 {
-		return nil
-	}
-	top := m.threadScrollOffset
-	bottom := top + height
-	var slots []InlineImageSlot
-	for j, img := range imgSlots {
-		if img.Line < top || img.Line+inlineImageMaxRows > bottom {
-			continue
-		}
-		slots = append(slots, InlineImageSlot{
-			URL:       img.URL,
-			Row:       img.Line - top,
-			ColIndent: 2,
-			MaxCols:   width - 4,
-			MaxRows:   inlineImageEncodeMaxRows,
-			Key:       fmt.Sprintf("guildpost:%s:%d", p.ID, j),
-		})
-	}
-	return slots
-}
-
 func (m GuildsModel) ensureSelectedVisible() GuildsModel {
 	if !m.ready || len(m.itemOffsets) == 0 {
 		return m
@@ -1374,217 +1216,4 @@ func (m GuildsModel) GetFocusedURLs() []string {
 	}
 	p := visible[m.postIndex]
 	return append(extractURLs(p.Content), attachmentURLs(p.Attachments)...)
-}
-
-// IsViewingGuildPosts reports whether the guild post list is currently shown (3-pane applies).
-func (m GuildsModel) IsViewingGuildPosts() bool { return m.view == viewGuildPosts }
-
-func (m GuildsModel) IsCompactListActive() bool { return m.IsViewingGuildPosts() }
-func (m GuildsModel) ListTitle() string         { return "posts (◆ " + m.ActiveGuildName() + ")" }
-
-// ActiveGuildName returns the display name of the active guild, falling back to the slug if detail has not yet loaded.
-func (m GuildsModel) ActiveGuildName() string {
-	if m.guildDetailLoaded {
-		return m.activeGuildDetail.Name
-	}
-	return m.activeGuild
-}
-
-// IsAtTop reports whether the first post is selected (used to suppress pull-to-refresh in Miller).
-func (m GuildsModel) IsAtTop() bool { return m.postIndex == 0 }
-
-// PostCount returns the number of currently visible guild posts.
-func (m GuildsModel) PostCount() int { return len(m.visiblePosts()) }
-
-// PostsNextCursor returns the pagination cursor for the next page of guild posts.
-func (m GuildsModel) PostsNextCursor() string { return m.nextCursor }
-
-func (m GuildsModel) effectiveMaxDepth() int {
-	if m.maxThreadDepth <= 0 {
-		return 3
-	}
-	return m.maxThreadDepth
-}
-
-// currentDetailCmd clears the detail pane immediately and starts a debounce timer.
-// The API fetch only fires if the selection hasn't changed by the time the timer expires,
-// avoiding a flood of calls when the user scrolls quickly through the post list.
-func (m GuildsModel) currentDetailCmd() (GuildsModel, tea.Cmd) {
-	visible := m.visiblePosts()
-	if m.postIndex >= len(visible) {
-		return m, nil
-	}
-	postID := visible[m.postIndex].ID
-	if postID == m.threadPostID {
-		return m, nil
-	}
-	m.threadPostID = postID
-	m.threadLoading = false
-	m.threadReplies = nil
-	m.threadFlatTree = nil
-	m.threadReplyIndex = -1
-	m.threadScrollOffset = 0
-	return m, tea.Tick(guildThreadDebounceDelay, func(time.Time) tea.Msg {
-		return GuildThreadDebounceMsg{PostID: postID}
-	})
-}
-
-// CurrentDetailCmd is exported so app.go can trigger the initial detail load when guild posts first arrive.
-// Loads immediately without debounce.
-func (m GuildsModel) CurrentDetailCmd() (GuildsModel, tea.Cmd) {
-	visible := m.visiblePosts()
-	if m.postIndex >= len(visible) {
-		return m, nil
-	}
-	postID := visible[m.postIndex].ID
-	if postID == m.threadPostID {
-		return m, nil
-	}
-	m.threadPostID = postID
-	m.threadLoading = true
-	m.threadReplies = nil
-	m.threadFlatTree = nil
-	m.threadReplyIndex = -1
-	m.threadScrollOffset = 0
-	return m, func() tea.Msg { return LoadGuildThreadMsg{PostID: postID} }
-}
-
-func (m GuildsModel) renderDetailReply(node replyNode, selected bool, width int) string {
-	return cachedReplyCard(m.replyBodyCache, node, selected, width, m.location(), m.timeDisplayFormat)
-}
-
-func (m GuildsModel) renderCompactPost(p model.Post, selected bool, width int) string {
-	username := "@" + p.AuthorUsername
-	var preview string
-	if p.Title != "" {
-		preview = p.Title
-	} else {
-		preview = strings.TrimSpace(strings.SplitN(p.Content, "\n", 2)[0])
-	}
-	const sep = "  "
-	var indicatorAndName string
-	if selected {
-		indicatorAndName = theme.Highlight.Render("▶ " + username)
-	} else {
-		indicatorAndName = theme.Subtle.Render("  ") + theme.Base.Render(username)
-	}
-	prefixWidth := 2 + lipgloss.Width(username) + len(sep)
-	remaining := width - prefixWidth
-	if remaining > 1 {
-		preview = ansiTruncate(preview, remaining)
-	} else {
-		preview = ""
-	}
-	return indicatorAndName + theme.Subtle.Render(sep+preview)
-}
-
-// CompactListView returns the compact single-line guild post list for the Miller list pane.
-func (m GuildsModel) CompactListView(width, height int) string {
-	if !m.ready || m.fetching {
-		return theme.Subtle.Render("  loading…")
-	}
-	visible := m.visiblePosts()
-	if len(visible) == 0 {
-		return theme.Subtle.Render("  no posts")
-	}
-	headerLines := 0
-	var header string
-	if m.refreshing {
-		header = theme.Subtle.Render("  fetching new posts...")
-		headerLines = 1
-	}
-	n := len(visible)
-	listH := height - headerLines
-	if listH < 1 {
-		listH = 1
-	}
-	offset := m.postIndex - listH + 1
-	if offset < 0 {
-		offset = 0
-	}
-	if offset+listH > n {
-		offset = n - listH
-		if offset < 0 {
-			offset = 0
-		}
-	}
-	end := offset + listH
-	if end > n {
-		end = n
-	}
-	lines := make([]string, 0, end-offset+headerLines)
-	if header != "" {
-		lines = append(lines, header)
-	}
-	for i := offset; i < end; i++ {
-		lines = append(lines, m.renderCompactPost(visible[i], i == m.postIndex, width))
-	}
-	return strings.Join(lines, "\n")
-}
-
-// pageThreadNav implements pager-style scrolling for the Miller detail pane.
-func (m GuildsModel) pageThreadNav(delta, paneH, paneW int) GuildsModel {
-	visible := m.visiblePosts()
-	if m.postIndex >= len(visible) {
-		return m
-	}
-	p := visible[m.postIndex]
-	_, bookmarked := m.bookmarkedPostIDs[p.ID]
-	_, watched := m.watchedPostIDs[p.ID]
-
-	postCard, _ := cachedPostCard(m.postBodyCache, p, false, bookmarked, watched, paneW, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
-	postH := lipgloss.Height(postCard)
-
-	replyStarts := make([]int, len(m.threadFlatTree))
-	replyHeights := make([]int, len(m.threadFlatTree))
-	pos := postH
-	for i, node := range m.threadFlatTree {
-		replyStarts[i] = pos
-		rendered := m.renderDetailReply(node, false, paneW)
-		replyHeights[i] = lipgloss.Height(rendered)
-		pos += replyHeights[i]
-	}
-
-	m.threadReplyIndex, m.threadScrollOffset = millerPageNav(
-		delta, paneH, postH, replyStarts, replyHeights, m.threadReplyIndex, m.threadScrollOffset,
-	)
-	return m
-}
-
-// DetailView returns the full guild post card + threaded replies for the Miller reading pane.
-func (m GuildsModel) DetailView(width, height int) string {
-	if !m.ready {
-		return theme.Subtle.Render("  loading…")
-	}
-	visible := m.visiblePosts()
-	if len(visible) == 0 {
-		return theme.Subtle.Render("  no posts")
-	}
-	if m.postIndex >= len(visible) {
-		return theme.Subtle.Render("  select a post")
-	}
-	p := visible[m.postIndex]
-	_, bookmarked := m.bookmarkedPostIDs[p.ID]
-	_, watched := m.watchedPostIDs[p.ID]
-
-	postSelected := m.threadReplyIndex < 0
-	card, _ := cachedPostCard(m.postBodyCache, p, postSelected, bookmarked, watched, width, m.location(), m.timeDisplayFormat, 0, m.inlineImagesEnabled)
-
-	var parts []string
-	startLines := []int{0}
-	lineCount := lipgloss.Height(card)
-	parts = append(parts, card)
-
-	if m.threadLoading {
-		parts = append(parts, theme.Subtle.Render("  loading replies…"))
-	} else {
-		for i, node := range m.threadFlatTree {
-			rendered := m.renderDetailReply(node, i == m.threadReplyIndex, width)
-			startLines = append(startLines, lineCount)
-			lineCount += lipgloss.Height(rendered)
-			parts = append(parts, rendered)
-		}
-	}
-	fullContent := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return sliceContent(fullContent, m.threadScrollOffset, height, lineCount)
 }

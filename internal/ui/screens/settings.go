@@ -359,8 +359,6 @@ type SettingsModel struct {
 	originalDithering               bool           // last saved baseline
 	ditherSharpness                 string         // live local config value ("rough"/"medium"/"sharp")
 	originalDitherSharpness         string         // last saved baseline
-	layoutName                      string         // live local config value ("tabs" or "miller")
-	originalLayoutName              string         // last saved baseline
 	feedManualRefreshOnly           bool           // live local config value (true = feed background poll off)
 	originalFeedManualRefreshOnly   bool           // last saved baseline
 	typingIndicatorsEnabled         bool           // live local config value (positive polarity)
@@ -396,7 +394,7 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typingIndicatorsEnabled bool, desktopNotifications bool, showGlobeTab bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, ditherSharpness string, layoutName string, keywordAlerts []string) SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typingIndicatorsEnabled bool, desktopNotifications bool, showGlobeTab bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, ditherSharpness string, keywordAlerts []string) SettingsModel {
 	m.err = nil
 	m.original = m.settings
 	m.wanderLust = wanderLust
@@ -423,8 +421,6 @@ func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typ
 	m.originalDithering = dithering
 	m.ditherSharpness = ditherSharpness
 	m.originalDitherSharpness = ditherSharpness
-	m.layoutName = layoutName
-	m.originalLayoutName = layoutName
 	m.keywordAlerts = keywordAlerts
 	m.originalKeywordAlerts = keywordAlerts
 	return m
@@ -474,7 +470,6 @@ func (m SettingsModel) IsDirty() bool {
 		m.inlineImages != m.originalInlineImages ||
 		m.dithering != m.originalDithering ||
 		m.ditherSharpness != m.originalDitherSharpness ||
-		m.layoutName != m.originalLayoutName ||
 		m.hardBreakKey != m.originalHardBreakKey ||
 		!stringSlicesEqual(m.keywordAlerts, m.originalKeywordAlerts)
 }
@@ -611,8 +606,6 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.originalDithering = msg.Dithering
 			m.ditherSharpness = msg.DitherSharpness
 			m.originalDitherSharpness = msg.DitherSharpness
-			m.layoutName = msg.LayoutName
-			m.originalLayoutName = msg.LayoutName
 			m.keywordAlerts = msg.KeywordAlerts
 			m.originalKeywordAlerts = msg.KeywordAlerts
 			m.hardBreakKey = msg.HardBreakKey
@@ -683,12 +676,11 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				ii := m.inlineImages
 				dt := m.dithering
 				ds := m.ditherSharpness
-				ln := m.layoutName
 				ka := m.keywordAlerts
 				hb := m.hardBreakKey
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, LayoutName: ln, KeywordAlerts: ka, HardBreakKey: hb, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, KeywordAlerts: ka, HardBreakKey: hb, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -708,7 +700,6 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.inlineImages = m.originalInlineImages
 			m.dithering = m.originalDithering
 			m.ditherSharpness = m.originalDitherSharpness
-			m.layoutName = m.originalLayoutName
 			m.keywordAlerts = m.originalKeywordAlerts
 			m.hardBreakKey = m.originalHardBreakKey
 			m.err = nil

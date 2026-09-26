@@ -72,7 +72,6 @@ type SharedConfigMsg struct {
 	// (from GET /v1/users/:username/guilds, Role == "apprentice"), used by
 	// the Guilds screen to float those guilds toward the top of the list.
 	OwnApprenticeSlugs []string
-	LayoutName         string // "tabs" or "miller"; used by settings screen to show current value
 	// TypingIndicatorsEnabled is the user's preference (positive polarity —
 	// config.Config.TypingIndicatorsDisabled is inverted once at load time),
 	// consumed directly by CMailModel to gate its typing-presence
@@ -193,7 +192,6 @@ type SaveSettingsMsg struct {
 	InlineImages            bool
 	Dithering               bool
 	DitherSharpness         string
-	LayoutName              string // "tabs" or "miller"
 	KeywordAlerts           []string
 	HardBreakKey            string
 	RemoteChanged           bool // true when API-managed fields differ from the last saved baseline
