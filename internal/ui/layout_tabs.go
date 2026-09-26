@@ -34,16 +34,16 @@ type TabsLayout struct{}
 func (l TabsLayout) NeedsCompactAutoFill(termHeight int) int { return 0 }
 
 // View renders the full terminal output for the tabs layout.
-func (l TabsLayout) View(a App) string {
+func (l TabsLayout) View(a *App) string {
 	contentHeight := a.height - theme.ChromeHeight
-	content := lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(l.renderActiveScreen(&a))
+	content := lipgloss.NewStyle().Height(contentHeight).MaxHeight(contentHeight).Render(l.renderActiveScreen(a))
 	base := lipgloss.JoinVertical(lipgloss.Left,
-		l.renderTabBar(&a),
-		l.renderFeedPendingBar(&a),
+		l.renderTabBar(a),
+		l.renderFeedPendingBar(a),
 		content,
-		l.renderBottomBar(&a),
+		l.renderBottomBar(a),
 	)
-	return compositeOverlays(l, &a, base)
+	return compositeOverlays(l, a, base)
 }
 
 // InlineImageSlots returns the active screen's visible inline-image slots and

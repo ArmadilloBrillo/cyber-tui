@@ -7376,3 +7376,31 @@ func TestHandleLogoAnim_SkipsScrambleWhileComposeOpen(t *testing.T) {
 		t.Error("expected the idle timer to be re-armed so the animation resumes after the editor closes")
 	}
 }
+
+func TestRoot_MatchesValueUpdatePath(t *testing.T) {
+	var byValue tea.Model = loggedInApp()
+	root := NewRoot(loggedInApp())
+	var byRoot tea.Model = root
+
+	msgs := []tea.Msg{
+		tea.WindowSizeMsg{Width: 120, Height: 40},
+		keyMsg("n"),
+		keyMsg("h"),
+		keyMsg("i"),
+	}
+	for i, msg := range msgs {
+		byValue, _ = byValue.Update(msg)
+		var cmd tea.Cmd
+		byRoot, cmd = byRoot.Update(msg)
+		_ = cmd
+		if byRoot != tea.Model(root) {
+			t.Fatalf("msg %d: expected Root.Update to return the same *Root, not a copy", i)
+		}
+		if got, want := byRoot.View(), byValue.View(); got != want {
+			t.Fatalf("msg %d: Root.View differs from the value-path View", i)
+		}
+	}
+	if !root.app.feed.PanelActive() {
+		t.Error("expected the feed composer to be open after 'n'")
+	}
+}

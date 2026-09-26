@@ -57,7 +57,9 @@ func (l MillerLayout) activeCompactRenderer(a App) CompactListRenderer {
 	return nil
 }
 
-func (l MillerLayout) View(a App) string {
+func (l MillerLayout) View(a *App) string { return l.view(*a) }
+
+func (l MillerLayout) view(a App) string {
 	contentH := a.height - 1 - millerHeaderHeight // full height minus bottom bar and column header
 	contentW := a.width - millerSidebarWidth
 

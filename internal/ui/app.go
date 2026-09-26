@@ -846,6 +846,13 @@ func (a App) Init() tea.Cmd {
 // change from this same message — batching its command (if any) with
 // whatever updateInner returned.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	cmd := a.step(msg)
+	return a, cmd
+}
+
+// step is Update applied in place. Root drives it directly so bubbletea never
+// copies or re-boxes the (very large) App between messages.
+func (a *App) step(msg tea.Msg) tea.Cmd {
 	prevActive := a.active
 	// C-Mail unread is RTDB-driven and never reaches the notifications list, so
 	// its desktop toast is detected here by an exact before/after TotalUnread()
@@ -856,21 +863,39 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmailUnreadBefore = a.cmail.TotalUnread()
 	}
 	a2, cmd := a.updateInner(msg)
-	if cmailUnreadBefore >= 0 {
-		*a2, cmd = a2.maybeNotifyNewCMail(cmailUnreadBefore, cmd)
+	if a2 != a {
+		*a = *a2
 	}
-	if a2.active != prevActive {
+	if cmailUnreadBefore >= 0 {
+		*a, cmd = a.maybeNotifyNewCMail(cmailUnreadBefore, cmd)
+	}
+	if a.active != prevActive {
 		// See screenSwitchedAt's doc comment (App struct) and
 		// inlineImageSwitchSettleDelay's — injectInlineImages uses this to
 		// briefly hold back inline image draws right after a screen switch.
-		a2.screenSwitchedAt = time.Now()
+		a.screenSwitchedAt = time.Now()
 	}
-	syncCmd := a2.syncInlineImages()
+	syncCmd := a.syncInlineImages()
 	if syncCmd == nil {
-		return *a2, cmd
+		return cmd
 	}
-	return *a2, tea.Batch(cmd, syncCmd)
+	return tea.Batch(cmd, syncCmd)
 }
+
+// Root is the tea.Model the program runs. It holds App by pointer so each
+// message mutates it in place instead of copying it out of, and back into, a
+// tea.Model interface value.
+type Root struct{ app *App }
+
+func NewRoot(a App) *Root { return &Root{app: &a} }
+
+func (r *Root) Init() tea.Cmd { return r.app.Init() }
+
+func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	return r, r.app.step(msg)
+}
+
+func (r *Root) View() string { return r.app.view() }
 
 // maybeNotifyNewCMail fires a "C-Mail: new message" desktop toast when the total
 // C-Mail unread count rose while handling a DM-stream message and the focus/tab
@@ -3086,7 +3111,9 @@ func (a *App) delegateUpdate(msg tea.Msg) tea.Cmd {
 
 // --- view ---
 
-func (a App) View() string {
+func (a App) View() string { return a.view() }
+
+func (a *App) view() string {
 	if a.active == screenLogin {
 		return a.login.View()
 	}
@@ -3389,7 +3416,7 @@ func (a App) canProbeImageInline() bool {
 // same protocol/imageViewer/ephemeral gates as the fullscreen image viewer
 // (see canRenderImageInline). There's no URL to check yet here — this gates
 // the feature as a whole, per-attachment checks happen when rendering.
-func (a App) canInlineImages() bool {
+func (a *App) canInlineImages() bool {
 	return a.inlineImages &&
 		!a.ephemeral &&
 		a.graphicsProtocol != imgview.ProtocolNone &&
@@ -3401,7 +3428,7 @@ func (a App) canInlineImages() bool {
 // the user's Dithering preference is on, gated by the same imageViewer
 // check as graphicsProtocol/inlineImages — dithering is meaningless when
 // images open in the OS browser instead.
-func (a App) ditheringEnabled() bool {
+func (a *App) ditheringEnabled() bool {
 	return a.dithering && a.imageViewer != "browser"
 }
 

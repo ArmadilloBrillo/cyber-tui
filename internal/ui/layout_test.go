@@ -966,7 +966,7 @@ func TestTabsLayoutView_InjectsInlineImages(t *testing.T) {
 	}
 	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol, nil): "\x1b_Gfake\x1b\\"}
 
-	out := (TabsLayout{}).View(a)
+	out := (TabsLayout{}).View(&a)
 	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
 		t.Errorf("expected TabsLayout.View to composite the cached inline image, got: %q", out)
 	}
@@ -995,7 +995,7 @@ func TestMillerLayoutView_InjectsInlineImages(t *testing.T) {
 	}
 	a.inlineImageCache = map[string]string{inlineImageCacheKey(slots[0], a.graphicsProtocol, nil): "\x1b_Gfake\x1b\\"}
 
-	out := (MillerLayout{}).View(a)
+	out := (MillerLayout{}).View(&a)
 	if !strings.Contains(out, "\x1b_Gfake\x1b\\") {
 		t.Errorf("expected MillerLayout.View to composite the cached inline image in the Feed detail pane, got: %q", out)
 	}
