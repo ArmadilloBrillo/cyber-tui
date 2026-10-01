@@ -39,12 +39,6 @@ const (
 // top border + 2 content rows + bottom border = 4.
 const roomCardHeight = 4
 
-// nsfwRoom is a real server room that GET /v1/circ deliberately omits. It's
-// appended to the fetched list unless the viewer's filterNSFW setting is on.
-// Only Slug and Name are load-bearing; LastMessageAt stays the zero time so
-// the card draws no timestamp, OnlineCount stays 0 ("0 online").
-var nsfwRoom = model.Room{Slug: "nsfw", Name: "NSFW"}
-
 // chatMessageBufferMaxBytes bounds the live message history kept for the
 // active room, evicting oldest-first once exceeded — mirrors the byte cap
 // used for inlineImageCache (app.go). Prevents unbounded growth from an
@@ -218,10 +212,6 @@ type ChatroomsModel struct {
 
 	mutedUsersByRoom map[string][]string // roomID -> muted usernames, from Settings
 	keywordAlerts    []string            // user's configured keyword alerts, from SharedConfigMsg
-
-	serverRooms []model.Room // rooms from GET /v1/circ, before nsfwRoom injection
-	roomsLoaded bool         // true once SetRooms has been called with a real fetch result
-	filterNSFW  bool         // from Settings; when true, nsfwRoom is left out of the list
 
 	// canGoBack is true when the active room was opened via a deep link
 	// (e.g. a chat_mention notification) rather than by switching to this
@@ -787,26 +777,11 @@ func (m ChatroomsModel) GetFocusedURLs() []string {
 	return dedupeURLs(urls)
 }
 
-// SetRooms replaces the room list with a freshly fetched server list.
+// SetRooms replaces the room list.
 func (m ChatroomsModel) SetRooms(rooms []model.Room) ChatroomsModel {
-	m.serverRooms = rooms
-	m.roomsLoaded = true
-	return m.rebuildRoomList()
-}
-
-// rebuildRoomList derives m.rooms from m.serverRooms, appending nsfwRoom unless
-// filterNSFW is set (or the server has started returning it itself). nsfwRoom
-// is withheld until the real list has loaded (roomsLoaded), so it doesn't
-// flash on screen alone before the fetch completes. Called whenever the
-// server list or the filterNSFW setting changes.
-func (m ChatroomsModel) rebuildRoomList() ChatroomsModel {
-	rooms := m.serverRooms
-	if m.roomsLoaded && !m.filterNSFW && !slices.ContainsFunc(rooms, func(r model.Room) bool { return r.Slug == nsfwRoom.Slug }) {
-		rooms = append(append([]model.Room(nil), rooms...), nsfwRoom)
-	}
 	m.rooms = rooms
-	if m.selectedRoom > len(m.rooms)-1 {
-		m.selectedRoom = max(0, len(m.rooms)-1)
+	if len(rooms) > 0 && m.selectedRoom >= len(rooms) {
+		m.selectedRoom = len(rooms) - 1
 	}
 	if m.ready {
 		m.listVP.SetContent(m.renderRoomCards())
@@ -1312,9 +1287,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		m.mutedUsersByRoom = msg.Settings.MutedUsersByRoom
 		m.keywordAlerts = msg.KeywordAlerts
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
-		m.filterNSFW = msg.Settings.FilterNSFW
 		m = m.SetLocation(msg.Loc)
-		m = m.rebuildRoomList()
 		if m.mode == chatroomModeDetail && m.activeRoom != nil {
 			m = m.refreshMessages()
 			if m.selectedMsgID != "" {
