@@ -514,18 +514,10 @@ type App struct {
 	// what's already known" baseline approach, kept separately here since
 	// FeedModel has no notion of keyword alerts.
 	keywordSeenPostIDs map[string]struct{}
-	// keywordReplySeen tracks, per configured keyword, the set of reply IDs
-	// already accounted for by the replies keyword-alert poll (see
-	// keywordReplyPollTickMsg) — a set rather than a "last seen id" cursor
-	// because SearchReplies' result ordering isn't documented, so a cursor
-	// would risk missing replies depending on how the server orders them.
-	// The first response for a given keyword only seeds this (baseline, no
-	// alert), same reasoning as keywordSeenPostIDs above.
-	keywordReplySeen map[string]map[string]struct{}
 	// keywordAlerts is the local config value (config.Config.KeywordAlerts):
 	// user-edited words/phrases that raise a Notifications-tab entry (and,
 	// subject to desktopNotifications, an OSC 9 toast) wherever content is
-	// scanned — cIRC, C-Mail, posts, replies, and post topics/tags. Empty by
+	// scanned — cIRC, C-Mail, posts, and post topics/tags. Empty by
 	// default.
 	keywordAlerts []string
 	// showGlobeTab is the local config value (inverted from
@@ -1918,10 +1910,6 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		// subsystem, see cmail.go's SharedConfigMsg handler.
 		a.typingIndicatorsEnabled = msg.typingIndicatorsEnabled
 		a.desktopNotifications = msg.desktopNotifications
-		// hadNoKeywords detects an empty→non-empty transition so the
-		// (possibly dead) replies keyword-alert poll chain gets restarted
-		// immediately below — same reasoning as wasManual above.
-		hadNoKeywords := len(a.keywordAlerts) == 0
 		a.keywordAlerts = msg.keywordAlerts
 		a.showGlobeTab = msg.showGlobeTab
 		a.maxThreadDepth = msg.maxThreadDepth
@@ -1981,9 +1969,6 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		cmds := []tea.Cmd{notifyCmd, saveCmd}
 		if wasManual && !a.feedManualRefreshOnly {
 			cmds = append(cmds, a.scheduleFeedPollCmd())
-		}
-		if hadNoKeywords && len(a.keywordAlerts) > 0 {
-			cmds = append(cmds, a.scheduleKeywordReplyPollCmd())
 		}
 		return a, tea.Batch(cmds...), true
 
@@ -4678,13 +4663,6 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	if !a.feedManualRefreshOnly {
 		feedPollCmd = a.scheduleFeedPollCmd()
 	}
-	// Same dead-chain-unless-restarted reasoning as feedPollCmd above: only
-	// start the replies keyword-alert poll when there's actually something to
-	// search for. settingsSavedMsg restarts it if a keyword is added later.
-	var keywordReplyPollCmd tea.Cmd
-	if len(a.keywordAlerts) > 0 {
-		keywordReplyPollCmd = a.scheduleKeywordReplyPollCmd()
-	}
 	return tea.Batch(
 		a.loadFeedCmd(),
 		a.loadBookmarksCmd(""),
@@ -4701,7 +4679,6 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.loadNotifsCmd(),
 		a.schedulePollCmd(),
 		feedPollCmd,
-		keywordReplyPollCmd,
 		a.loadSettingsCmd(),
 		a.scheduleWanderCmd(),
 		a.checkAndWanderCmd(),
@@ -5166,90 +5143,6 @@ const feedPollInterval = 60 * time.Second
 func (a *App) scheduleFeedPollCmd() tea.Cmd {
 	gen := a.sessionGen
 	return tea.Tick(feedPollInterval, func(time.Time) tea.Msg { return feedPollTickMsg{gen: gen} })
-}
-
-// keywordReplyPollInterval is how often the replies keyword-alert poll (see
-// keywordReplyPollTickMsg) checks each configured keyword via SearchReplies
-// — same cadence as the feed peek poll.
-const keywordReplyPollInterval = 60 * time.Second
-
-type keywordReplyPollTickMsg struct{ gen int }
-
-// keywordReplyMatchMsg carries one keyword's SearchReplies results back from
-// fetchKeywordRepliesCmd for scanKeywordReplyMatches to diff against what's
-// already been seen for that keyword.
-type keywordReplyMatchMsg struct {
-	keyword string
-	replies []model.Reply
-}
-
-func (a *App) scheduleKeywordReplyPollCmd() tea.Cmd {
-	gen := a.sessionGen
-	return tea.Tick(keywordReplyPollInterval, func(time.Time) tea.Msg { return keywordReplyPollTickMsg{gen: gen} })
-}
-
-// fetchKeywordRepliesCmd searches replies for keyword — one call per
-// configured keyword per poll tick, independent of feed size or platform
-// activity (see the plan's cost comparison against fanning out
-// GetPostReplies per post). Errors are swallowed (nil msg), same as
-// fetchFeedPeekCmd — a missed poll just tries again next tick.
-func (a *App) fetchKeywordRepliesCmd(keyword string) tea.Cmd {
-	return func() tea.Msg {
-		replies, _, err := a.client.SearchReplies(keyword, "")
-		if err != nil {
-			return nil
-		}
-		return keywordReplyMatchMsg{keyword: keyword, replies: replies}
-	}
-}
-
-// scanKeywordReplyMatches diffs a keyword's fresh SearchReplies results
-// against keywordReplySeen[keyword], alerting only for reply IDs not seen
-// before. The first call for a given keyword only seeds the set (baseline,
-// no alerts) so enabling keyword alerts doesn't replay every existing
-// matching reply on the platform.
-func (a App) scanKeywordReplyMatches(keyword string, replies []model.Reply) (App, tea.Cmd) {
-	if a.keywordReplySeen == nil {
-		a.keywordReplySeen = make(map[string]map[string]struct{})
-	}
-	seen, seeded := a.keywordReplySeen[keyword]
-	if !seeded {
-		seen = make(map[string]struct{}, len(replies))
-		for _, r := range replies {
-			seen[r.ID] = struct{}{}
-		}
-		a.keywordReplySeen[keyword] = seen
-		return a, nil
-	}
-	var cmds []tea.Cmd
-	for _, r := range replies {
-		if _, known := seen[r.ID]; known {
-			continue
-		}
-		seen[r.ID] = struct{}{}
-		viewing := a.active == screenFeed && a.focusReported && a.focused
-		n := model.Notification{
-			ID:             localKeywordIDPrefix + r.ID,
-			Type:           "keyword_match",
-			Read:           viewing,
-			CreatedAt:      time.Now(),
-			Actor:          model.NotificationActor{Username: r.AuthorUsername},
-			TargetID:       r.PostID,
-			TargetType:     "reply",
-			ReplyID:        r.ID,
-			ReplyContent:   r.Content,
-			MatchedKeyword: keyword,
-		}
-		a.notifications = a.notifications.AddLocalMention(n)
-		if !n.Read {
-			a.polledUnreadCount++
-		}
-		if !a.shouldDesktopNotify(screenFeed) {
-			continue
-		}
-		cmds = append(cmds, desktopNotifyCmd("keyword \""+keyword+"\"", "@"+r.AuthorUsername+": "+r.Content))
-	}
-	return a, tea.Batch(cmds...)
 }
 
 func (a *App) loadFeedPageCmd(cursor string) tea.Cmd {
@@ -5771,25 +5664,6 @@ func (a *App) handleNotifications(msg tea.Msg) (*App, tea.Cmd, bool) {
 		a.feed = a.feed.SetPendingNew(msg.posts)
 		var cmd tea.Cmd
 		*a, cmd = a.scanPeekedPostsForKeywords(msg.posts)
-		return a, cmd, true
-	case keywordReplyPollTickMsg:
-		if msg.gen != a.sessionGen {
-			return a, nil, true
-		}
-		if len(a.keywordAlerts) == 0 {
-			// Chain dies here — restarted from settingsSavedMsg when a
-			// keyword is added mid-session (mirrors feedPollTickMsg's own
-			// manual-refresh-only dead-chain handling above).
-			return a, nil, true
-		}
-		cmds := []tea.Cmd{a.scheduleKeywordReplyPollCmd()}
-		for _, kw := range a.keywordAlerts {
-			cmds = append(cmds, a.fetchKeywordRepliesCmd(kw))
-		}
-		return a, tea.Batch(cmds...), true
-	case keywordReplyMatchMsg:
-		var cmd tea.Cmd
-		*a, cmd = a.scanKeywordReplyMatches(msg.keyword, msg.replies)
 		return a, cmd, true
 	}
 	return a, nil, false
