@@ -329,7 +329,7 @@ var settingsGroups = []settingsGroup{
 				// Words/phrases that raise a Notifications-tab entry (and,
 				// subject to the desktop-notifications toggle above, an OSC 9
 				// toast) wherever content is scanned — cIRC, C-Mail, posts,
-				// replies, and post topics/tags. Edited in place (kind
+				// and post topics/tags. Edited in place (kind
 				// "keywordlist" has its own key handling in Update/View,
 				// there being only one such row, unlike bool/enum's
 				// getter/setter closures).
