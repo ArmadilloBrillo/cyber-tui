@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.8.11
+# ᑕ¥βєяรקค¢є API v0.8.12
 
 ## Access
 
@@ -1436,7 +1436,9 @@ GET /v1/search?q=neon&type=posts&page=0
 
 `cursor` is the next `page` number (pass it as `?page=`), or `null` on the last page. User hits include `username`, `displayName`, `profilePictureUrl`, `supporterIcon`, guild fields, and follower/post counts; reply hits include `parentPostAuthor`/`parentPostContent` context.
 
-Missing `q` returns `400 VALIDATION_ERROR`. Rate limit: 30/min.
+Missing `q` returns `400 VALIDATION_ERROR`. Rate limit: 30/min, 60/hour, 200/day.
+
+Search is for queries a person types. Don't poll it on a timer: every search bills a monthly quota shared by the whole site, and results are cached server-side for 15 minutes, so polling faster than that returns the same hits.
 
 ---
 
@@ -1590,6 +1592,8 @@ Pokes are capped at 1/hour rather than per minute. C-Mail messaging also has an 
 | Read a cIRC room | 45 |
 | List who's in a cIRC room | 60 |
 | Search | 30 |
+
+Search is also capped at 60/hour and 200/day.
 
 Exceeding a rate limit returns `429`. Limits use a rolling window (24 hours for daily, 60 seconds for per-minute).
 
