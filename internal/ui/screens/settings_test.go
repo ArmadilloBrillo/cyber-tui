@@ -1158,3 +1158,38 @@ func TestSettings_HardBreak_SeededFromSharedConfig(t *testing.T) {
 		t.Error("seeding must not mark the screen dirty")
 	}
 }
+
+// --- Reveal content warnings tests ---
+
+func TestSettings_RevealCW_ToggleDirtySaveRevert(t *testing.T) {
+	m := initSettings(defaultSettings())
+	idx := -1
+	for i, it := range flatItems(m) {
+		if it.label == "always reveal content warnings" {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatal("expected an always reveal content warnings settings item")
+	}
+	m.cursor = idx
+	m, _ = m.Update(keyMsg("enter"))
+	if !m.revealCW || !m.IsDirty() {
+		t.Fatalf("toggle: revealCW = %v, dirty = %v, want both true", m.revealCW, m.IsDirty())
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd == nil {
+		t.Fatal("ctrl+s should emit a cmd")
+	}
+	save, ok := cmd().(SaveSettingsMsg)
+	if !ok || !save.RevealContentWarnings {
+		t.Errorf("SaveSettingsMsg = %+v, want RevealContentWarnings true", save)
+	}
+
+	m, _ = m.Update(keyMsg("esc"))
+	if m.revealCW {
+		t.Error("esc should revert revealCW to the saved baseline")
+	}
+}

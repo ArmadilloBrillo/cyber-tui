@@ -7389,3 +7389,37 @@ func TestSaveProfileCmd_DoesNotMutateLiveApp(t *testing.T) {
 		t.Errorf("expected profileLoadedMsg carrying the updated user, got %#v", msg)
 	}
 }
+
+// TestHandleSettings_RevealContentWarningsPersists checks the setting reaches
+// App state, the broadcast to post screens, and the config file.
+func TestHandleSettings_RevealContentWarningsPersists(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	a := loggedInApp()
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{RevealContentWarnings: true, ImageViewer: "terminal"})
+	if !ok || cmd == nil {
+		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
+	}
+	saved, ok := cmd().(settingsSavedMsg)
+	if !ok {
+		t.Fatal("expected settingsSavedMsg")
+	}
+	a2, cmd2, _ := a.handleSettings(saved)
+	if !a2.revealContentWarnings {
+		t.Error("expected revealContentWarnings to be true after save")
+	}
+	batch, ok := cmd2().(tea.BatchMsg)
+	if !ok || len(batch) < 2 {
+		t.Fatalf("expected a batch with notify + save cmds, got %T", cmd2())
+	}
+	batch[1]()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if !cfg.RevealContentWarnings {
+		t.Error("expected RevealContentWarnings persisted to config")
+	}
+}

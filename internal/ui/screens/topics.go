@@ -79,6 +79,7 @@ type TopicsModel struct {
 	// postImages field for the same convention).
 	postImages          [][]postImageSlot
 	inlineImagesEnabled bool
+	revealCW            bool // SharedConfigMsg.RevealContentWarnings
 
 	bookmarkedPostIDs map[string]struct{}
 	watchedPostIDs    map[string]struct{}
@@ -261,6 +262,7 @@ func (m TopicsModel) Update(msg tea.Msg) (TopicsModel, tea.Cmd) {
 			}
 		}
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
+		m.revealCW = msg.RevealContentWarnings
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -598,7 +600,7 @@ func (m TopicsModel) renderTopicItem(topic model.Topic, isSelected bool) string 
 func (m TopicsModel) renderPostItem(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, false)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, m.revealCW)
 }
 
 func (m TopicsModel) refreshContent() TopicsModel {

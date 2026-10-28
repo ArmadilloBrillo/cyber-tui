@@ -265,6 +265,11 @@ var settingsGroups = []settingsGroup{
 					return m
 				},
 			},
+			{
+				label: "always reveal content warnings", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.revealCW },
+				toggle:  func(m SettingsModel) SettingsModel { m.revealCW = !m.revealCW; return m },
+			},
 		},
 	},
 	{
@@ -367,6 +372,8 @@ type SettingsModel struct {
 	originalDesktopNotifications    bool           // last saved baseline
 	showGlobeTab                    bool           // live local config value (Globe tab shown on the tab bar/cycling)
 	originalShowGlobeTab            bool           // last saved baseline
+	revealCW                        bool           // live local config value (config.Config.RevealContentWarnings)
+	originalRevealCW                bool           // last saved baseline
 	keywordAlerts                   []string       // live local config value (config.Config.KeywordAlerts); edited via the KeywordEditorModel popup, not inline
 	originalKeywordAlerts           []string       // last saved baseline
 	hardBreakKey                    string         // live local config value (config.Config.HardBreakKey)
@@ -433,6 +440,13 @@ func (m SettingsModel) SetSavedHardBreakKey(key string) SettingsModel {
 	return m
 }
 
+// SetSavedRevealCW advances the reveal-content-warnings baseline after a save.
+func (m SettingsModel) SetSavedRevealCW(reveal bool) SettingsModel {
+	m.revealCW = reveal
+	m.originalRevealCW = reveal
+	return m
+}
+
 // Capturing reports whether the hard-break row is waiting for a keypress. App
 // uses it to hand every key to this screen instead of its global shortcuts.
 func (m SettingsModel) Capturing() bool { return m.capturing }
@@ -463,6 +477,7 @@ func (m SettingsModel) IsDirty() bool {
 		m.typingIndicatorsEnabled != m.originalTypingIndicatorsEnabled ||
 		m.desktopNotifications != m.originalDesktopNotifications ||
 		m.showGlobeTab != m.originalShowGlobeTab ||
+		m.revealCW != m.originalRevealCW ||
 		m.maxThreadDepth != m.originalMaxThreadDepth ||
 		m.timezone != m.originalTimezone ||
 		m.imageViewer != m.originalImageViewer ||
@@ -678,9 +693,10 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				ds := m.ditherSharpness
 				ka := m.keywordAlerts
 				hb := m.hardBreakKey
+				rcw := m.revealCW
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, KeywordAlerts: ka, HardBreakKey: hb, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, KeywordAlerts: ka, HardBreakKey: hb, RevealContentWarnings: rcw, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -693,6 +709,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.typingIndicatorsEnabled = m.originalTypingIndicatorsEnabled
 			m.desktopNotifications = m.originalDesktopNotifications
 			m.showGlobeTab = m.originalShowGlobeTab
+			m.revealCW = m.originalRevealCW
 			m.maxThreadDepth = m.originalMaxThreadDepth
 			m.timezone = m.originalTimezone
 			m.imageViewer = m.originalImageViewer

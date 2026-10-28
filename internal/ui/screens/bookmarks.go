@@ -55,6 +55,7 @@ type BookmarksModel struct {
 	loc           *time.Location
 	relaxed       bool
 	filterNSFW    bool
+	revealCW      bool                // SharedConfigMsg.RevealContentWarnings
 	mutedTopics   map[string]struct{} // Settings.MutedTopics; bookmarked posts tagged with any are hidden
 }
 
@@ -155,6 +156,7 @@ func (m BookmarksModel) Init() tea.Cmd { return nil }
 func (m BookmarksModel) Update(msg tea.Msg) (BookmarksModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case SharedConfigMsg:
+		m.revealCW = msg.RevealContentWarnings
 		m.relaxed = msg.Relaxed
 		if msg.Loc != nil {
 			m.loc = msg.Loc
@@ -438,7 +440,7 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 	previewMax := max(innerWidth-rightWidth-1, 1)
 	var previewText string
 	if b.Post != nil {
-		previewText = strings.ReplaceAll(cwPreview(*b.Post, false), "\n", " ")
+		previewText = strings.ReplaceAll(cwPreview(*b.Post, m.revealCW), "\n", " ")
 	} else {
 		previewText = strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
 	}

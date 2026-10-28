@@ -122,6 +122,7 @@ type SearchModel struct {
 	// convention) when inlineImagesEnabled is true.
 	rowImages           [][]postImageSlot
 	inlineImagesEnabled bool
+	revealCW            bool // SharedConfigMsg.RevealContentWarnings
 }
 
 func NewSearchModel() SearchModel {
@@ -281,6 +282,7 @@ func (m SearchModel) Update(msg tea.Msg) (SearchModel, tea.Cmd) {
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.filterNSFW = msg.Settings.FilterNSFW
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
+		m.revealCW = msg.RevealContentWarnings
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -698,7 +700,7 @@ func (m SearchModel) renderUserHit(u model.User, selected bool) string {
 func (m SearchModel) renderPostHit(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, false)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, m.revealCW)
 }
 
 func (m SearchModel) renderReplyHit(r model.Reply, selected bool) string {

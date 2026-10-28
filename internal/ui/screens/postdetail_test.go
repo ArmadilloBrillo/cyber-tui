@@ -885,3 +885,14 @@ func TestPostDetail_ContentWarning_NoInlineImagesWhileGated(t *testing.T) {
 		t.Errorf("expected 1 image slot after reveal, got %+v", slots)
 	}
 }
+
+func TestPostDetail_ContentWarning_SettingRevealsOnOpen(t *testing.T) {
+	m := initPostDetail()
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40, RevealContentWarnings: true})
+	m = m.SetPost(cwPost("p1"))
+	m = m.SetReplies(nil)
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "the twist is") || !strings.Contains(view, "CW: spoilers") {
+		t.Errorf("expected revealed post with CW label when the setting is on, got: %q", view)
+	}
+}

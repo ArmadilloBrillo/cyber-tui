@@ -102,6 +102,7 @@ type FeedModel struct {
 	// PostDetailModel's field of the same name. postImages is parallel to
 	// postOffsets/visiblePosts(); only ever populated when this is true.
 	inlineImagesEnabled bool
+	revealCW            bool // SharedConfigMsg.RevealContentWarnings
 	postImages          [][]postImageSlot
 
 	currentUsername        string // set after login; used to guard the delete key
@@ -498,6 +499,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		m.defaultPublicPost = msg.Settings.DefaultPublicPost
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
+		m.revealCW = msg.RevealContentWarnings
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
 		mutedChanged := !sameMutedSet(m.mutedTopics, msg.Settings.MutedTopics)
@@ -919,6 +921,7 @@ type feedBodyCacheEntry struct {
 	isNSFW              bool
 	editedAt            time.Time
 	inlineImagesEnabled bool
+	revealCW            bool
 	themeName           string
 }
 
@@ -946,12 +949,12 @@ func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageS
 	topics := strings.Join(p.Topics, ",")
 
 	body, imgSlots, ok := "", []postImageSlot(nil), false
-	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.contentWarning == p.ContentWarning && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == m.inlineImagesEnabled && e.themeName == theme.CurrentName() {
+	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.contentWarning == p.ContentWarning && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == m.inlineImagesEnabled && e.revealCW == m.revealCW && e.themeName == theme.CurrentName() {
 		body, imgSlots, ok = e.body, e.imgSlots, true
 	}
 	if !ok {
-		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, false)
-		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, contentWarning: p.ContentWarning, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, editedAt: p.EditedAt, inlineImagesEnabled: m.inlineImagesEnabled, themeName: theme.CurrentName()}
+		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, m.revealCW)
+		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, contentWarning: p.ContentWarning, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, editedAt: p.EditedAt, inlineImagesEnabled: m.inlineImagesEnabled, revealCW: m.revealCW, themeName: theme.CurrentName()}
 	}
 
 	boxStyle := theme.Border

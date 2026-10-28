@@ -127,6 +127,7 @@ type PostDetailModel struct {
 	// != "browser" AND not an ephemeral SSH session). postImages/replyImages
 	// are only ever populated when this is true.
 	inlineImagesEnabled bool
+	revealCW            bool              // SharedConfigMsg.RevealContentWarnings
 	postImages          []postImageSlot   // every eligible image in the post; set by buildContent
 	replyImages         [][]postImageSlot // parallel to flatTree/replyOffsets — one slice per reply; set by buildContent
 	selectedReply       int
@@ -591,6 +592,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
+		m.revealCW = msg.RevealContentWarnings
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
 		if msg.MaxThreadDepth != m.maxThreadDepth {
@@ -1053,7 +1055,7 @@ func (m PostDetailModel) renderFullPost(selected bool) (string, []postImageSlot)
 	if badges != "" {
 		rows = append(rows, badges)
 	}
-	gated := cwGated(m.post, m.cwRevealed)
+	gated := cwGated(m.post, m.cwRevealed || m.revealCW)
 	if m.post.ContentWarning != "" {
 		rows = append(rows, cwLabel(m.post.ContentWarning))
 	}

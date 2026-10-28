@@ -78,6 +78,10 @@ type SharedConfigMsg struct {
 	// subscription, announce/clear calls, and the merged anim/idle-check
 	// tick — see docs/00-battery-audit.md item #6.
 	TypingIndicatorsEnabled bool
+	// RevealContentWarnings is the user's raw preference
+	// (config.Config.RevealContentWarnings); when true, post screens render
+	// content-warned posts ungated.
+	RevealContentWarnings bool
 	// DesktopNotifications is the user's raw preference
 	// (config.Config.DesktopNotifications), used by the settings screen to
 	// display/edit the toggle — see docs/53-desktop-notifications.md.
@@ -194,6 +198,7 @@ type SaveSettingsMsg struct {
 	DitherSharpness         string
 	KeywordAlerts           []string
 	HardBreakKey            string
+	RevealContentWarnings   bool
 	RemoteChanged           bool // true when API-managed fields differ from the last saved baseline
 }
 
