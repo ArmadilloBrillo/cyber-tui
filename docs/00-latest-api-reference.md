@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.8.12
+# ᑕ¥βєяรקค¢є API v0.9.0
 
 ## Access
 
@@ -181,7 +181,8 @@ POST /v1/posts
   "slug": "optional-slug",
   "topics": ["tag1", "tag2"],
   "isPublic": false,
-  "isNSFW": false
+  "isNSFW": false,
+  "contentWarning": "Optional short warning"
 }
 ```
 
@@ -190,10 +191,12 @@ POST /v1/posts
 - `slug` -- optional, lowercase `[a-z0-9-]`, max 60 characters, unique per author. If omitted, one is generated server-side from the title, content, or attachments. If the slug is already taken by another of your posts, `-2`, `-3`, … is appended automatically. Reserved slugs (`blog`, `jukebox`, `public`, `replies`, `index`, `edit`, `new`, `admin`, anything starting with `_`) are rejected.
 - `topics` -- optional, max 3, must be lowercase
 - `isPublic` -- optional, makes entry visible without login
-- `isNSFW` -- optional, content warning flag
+- `isNSFW` -- optional, NSFW flag
+- `contentWarning` -- optional, max 60 characters. A short phrase readers see before the entry. Clients show `CW: <contentWarning>` and reveal the title, body and attachments only on request.
 - `attachments` -- optional, max 1. Audio only:
   `{ "type": "audio", "src": "<YouTube URL>", "origin": "youtube", "artist": "...", "title": "...", "genre": "..." }`.
   `artist` (max 100), `title` (max 150) and `genre` (max 50, lowercase) are all required.
+  Entries posted on the website can also carry `"origin": "latex"`, with a direct MP3 `src` and a `cover` image URL. The API accepts YouTube only.
 
 **Images are posted on the website.** They travel as inline markdown in `content` --
 `![alt](https://bunker.cyberspace.online/...)` -- and the URL has to be one the site is
@@ -230,6 +233,7 @@ Every field is optional; only what you send changes. Send at least one, or you g
 - `topics` -- max 3, must be lowercase. Replaces the existing list.
 - `isPublic` -- boolean
 - `isNSFW` -- boolean
+- `contentWarning` -- max 60 characters. Send `""` or `null` to remove it.
 - `attachments` -- replaces the existing attachments. Audio only, same shape as [Create Entry](#create-entry). Send `[]` to remove them.
 
 The `slug` is fixed once an entry is published, so share links keep working; sending one returns `400`. `createdAt` never changes, and an edit sends no notifications -- the people who were notified when you published aren't notified again.
@@ -1004,7 +1008,11 @@ PATCH /v1/settings
 }
 ```
 
-Available fields: `notifications`, `filterNSFW`, `showFollowerCount`, `hideImagesInFeed`, `hideAudioInFeed`, `autoWatchOnReply`, `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom`, `iconTheme`, `followedTopics`, `mutedTopics`, `imagePixelSize`, `timeDisplayFormat`, `useLegacyMenuOrder`, `defaultPublicPost`, `showGuildPostsInFeed`.
+Available fields: `notifications`, `filterNSFW`, `showFollowerCount`, `hideImagesInFeed`, `hideAudioInFeed`, `autoWatchOnReply`, `keyboardBindings`, `keyboardPreset`, `mutedUsersByRoom`, `iconTheme`, `followedTopics`, `mutedTopics`, `imagePixelSize`, `imageColor`, `colorNicknames`, `timeDisplayFormat`, `useLegacyMenuOrder`, `defaultPublicPost`, `showGuildPostsInFeed`.
+
+`imagePixelSize` is one of `rough`, `medium`, `sharp`, `crisp`. `imageColor` (default off) renders images in colour instead of the theme's foreground and background.
+
+`colorNicknames` (default off) colours usernames in cIRC message lines. To match the website, take the hue from a 32-bit FNV-1a hash of the lower-cased username: `hue = hash % 360`. Pick the lightness to suit your background.
 
 `autoWatchOnReply` (default on) controls whether posting a reply auto-watches that thread (see Thread Watching). Set it to `false` to opt out.
 
@@ -1181,6 +1189,8 @@ GET /v1/circ/:roomId?limit=50&before=<timestamp>
 
 Use this to load history — the initial screen of messages and scrollback. New messages that arrive while you're connected come from the [real-time subscription](#reading-a-room-in-real-time), not from here. Returns up to `limit` (1–100, default 50) messages oldest-first. For older pages, pass `before` = the `cursor` from the previous response (the oldest message's timestamp). Returns `403` if the room isn't available to you.
 
+**History is limited.** Scrollback stops at the room's newest **1000** messages or at messages **180 days** old, whichever comes first. The first page (no `before`) always returns the latest messages, however old, so a quiet room never loads empty. A `before` past the limit returns an empty page, and `cursor` is `null` on the last page inside it.
+
 Each message: `id`, `userId`, `username`, `isChatAdmin`, `content`, `timestamp` (ms epoch), plus the optional attachment and formatting fields described under [Message fields](#message-fields). **`content` can be empty** — an attached image, GIF or song is the whole message. Don't assume every message has text.
 
 ### Send a Message
@@ -1294,7 +1304,9 @@ To keep the room's user list live without polling `GET /v1/circ/:roomId/users`, 
 
 **Stay within bounds (or get denied):**
 
-- **Always** include `orderBy="timestamp"` and a `limitToLast` of **100 or fewer**. Page older history with `&endBefore=<timestamp>`. Unbounded reads may be rejected.
+- **Always** include `orderBy="timestamp"` and a `limitToLast` of **1000 or fewer**. Reads without them are denied.
+- `endAt` and `endBefore` are denied, so you can't page history over RTDB. Only the room's newest 1000 messages are readable there. Load scrollback with [`GET /v1/circ/:roomId`](#read-a-room) instead.
+- `startAt` / `startAfter` are allowed, for example to resume a stream after the last message you hold: `&startAfter=<timestamp>&limitToLast=1000`.
 - Keep one stream open per room; don't reconnect in a loop.
 - When the `idToken` expires (~1 hour) the stream closes — get a fresh one from `POST /v1/auth/refresh` and reopen the connection.
 
@@ -1458,6 +1470,7 @@ Both cIRC and C-Mail sends understand IRC-style slash commands. When a message's
 | `/art <ascii art>` | Post ASCII art. cIRC only; max 80 columns × 25 lines |
 | `/blink` `/l33t` `/comic` `/cursive` `/times` `/rainbow` `/flip` `/quiet` `/slow` `/glitch` `/spoiler` `/wave` `<message>` | Post the message with a text style |
 | `/mute <username>` `/unmute <username>` `/muted` `/unmuteall` | Manage who you've muted in this room. cIRC only; posts nothing |
+| `/localtime HH:MM` | Posts "It's HH:MM o'clock where @you is". Pass your local time, 24h; the server can't see your clock. cIRC only |
 | `/help` | Returns the command list as `{ "data": { "reply": "…" } }`; posts nothing |
 
 Plain text is posted as-is. A malformed command (e.g. bad `/dice` notation, a `/song` that isn't a YouTube link) returns `400 VALIDATION_ERROR`. `/song` without supporter status returns `403 FORBIDDEN`.
@@ -1484,7 +1497,7 @@ Beyond `content`, a message may carry any of these. They're all optional — a p
 |-------|---------|
 | `imageUrl` | An attached image. Posted from the website; render it alongside the text |
 | `gifUrl` | An attached animated GIF (`/gif`) |
-| `audioAttachment` | A jukebox track (`/song`): `{ src, origin: "youtube", artist, title, genre }` |
+| `audioAttachment` | A jukebox track (`/song`): `{ src, origin, cover?, artist, title, genre }`. `origin` is `"youtube"` or `"latex"`; a `latex` track has a direct MP3 `src` and a `cover` image URL |
 | `style` | A text style name, or an array of them for chained styles |
 | `isAction` | The message is a third-person action (`/me` and the emotes) — conventionally rendered as `* username content` |
 | `isDice` | The action was a dice roll |
