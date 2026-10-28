@@ -202,6 +202,7 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 			CreatedAt:      time.Now().Add(-3 * time.Hour),
 			Topics:         []string{"mission"},
 			IsPublic:       true,
+			ContentWarning: "plot spoilers",
 		},
 	}, "", nil
 }
@@ -241,7 +242,7 @@ func (m *MockClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	}, nil
 }
 
-func (m *MockClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error) {
+func (m *MockClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
 	var attachments []model.Attachment
 	if attachment != nil {
 		attachments = []model.Attachment{*attachment}
@@ -256,6 +257,7 @@ func (m *MockClient) CreatePost(content, title, slug string, topics []string, is
 		Topics:         topics,
 		IsPublic:       isPublic,
 		IsNSFW:         isNSFW,
+		ContentWarning: contentWarning,
 		Attachments:    attachments,
 	}, nil
 }
@@ -264,7 +266,7 @@ func (m *MockClient) DeletePost(postID string) error {
 	return nil // no-op: in-memory feed is rebuilt on each GetFeed call
 }
 
-func (m *MockClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, attachments []model.Attachment, attachmentTouched bool) error {
+func (m *MockClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, contentWarning string, attachments []model.Attachment, attachmentTouched bool) error {
 	return nil
 }
 

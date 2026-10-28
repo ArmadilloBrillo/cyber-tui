@@ -5472,7 +5472,7 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string, audioAttachm
 // in a post's attachments array).
 func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool, audioAttachment *model.Attachment) tea.Cmd {
 	return func() tea.Msg {
-		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, audioAttachment)
+		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, "", audioAttachment)
 		if err != nil {
 			if errors.Is(err, api.ErrUnauthorized) {
 				return actionErrMsg{err} // let handleUnauthorized redirect to login
@@ -6438,7 +6438,7 @@ func (a *App) editPostCmd(postID, content, title string, topics []string, isPubl
 				attachments = append(attachments, *audioAttachment)
 			}
 		}
-		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW, attachments, attachmentTouched); err != nil {
+		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW, "", attachments, attachmentTouched); err != nil {
 			return editErrorMsg(err)
 		}
 		return postEditedMsg{
@@ -6547,7 +6547,7 @@ func (a *App) deleteRoomMessageCmd(roomID, messageID string) tea.Cmd {
 // Published notes have no title, are private, and not marked NSFW.
 func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, "", "", topics, false, false, nil)
+		_, err := a.client.CreatePost(content, "", "", topics, false, false, "", nil)
 		if err != nil {
 			if errors.Is(err, api.ErrUnauthorized) {
 				return actionErrMsg{err} // let handleUnauthorized redirect to login

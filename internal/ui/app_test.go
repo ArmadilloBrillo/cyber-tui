@@ -2739,7 +2739,7 @@ type createPostErrClient struct {
 	err error
 }
 
-func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error) {
+func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
 	return model.Post{}, c.err
 }
 func (c *createPostErrClient) CreateNote(content string, topics []string) (model.Note, error) {
@@ -2799,7 +2799,7 @@ type editPostRecordingClient struct {
 	gotTouched     bool
 }
 
-func (c *editPostRecordingClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, attachments []model.Attachment, attachmentTouched bool) error {
+func (c *editPostRecordingClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, contentWarning string, attachments []model.Attachment, attachmentTouched bool) error {
 	c.gotAttachments = attachments
 	c.gotTouched = attachmentTouched
 	return nil
