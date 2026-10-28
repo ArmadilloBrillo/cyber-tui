@@ -689,3 +689,18 @@ func TestParseTopics_LowercasesTrimsCapsAndIgnoresEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestFeed_VisibleInlineImages_SkipsContentWarnedPost(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 80})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)", ContentWarning: "gore"},
+		{ID: "p2", AuthorUsername: "bob", Content: "yo\n\n![b](https://example.com/b.png)\n\nlater"},
+	}, "")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 || slots[0].Key != "post:p2:0" {
+		t.Errorf("expected only p2's image slot, got %+v", slots)
+	}
+}

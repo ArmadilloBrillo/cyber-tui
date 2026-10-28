@@ -698,7 +698,7 @@ func (m SearchModel) renderUserHit(u model.User, selected bool) string {
 func (m SearchModel) renderPostHit(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, false)
 }
 
 func (m SearchModel) renderReplyHit(r model.Reply, selected bool) string {

@@ -913,6 +913,7 @@ type feedBodyCacheEntry struct {
 	watched             bool
 	content             string
 	title               string
+	contentWarning      string
 	topics              string // strings.Join(p.Topics, ",") — cheap to compare
 	isPublic            bool
 	isNSFW              bool
@@ -945,12 +946,12 @@ func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageS
 	topics := strings.Join(p.Topics, ",")
 
 	body, imgSlots, ok := "", []postImageSlot(nil), false
-	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == m.inlineImagesEnabled && e.themeName == theme.CurrentName() {
+	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.contentWarning == p.ContentWarning && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == m.inlineImagesEnabled && e.themeName == theme.CurrentName() {
 		body, imgSlots, ok = e.body, e.imgSlots, true
 	}
 	if !ok {
-		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
-		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, editedAt: p.EditedAt, inlineImagesEnabled: m.inlineImagesEnabled, themeName: theme.CurrentName()}
+		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, false)
+		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, contentWarning: p.ContentWarning, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, editedAt: p.EditedAt, inlineImagesEnabled: m.inlineImagesEnabled, themeName: theme.CurrentName()}
 	}
 
 	boxStyle := theme.Border

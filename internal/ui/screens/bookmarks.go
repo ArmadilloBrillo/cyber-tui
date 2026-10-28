@@ -437,8 +437,8 @@ func (m BookmarksModel) renderItem(b model.Bookmark, selected bool) string {
 	rightWidth := lipgloss.Width(right1)
 	previewMax := max(innerWidth-rightWidth-1, 1)
 	var previewText string
-	if b.Post != nil && b.Post.Title != "" {
-		previewText = b.Post.Title
+	if b.Post != nil {
+		previewText = strings.ReplaceAll(cwPreview(*b.Post, false), "\n", " ")
 	} else {
 		previewText = strings.ReplaceAll(markdown.FirstLine(content), "\n", " ")
 	}

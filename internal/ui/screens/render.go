@@ -25,8 +25,8 @@ const postMaxBodyLines = 4
 // 0 for the reading pane where the full content should be shown).
 // inlineImagesEnabled mirrors renderPostBody's parameter of the same name;
 // the returned []postImageSlot is nil whenever it's false.
-func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled bool) (string, []postImageSlot) {
-	content, imgSlots := renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines, inlineImagesEnabled)
+func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled, revealCW bool) (string, []postImageSlot) {
+	content, imgSlots := renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines, inlineImagesEnabled, revealCW)
 	boxStyle := theme.Border
 	if selected {
 		boxStyle = theme.ActiveBorder
@@ -44,7 +44,7 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 // arrow-key navigation) can cache this per post ID/width and skip the
 // markdown re-parse, instead of rebuilding every loaded post on every
 // keystroke.
-func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled bool) (string, []postImageSlot) {
+func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled, revealCW bool) (string, []postImageSlot) {
 	innerWidth := width - 4
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -90,7 +90,11 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 	if badges != "" {
 		rows = append(rows, badges)
 	}
-	if p.Title != "" {
+	gated := cwGated(p, revealCW)
+	if p.ContentWarning != "" {
+		rows = append(rows, cwLabel(p.ContentWarning))
+	}
+	if p.Title != "" && !gated {
 		rows = append(rows, theme.Highlight.Render(p.Title))
 	}
 	// 1 = the card's own top border row, added by RenderPost/FeedModel.renderPost.
@@ -98,7 +102,9 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 
 	var body string
 	var imgSlots []postImageSlot
-	if innerWidth > 0 {
+	if gated {
+		body = theme.Subtle.Render("  enter to open")
+	} else if innerWidth > 0 {
 		if inlineImagesEnabled {
 			rendered, hits := markdown.RenderLocatingImages(p.Content, innerWidth)
 			// Feed's card is compact and truncates body text to maxBodyLines,
@@ -135,7 +141,7 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 		body = markdown.Render(p.Content, 0)
 	}
 
-	if att := renderAttachments(p.Attachments); att != "" {
+	if att := renderAttachments(p.Attachments); att != "" && !gated {
 		body = body + "\n" + att
 	}
 
@@ -159,6 +165,26 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 		rows = append(rows, "\n"+topics)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...), imgSlots
+}
+
+// cwGated reports whether p's title, body and attachments must stay hidden:
+// the API requires a content-warned post to reveal them only on request.
+func cwGated(p model.Post, revealCW bool) bool { return p.ContentWarning != "" && !revealCW }
+
+// cwLabel renders the "CW: <text>" line shown wherever a content-warned post
+// appears, revealed or not.
+func cwLabel(cw string) string { return theme.Error.Render("CW: " + cw) }
+
+// cwPreview returns the one-line preview text for compact list rows: the CW
+// label while gated, else the title or the first line of the body.
+func cwPreview(p model.Post, revealCW bool) string {
+	if cwGated(p, revealCW) {
+		return "CW: " + p.ContentWarning
+	}
+	if p.Title != "" {
+		return p.Title
+	}
+	return markdown.FirstLine(p.Content)
 }
 
 // imageIcon returns a 🖼 icon (with leading spaces) when any image is present

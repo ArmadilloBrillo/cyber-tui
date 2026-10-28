@@ -1131,10 +1131,7 @@ func (m ProfileModel) renderPostItem(p model.Post, selected bool) string {
 		innerWidth = 40
 	}
 	ts := theme.Subtle.Render(displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, true) + editedSuffix(p.EditedAt))
-	previewText := markdown.FirstLine(p.Content)
-	if p.Title != "" {
-		previewText = p.Title
-	}
+	previewText := cwPreview(p, false)
 	left := theme.Highlight.Render("@"+p.AuthorUsername) + "  " + theme.Base.Render(truncateStr(previewText, innerWidth-lipgloss.Width(ts)-lipgloss.Width(theme.Highlight.Render("@"+p.AuthorUsername))-4))
 	gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ts)
 	var line string

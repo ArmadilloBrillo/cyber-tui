@@ -598,7 +598,7 @@ func (m TopicsModel) renderTopicItem(topic model.Topic, isSelected bool) string 
 func (m TopicsModel) renderPostItem(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, false)
 }
 
 func (m TopicsModel) refreshContent() TopicsModel {
