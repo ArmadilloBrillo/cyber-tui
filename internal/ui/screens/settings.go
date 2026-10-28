@@ -599,6 +599,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.originalDesktopNotifications = msg.DesktopNotifications
 			m.showGlobeTab = msg.ShowGlobeTab
 			m.originalShowGlobeTab = msg.ShowGlobeTab
+			m.revealCW = msg.RevealContentWarnings
+			m.originalRevealCW = msg.RevealContentWarnings
 			m.maxThreadDepth = msg.MaxThreadDepth
 			m.originalMaxThreadDepth = msg.MaxThreadDepth
 			tz := msg.Timezone

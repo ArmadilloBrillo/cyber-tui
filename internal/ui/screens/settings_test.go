@@ -1193,3 +1193,14 @@ func TestSettings_RevealCW_ToggleDirtySaveRevert(t *testing.T) {
 		t.Error("esc should revert revealCW to the saved baseline")
 	}
 }
+
+func TestSettings_RevealCW_SeededFromSharedConfig(t *testing.T) {
+	m := NewSettingsModel()
+	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 40, RevealContentWarnings: true})
+	if !m.revealCW {
+		t.Error("expected revealCW seeded from SharedConfigMsg")
+	}
+	if m.IsDirty() {
+		t.Error("seeding must also set the baseline, not mark the screen dirty")
+	}
+}
