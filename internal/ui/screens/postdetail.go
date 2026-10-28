@@ -117,6 +117,10 @@ type PostDetailModel struct {
 	replyOffsets []int       // start line of each reply within the viewport content
 	replyHeights []int       // rendered height of each reply (matches offsets; set by buildContent)
 	postHeight   int         // rendered height of the full post block; set by refreshContent
+	// cwRevealed is the reader's per-post request to see a content-warned
+	// post. Reset on every SetPost: notification and profile-reply paths land
+	// here without the reader ever seeing the post's CW card.
+	cwRevealed bool
 
 	// inlineImagesEnabled mirrors SharedConfigMsg.InlineImagesEnabled — the
 	// fully-gated value (config flag AND protocol available AND imageViewer
@@ -173,6 +177,7 @@ func NewPostDetailModel() PostDetailModel {
 
 func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 	m.post = post
+	m.cwRevealed = false
 	m.replies = nil
 	m.flatTree = nil
 	m.replyOffsets = nil
@@ -233,6 +238,7 @@ func (m PostDetailModel) PostID() string { return m.post.ID }
 // (which SetPost itself doesn't reset) are cleared.
 func (m PostDetailModel) Close() PostDetailModel {
 	m.post = model.Post{}
+	m.cwRevealed = false
 	m.replies = nil
 	m.flatTree = nil
 	m.replyOffsets = nil
@@ -764,6 +770,14 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			return m, func() tea.Msg { return BackToFeedMsg{} }
+		case "enter":
+			if m.selectedReply == -1 && m.post.ContentWarning != "" {
+				m.cwRevealed = !m.cwRevealed
+				if m.ready {
+					m = m.refreshContent()
+				}
+			}
+			return m, nil
 		case "d":
 			if m.selectedReply == -1 {
 				// Post selected — only allow delete if it's the user's own post.
@@ -1039,13 +1053,23 @@ func (m PostDetailModel) renderFullPost(selected bool) (string, []postImageSlot)
 	if badges != "" {
 		rows = append(rows, badges)
 	}
-	if m.post.Title != "" {
+	gated := cwGated(m.post, m.cwRevealed)
+	if m.post.ContentWarning != "" {
+		rows = append(rows, cwLabel(m.post.ContentWarning))
+	}
+	if m.post.Title != "" && !gated {
 		rows = append(rows, theme.Title.Render(m.post.Title))
 	}
 
-	body, imgSlots := m.renderBodyWithInlineImage(m.post.Content, innerWidth, 1+lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, rows...)))
-	if att := renderAttachments(m.post.Attachments); att != "" {
-		body = body + "\n" + att
+	var body string
+	var imgSlots []postImageSlot
+	if gated {
+		body = theme.Subtle.Render("  enter to reveal")
+	} else {
+		body, imgSlots = m.renderBodyWithInlineImage(m.post.Content, innerWidth, 1+lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, rows...)))
+		if att := renderAttachments(m.post.Attachments); att != "" {
+			body = body + "\n" + att
+		}
 	}
 
 	var topicsSB strings.Builder

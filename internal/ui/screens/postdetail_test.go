@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 )
@@ -819,5 +820,68 @@ func TestPostDetail_HardBreakKey_FromSharedConfig(t *testing.T) {
 	}
 	if sub.Content != "a  \nb" {
 		t.Errorf("reply content = %q, want %q", sub.Content, "a  \nb")
+	}
+}
+
+func cwPost(id string) model.Post {
+	return model.Post{ID: id, AuthorUsername: "op", Title: "Episode 4", Content: "the twist is", ContentWarning: "spoilers"}
+}
+
+func TestPostDetail_ContentWarning_GatedOnOpenAndEnterToggles(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetPost(cwPost("p1"))
+	m = m.SetReplies(nil)
+
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "CW: spoilers") || strings.Contains(view, "the twist is") || strings.Contains(view, "Episode 4") {
+		t.Fatalf("expected gated post on open, got: %q", view)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	view = ansi.Strip(m.View())
+	if !strings.Contains(view, "the twist is") || !strings.Contains(view, "Episode 4") || !strings.Contains(view, "CW: spoilers") {
+		t.Fatalf("expected revealed post with CW label after Enter, got: %q", view)
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if view = ansi.Strip(m.View()); strings.Contains(view, "the twist is") {
+		t.Errorf("expected second Enter to hide the post again, got: %q", view)
+	}
+}
+
+func TestPostDetail_ContentWarning_EnterOnReplyDoesNotReveal(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetPost(cwPost("p1"))
+	m = m.SetReplies([]model.Reply{pdReply("r1", "", "alice", time.Now())})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if view := ansi.Strip(m.View()); strings.Contains(view, "the twist is") {
+		t.Errorf("Enter with a reply selected revealed the post: %q", view)
+	}
+}
+
+func TestPostDetail_ContentWarning_SetPostRegates(t *testing.T) {
+	m := initPostDetail()
+	m = m.SetPost(cwPost("p1"))
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m.SetPost(cwPost("p2"))
+	if view := ansi.Strip(m.View()); strings.Contains(view, "the twist is") {
+		t.Errorf("reveal carried over to the next post: %q", view)
+	}
+}
+
+func TestPostDetail_ContentWarning_NoInlineImagesWhileGated(t *testing.T) {
+	m := initPostDetail()
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	p := cwPost("p1")
+	p.Content = "look\n\n![a](https://example.com/a.png)\n\nend"
+	m = m.SetPost(p)
+	m = m.SetReplies(nil)
+	if slots := m.VisibleInlineImages(); len(slots) != 0 {
+		t.Fatalf("expected no image slots while gated, got %+v", slots)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if slots := m.VisibleInlineImages(); len(slots) != 1 {
+		t.Errorf("expected 1 image slot after reveal, got %+v", slots)
 	}
 }
