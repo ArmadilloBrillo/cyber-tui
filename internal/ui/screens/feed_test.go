@@ -382,8 +382,8 @@ func TestFeed_ComposeSubmit_BorksContentOnlyWhenTicked(t *testing.T) {
 			m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 			m, _ = m.Update(keyRune("n"))
 			if tick {
-				// title -> slug -> body -> topics -> public -> nsfw -> bork
-				for range 6 {
+				// title -> slug -> cw -> body -> topics -> public -> nsfw -> bork
+				for range 7 {
 					m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 				}
 				m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})

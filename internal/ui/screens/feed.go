@@ -45,6 +45,7 @@ const feedMergeAnimDelay = 200 * time.Millisecond
 type SubmitNewPostMsg struct {
 	Content         string
 	Title           string // empty = no title
+	ContentWarning  string // empty = none
 	Slug            string // empty = server-generated
 	Topics          []string
 	IsPublic        bool
@@ -59,6 +60,7 @@ type SubmitPostEditMsg struct {
 	PostID            string
 	Content           string
 	Title             string
+	ContentWarning    string // empty clears it
 	Topics            []string
 	IsPublic          bool
 	IsNSFW            bool
@@ -326,11 +328,12 @@ func (m FeedModel) CanEditSelected() bool {
 // untouched. Attachments is only applied when attachmentsTouched — the edit
 // didn't change them server-side otherwise, so the cached value is already
 // correct (see EditPost's own attachmentTouched).
-func (m FeedModel) ApplyPostEdit(postID, content, title string, topics []string, isPublic, isNSFW bool, editedAt time.Time, attachments []model.Attachment, attachmentsTouched bool) FeedModel {
+func (m FeedModel) ApplyPostEdit(postID, content, title, contentWarning string, topics []string, isPublic, isNSFW bool, editedAt time.Time, attachments []model.Attachment, attachmentsTouched bool) FeedModel {
 	for i, p := range m.posts {
 		if p.ID == postID {
 			p.Content = content
 			p.Title = title
+			p.ContentWarning = contentWarning
 			p.Topics = topics
 			p.IsPublic = isPublic
 			p.IsNSFW = isNSFW
@@ -552,6 +555,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			content = bork.Bork(content)
 		}
 		title := m.panel.TitleValue()
+		contentWarning := m.panel.CWValue()
 		topics := ParseTopics(m.panel.TopicsRaw())
 		isPublic := m.panel.IsPublic()
 		isNSFW := m.panel.IsNSFW()
@@ -562,7 +566,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			postID := m.editingPostID
 			m = m.closeCompose()
 			return m, func() tea.Msg {
-				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
+				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, ContentWarning: contentWarning, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
 			}
 		}
 		slug := m.panel.SlugValue()
@@ -571,7 +575,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		// their work (see postSubmitFailedMsg in app.go).
 		m.panel = m.panel.MarkSubmitting()
 		return m, func() tea.Msg {
-			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AudioAttachment: audioAttachment}
+			return SubmitNewPostMsg{Content: content, Title: title, ContentWarning: contentWarning, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AudioAttachment: audioAttachment}
 		}
 
 	case ComposeSaveAsNoteMsg:

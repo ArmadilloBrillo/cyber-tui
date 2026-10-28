@@ -1407,7 +1407,7 @@ func (a *App) handlePostDetail(msg tea.Msg) (*App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AudioAttachment), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.ContentWarning, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AudioAttachment), true
 	case postCreatedMsg:
 		a.feed = a.feed.CloseComposeAfterSuccess()
 		return a, a.loadFeedCmd(), true
@@ -1430,15 +1430,15 @@ func (a *App) handlePostDetail(msg tea.Msg) (*App, tea.Cmd, bool) {
 		*a, notifyCmd = a.notify(notifyInfo, "saved to your Journal")
 		return a, notifyCmd, true
 	case screens.SubmitPostEditMsg:
-		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentTouched, msg.AudioAttachment, msg.OtherAttachments), true
+		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.ContentWarning, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentTouched, msg.AudioAttachment, msg.OtherAttachments), true
 	case postEditedMsg:
 		// Both Feed and PostDetail may hold their own local copy of this post;
 		// PostDetail's ApplyPostEdit has no postID param, so guard it here —
 		// otherwise editing from Feed while PostDetail has an unrelated post
 		// open would overwrite that unrelated post's content.
-		a.feed = a.feed.ApplyPostEdit(msg.postID, msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
+		a.feed = a.feed.ApplyPostEdit(msg.postID, msg.content, msg.title, msg.contentWarning, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
 		if a.postDetail.PostID() == msg.postID {
-			a.postDetail = a.postDetail.ApplyPostEdit(msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
+			a.postDetail = a.postDetail.ApplyPostEdit(msg.content, msg.title, msg.contentWarning, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
 		}
 		return a, nil, true
 	case screens.SubmitReplyMsg:
@@ -4776,11 +4776,11 @@ type postDeletedMsg struct {
 // PATCH response echoes back no fields worth using (same as CreatePost), so
 // editedAt is set optimistically to the time the request completed.
 type postEditedMsg struct {
-	postID           string
-	content, title   string
-	topics           []string
-	isPublic, isNSFW bool
-	editedAt         time.Time
+	postID                         string
+	content, title, contentWarning string
+	topics                         []string
+	isPublic, isNSFW               bool
+	editedAt                       time.Time
 	// attachments/attachmentsTouched mirror EditPost's own pair: Feed/
 	// PostDetail's local copy only overwrites its cached Attachments when
 	// attachmentsTouched — otherwise the edit didn't touch them server-side
@@ -5470,9 +5470,9 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string, audioAttachm
 // createPostCmd sends a post with its audio attachment, if any (native
 // image/gif post attachments were removed — API v0.8.7 rejects type:"image"
 // in a post's attachments array).
-func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool, audioAttachment *model.Attachment) tea.Cmd {
+func (a *App) createPostCmd(content, title, slug, contentWarning string, topics []string, isPublic, isNSFW bool, audioAttachment *model.Attachment) tea.Cmd {
 	return func() tea.Msg {
-		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, "", audioAttachment)
+		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, contentWarning, audioAttachment)
 		if err != nil {
 			if errors.Is(err, api.ErrUnauthorized) {
 				return actionErrMsg{err} // let handleUnauthorized redirect to login
@@ -6429,7 +6429,7 @@ func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 // panel found on the post but doesn't manage (e.g. an audio one) — when
 // attachmentTouched, they're resent alongside the resolved attachmentURL
 // since EditPost replaces the whole attachments array wholesale.
-func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool, attachmentTouched bool, audioAttachment *model.Attachment, otherAttachments []model.Attachment) tea.Cmd {
+func (a *App) editPostCmd(postID, content, title, contentWarning string, topics []string, isPublic, isNSFW bool, attachmentTouched bool, audioAttachment *model.Attachment, otherAttachments []model.Attachment) tea.Cmd {
 	return func() tea.Msg {
 		var attachments []model.Attachment
 		if attachmentTouched {
@@ -6438,11 +6438,11 @@ func (a *App) editPostCmd(postID, content, title string, topics []string, isPubl
 				attachments = append(attachments, *audioAttachment)
 			}
 		}
-		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW, "", attachments, attachmentTouched); err != nil {
+		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW, contentWarning, attachments, attachmentTouched); err != nil {
 			return editErrorMsg(err)
 		}
 		return postEditedMsg{
-			postID: postID, content: content, title: title, topics: topics,
+			postID: postID, content: content, title: title, contentWarning: contentWarning, topics: topics,
 			isPublic: isPublic, isNSFW: isNSFW, editedAt: time.Now(),
 			attachments: attachments, attachmentsTouched: attachmentTouched,
 		}

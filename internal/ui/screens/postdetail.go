@@ -395,9 +395,10 @@ func (m PostDetailModel) CanEditSelected() bool {
 // ApplyPostEdit overwrites the edited fields of the open post after a
 // successful PATCH. Attachments is only applied when attachmentsTouched —
 // see FeedModel.ApplyPostEdit's doc comment for why.
-func (m PostDetailModel) ApplyPostEdit(content, title string, topics []string, isPublic, isNSFW bool, editedAt time.Time, attachments []model.Attachment, attachmentsTouched bool) PostDetailModel {
+func (m PostDetailModel) ApplyPostEdit(content, title, contentWarning string, topics []string, isPublic, isNSFW bool, editedAt time.Time, attachments []model.Attachment, attachmentsTouched bool) PostDetailModel {
 	m.post.Content = content
 	m.post.Title = title
+	m.post.ContentWarning = contentWarning
 	m.post.Topics = topics
 	m.post.IsPublic = isPublic
 	m.post.IsNSFW = isNSFW
@@ -630,6 +631,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			content := msg.Content
 			postID := m.post.ID
 			title := m.editPanel.TitleValue()
+			contentWarning := m.editPanel.CWValue()
 			topics := ParseTopics(m.editPanel.TopicsRaw())
 			isPublic := m.editPanel.IsPublic()
 			isNSFW := m.editPanel.IsNSFW()
@@ -641,7 +643,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				m.viewport.Height = m.viewportHeight()
 			}
 			return m, func() tea.Msg {
-				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
+				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, ContentWarning: contentWarning, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
 			}
 		}
 		content := msg.Content
