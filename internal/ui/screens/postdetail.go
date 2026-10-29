@@ -1066,7 +1066,7 @@ func (m PostDetailModel) renderFullPost(selected bool) (string, []postImageSlot)
 	var body string
 	var imgSlots []postImageSlot
 	if gated {
-		body = theme.Subtle.Render("  enter to reveal")
+		body = cwHiddenBar("enter to reveal", innerWidth)
 	} else {
 		body, imgSlots = m.renderBodyWithInlineImage(m.post.Content, innerWidth, 1+lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, rows...)))
 		if att := renderAttachments(m.post.Attachments); att != "" {

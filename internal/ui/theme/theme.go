@@ -129,6 +129,12 @@ var (
 			Background(ColorDimGreen).
 			Foreground(ColorGreen).
 			Bold(true)
+
+	// SpoilerHint is the inverse strip a hidden content-warned post's hint
+	// sits on, shaded in the same colour as the surrounding ░ run.
+	SpoilerHint = lipgloss.NewStyle().
+			Background(ColorMuted).
+			Foreground(ColorBackground)
 )
 
 // Set applies the named theme by reassigning all color and style vars.
@@ -683,4 +689,8 @@ func applyStyles() {
 		Background(ColorDimGreen).
 		Foreground(ColorGreen).
 		Bold(true)
+
+	SpoilerHint = lipgloss.NewStyle().
+		Background(ColorMuted).
+		Foreground(ColorBackground)
 }

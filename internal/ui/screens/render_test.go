@@ -1226,3 +1226,19 @@ func TestFeedRenderPost_CacheInvalidatesOnContentWarningOnlyChange(t *testing.T)
 		t.Errorf("expected cache to invalidate after CW-only change, got stale body: %q", after)
 	}
 }
+
+func TestCWHiddenBar(t *testing.T) {
+	bar := ansi.Strip(cwHiddenBar("enter to open", 76))
+	if got := lipgloss.Width(bar); got != 32 {
+		t.Errorf("width = %d, want 32 (capped)", got)
+	}
+	if !strings.HasPrefix(bar, "░") || !strings.HasSuffix(bar, "░") || !strings.Contains(bar, " enter to open ") {
+		t.Errorf("expected ░ either side of the hint, got %q", bar)
+	}
+	if got := lipgloss.Width(ansi.Strip(cwHiddenBar("enter to open", 20))); got != 20 {
+		t.Errorf("width at innerWidth 20 = %d, want 20", got)
+	}
+	if got := ansi.Strip(cwHiddenBar("enter to open", 10)); got != " enter to open " {
+		t.Errorf("narrow fallback = %q, want the hint alone", got)
+	}
+}

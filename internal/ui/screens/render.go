@@ -103,7 +103,7 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 	var body string
 	var imgSlots []postImageSlot
 	if gated {
-		body = theme.Subtle.Render("  enter to open")
+		body = cwHiddenBar("enter to open", innerWidth)
 	} else if innerWidth > 0 {
 		if inlineImagesEnabled {
 			rendered, hits := markdown.RenderLocatingImages(p.Content, innerWidth)
@@ -174,6 +174,19 @@ func cwGated(p model.Post, revealCW bool) bool { return p.ContentWarning != "" &
 // cwLabel renders the "CW: <text>" line shown wherever a content-warned post
 // appears, revealed or not.
 func cwLabel(cw string) string { return theme.Error.Render("CW: " + cw) }
+
+// cwHiddenBar renders the spoiler-style strip shown in place of a hidden
+// post's title, body and attachments: a fixed-width ░ run (like cIRC's
+// spoiler mask) with hint set into it on a shaded background.
+func cwHiddenBar(hint string, innerWidth int) string {
+	label := theme.SpoilerHint.Render(" " + hint + " ")
+	pad := min(innerWidth, 32) - lipgloss.Width(label)
+	if pad < 2 {
+		return label
+	}
+	left := pad / 2
+	return theme.Subtle.Render(strings.Repeat("░", left)) + label + theme.Subtle.Render(strings.Repeat("░", pad-left))
+}
 
 // cwPreview returns the one-line preview text for compact list rows: the CW
 // label while gated, else the title or the first line of the body.
