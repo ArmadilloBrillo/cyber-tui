@@ -1649,7 +1649,7 @@ func TestBrowsing_Enter_TogglesSpoilerReveal(t *testing.T) {
 	}
 	renderedWithReveal := func(m ChatroomsModel) string {
 		content, _, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
-			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil, nil)
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, false, nil, nil)
 		return content
 	}
 	if strings.Contains(renderedWithReveal(m), "the ending is a twist") {
@@ -1702,7 +1702,7 @@ func TestBrowsing_Enter_TogglesL33tReveal(t *testing.T) {
 
 	renderedWithReveal := func(m ChatroomsModel) string {
 		content, _, _, _ := renderCircMessagesWithSelection(m.messages, m.location(), m.timeDisplayFormat,
-			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, nil, nil)
+			m.viewport.Width, m.currentUser, m.selectedMsgID, m.revealed, m.styleAnimFrame, nil, false, false, nil, nil)
 		return content
 	}
 	if !strings.Contains(renderedWithReveal(m), "3l173") {
@@ -2202,13 +2202,13 @@ func TestChatrooms_InlineImages_SuppressesRedundantTextOnceEnabled(t *testing.T)
 	}
 
 	disabled, _, _, _ := renderCircMessagesWithSelection(msgs, m.location(), m.timeDisplayFormat,
-		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, false, nil, nil)
+		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, false, false, nil, nil)
 	if !strings.Contains(disabled, "https://example.com/attach.png") || !strings.Contains(disabled, "https://example.com/pic.png") {
 		t.Fatalf("setup: expected both URLs visible while disabled, got: %q", disabled)
 	}
 
 	enabled, _, _, _ := renderCircMessagesWithSelection(msgs, m.location(), m.timeDisplayFormat,
-		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, true, nil, nil)
+		m.viewport.Width, m.currentUser, "", m.revealed, m.styleAnimFrame, nil, false, true, nil, nil)
 	if strings.Contains(enabled, "https://example.com/attach.png") {
 		t.Errorf("expected the attachment URL suppressed once enabled, got: %q", enabled)
 	}

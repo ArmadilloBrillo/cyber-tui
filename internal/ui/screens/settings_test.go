@@ -204,6 +204,21 @@ func TestSettings_Tab_OnBool_IsNoop(t *testing.T) {
 	}
 }
 
+func TestSettings_ColorNicknames_SpaceTogglesAndMarksDirty(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.cursor = 10 // color nicknames
+	if flatItems(m)[m.cursor].label != "color nicknames" {
+		t.Fatalf("item %d = %q, want color nicknames", m.cursor, flatItems(m)[m.cursor].label)
+	}
+	m, _ = m.Update(keyMsg("space"))
+	if !m.settings.ColorNicknames {
+		t.Error("space should toggle ColorNicknames on")
+	}
+	if !m.IsDirty() {
+		t.Error("toggling ColorNicknames should mark settings dirty")
+	}
+}
+
 // --- Keyword list Tests ---
 //
 // The "alert keywords" row's own editing UX (add/delete/dedupe/scroll)
@@ -588,7 +603,7 @@ func TestSettings_WanderGroup_Visible(t *testing.T) {
 func TestSettings_WanderToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
-	m.cursor = 15 // wander mode item (shifted by the new dithering toggle above it)
+	m.cursor = 16 // wander mode item (shifted by the dithering and color nicknames toggles above it)
 	m, _ = m.Update(keyMsg("enter"))
 	if m.wanderLust {
 		t.Error("toggling wander mode should flip wanderLust to false")
@@ -860,7 +875,7 @@ func TestSettings_Timezone_CyclesForward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.timezone = "UTC"
 	m.originalTimezone = "UTC"
-	m.cursor = 10 // timezone item
+	m.cursor = 11 // timezone item
 	m, _ = m.Update(keyMsg("tab"))
 	if m.timezone == "UTC" {
 		t.Error("tab should advance timezone from UTC")
@@ -871,7 +886,7 @@ func TestSettings_Timezone_CyclesBackward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.timezone = "UTC"
 	m.originalTimezone = "UTC"
-	m.cursor = 10
+	m.cursor = 11
 	m, _ = m.Update(keyMsg("shift+tab"))
 	if m.timezone == "UTC" {
 		t.Error("shift+tab should cycle timezone backward from UTC")
@@ -881,12 +896,12 @@ func TestSettings_Timezone_CyclesBackward(t *testing.T) {
 func TestSettings_Timezone_Wraps(t *testing.T) {
 	m := initSettings(defaultSettings())
 	items := flatItems(m)
-	last := items[10].options[len(items[10].options)-1]
+	last := items[11].options[len(items[11].options)-1]
 	m.timezone = last
 	m.originalTimezone = last
-	m.cursor = 10
+	m.cursor = 11
 	m, _ = m.Update(keyMsg("tab"))
-	first := items[10].options[0]
+	first := items[11].options[0]
 	if m.timezone != first {
 		t.Errorf("tab from last timezone should wrap to first, got %s", m.timezone)
 	}

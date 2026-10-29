@@ -534,3 +534,28 @@ func TestImportFromFile_ValidJSON_InvalidPalette(t *testing.T) {
 		t.Errorf("expected ErrInvalidThemeFile, got %v", err)
 	}
 }
+
+func TestNickStyle_HashesLowercasedNameToHue(t *testing.T) {
+	Set("cyber")
+	// fnv32a("alice") = 2267157479, % 360 = 239; cyber's text is light, so
+	// lightness is 0.65 at saturation 0.7.
+	if got := NickStyle("Alice").GetForeground(); got != lipgloss.Color("#6769e4") {
+		t.Errorf("NickStyle(Alice) foreground = %v, want #6769e4", got)
+	}
+	if NickStyle("alice").GetForeground() != NickStyle("ALICE").GetForeground() {
+		t.Error("NickStyle should ignore case")
+	}
+	if NickStyle("alice").GetForeground() == NickStyle("bob").GetForeground() {
+		t.Error("different names should get different hues")
+	}
+}
+
+func TestNickStyle_DarkTextGetsDarkerShade(t *testing.T) {
+	Set("cyber")
+	light := NickStyle("alice").GetForeground()
+	ColorGreen = lipgloss.Color("#202020")
+	t.Cleanup(func() { Set("cyber") })
+	if dark := NickStyle("alice").GetForeground(); dark == light {
+		t.Errorf("dark theme text should pick a different lightness, both %v", dark)
+	}
+}

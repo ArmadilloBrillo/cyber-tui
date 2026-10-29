@@ -212,6 +212,7 @@ type ChatroomsModel struct {
 
 	mutedUsersByRoom map[string][]string // roomID -> muted usernames, from Settings
 	keywordAlerts    []string            // user's configured keyword alerts, from SharedConfigMsg
+	colorNicknames   bool                // Settings.ColorNicknames, from SharedConfigMsg
 
 	// canGoBack is true when the active room was opened via a deep link
 	// (e.g. a chat_mention notification) rather than by switching to this
@@ -344,6 +345,7 @@ var baseSlashCommands = map[string]bool{
 // server rejects them (see docs/00-latest-api-reference.md).
 var circOnlySlashCommands = map[string]bool{
 	"/mute": true, "/unmute": true, "/muted": true, "/unmuteall": true, "/art": true,
+	"/localtime": true,
 }
 
 // knownCircStyles are the text-style command names (see chatstyle.go) that
@@ -1286,6 +1288,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.mutedUsersByRoom = msg.Settings.MutedUsersByRoom
 		m.keywordAlerts = msg.KeywordAlerts
+		m.colorNicknames = msg.Settings.ColorNicknames
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m = m.SetLocation(msg.Loc)
 		if m.mode == chatroomModeDetail && m.activeRoom != nil {
@@ -1684,6 +1687,11 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 								}
 								val = body
 							}
+							// The server can't see the user's clock, so a bare
+							// /localtime would otherwise be rejected for a missing time.
+							if cmd == "/localtime" && len(strings.Fields(val)) == 1 {
+								val = "/localtime " + time.Now().In(m.location()).Format("15:04")
+							}
 							if cmd == "/mute" || cmd == "/unmute" {
 								if fields := strings.Fields(val); len(fields) >= 2 {
 									val = cmd + " " + strings.ToLower(strings.Join(fields[1:], " "))
@@ -1849,7 +1857,7 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 	}
 	content, offsets, heights, imgSlots := renderCircMessagesWithSelection(
 		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID,
-		m.revealed, m.styleAnimFrame, m.mutedUsers(), m.inlineImagesEnabled, m.imageRealRows, m.chatBodyCache)
+		m.revealed, m.styleAnimFrame, m.mutedUsers(), m.colorNicknames, m.inlineImagesEnabled, m.imageRealRows, m.chatBodyCache)
 	m.viewport.SetContent(content)
 	m.msgOffsets, m.msgHeights = offsets, heights
 	m.msgImages = imgSlots

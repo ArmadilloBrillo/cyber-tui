@@ -460,6 +460,7 @@ type wireSettings struct {
 	ShowFollowerCount    bool                  `json:"showFollowerCount"`
 	AutoWatchOnReply     bool                  `json:"autoWatchOnReply"`
 	ShowGuildPostsInFeed bool                  `json:"showGuildPostsInFeed"`
+	ColorNicknames       bool                  `json:"colorNicknames"`
 	IconTheme            string                `json:"iconTheme"`
 	FollowedTopics       []string              `json:"followedTopics"`
 	MutedTopics          []string              `json:"mutedTopics"`
@@ -482,6 +483,7 @@ type wirePatchSettings struct {
 	ShowFollowerCount    bool                  `json:"showFollowerCount"`
 	AutoWatchOnReply     bool                  `json:"autoWatchOnReply"`
 	ShowGuildPostsInFeed bool                  `json:"showGuildPostsInFeed"`
+	ColorNicknames       bool                  `json:"colorNicknames"`
 	TimeDisplayFormat    string                `json:"timeDisplayFormat"`
 	DefaultPublicPost    bool                  `json:"defaultPublicPost"`
 	MutedTopics          []string              `json:"mutedTopics"`
@@ -1099,6 +1101,7 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 		ShowFollowerCount:    w.ShowFollowerCount,
 		AutoWatchOnReply:     w.AutoWatchOnReply,
 		ShowGuildPostsInFeed: w.ShowGuildPostsInFeed,
+		ColorNicknames:       w.ColorNicknames,
 		IconTheme:            w.IconTheme,
 		FollowedTopics:       w.FollowedTopics,
 		MutedTopics:          w.MutedTopics,
@@ -1568,6 +1571,7 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 		ShowFollowerCount:    update.ShowFollowerCount,
 		AutoWatchOnReply:     update.AutoWatchOnReply,
 		ShowGuildPostsInFeed: update.ShowGuildPostsInFeed,
+		ColorNicknames:       update.ColorNicknames,
 		TimeDisplayFormat:    update.TimeDisplayFormat,
 		DefaultPublicPost:    update.DefaultPublicPost,
 		MutedTopics:          mutedTopics,

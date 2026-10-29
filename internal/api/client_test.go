@@ -3046,6 +3046,39 @@ func TestHTTPSettings_ShowGuildPostsInFeed_RoundTrips(t *testing.T) {
 	}
 }
 
+func TestHTTPSettings_ColorNicknames_RoundTrips(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/settings" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == "PATCH" {
+			json.NewDecoder(r.Body).Decode(&gotBody)
+			writeOK(t, w, map[string]any{})
+			return
+		}
+		writeOK(t, w, map[string]any{"colorNicknames": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	settings, err := c.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if !settings.ColorNicknames {
+		t.Error("ColorNicknames should parse as true from the response")
+	}
+
+	settings.ColorNicknames = false
+	if err := c.UpdateSettings(settings); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if gotBody["colorNicknames"] != false {
+		t.Errorf("PATCH body colorNicknames = %v, want false", gotBody["colorNicknames"])
+	}
+}
+
 func TestHTTPUpdateSettings_SendsMutedTopics(t *testing.T) {
 	var gotBody map[string]any
 	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -620,6 +621,24 @@ func setBland() {
 
 // applyStyles rebuilds all style vars from the current color vars.
 // Must be called after any color vars are changed.
+// NickStyle is the colorNicknames style for a cIRC username: the hue follows
+// the website's formula (FNV-1a 32 of the lower-cased name, mod 360). The TUI
+// never paints a background, so lightness keys off the theme's text colour
+// instead: light text implies a dark terminal, which gets the lighter shade.
+// ponytail: fixed saturation/lightness, tune per theme if some hues read poorly.
+func NickStyle(username string) lipgloss.Style {
+	h := fnv.New32a()
+	h.Write([]byte(strings.ToLower(username)))
+	l := 0.35
+	if fg, err := colorful.Hex(string(ColorGreen)); err == nil {
+		if _, _, fgL := fg.Hsl(); fgL >= 0.5 {
+			l = 0.65
+		}
+	}
+	c := colorful.Hsl(float64(h.Sum32()%360), 0.7, l)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(c.Hex())).Bold(true)
+}
+
 func applyStyles() {
 	Base = lipgloss.NewStyle().
 		Foreground(ColorGreen)

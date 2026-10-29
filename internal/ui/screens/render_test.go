@@ -655,8 +655,8 @@ func TestRenderCircMessagesStyled_Blink_HidesAndShowsWithoutChangingLineCount(t 
 	msg := circMsg("molly", "hello there")
 	msg.Style = []string{"blink"}
 
-	visible := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, 0, nil)
-	hidden := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, blinkPhaseFrames, nil)
+	visible := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, 0, nil, false)
+	hidden := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, blinkPhaseFrames, nil, false)
 
 	if !strings.Contains(ansi.Strip(visible), "hello there") {
 		t.Errorf("expected the visible phase to contain the body text, got: %q", visible)
@@ -713,7 +713,7 @@ func TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned(t *testi
 	msgs := []model.Message{muted, visible}
 
 	content, offsets, heights, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "", "", nil, 0,
-		map[string]bool{"alice": true}, false, nil, nil)
+		map[string]bool{"alice": true}, false, false, nil, nil)
 
 	if len(offsets) != len(msgs) || len(heights) != len(msgs) {
 		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
@@ -874,8 +874,8 @@ func TestRenderCircMessagesWithSelection_HighlightsImageBandWhenSelected(t *test
 	msg.ImageUrl = "https://example.com/a.png"
 	msgs := []model.Message{msg}
 
-	unselected, _, unselHeights, unselSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, true, nil, nil)
-	selected, _, selHeights, selSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "m1", nil, 0, nil, true, nil, nil)
+	unselected, _, unselHeights, unselSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, true, nil, nil)
+	selected, _, selHeights, selSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "m1", nil, 0, nil, false, true, nil, nil)
 
 	if unselHeights[0] != selHeights[0] {
 		t.Errorf("heights differ between selected/unselected: %d vs %d, want equal", unselHeights[0], selHeights[0])
@@ -924,7 +924,7 @@ func TestRenderCircMessagesWithSelection_UsesCachedBodyOnHit(t *testing.T) {
 		},
 	}
 
-	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, nil, cache)
+	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, false, nil, cache)
 
 	if !strings.Contains(content, "CACHED-SENTINEL") {
 		t.Errorf("expected the matching cache entry to be reused, got: %q", content)
@@ -952,7 +952,7 @@ func TestRenderCircMessagesWithSelection_StaleCacheEntryIsRecomputed(t *testing.
 		},
 	}
 
-	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, nil, cache)
+	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, false, nil, cache)
 
 	if strings.Contains(content, "CACHED-SENTINEL") {
 		t.Errorf("expected a stale cache entry (body mismatch) to be recomputed, not reused, got: %q", content)
@@ -984,7 +984,7 @@ func TestRenderCircMessagesWithSelection_AnimatedMessageNeverCached(t *testing.T
 		},
 	}
 
-	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, nil, cache)
+	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, false, nil, cache)
 
 	if strings.Contains(content, "CACHED-SENTINEL") {
 		t.Errorf("expected an animated-style message to bypass the cache entirely, got: %q", content)
@@ -1129,7 +1129,7 @@ func BenchmarkRenderCircMessagesWithSelection(b *testing.B) {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, false, nil, nil)
+				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, false, false, nil, nil)
 			}
 		})
 	}
@@ -1240,5 +1240,46 @@ func TestCWHiddenBar(t *testing.T) {
 	}
 	if got := ansi.Strip(cwHiddenBar("enter to open", 10)); got != " enter to open " {
 		t.Errorf("narrow fallback = %q, want the hint alone", got)
+	}
+}
+
+func TestRenderCircMessages_ColorNicknames(t *testing.T) {
+	withTrueColor(t)
+	msgs := []model.Message{circMsg("bob", "hi"), circMsg("alice", "yo")}
+
+	off := renderCircMessagesStyled(msgs, time.UTC, "datetime", 80, "alice", nil, 0, nil, false)
+	on := renderCircMessagesStyled(msgs, time.UTC, "datetime", 80, "alice", nil, 0, nil, true)
+
+	if !strings.Contains(off, theme.Highlight.Render("bob")) {
+		t.Error("with colorNicks off, other users should use Highlight")
+	}
+	if !strings.Contains(on, theme.NickStyle("bob").Render("bob")) {
+		t.Error("with colorNicks on, other users should use NickStyle")
+	}
+	if !strings.Contains(on, theme.MeHighlight.Render("alice")) {
+		t.Error("own username should keep MeHighlight with colorNicks on")
+	}
+}
+
+func TestRenderCircMessagesWithSelection_ColorNicknamesTogglesCache(t *testing.T) {
+	withTrueColor(t)
+	msgs := []model.Message{{ID: "m1", From: model.User{Username: "bob"}, Body: "hi", CreatedAt: circMsgTime}}
+	cache := map[string]chatBodyCacheEntry{}
+
+	off, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, false, false, nil, cache)
+	on, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, true, false, nil, cache)
+	if off == on {
+		t.Error("toggling colorNicks should miss the cache and re-render")
+	}
+	if !strings.Contains(on, theme.NickStyle("bob").Render("bob")) {
+		t.Error("re-render with colorNicks on should use NickStyle")
+	}
+}
+
+func TestRenderActionLine_ColorNicknames(t *testing.T) {
+	withTrueColor(t)
+	got := renderActionLine("bob", "waves", "12:00", 80, "alice", true)
+	if !strings.Contains(got, theme.NickStyle("bob").Render("bob")) {
+		t.Error("/me line should use NickStyle with colorNicks on")
 	}
 }

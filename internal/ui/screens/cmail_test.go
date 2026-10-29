@@ -230,6 +230,19 @@ func TestCMail_Send_UnknownCommandIsRejected(t *testing.T) {
 	}
 }
 
+func TestCMail_Send_LocaltimeIsCircOnly(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.input.SetValue("/localtime 09:30")
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected no command: /localtime is cIRC-only")
+	}
+	if view := m.View(); !strings.Contains(view, "unknown command: /localtime") {
+		t.Errorf("expected an unknown-command notice in the view, got: %q", view)
+	}
+}
+
 func TestCMail_Send_KnownCommandStillSends(t *testing.T) {
 	cases := []string{
 		"/me waves",

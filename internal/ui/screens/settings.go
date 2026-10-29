@@ -141,6 +141,14 @@ var settingsGroups = []settingsGroup{
 				},
 			},
 			{
+				label: "color nicknames", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.ColorNicknames },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.settings.ColorNicknames = !m.settings.ColorNicknames
+					return m
+				},
+			},
+			{
 				label: "timezone", kind: "enum",
 				options: config.AvailableTimezones,
 				getEnum: func(m SettingsModel) string {
@@ -509,6 +517,7 @@ func settingsEqual(a, b model.Settings) bool {
 		a.ShowFollowerCount == b.ShowFollowerCount &&
 		a.AutoWatchOnReply == b.AutoWatchOnReply &&
 		a.ShowGuildPostsInFeed == b.ShowGuildPostsInFeed &&
+		a.ColorNicknames == b.ColorNicknames &&
 		a.DefaultPublicPost == b.DefaultPublicPost &&
 		a.TimeDisplayFormat == b.TimeDisplayFormat
 }
