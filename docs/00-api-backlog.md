@@ -317,7 +317,7 @@ Changes from v0.8.12, see `docs/api-diff-v0.8.12-to-v0.9.0.diff`.
 | `/localtime HH:MM` command | cIRC only. Posts "It's HH:MM o'clock where @you is"; the client must supply local time (24h) since the server can't see the clock. Was rejected client-side as an unknown command (missing from `circOnlySlashCommands`); now allowed, and a bare `/localtime` is filled in with the current time. | **Done**, see `docs/58-circ-color-nicknames-localtime.md` |
 | `audioAttachment` `origin: "latex"` | Website-posted tracks (entries and cIRC/C-Mail `/song`) can carry `origin: "latex"` with a direct MP3 `src` and a `cover` image URL. `wireAttachment` (`internal/api/client.go:76-83`) has no `cover` field; playback path not yet checked for YouTube-only assumptions. The API itself still only accepts YouTube on create. | Medium |
 | `imageColor` setting | Default off. Renders images in colour instead of the theme's foreground/background. Only relevant if the client renders images tinted to the theme; current image rendering not checked against this. | Not evaluated |
-| `imagePixelSize` values documented | One of `rough`, `medium`, `sharp`, `crisp`. Still deferred (see Partially Implemented Features). | Low |
+| `imagePixelSize` values documented | One of `rough`, `medium`, `sharp`, `crisp`. Now backs the Settings dithering "sharpness" row and is sent on `PATCH`; replaces the local `ditherSharpness` config key. | **Done** (PR #205), see `docs/59-image-pixel-size.md` |
 | cIRC history limits | Scrollback stops at the newest 1000 messages or 180 days. RTDB reads now require `orderBy="timestamp"` with `limitToLast` up to 1000 and deny `endAt`/`endBefore`; scrollback must use `GET /v1/circ/:roomId`. Client RTDB reads use `limitToLast=50` without `endBefore` (`client.go:1999`, `:2671`), so no change needed. A `before` past the limit returns an empty page; not yet checked how the client's cIRC scrollback handles that. | No change needed |
 
 ### Replies
@@ -350,7 +350,7 @@ Changes from v0.8.12, see `docs/api-diff-v0.8.12-to-v0.9.0.diff`.
 | --------------- | ------------------------------------- | -------------------------------------------------------------------- |
 | Notes (Journal) | List, create, edit, delete, revision history | — |
 | Profile         | View and edit all fields              | —                                                                    |
-| Settings        | All TUI-relevant fields editable; `mutedUsersByRoom` read and enforced (feature 37); `mutedTopics` (muted topics) managed from the Topics tab and filtered everywhere (feature 54) | `keyboardBindings`, `keyboardPreset` — web UI concepts with no TUI equivalent; intentionally omitted; `followedTopics`, `iconTheme`, `imagePixelSize` still deferred |
+| Settings        | All TUI-relevant fields editable; `mutedUsersByRoom` read and enforced (feature 37); `mutedTopics` (muted topics) managed from the Topics tab and filtered everywhere (feature 54) | `keyboardBindings`, `keyboardPreset` — web UI concepts with no TUI equivalent; intentionally omitted; `followedTopics`, `iconTheme` still deferred |
 | Follows         | Follow, unfollow, list following and followers | — |
 | Notifications   | All v0.4 types received and displayed with dedicated text and icons; unread-only toggle (`u`); category filter panel (`f`) | — |
 
