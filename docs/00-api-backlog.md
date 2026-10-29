@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.8.11) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.9.0) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -305,6 +305,20 @@ Notes:
 | Area | Description | Priority |
 |---|---|---|
 | 4 new notification types | `guild_chat_message`, `moderator_permissions_changed`, `edit_access_granted`/`edit_access_removed`, `gift_received`/`gift_sent` — `notifSummary`/`notifIcon` cases and category-filter grouping added in `notifications.go`. Unverified against a live payload (all rare/admin- or feature-gated triggers). | **Done** — 2026-09-16 |
+
+### API v0.9.0 (2026-10-28)
+
+Changes from v0.8.12, see `docs/api-diff-v0.8.12-to-v0.9.0.diff`.
+
+| Area | Description | Priority |
+|---|---|---|
+| `contentWarning` on posts | Optional, max 60 chars on create/edit (`""` or `null` removes it). Clients show `CW: <contentWarning>` and reveal title, body and attachments on request. | **Done** (PR #203): sent from compose/edit, gated in feed and post detail, plus a setting to always reveal |
+| `colorNicknames` setting | Default off. Colours usernames in cIRC message lines; hue is `fnv32a(lowercase(username)) % 360`, lightness chosen by the client to suit the background. Needs the settings field, a Settings screen toggle and cIRC line rendering. | Medium |
+| `/localtime HH:MM` command | cIRC only. Posts "It's HH:MM o'clock where @you is"; the client must supply local time (24h) since the server can't see the clock. Typing it by hand with an explicit time should already work, since commands are expanded server-side (not verified live); the client could fill in the time when the argument is omitted. | Low |
+| `audioAttachment` `origin: "latex"` | Website-posted tracks (entries and cIRC/C-Mail `/song`) can carry `origin: "latex"` with a direct MP3 `src` and a `cover` image URL. `wireAttachment` (`internal/api/client.go:76-83`) has no `cover` field; playback path not yet checked for YouTube-only assumptions. The API itself still only accepts YouTube on create. | Medium |
+| `imageColor` setting | Default off. Renders images in colour instead of the theme's foreground/background. Only relevant if the client renders images tinted to the theme; current image rendering not checked against this. | Not evaluated |
+| `imagePixelSize` values documented | One of `rough`, `medium`, `sharp`, `crisp`. Still deferred (see Partially Implemented Features). | Low |
+| cIRC history limits | Scrollback stops at the newest 1000 messages or 180 days. RTDB reads now require `orderBy="timestamp"` with `limitToLast` up to 1000 and deny `endAt`/`endBefore`; scrollback must use `GET /v1/circ/:roomId`. Client RTDB reads use `limitToLast=50` without `endBefore` (`client.go:1999`, `:2671`), so no change needed. A `before` past the limit returns an empty page; not yet checked how the client's cIRC scrollback handles that. | No change needed |
 
 ### Replies
 
