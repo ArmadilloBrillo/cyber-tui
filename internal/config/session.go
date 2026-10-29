@@ -97,11 +97,6 @@ type Config struct {
 	// RasterImage shader effect. Only applies when ImageViewer != "browser".
 	Dithering bool `json:"dithering,omitempty"`
 
-	// DitherSharpness controls the dithering pixelation block size: "rough"
-	// (chunkiest), "medium" (default), "sharp", or "crisp" (no pixelation).
-	// Only meaningful when Dithering is on. See GetDitherSharpness.
-	DitherSharpness string `json:"ditherSharpness,omitempty"`
-
 	// FeedManualRefreshOnly disables Feed's background poll (see
 	// docs/39-feed-background-poll.md) — the 60s tea.Tick chain that fetches
 	// a peek page to stage the "(N) new posts" badge. Off (auto-poll) by
@@ -187,17 +182,6 @@ func (c Config) GetImageScale() float64 {
 		s = MaxImageScale
 	}
 	return s
-}
-
-// GetDitherSharpness returns DitherSharpness, substituting the default
-// ("medium") for an empty or unrecognized value.
-func (c Config) GetDitherSharpness() string {
-	switch c.DitherSharpness {
-	case "rough", "sharp", "crisp":
-		return c.DitherSharpness
-	default:
-		return "medium"
-	}
 }
 
 // GetMaxThreadDepth returns MaxThreadDepth, substituting the default (3) when
