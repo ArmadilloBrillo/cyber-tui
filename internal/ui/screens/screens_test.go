@@ -3,6 +3,7 @@ package screens_test
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -367,6 +368,7 @@ func TestChatrooms_Send_KnownCommandStillSends(t *testing.T) {
 		"/art",
 		"/dice 4d6kh3",
 		"/dice:20:2",
+		"/localtime 09:30",
 	}
 	for _, body := range cases {
 		t.Run(body, func(t *testing.T) {
@@ -420,6 +422,27 @@ func TestChatrooms_Send_BorkRewritesBody(t *testing.T) {
 				t.Errorf("body = %q, want %q", sendMsg.Body, tt.want)
 			}
 		})
+	}
+}
+
+func TestChatrooms_Send_BareLocaltimeFillsCurrentTime(t *testing.T) {
+	m := screens.NewChatroomsModel("neuromancer", nil)
+	m = m.SetRooms(sampleRooms())
+	m, _ = sendChatroomSpecialKey(m, tea.KeyEnter) // open room
+
+	for _, r := range "/localtime" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	_, cmd := sendChatroomSpecialKey(m, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("expected a command for bare /localtime")
+	}
+	sendMsg, ok := cmd().(screens.SendRoomMessageMsg)
+	if !ok {
+		t.Fatalf("expected SendRoomMessageMsg, got %T", cmd())
+	}
+	if !regexp.MustCompile(`^/localtime \d{2}:\d{2}$`).MatchString(sendMsg.Body) {
+		t.Errorf("body = %q, want /localtime HH:MM", sendMsg.Body)
 	}
 }
 

@@ -344,6 +344,7 @@ var baseSlashCommands = map[string]bool{
 // server rejects them (see docs/00-latest-api-reference.md).
 var circOnlySlashCommands = map[string]bool{
 	"/mute": true, "/unmute": true, "/muted": true, "/unmuteall": true, "/art": true,
+	"/localtime": true,
 }
 
 // knownCircStyles are the text-style command names (see chatstyle.go) that
@@ -1683,6 +1684,11 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 									return m.AppendSystemMessage(roomID, notice), nil
 								}
 								val = body
+							}
+							// The server can't see the user's clock, so a bare
+							// /localtime would otherwise be rejected for a missing time.
+							if cmd == "/localtime" && len(strings.Fields(val)) == 1 {
+								val = "/localtime " + time.Now().In(m.location()).Format("15:04")
 							}
 							if cmd == "/mute" || cmd == "/unmute" {
 								if fields := strings.Fields(val); len(fields) >= 2 {
