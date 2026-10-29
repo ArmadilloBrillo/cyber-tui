@@ -193,6 +193,7 @@ type Settings struct {
 	ShowFollowerCount    bool
 	AutoWatchOnReply     bool
 	ShowGuildPostsInFeed bool
+	ColorNicknames       bool // colour cIRC usernames by a hash of the name
 	IconTheme            string
 	FollowedTopics       []string
 	MutedTopics          []string
