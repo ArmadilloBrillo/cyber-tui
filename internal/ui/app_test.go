@@ -6145,7 +6145,7 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 	}
 
 	a.dithering = true
-	a.ditherSharpness = "sharp"
+	a.settings.ImagePixelSize = "sharp"
 
 	cmd = a.syncInlineImages()
 	if cmd == nil {

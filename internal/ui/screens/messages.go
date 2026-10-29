@@ -62,12 +62,8 @@ type SharedConfigMsg struct {
 	InlineImagesEnabled bool
 	// Dithering is the user's raw preference (config.Config.Dithering), used
 	// by the settings screen to display/edit the toggle.
-	Dithering bool
-	// DitherSharpness is the user's raw preference
-	// (config.Config.DitherSharpness): "rough"/"medium"/"sharp". Used by the
-	// settings screen to display/edit the enum.
-	DitherSharpness string
-	OwnGuildSlug    string
+	Dithering    bool
+	OwnGuildSlug string
 	// OwnApprenticeSlugs are the logged-in user's apprenticed guild slugs
 	// (from GET /v1/users/:username/guilds, Role == "apprentice"), used by
 	// the Guilds screen to float those guilds toward the top of the list.
@@ -195,7 +191,6 @@ type SaveSettingsMsg struct {
 	GraphicsProtocol        string
 	InlineImages            bool
 	Dithering               bool
-	DitherSharpness         string
 	KeywordAlerts           []string
 	HardBreakKey            string
 	RevealContentWarnings   bool

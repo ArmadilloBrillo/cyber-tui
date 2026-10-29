@@ -315,7 +315,7 @@ func TestSettings_Esc_ClearsError(t *testing.T) {
 func TestSettings_SetSaved_ClearsError(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetError(testErr)
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	if m.err != nil {
 		t.Error("SetSaved should clear error")
 	}
@@ -327,7 +327,7 @@ func TestSettings_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty after change")
 	}
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	if m.IsDirty() {
 		t.Error("after SetSaved, should not be dirty")
 	}
@@ -380,8 +380,7 @@ func TestSettings_Dithering_SaveMsg(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.dithering = true
 	m.originalDithering = false // make it dirty
-	m.ditherSharpness = "rough"
-	m.originalDitherSharpness = "medium"
+	m.settings.ImagePixelSize = "rough"
 	var got tea.Msg
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cmd != nil {
@@ -394,8 +393,11 @@ func TestSettings_Dithering_SaveMsg(t *testing.T) {
 	if !save.Dithering {
 		t.Error("SaveSettingsMsg.Dithering should reflect current dithering value")
 	}
-	if save.DitherSharpness != "rough" {
-		t.Errorf("SaveSettingsMsg.DitherSharpness = %q, want %q", save.DitherSharpness, "rough")
+	if save.Settings.ImagePixelSize != "rough" {
+		t.Errorf("SaveSettingsMsg.Settings.ImagePixelSize = %q, want %q", save.Settings.ImagePixelSize, "rough")
+	}
+	if !save.RemoteChanged {
+		t.Error("changing sharpness should mark the save as RemoteChanged so it is PATCHed")
 	}
 }
 
@@ -403,14 +405,12 @@ func TestSettings_Dithering_SetSaved_AdvancesBaseline(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.dithering = true
 	m.originalDithering = false
-	m.ditherSharpness = "sharp"
-	m.originalDitherSharpness = "medium"
 	if !m.IsDirty() {
 		t.Error("should be dirty before SetSaved")
 	}
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, true, "sharp", nil)
-	if m.originalDithering != true || m.originalDitherSharpness != "sharp" {
-		t.Error("SetSaved should update originalDithering/originalDitherSharpness to the saved values")
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, true, nil)
+	if m.originalDithering != true {
+		t.Error("SetSaved should update originalDithering to the saved value")
 	}
 	if m.IsDirty() {
 		t.Error("should not be dirty after SetSaved")
@@ -574,7 +574,7 @@ func TestSettings_View_DirtyFooterHint(t *testing.T) {
 
 func TestSettings_View_SavedMessage(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	view := m.View()
 	if !containsSubstring(view, "saved!") {
 		t.Error("View should show 'saved!' when saved=true")
@@ -645,7 +645,7 @@ func TestSettings_WanderSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
 	m.originalWanderLust = false // dirty
-	m = m.SetSaved(true, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(true, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	if m.originalWanderLust != true {
 		t.Error("SetSaved should update originalWanderLust to the saved value")
 	}
@@ -726,7 +726,7 @@ func TestSettings_FeedAutoRefreshSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.feedManualRefreshOnly = true
 	m.originalFeedManualRefreshOnly = false // dirty
-	m = m.SetSaved(false, true, true, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(false, true, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	if m.originalFeedManualRefreshOnly != true {
 		t.Error("SetSaved should update originalFeedManualRefreshOnly to the saved value")
 	}
@@ -805,7 +805,7 @@ func TestSettings_TypingIndicatorsSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.typingIndicatorsEnabled = false
 	m.originalTypingIndicatorsEnabled = true // dirty
-	m = m.SetSaved(false, false, false, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(false, false, false, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	if m.originalTypingIndicatorsEnabled != false {
 		t.Error("SetSaved should update originalTypingIndicatorsEnabled to the saved value")
 	}
