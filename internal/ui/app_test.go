@@ -2716,7 +2716,7 @@ func (c *tooSoonPostClient) GetPost(postID string) (model.Post, error) {
 func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testing.T) {
 	a := NewApp(&tooSoonPostClient{MockClient: api.NewMockClient()})
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
 	if _, ok := msg.(postConvertedToNoteMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postConvertedToNoteMsg", msg)
 	}
@@ -2725,7 +2725,7 @@ func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testin
 func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
 	a := NewApp(api.NewMockClient())
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
 	if _, ok := msg.(postCreatedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
 	}
@@ -2739,7 +2739,7 @@ type createPostErrClient struct {
 	err error
 }
 
-func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error) {
+func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
 	return model.Post{}, c.err
 }
 func (c *createPostErrClient) CreateNote(content string, topics []string) (model.Note, error) {
@@ -2749,7 +2749,7 @@ func (c *createPostErrClient) CreateNote(content string, topics []string) (model
 func TestCreatePostCmd_RateLimited_ReturnsPostSubmitFailedMsg(t *testing.T) {
 	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrRateLimited})
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
 	if _, ok := msg.(postSubmitFailedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postSubmitFailedMsg (editor must stay open)", msg)
 	}
@@ -2758,7 +2758,7 @@ func TestCreatePostCmd_RateLimited_ReturnsPostSubmitFailedMsg(t *testing.T) {
 func TestCreatePostCmd_Unauthorized_ReturnsActionErrMsg(t *testing.T) {
 	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrUnauthorized})
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
 	if _, ok := msg.(actionErrMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want actionErrMsg so handleUnauthorized redirects to login", msg)
 	}
@@ -2797,11 +2797,13 @@ type editPostRecordingClient struct {
 	*api.MockClient
 	gotAttachments []model.Attachment
 	gotTouched     bool
+	gotCW          string
 }
 
-func (c *editPostRecordingClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, attachments []model.Attachment, attachmentTouched bool) error {
+func (c *editPostRecordingClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, contentWarning string, attachments []model.Attachment, attachmentTouched bool) error {
 	c.gotAttachments = attachments
 	c.gotTouched = attachmentTouched
+	c.gotCW = contentWarning
 	return nil
 }
 
@@ -2817,7 +2819,7 @@ func TestEditPostCmd_SendsAudioAttachment(t *testing.T) {
 	audio := model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Origin: "youtube", Artist: "a", Title: "t"}
 	legacyImage := model.Attachment{Type: "image", Src: "https://example.com/pic.png"}
 
-	msg := a.editPostCmd("p1", "content", "title", nil, false, false, true, &audio, []model.Attachment{legacyImage})()
+	msg := a.editPostCmd("p1", "content", "title", "", nil, false, false, true, &audio, []model.Attachment{legacyImage})()
 	if _, ok := msg.(postEditedMsg); !ok {
 		t.Fatalf("editPostCmd() = %T, want postEditedMsg", msg)
 	}
@@ -2827,6 +2829,25 @@ func TestEditPostCmd_SendsAudioAttachment(t *testing.T) {
 	want := []model.Attachment{legacyImage, audio}
 	if !slices.Equal(client.gotAttachments, want) {
 		t.Errorf("EditPost attachments = %+v, want %+v (other attachment first, then audio)", client.gotAttachments, want)
+	}
+}
+
+// TestEditPostCmd_PassesContentWarning checks the CW reaches the API and the
+// postEditedMsg Feed/PostDetail apply locally.
+func TestEditPostCmd_PassesContentWarning(t *testing.T) {
+	client := &editPostRecordingClient{MockClient: api.NewMockClient()}
+	a := NewApp(client)
+
+	msg := a.editPostCmd("p1", "content", "title", "spoilers", nil, false, false, false, nil, nil)()
+	edited, ok := msg.(postEditedMsg)
+	if !ok {
+		t.Fatalf("editPostCmd() = %T, want postEditedMsg", msg)
+	}
+	if client.gotCW != "spoilers" {
+		t.Errorf("EditPost contentWarning = %q, want spoilers", client.gotCW)
+	}
+	if edited.contentWarning != "spoilers" {
+		t.Errorf("postEditedMsg.contentWarning = %q, want spoilers", edited.contentWarning)
 	}
 }
 
@@ -7366,5 +7387,39 @@ func TestSaveProfileCmd_DoesNotMutateLiveApp(t *testing.T) {
 	loaded, ok := msg.(profileLoadedMsg)
 	if !ok || loaded.user.Bio != "new" || loaded.user.Username != "alice" {
 		t.Errorf("expected profileLoadedMsg carrying the updated user, got %#v", msg)
+	}
+}
+
+// TestHandleSettings_RevealContentWarningsPersists checks the setting reaches
+// App state, the broadcast to post screens, and the config file.
+func TestHandleSettings_RevealContentWarningsPersists(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	a := loggedInApp()
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{RevealContentWarnings: true, ImageViewer: "terminal"})
+	if !ok || cmd == nil {
+		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
+	}
+	saved, ok := cmd().(settingsSavedMsg)
+	if !ok {
+		t.Fatal("expected settingsSavedMsg")
+	}
+	a2, cmd2, _ := a.handleSettings(saved)
+	if !a2.revealContentWarnings {
+		t.Error("expected revealContentWarnings to be true after save")
+	}
+	batch, ok := cmd2().(tea.BatchMsg)
+	if !ok || len(batch) < 2 {
+		t.Fatalf("expected a batch with notify + save cmds, got %T", cmd2())
+	}
+	batch[1]()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if !cfg.RevealContentWarnings {
+		t.Error("expected RevealContentWarnings persisted to config")
 	}
 }

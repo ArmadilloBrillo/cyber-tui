@@ -313,6 +313,7 @@ type postField int
 const (
 	postFieldTitle postField = iota
 	postFieldSlug
+	postFieldCW
 	postFieldBody
 	postFieldTopics
 	postFieldPublic
@@ -328,6 +329,7 @@ const (
 type PostComposePanel struct {
 	titleInput  textinput.Model
 	slugInput   textinput.Model
+	cwInput     textinput.Model
 	textarea    textarea.Model
 	topicsInput textinput.Model
 	slugError   string
@@ -377,6 +379,11 @@ func NewPostComposePanel(width int) PostComposePanel {
 	sl.Prompt = ""
 	sl.CharLimit = 60
 
+	cw := textinput.New()
+	cw.Placeholder = "content warning (optional, max 60)"
+	cw.Prompt = ""
+	cw.CharLimit = 60
+
 	ta := textarea.New()
 	// View re-Focuses the textarea every render (which resets Blink), so a blinking
 	// cursor never actually blinks but still costs a cancelled-blink message per key.
@@ -392,6 +399,7 @@ func NewPostComposePanel(width int) PostComposePanel {
 	m := PostComposePanel{
 		titleInput:  ti,
 		slugInput:   sl,
+		cwInput:     cw,
 		textarea:    ta,
 		topicsInput: top,
 		bodyLines:   composeMinLines,
@@ -411,6 +419,7 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.titleInput.SetValue("")
 	m.slugInput.SetValue("")
 	m.slugError = ""
+	m.cwInput.SetValue("")
 	m.topicsInput.SetValue("")
 	m.textarea.SetValue("")
 	m.bodyLines = composeMinLines
@@ -420,6 +429,7 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.otherAttachments = nil
 	m.textarea.Blur()
 	m.slugInput.Blur()
+	m.cwInput.Blur()
 	m.topicsInput.Blur()
 	return m, m.titleInput.Focus()
 }
@@ -439,6 +449,7 @@ func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cm
 	m.titleInput.SetValue(post.Title)
 	m.slugInput.SetValue("")
 	m.slugError = ""
+	m.cwInput.SetValue(post.ContentWarning)
 	m.topicsInput.SetValue(strings.Join(post.Topics, ", "))
 	m.textarea.SetValue(post.Content)
 	m.attachmentTouched = false
@@ -454,6 +465,7 @@ func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cm
 	}
 	m.titleInput.Blur()
 	m.slugInput.Blur()
+	m.cwInput.Blur()
 	m.topicsInput.Blur()
 	// Force textarea height back to the baseline before growing it to fit the
 	// pre-filled content — recalcBodyHeight short-circuits when its computed
@@ -477,6 +489,8 @@ func (m PostComposePanel) Close() PostComposePanel {
 	m.slugInput.SetValue("")
 	m.slugInput.Blur()
 	m.slugError = ""
+	m.cwInput.SetValue("")
+	m.cwInput.Blur()
 	m.textarea.SetValue("")
 	m.textarea.Blur()
 	m.topicsInput.Blur()
@@ -530,18 +544,19 @@ func (m PostComposePanel) TitleValue() string { return strings.TrimSpace(m.title
 func (m PostComposePanel) SlugValue() string {
 	return strings.ToLower(strings.TrimSpace(m.slugInput.Value()))
 }
+func (m PostComposePanel) CWValue() string   { return strings.TrimSpace(m.cwInput.Value()) }
 func (m PostComposePanel) TopicsRaw() string { return m.topicsInput.Value() }
 func (m PostComposePanel) IsPublic() bool    { return m.isPublic }
 func (m PostComposePanel) IsNSFW() bool      { return m.isNSFW }
 func (m PostComposePanel) IsBork() bool      { return m.isBork }
 
 // PanelHeight returns the total terminal rows the panel renders:
-// 2 (border) + 1 (title row) + 1 (slug row) + 1 (sep) + bodyLines + 1 (sep) + 1 (topics row).
+// 2 (border) + 1 (title row) + 1 (slug row) + 1 (cw row) + 1 (sep) + bodyLines + 1 (sep) + 1 (topics row).
 // The slug row is omitted in edit mode (slug is immutable once published).
 func (m PostComposePanel) PanelHeight() int {
-	h := m.bodyLines + 7
+	h := m.bodyLines + 8
 	if m.editing {
-		h = m.bodyLines + 6
+		h = m.bodyLines + 7
 	}
 	if m.pendingAudio != nil {
 		h++
@@ -567,6 +582,7 @@ func (m PostComposePanel) SetWidth(w int) PostComposePanel {
 	}
 	m.titleInput.Width = titleInputW
 	m.slugInput.Width = titleInputW
+	m.cwInput.Width = titleInputW
 
 	topicsInputW := innerW - labelW - togglesW - cursorW
 	if topicsInputW < 1 {
@@ -584,6 +600,8 @@ func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
 		m.titleInput.Blur()
 	case postFieldSlug:
 		m.slugInput.Blur()
+	case postFieldCW:
+		m.cwInput.Blur()
 	case postFieldBody:
 		m.textarea.Blur()
 	case postFieldTopics:
@@ -599,6 +617,8 @@ func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
 		return m, m.titleInput.Focus()
 	case postFieldSlug:
 		return m, m.slugInput.Focus()
+	case postFieldCW:
+		return m, m.cwInput.Focus()
 	case postFieldBody:
 		return m, m.textarea.Focus()
 	case postFieldTopics:
@@ -664,6 +684,7 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 					m.slugError = err.Error()
 					m.focus = postFieldSlug
 					m.titleInput.Blur()
+					m.cwInput.Blur()
 					m.textarea.Blur()
 					m.topicsInput.Blur()
 					cmd := m.slugInput.Focus()
@@ -728,6 +749,19 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 		var cmd tea.Cmd
 		m.slugInput, cmd = m.slugInput.Update(msg)
 		return m, cmd
+	case postFieldCW:
+		if km, ok := msg.(tea.KeyMsg); ok {
+			filtered, keep := filterAmbiguousKeyMsg(km)
+			if !keep {
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.cwInput, cmd = m.cwInput.Update(filtered)
+			return m, cmd
+		}
+		var cmd tea.Cmd
+		m.cwInput, cmd = m.cwInput.Update(msg)
+		return m, cmd
 	case postFieldBody:
 		if km, ok := msg.(tea.KeyMsg); ok {
 			if km.String() == "enter" {
@@ -766,6 +800,8 @@ func (m PostComposePanel) View() string {
 	m.titleInput.PlaceholderStyle = theme.Subtle
 	m.slugInput.TextStyle = theme.Base
 	m.slugInput.PlaceholderStyle = theme.Subtle
+	m.cwInput.TextStyle = theme.Base
+	m.cwInput.PlaceholderStyle = theme.Subtle
 	m.topicsInput.TextStyle = theme.Base
 	m.topicsInput.PlaceholderStyle = theme.Subtle
 	m.textarea.FocusedStyle.Text = theme.Base
@@ -802,6 +838,12 @@ func (m PostComposePanel) View() string {
 	if m.focus == postFieldSlug {
 		slugStyle = active
 	}
+	cwStyle := inactive
+	if m.focus == postFieldCW {
+		cwStyle = active
+	}
+	cwRow := cwStyle.Render("cw     ") + m.cwInput.View()
+
 	slugRow := slugStyle.Render("slug   ") + m.slugInput.View()
 	if m.slugError != "" {
 		slugRow += "  " + theme.Error.Render("← "+m.slugError)
@@ -845,6 +887,7 @@ func (m PostComposePanel) View() string {
 	if !m.editing {
 		rows = append(rows, slugRow)
 	}
+	rows = append(rows, cwRow)
 	rows = append(rows, sep, m.textarea.View(), sep, topicsRow)
 	if m.pendingAudio != nil {
 		const songLabelW = 7 // "song   " — matches attachLabelW

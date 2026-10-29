@@ -139,6 +139,12 @@ type Config struct {
 	// default (tab shown) when absent from the JSON file.
 	HideGlobeTab bool `json:"hideGlobeTab,omitempty"`
 
+	// RevealContentWarnings shows content-warned posts in full everywhere,
+	// keeping only the "CW: <text>" label. Off by default: the API requires
+	// such posts to reveal title, body and attachments only on request, and
+	// turning this on is the reader's standing request.
+	RevealContentWarnings bool `json:"revealContentWarnings,omitempty"`
+
 	// ImageScale multiplies the fullscreen image modal's display size,
 	// relative to the image's own native (1:1 pixel) size — 1.0 shows it at
 	// native size (clamped to fit the terminal), not a fraction of the

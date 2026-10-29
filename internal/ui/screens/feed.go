@@ -45,6 +45,7 @@ const feedMergeAnimDelay = 200 * time.Millisecond
 type SubmitNewPostMsg struct {
 	Content         string
 	Title           string // empty = no title
+	ContentWarning  string // empty = none
 	Slug            string // empty = server-generated
 	Topics          []string
 	IsPublic        bool
@@ -59,6 +60,7 @@ type SubmitPostEditMsg struct {
 	PostID            string
 	Content           string
 	Title             string
+	ContentWarning    string // empty clears it
 	Topics            []string
 	IsPublic          bool
 	IsNSFW            bool
@@ -100,6 +102,7 @@ type FeedModel struct {
 	// PostDetailModel's field of the same name. postImages is parallel to
 	// postOffsets/visiblePosts(); only ever populated when this is true.
 	inlineImagesEnabled bool
+	revealCW            bool // SharedConfigMsg.RevealContentWarnings
 	postImages          [][]postImageSlot
 
 	currentUsername        string // set after login; used to guard the delete key
@@ -326,11 +329,12 @@ func (m FeedModel) CanEditSelected() bool {
 // untouched. Attachments is only applied when attachmentsTouched — the edit
 // didn't change them server-side otherwise, so the cached value is already
 // correct (see EditPost's own attachmentTouched).
-func (m FeedModel) ApplyPostEdit(postID, content, title string, topics []string, isPublic, isNSFW bool, editedAt time.Time, attachments []model.Attachment, attachmentsTouched bool) FeedModel {
+func (m FeedModel) ApplyPostEdit(postID, content, title, contentWarning string, topics []string, isPublic, isNSFW bool, editedAt time.Time, attachments []model.Attachment, attachmentsTouched bool) FeedModel {
 	for i, p := range m.posts {
 		if p.ID == postID {
 			p.Content = content
 			p.Title = title
+			p.ContentWarning = contentWarning
 			p.Topics = topics
 			p.IsPublic = isPublic
 			p.IsNSFW = isNSFW
@@ -495,6 +499,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		m.defaultPublicPost = msg.Settings.DefaultPublicPost
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
+		m.revealCW = msg.RevealContentWarnings
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
 		mutedChanged := !sameMutedSet(m.mutedTopics, msg.Settings.MutedTopics)
@@ -552,6 +557,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			content = bork.Bork(content)
 		}
 		title := m.panel.TitleValue()
+		contentWarning := m.panel.CWValue()
 		topics := ParseTopics(m.panel.TopicsRaw())
 		isPublic := m.panel.IsPublic()
 		isNSFW := m.panel.IsNSFW()
@@ -562,7 +568,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			postID := m.editingPostID
 			m = m.closeCompose()
 			return m, func() tea.Msg {
-				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
+				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, ContentWarning: contentWarning, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
 			}
 		}
 		slug := m.panel.SlugValue()
@@ -571,7 +577,7 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		// their work (see postSubmitFailedMsg in app.go).
 		m.panel = m.panel.MarkSubmitting()
 		return m, func() tea.Msg {
-			return SubmitNewPostMsg{Content: content, Title: title, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AudioAttachment: audioAttachment}
+			return SubmitNewPostMsg{Content: content, Title: title, ContentWarning: contentWarning, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AudioAttachment: audioAttachment}
 		}
 
 	case ComposeSaveAsNoteMsg:
@@ -909,11 +915,13 @@ type feedBodyCacheEntry struct {
 	watched             bool
 	content             string
 	title               string
+	contentWarning      string
 	topics              string // strings.Join(p.Topics, ",") — cheap to compare
 	isPublic            bool
 	isNSFW              bool
 	editedAt            time.Time
 	inlineImagesEnabled bool
+	revealCW            bool
 	themeName           string
 }
 
@@ -941,12 +949,12 @@ func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageS
 	topics := strings.Join(p.Topics, ",")
 
 	body, imgSlots, ok := "", []postImageSlot(nil), false
-	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == m.inlineImagesEnabled && e.themeName == theme.CurrentName() {
+	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.contentWarning == p.ContentWarning && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == m.inlineImagesEnabled && e.revealCW == m.revealCW && e.themeName == theme.CurrentName() {
 		body, imgSlots, ok = e.body, e.imgSlots, true
 	}
 	if !ok {
-		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
-		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, editedAt: p.EditedAt, inlineImagesEnabled: m.inlineImagesEnabled, themeName: theme.CurrentName()}
+		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, m.revealCW)
+		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, contentWarning: p.ContentWarning, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, editedAt: p.EditedAt, inlineImagesEnabled: m.inlineImagesEnabled, revealCW: m.revealCW, themeName: theme.CurrentName()}
 	}
 
 	boxStyle := theme.Border

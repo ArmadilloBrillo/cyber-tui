@@ -251,7 +251,7 @@ func TestHTTPCreatePost_SendsAllFields(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass") //nolint:errcheck
 
-	post, err := c.CreatePost("body text", "My Title", "", []string{"cyber"}, true, true, nil)
+	post, err := c.CreatePost("body text", "My Title", "", []string{"cyber"}, true, true, "spoilers", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -272,6 +272,9 @@ func TestHTTPCreatePost_SendsAllFields(t *testing.T) {
 	}
 	if gotBody["title"] != "My Title" {
 		t.Errorf("request body title = %v, want My Title", gotBody["title"])
+	}
+	if gotBody["contentWarning"] != "spoilers" {
+		t.Errorf("request body contentWarning = %v, want spoilers", gotBody["contentWarning"])
 	}
 	if gotBody["isPublic"] != true {
 		t.Errorf("request body isPublic = %v, want true", gotBody["isPublic"])
@@ -2462,6 +2465,7 @@ func TestHTTPGetPost_ParsesPost(t *testing.T) {
 			"repliesCount":   3,
 			"isPublic":       true,
 			"isNSFW":         false,
+			"contentWarning": "spoilers",
 			"deleted":        false,
 			"createdAt":      "2026-01-01T10:00:00Z",
 		})
@@ -2479,6 +2483,9 @@ func TestHTTPGetPost_ParsesPost(t *testing.T) {
 	}
 	if post.Content != "hello world" {
 		t.Errorf("Content mismatch: %s", post.Content)
+	}
+	if post.ContentWarning != "spoilers" {
+		t.Errorf("ContentWarning = %q, want spoilers", post.ContentWarning)
 	}
 	if post.RepliesCount != 3 {
 		t.Errorf("RepliesCount mismatch: %d", post.RepliesCount)
@@ -3561,7 +3568,7 @@ func TestHTTPEditPost_CallsCorrectEndpoint(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	err := c.EditPost("p1", "corrected content", "New Title", []string{"go", "cli"}, true, false, nil, false)
+	err := c.EditPost("p1", "corrected content", "New Title", []string{"go", "cli"}, true, false, "", nil, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -3594,7 +3601,7 @@ func TestHTTPEditPost_SendsEmptyTitleToClear(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	if err := c.EditPost("p1", "content", "", nil, false, false, nil, false); err != nil {
+	if err := c.EditPost("p1", "content", "", nil, false, false, "", nil, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sawTitleKey {
@@ -3602,6 +3609,9 @@ func TestHTTPEditPost_SendsEmptyTitleToClear(t *testing.T) {
 	}
 	if gotBody["title"] != "" {
 		t.Errorf("title = %v, want empty string", gotBody["title"])
+	}
+	if cw, ok := gotBody["contentWarning"]; !ok || cw != "" {
+		t.Errorf("contentWarning = %v (present=%v), want empty string so the API clears it", cw, ok)
 	}
 }
 
@@ -3614,7 +3624,7 @@ func TestHTTPCreatePost_SendsAttachment(t *testing.T) {
 	c.Login("u@example.com", "pass")
 
 	attachment := &model.Attachment{Type: "gif", Src: "https://example.com/pic.gif", Width: 100, Height: 80}
-	if _, err := c.CreatePost("content", "", "", nil, false, false, attachment); err != nil {
+	if _, err := c.CreatePost("content", "", "", nil, false, false, "", attachment); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	attachments, ok := gotBody["attachments"].([]any)
@@ -3638,7 +3648,7 @@ func TestHTTPCreatePost_NoAttachmentURL_OmitsAttachments(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	if _, err := c.CreatePost("content", "", "", nil, false, false, nil); err != nil {
+	if _, err := c.CreatePost("content", "", "", nil, false, false, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sawAttachmentsKey {
@@ -3681,7 +3691,7 @@ func TestHTTPEditPost_AttachmentTouched(t *testing.T) {
 			})))
 			c.Login("u@example.com", "pass")
 
-			if err := c.EditPost("p1", "content", "title", nil, false, false, tc.attachments, tc.attachmentTouched); err != nil {
+			if err := c.EditPost("p1", "content", "title", nil, false, false, "", tc.attachments, tc.attachmentTouched); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if sawKey != tc.wantKeyPresent {
@@ -3704,7 +3714,7 @@ func TestHTTPEditPost_Forbidden(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	err := c.EditPost("p1", "content", "title", nil, false, false, nil, false)
+	err := c.EditPost("p1", "content", "title", nil, false, false, "", nil, false)
 	apiErr, ok := asAPIError(err)
 	if !ok {
 		t.Fatalf("expected *APIError, got %T: %v", err, err)

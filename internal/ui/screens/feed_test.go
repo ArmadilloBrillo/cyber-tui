@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/screens"
 )
@@ -382,8 +383,8 @@ func TestFeed_ComposeSubmit_BorksContentOnlyWhenTicked(t *testing.T) {
 			m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 			m, _ = m.Update(keyRune("n"))
 			if tick {
-				// title -> slug -> body -> topics -> public -> nsfw -> bork
-				for range 6 {
+				// title -> slug -> cw -> body -> topics -> public -> nsfw -> bork
+				for range 7 {
 					m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 				}
 				m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
@@ -687,5 +688,34 @@ func TestParseTopics_LowercasesTrimsCapsAndIgnoresEmpty(t *testing.T) {
 		if got := screens.ParseTopics(c.in); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("ParseTopics(%q) = %#v, want %#v", c.in, got, c.want)
 		}
+	}
+}
+
+func TestFeed_VisibleInlineImages_SkipsContentWarnedPost(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 80})
+	m, _ = m.Update(screens.SharedConfigMsg{InlineImagesEnabled: true})
+	m = m.SetPosts([]model.Post{
+		{ID: "p1", AuthorUsername: "alice", Content: "hi\n\n![a](https://example.com/a.png)", ContentWarning: "gore"},
+		{ID: "p2", AuthorUsername: "bob", Content: "yo\n\n![b](https://example.com/b.png)\n\nlater"},
+	}, "")
+
+	slots := m.VisibleInlineImages()
+	if len(slots) != 1 || slots[0].Key != "post:p2:0" {
+		t.Errorf("expected only p2's image slot, got %+v", slots)
+	}
+}
+
+func TestFeed_ContentWarning_SettingRevealsCards(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetPosts([]model.Post{{ID: "p1", AuthorUsername: "alice", Content: "the twist is", ContentWarning: "spoilers"}}, "")
+	if strings.Contains(ansi.Strip(m.View()), "the twist is") {
+		t.Fatal("expected gated card before the setting is on")
+	}
+	m, _ = m.Update(screens.SharedConfigMsg{Width: 80, Height: 40, RevealContentWarnings: true})
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "the twist is") || !strings.Contains(view, "CW: spoilers") {
+		t.Errorf("expected revealed card with CW label after the setting is on, got: %q", view)
 	}
 }

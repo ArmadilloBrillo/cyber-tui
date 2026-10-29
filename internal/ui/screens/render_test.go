@@ -848,14 +848,14 @@ func TestFeedRenderPost_CacheInvalidatesOnEditedAtOnlyChange(t *testing.T) {
 func TestRenderPost_ShowsEditedMarkerWhenEditedAtSet(t *testing.T) {
 	base := model.Post{ID: "p1", AuthorUsername: "alice", Content: "hello"}
 
-	unedited, _ := RenderPost(base, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false)
+	unedited, _ := RenderPost(base, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false, false)
 	if strings.Contains(unedited, "(edited)") {
 		t.Errorf("expected no (edited) marker for a never-edited post, got: %q", unedited)
 	}
 
 	edited := base
 	edited.EditedAt = time.Now()
-	got, _ := RenderPost(edited, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false)
+	got, _ := RenderPost(edited, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false, false)
 	if !strings.Contains(ansi.Strip(got), "(edited)") {
 		t.Errorf("expected (edited) marker for an edited post, got: %q", got)
 	}
@@ -1160,5 +1160,85 @@ func BenchmarkFeedBuildContent_SelectionChange(b *testing.B) {
 				m.buildContent()
 			}
 		})
+	}
+}
+
+func TestRenderPost_ContentWarningGatesTitleBodyAttachments(t *testing.T) {
+	p := model.Post{
+		ID: "p1", AuthorUsername: "alice", Title: "Episode 4", Content: "the twist is",
+		ContentWarning: "spoilers",
+		Attachments:    []model.Attachment{{Type: "audio", Origin: "youtube", Src: "https://youtu.be/x", Artist: "band", Title: "song"}},
+	}
+
+	gated, slots := RenderPost(p, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, true, false)
+	plain := ansi.Strip(gated)
+	if !strings.Contains(plain, "CW: spoilers") {
+		t.Errorf("gated card missing CW label: %q", plain)
+	}
+	for _, hidden := range []string{"Episode 4", "the twist is", "song"} {
+		if strings.Contains(plain, hidden) {
+			t.Errorf("gated card leaks %q: %q", hidden, plain)
+		}
+	}
+	if slots != nil {
+		t.Errorf("gated card returned image slots: %+v", slots)
+	}
+
+	revealed, _ := RenderPost(p, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, true, true)
+	plain = ansi.Strip(revealed)
+	for _, want := range []string{"CW: spoilers", "Episode 4", "the twist is"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("revealed card missing %q: %q", want, plain)
+		}
+	}
+}
+
+func TestCWPreview(t *testing.T) {
+	cases := []struct {
+		name   string
+		p      model.Post
+		reveal bool
+		want   string
+	}{
+		{"gated", model.Post{Title: "t", Content: "c", ContentWarning: "cw"}, false, "CW: cw"},
+		{"revealed title", model.Post{Title: "t", Content: "c", ContentWarning: "cw"}, true, "t"},
+		{"no cw body", model.Post{Content: "first\nsecond"}, false, "first"},
+	}
+	for _, tc := range cases {
+		if got := cwPreview(tc.p, tc.reveal); got != tc.want {
+			t.Errorf("%s: cwPreview = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestFeedRenderPost_CacheInvalidatesOnContentWarningOnlyChange(t *testing.T) {
+	m := NewFeedModel()
+	m.width = 80
+	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "same content"}
+
+	before, _ := m.renderPost(post, false)
+	if !strings.Contains(ansi.Strip(before), "same content") {
+		t.Fatalf("expected body before CW is set, got: %q", before)
+	}
+	post.ContentWarning = "spoilers"
+	after, _ := m.renderPost(post, false)
+	if strings.Contains(ansi.Strip(after), "same content") {
+		t.Errorf("expected cache to invalidate after CW-only change, got stale body: %q", after)
+	}
+}
+
+func TestCWHiddenBar(t *testing.T) {
+	bar := ansi.Strip(cwHiddenBar("enter to open", 76))
+	if got := lipgloss.Width(bar); got != 32 {
+		t.Errorf("width = %d, want 32 (capped)", got)
+	}
+	if !strings.HasPrefix(bar, "░") || !strings.HasSuffix(bar, "░") || !strings.Contains(bar, " enter to open ") {
+		t.Errorf("expected ░ either side of the hint, got %q", bar)
+	}
+	if got := lipgloss.Width(ansi.Strip(cwHiddenBar("enter to open", 20))); got != 20 {
+		t.Errorf("width at innerWidth 20 = %d, want 20", got)
+	}
+	if got := ansi.Strip(cwHiddenBar("enter to open", 10)); got != " enter to open " {
+		t.Errorf("narrow fallback = %q, want the hint alone", got)
 	}
 }

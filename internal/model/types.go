@@ -82,6 +82,7 @@ type Post struct {
 	BookmarksCount int
 	IsPublic       bool
 	IsNSFW         bool
+	ContentWarning string // empty = none; non-empty gates title, body and attachments until revealed
 	Deleted        bool
 	CreatedAt      time.Time
 	EditedAt       time.Time // zero value means never edited
