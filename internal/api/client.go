@@ -471,7 +471,7 @@ type wireSettings struct {
 }
 
 // wirePatchSettings is the PATCH /v1/settings payload — only the fields the
-// UI manages. Deferred fields (iconTheme, imagePixelSize, followedTopics,
+// UI manages. Deferred fields (iconTheme, followedTopics,
 // mutedUsersByRoom) are intentionally excluded so the API never receives
 // them — mutedUsersByRoom is server-managed via /mute commands, not PATCH.
 // mutedTopics IS sent: the Topics tab's mute/unmute (docs/54-muted-topics.md)
@@ -487,6 +487,7 @@ type wirePatchSettings struct {
 	TimeDisplayFormat    string                `json:"timeDisplayFormat"`
 	DefaultPublicPost    bool                  `json:"defaultPublicPost"`
 	MutedTopics          []string              `json:"mutedTopics"`
+	ImagePixelSize       string                `json:"imagePixelSize,omitempty"`
 }
 
 // --- CIRC wire types ---
@@ -1575,6 +1576,7 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 		TimeDisplayFormat:    update.TimeDisplayFormat,
 		DefaultPublicPost:    update.DefaultPublicPost,
 		MutedTopics:          mutedTopics,
+		ImagePixelSize:       update.ImagePixelSize,
 	})
 	return err
 }

@@ -75,7 +75,7 @@ func NewMockClient() *MockClient {
 			Notifications:     model.NotificationPrefs{Bookmark: true, Reply: true, Poke: true},
 			ShowFollowerCount: true,
 			TimeDisplayFormat: "datetime",
-			ImagePixelSize:    "2",
+			ImagePixelSize:    "sharp",
 		},
 	}
 }

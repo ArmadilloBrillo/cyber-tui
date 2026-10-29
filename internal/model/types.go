@@ -197,7 +197,7 @@ type Settings struct {
 	IconTheme            string
 	FollowedTopics       []string
 	MutedTopics          []string
-	ImagePixelSize       string // named preset or pixel multiplier, e.g. "sharp", "2"
+	ImagePixelSize       string // "rough", "medium", "sharp" or "crisp"; drives dither pixel size
 	TimeDisplayFormat    string // "datetime", "relative", "unix", or "swatch"
 	DefaultPublicPost    bool
 	MutedUsersByRoom     map[string][]string // roomID -> muted usernames; server-managed via /mute commands, cIRC only

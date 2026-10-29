@@ -3125,6 +3125,35 @@ func TestHTTPUpdateSettings_SendsMutedTopics(t *testing.T) {
 	}
 }
 
+func TestHTTPUpdateSettings_SendsImagePixelSize(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/settings" || r.Method != "PATCH" {
+			http.NotFound(w, r)
+			return
+		}
+		gotBody = nil
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.UpdateSettings(model.Settings{ImagePixelSize: "crisp"}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if gotBody["imagePixelSize"] != "crisp" {
+		t.Errorf("PATCH body imagePixelSize = %v, want crisp", gotBody["imagePixelSize"])
+	}
+
+	// An account with no stored value must not get "" written back.
+	if err := c.UpdateSettings(model.Settings{}); err != nil {
+		t.Fatalf("UpdateSettings (empty): %v", err)
+	}
+	if _, present := gotBody["imagePixelSize"]; present {
+		t.Errorf("PATCH body sent imagePixelSize = %v when empty; want omitted", gotBody["imagePixelSize"])
+	}
+}
+
 // --- Notes ---
 
 func TestHTTPGetNotes_ParsesList(t *testing.T) {
