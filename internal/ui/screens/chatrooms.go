@@ -212,6 +212,7 @@ type ChatroomsModel struct {
 
 	mutedUsersByRoom map[string][]string // roomID -> muted usernames, from Settings
 	keywordAlerts    []string            // user's configured keyword alerts, from SharedConfigMsg
+	colorNicknames   bool                // Settings.ColorNicknames, from SharedConfigMsg
 
 	// canGoBack is true when the active room was opened via a deep link
 	// (e.g. a chat_mention notification) rather than by switching to this
@@ -1287,6 +1288,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.mutedUsersByRoom = msg.Settings.MutedUsersByRoom
 		m.keywordAlerts = msg.KeywordAlerts
+		m.colorNicknames = msg.Settings.ColorNicknames
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
 		m = m.SetLocation(msg.Loc)
 		if m.mode == chatroomModeDetail && m.activeRoom != nil {
@@ -1855,7 +1857,7 @@ func (m ChatroomsModel) refreshMessages() ChatroomsModel {
 	}
 	content, offsets, heights, imgSlots := renderCircMessagesWithSelection(
 		m.messages, m.location(), m.timeDisplayFormat, m.viewport.Width, m.currentUser, m.selectedMsgID,
-		m.revealed, m.styleAnimFrame, m.mutedUsers(), m.inlineImagesEnabled, m.imageRealRows, m.chatBodyCache)
+		m.revealed, m.styleAnimFrame, m.mutedUsers(), m.colorNicknames, m.inlineImagesEnabled, m.imageRealRows, m.chatBodyCache)
 	m.viewport.SetContent(content)
 	m.msgOffsets, m.msgHeights = offsets, heights
 	m.msgImages = imgSlots

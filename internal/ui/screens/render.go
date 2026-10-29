@@ -301,7 +301,16 @@ func listFooter(loading, exhausted bool) string {
 // every wrapped line for the timestamp column so long messages never push it
 // off-screen; continuation lines are indented to align under the body.
 func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, muted map[string]bool) string {
-	return renderCircMessagesStyled(msgs, loc, timeDisplayFormat, viewportWidth, currentUser, nil, 0, muted)
+	return renderCircMessagesStyled(msgs, loc, timeDisplayFormat, viewportWidth, currentUser, nil, 0, muted, false)
+}
+
+// otherNickStyle is how a username other than the current user's is drawn:
+// the per-name colour when the colorNicknames setting is on, else Highlight.
+func otherNickStyle(username string, colorNicks bool) lipgloss.Style {
+	if colorNicks {
+		return theme.NickStyle(username)
+	}
+	return theme.Highlight
 }
 
 // renderCircMessagesStyled is renderCircMessages plus style/attachment
@@ -312,7 +321,8 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 // passing (nil, 0), so its many existing call sites are unaffected. muted
 // (username, lowercased -> true) hides a sender's messages entirely — the
 // message contributes no output, keeping msgs/offsets/heights 1:1.
-func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, revealed map[string]bool, frame int, muted map[string]bool) string {
+// colorNicks is the colorNicknames setting (see otherNickStyle).
+func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, revealed map[string]bool, frame int, muted map[string]bool, colorNicks bool) string {
 	if viewportWidth < 20 {
 		viewportWidth = 80
 	}
@@ -330,7 +340,7 @@ func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisp
 		tsWidth := lipgloss.Width(ts)
 
 		if slices.Contains(msg.Style, styleArt) {
-			sb.WriteString(renderArtMessage(msg.From.Username, msg.Body, ts, viewportWidth))
+			sb.WriteString(renderArtMessage(msg.From.Username, msg.Body, ts, viewportWidth, otherNickStyle(msg.From.Username, colorNicks && msg.From.Username != currentUser)))
 			continue
 		}
 
@@ -340,11 +350,11 @@ func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisp
 		}
 
 		if msg.IsAction {
-			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser))
+			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser, colorNicks))
 			continue
 		}
 
-		usernameStyle := theme.Highlight
+		usernameStyle := otherNickStyle(msg.From.Username, colorNicks)
 		if currentUser != "" && msg.From.Username == currentUser {
 			usernameStyle = theme.MeHighlight
 		}
@@ -493,6 +503,7 @@ type chatBodyCacheEntry struct {
 	timeDisplayFormat   string
 	revealed            bool
 	muted               bool
+	colorNicks          bool
 	inlineImagesEnabled bool
 	body                string
 	deleted             bool
@@ -522,7 +533,7 @@ type chatBodyCacheEntry struct {
 // matching postImageSlot's convention elsewhere. realRows (keyed by
 // circMsgImageKey) supplies each image's already-known real row count, if
 // any — see chatImageBandRows.
-func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int, muted map[string]bool, inlineImagesEnabled bool, realRows map[string]int, cache map[string]chatBodyCacheEntry) (content string, offsets []int, heights []int, imgSlots [][]postImageSlot) {
+func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int, muted map[string]bool, colorNicks bool, inlineImagesEnabled bool, realRows map[string]int, cache map[string]chatBodyCacheEntry) (content string, offsets []int, heights []int, imgSlots [][]postImageSlot) {
 	offsets = make([]int, len(msgs))
 	heights = make([]int, len(msgs))
 	imgSlots = make([][]postImageSlot, len(msgs))
@@ -547,17 +558,17 @@ func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, t
 		if !animated {
 			if e, hit := cache[msg.ID]; hit && e.width == viewportWidth && e.currentUser == currentUser &&
 				e.timeDisplayFormat == timeDisplayFormat && e.revealed == revealState && e.muted == muteState &&
-				e.inlineImagesEnabled == inlineImagesEnabled && e.body == msg.Body && e.deleted == msg.Deleted &&
+				e.colorNicks == colorNicks && e.inlineImagesEnabled == inlineImagesEnabled && e.body == msg.Body && e.deleted == msg.Deleted &&
 				e.themeName == themeName {
 				rendered, ok = e.rendered, true
 			}
 		}
 		if !ok {
-			rendered = renderCircMessagesStyled([]model.Message{renderMsg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame, muted)
+			rendered = renderCircMessagesStyled([]model.Message{renderMsg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame, muted, colorNicks)
 			if !animated && cache != nil {
 				cache[msg.ID] = chatBodyCacheEntry{
 					rendered: rendered, width: viewportWidth, currentUser: currentUser,
-					timeDisplayFormat: timeDisplayFormat, revealed: revealState, muted: muteState,
+					timeDisplayFormat: timeDisplayFormat, revealed: revealState, muted: muteState, colorNicks: colorNicks,
 					inlineImagesEnabled: inlineImagesEnabled, body: msg.Body, deleted: msg.Deleted, themeName: themeName,
 				}
 			}
@@ -609,13 +620,13 @@ func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, t
 // line — no username bracket, matching how real IRC clients narrate actions
 // in the third person. The API returns IsAction messages with Body already
 // stripped of the username (just the action text), so it's assembled here.
-func renderActionLine(username, body, ts string, viewportWidth int, currentUser string) string {
+func renderActionLine(username, body, ts string, viewportWidth int, currentUser string, colorNicks bool) string {
 	username = sanitize.Strip(username)
 	const suffix = " *"
 	tsWidth := lipgloss.Width(ts)
 	const tsGap = 2
 
-	usernameStyle := theme.Highlight
+	usernameStyle := otherNickStyle(username, colorNicks)
 	if currentUser != "" && username == currentUser {
 		usernameStyle = theme.MeHighlight
 	}
@@ -707,7 +718,7 @@ func renderChatMessagesStyled(msgs []model.Message, currentUser string, loc *tim
 		}
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
 		if msg.IsAction {
-			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser))
+			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser, false))
 			sb.WriteString("\n")
 			continue
 		}
