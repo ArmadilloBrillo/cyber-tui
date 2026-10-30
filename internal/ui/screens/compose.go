@@ -540,6 +540,12 @@ func (m PostComposePanel) InsertText(s string) PostComposePanel {
 	}
 	return m
 }
+
+// FreeTextFocused reports whether InsertText would insert anything, i.e.
+// the title or body field has focus.
+func (m PostComposePanel) FreeTextFocused() bool {
+	return m.focus == postFieldTitle || m.focus == postFieldBody
+}
 func (m PostComposePanel) TitleValue() string { return strings.TrimSpace(m.titleInput.Value()) }
 func (m PostComposePanel) SlugValue() string {
 	return strings.ToLower(strings.TrimSpace(m.slugInput.Value()))

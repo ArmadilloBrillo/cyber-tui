@@ -3196,37 +3196,41 @@ func TestPostEditedMsg_AttachmentsTouched_UpdatesPostDetailCache(t *testing.T) {
 	}
 }
 
-// --- applyAttachURL: ctrl+g dispatch (posts/replies warn, chat /gif, else markdown insert) ---
+// --- ctrl+g: inert wherever applyAttachURL's result would be dropped ---
 
-// TestApplyAttachURL_FeedPanelActive_Warns covers the branch that must win
-// when the Feed new-post panel is open: API v0.8.7 rejects type:"image" in a
-// post's attachments array (and inline markdown pointing anywhere but
-// bunker.cyberspace.online), so ctrl+g here warns instead of attaching or
-// inserting markdown that would only fail later at submit.
-func TestApplyAttachURL_FeedPanelActive_Warns(t *testing.T) {
+// assertCtrlGDisabled presses ctrl+g and checks it was consumed (so it never
+// reaches the textarea) without opening the attach-URL prompt or notifying —
+// either the focused field ignores InsertIconMsg, or it's a post/reply, which
+// only accepts images already hosted on bunker (cyber-tui can't upload).
+func assertCtrlGDisabled(t *testing.T, a App) {
+	t.Helper()
+	a2, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlG})
+	if !consumed {
+		t.Fatal("expected ctrl+g to be consumed")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd")
+	}
+	if a2.attachURLPromptOpen {
+		t.Error("expected the attach-URL prompt to stay closed")
+	}
+	if a2.notifyText != "" {
+		t.Errorf("expected no notification, got %q", a2.notifyText)
+	}
+}
+
+func TestHandleKeys_CtrlG_FeedPanelActive_Disabled(t *testing.T) {
 	a := loggedInApp()
 	m, _ := a.feed.Update(keyMsg("n"))
 	a.feed = m
 	if !a.feed.PanelActive() {
 		t.Fatal("setup: expected Feed's new-post panel open after 'n'")
 	}
-
-	a2, cmd := a.applyAttachURL("https://example.com/pic.png")
-	if cmd == nil {
-		t.Error("expected a cmd (the warning notification's expiry tick)")
-	}
-	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
-		t.Errorf("expected a warning notification, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
-	}
-	if got := a2.feed.ComposeView(80); strings.Contains(got, "https://example.com/pic.png") {
-		t.Errorf("ComposeView() = %q, should not contain the URL — no native attachment set", got)
-	}
+	assertCtrlGDisabled(t, a)
 }
 
-// TestApplyAttachURL_PostDetailEditPanelActive_Warns mirrors the Feed case
-// for PostDetail's edit panel (opened via 'e', separate from the Feed
-// instance).
-func TestApplyAttachURL_PostDetailEditPanelActive_Warns(t *testing.T) {
+// PostDetail's edit panel is opened via 'e', separate from the Feed instance.
+func TestHandleKeys_CtrlG_PostDetailEditPanelActive_Disabled(t *testing.T) {
 	a := loggedInApp()
 	a.currentUser = model.User{Username: "op", IsSupporter: true}
 	a.active = screenPostDetail
@@ -3241,15 +3245,10 @@ func TestApplyAttachURL_PostDetailEditPanelActive_Warns(t *testing.T) {
 	if !a.postDetail.EditPanelActive() {
 		t.Fatal("setup: expected PostDetail's edit panel open after 'e'")
 	}
-
-	a2, cmd := a.applyAttachURL("https://example.com/pic.png")
-	if cmd == nil {
-		t.Error("expected a cmd (the warning notification's expiry tick)")
-	}
-	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
-		t.Errorf("expected a warning notification, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
-	}
+	assertCtrlGDisabled(t, a)
 }
+
+// --- applyAttachURL: attach-URL prompt dispatch (chat /gif, else markdown insert) ---
 
 // TestApplyAttachURL_DefaultBranch_ReturnsInsertIconMsg covers the leftover
 // incidental surfaces (guild threads, journal, bio editing — anything not
@@ -3341,10 +3340,7 @@ func TestApplyAttachURL_CMailNonGIF_WarnsInsteadOfInserting(t *testing.T) {
 	}
 }
 
-// TestApplyAttachURL_ReplyCompose_Warns: API v0.8.7 rejects type:"image" in a
-// reply's attachments array the same as posts, so ctrl+g on the reply
-// compose box warns rather than attaching or inserting markdown.
-func TestApplyAttachURL_ReplyCompose_Warns(t *testing.T) {
+func TestHandleKeys_CtrlG_ReplyCompose_Disabled(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenPostDetail
 	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
@@ -3353,20 +3349,95 @@ func TestApplyAttachURL_ReplyCompose_Warns(t *testing.T) {
 	if !a.postDetail.ReplyComposeActive() {
 		t.Fatal("setup: expected the reply compose box open")
 	}
+	assertCtrlGDisabled(t, a)
+}
 
-	a2, _ := a.applyAttachURL("https://example.com/pic.png")
-	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
-		t.Errorf("expected a warning notification, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+func TestHandleKeys_CtrlG_SearchQueryFocused_Disabled(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSearch
+	a.search = a.search.FocusQuery()
+	if !a.search.InputFocused() {
+		t.Fatal("setup: expected the search query focused")
 	}
+	assertCtrlGDisabled(t, a)
+}
+
+func TestHandleKeys_CtrlG_FeedFlagPrompt_Disabled(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	if !a.feed.ComposeActive() || a.feed.PanelActive() {
+		t.Fatal("setup: expected the flag prompt open with no post panel")
+	}
+	assertCtrlGDisabled(t, a)
+}
+
+func TestHandleKeys_CtrlG_GuildPanelSlugFocused_Disabled(t *testing.T) {
+	a := setupGuildPanelOpen(t, loggedInApp())
+	g, _ := a.guilds.Update(tea.KeyMsg{Type: tea.KeyTab})
+	a.guilds = g
+	if a.guilds.AcceptsInsertedText() {
+		t.Fatal("setup: expected tab to move focus from title to slug")
+	}
+	assertCtrlGDisabled(t, a)
+}
+
+func TestHandleKeys_CtrlG_JournalTopicsFocused_Disabled(t *testing.T) {
+	a := setupJournalNewNote(t, loggedInApp())
+	j, _ := a.journal.Update(tea.KeyMsg{Type: tea.KeyTab})
+	a.journal = j
+	if a.journal.AcceptsInsertedText() {
+		t.Fatal("setup: expected tab to move focus to topics")
+	}
+	assertCtrlGDisabled(t, a)
+}
+
+func TestHandleKeys_CtrlG_ProfileNonBioFieldFocused_Disabled(t *testing.T) {
+	a := setupProfileEditForm(t, loggedInApp())
+	p, _ := a.profile.Update(tea.KeyMsg{Type: tea.KeyTab})
+	a.profile = p
+	if a.profile.AcceptsInsertedText() {
+		t.Fatal("setup: expected tab to move focus off the bio field")
+	}
+	assertCtrlGDisabled(t, a)
 }
 
 // --- ctrl+g / attach-URL prompt ---
 
-func TestHandleKeys_CtrlG_OpensAttachURLPrompt_WhenInputFocused(t *testing.T) {
-	a := setupChatroomsDetailWithURL(loggedInApp())
-	if !a.chatrooms.InputFocused() {
-		t.Fatal("setup: expected chatrooms input focused in detail mode")
+func setupGuildPanelOpen(t *testing.T, a App) App {
+	t.Helper()
+	a.active = screenGuilds
+	a.guilds = a.guilds.OpenGuild("g1").SetGuildPosts(nil, "")
+	g, _ := a.guilds.Update(keyMsg("n"))
+	a.guilds = g
+	if !a.guilds.ComposeActive() {
+		t.Fatal("setup: expected the guild new-thread panel open after 'n'")
 	}
+	return a
+}
+
+func setupJournalNewNote(t *testing.T, a App) App {
+	t.Helper()
+	a.active = screenJournal
+	j, _ := a.journal.Update(keyMsg("n"))
+	a.journal = j
+	if !a.journal.ComposeActive() {
+		t.Fatal("setup: expected journal edit mode after 'n'")
+	}
+	return a
+}
+
+func setupProfileEditForm(t *testing.T, a App) App {
+	t.Helper()
+	a.active = screenProfile
+	p, _ := a.profile.Update(keyMsg("e"))
+	a.profile = p
+	if !a.profile.ComposeActive() {
+		t.Fatal("setup: expected profile edit mode after 'e'")
+	}
+	return a
+}
+
+func assertCtrlGOpensPrompt(t *testing.T, a App) {
+	t.Helper()
 	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlG})
 	if !consumed {
 		t.Fatal("expected ctrl+g to be consumed while a compose field is focused")
@@ -3374,6 +3445,34 @@ func TestHandleKeys_CtrlG_OpensAttachURLPrompt_WhenInputFocused(t *testing.T) {
 	if !a2.attachURLPromptOpen {
 		t.Error("expected attachURLPromptOpen = true after ctrl+g")
 	}
+}
+
+func TestHandleKeys_CtrlG_OpensAttachURLPrompt_WhenInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	assertCtrlGOpensPrompt(t, a)
+}
+
+func TestHandleKeys_CtrlG_CMailDetail_OpensPrompt(t *testing.T) {
+	a := setupCMailDetail(loggedInApp())
+	if !a.cmail.InputFocused() {
+		t.Fatal("setup: expected C-Mail input focused in detail mode")
+	}
+	assertCtrlGOpensPrompt(t, a)
+}
+
+func TestHandleKeys_CtrlG_GuildPanelTitleFocused_OpensPrompt(t *testing.T) {
+	assertCtrlGOpensPrompt(t, setupGuildPanelOpen(t, loggedInApp()))
+}
+
+func TestHandleKeys_CtrlG_JournalBodyFocused_OpensPrompt(t *testing.T) {
+	assertCtrlGOpensPrompt(t, setupJournalNewNote(t, loggedInApp()))
+}
+
+func TestHandleKeys_CtrlG_ProfileBioFocused_OpensPrompt(t *testing.T) {
+	assertCtrlGOpensPrompt(t, setupProfileEditForm(t, loggedInApp()))
 }
 
 // --- ctrl+j / song prompt ---

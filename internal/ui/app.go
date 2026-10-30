@@ -1218,6 +1218,17 @@ func (a *App) handleKeys(msg tea.Msg) (*App, tea.Cmd, bool) {
 		}
 	case "ctrl+g":
 		if a.activeScreenHasFocusedInput() {
+			// Consumed but inert everywhere applyAttachURL's result would be
+			// dropped — including posts/replies, which only accept images
+			// already hosted on bunker.cyberspace.online.
+			attachTarget := (a.active == screenChatrooms && a.chatrooms.InputFocused()) ||
+				(a.active == screenCMail && a.cmail.InputFocused()) ||
+				(a.active == screenGuilds && a.guilds.AcceptsInsertedText()) ||
+				(a.active == screenJournal && a.journal.AcceptsInsertedText()) ||
+				(a.active == screenProfile && a.profile.AcceptsInsertedText())
+			if !attachTarget {
+				return a, nil, true
+			}
 			a.attachURLPromptOpen = true
 			var cmd tea.Cmd
 			a.attachURLPrompt, cmd = a.attachURLPrompt.Open("attach image/gif url", "")
@@ -4367,13 +4378,12 @@ func (a App) handleAttachURLPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // applyAttachURL dispatches a submitted attach-URL prompt result. Posts and
-// replies no longer get a native image/gif attachment here — the API (v0.8.7)
-// now returns 400 for type:"image" in a post/reply's attachments array, and
-// 400s the same way for an inline markdown image in content that doesn't
-// point at bunker.cyberspace.online (see docs/00-latest-api-reference.md).
-// Since cyber-tui can't upload to bunker itself, no URL a user pastes here
-// will ever be accepted for a post/reply, so this warns instead of inserting
-// markdown that would only fail later at submit. circ/C-Mail can still only
+// replies never reach here — the API (v0.8.7) returns 400 for type:"image" in
+// a post/reply's attachments array, and for an inline markdown image in
+// content that doesn't point at bunker.cyberspace.online (see
+// docs/00-latest-api-reference.md), so ctrl+g only opens the prompt on
+// circ/C-Mail and the guild/journal/bio free-text fields (see handleKeys).
+// circ/C-Mail can still only
 // embed an animated GIF, via the server's own /gif command — visually
 // confirmed on the website, whereas markdown in a message's content does not
 // render there. Where nothing can actually render, this warns instead of
@@ -4382,12 +4392,6 @@ func (a App) handleAttachURLPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (a App) applyAttachURL(url string) (App, tea.Cmd) {
 	if url == "" {
 		return a, nil
-	}
-	if a.active == screenFeed && a.feed.PanelActive() {
-		return a.notify(notifyWarn, "cyberspace.online only accepts post/reply images uploaded via the website — attach a song instead (ctrl+j), or add the image there first")
-	}
-	if a.active == screenPostDetail && (a.postDetail.EditPanelActive() || a.postDetail.ReplyComposeActive()) {
-		return a.notify(notifyWarn, "cyberspace.online only accepts post/reply images uploaded via the website — attach a song instead (ctrl+j), or add the image there first")
 	}
 	if a.active == screenChatrooms || a.active == screenCMail {
 		if !urlutil.IsGIFURL(url) {
