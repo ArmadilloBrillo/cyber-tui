@@ -316,6 +316,10 @@ func (m ProfileModel) AppendUserFollowers(follows []model.Follow, cursor string)
 // route key events past global shortcuts.
 func (m ProfileModel) ComposeActive() bool { return m.editMode }
 
+// AcceptsInsertedText reports whether an InsertIconMsg would land anywhere,
+// so App only opens prompts like ctrl+g's where the result is used.
+func (m ProfileModel) AcceptsInsertedText() bool { return m.editMode && m.focusedField == fieldBio }
+
 func (m ProfileModel) IsReadOnly() bool { return m.readOnly }
 
 // location returns the configured timezone, defaulting to UTC.

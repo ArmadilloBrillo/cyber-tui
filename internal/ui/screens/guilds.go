@@ -161,6 +161,12 @@ func (m GuildsModel) visiblePosts() []model.Post {
 // ComposeActive reports whether the new-thread compose panel is open.
 func (m GuildsModel) ComposeActive() bool { return m.panel.IsActive() }
 
+// AcceptsInsertedText reports whether an InsertIconMsg would land anywhere,
+// so App only opens prompts like ctrl+g's where the result is used.
+func (m GuildsModel) AcceptsInsertedText() bool {
+	return m.panel.IsActive() && m.panel.FreeTextFocused()
+}
+
 // ActiveGuild returns the slug of the guild whose posts are currently displayed, or "" when in list view.
 func (m GuildsModel) ActiveGuild() string { return m.activeGuild }
 
