@@ -30,6 +30,9 @@ jobs:
       - uses: dominikh/staticcheck-action@9716614d4101e79b4340dd97b10e54d68234e431 # v1.4.1
         with:
           version: "2026.2.1"
+          # The action otherwise installs Go "stable", which can be newer than
+          # this staticcheck release can read (go1.27 export data broke 2026.2.1).
+          install-go: false
 
   vulncheck:
     name: vulncheck
