@@ -3339,6 +3339,7 @@ func (a *App) ditherOptions() *imgview.DitherOptions {
 		PixelSize: imgview.PixelSizeForSharpness(a.settings.ImagePixelSize),
 		FgColor:   fg,
 		BgColor:   bg,
+		ColorMode: a.settings.ImageColor,
 	}
 }
 
@@ -3502,13 +3503,13 @@ func inlineImageCacheKey(slot screens.InlineImageSlot, proto imgview.GraphicsPro
 // ditherKeyFragment returns a compact, deterministic string identifying
 // dither's effect on the encoded output, for use as an inlineImageCacheKey
 // component — "-" when dithering is off, otherwise a value that changes
-// whenever the resulting pixels would: sharpness (PixelSize) or the active
-// theme's colors (FgColor/BgColor).
+// whenever the resulting pixels would: sharpness (PixelSize), colour mode, or
+// the active theme's colors (FgColor/BgColor).
 func ditherKeyFragment(dither *imgview.DitherOptions) string {
 	if dither == nil {
 		return "-"
 	}
-	return fmt.Sprintf("d%d,%02x%02x%02x,%02x%02x%02x", dither.PixelSize,
+	return fmt.Sprintf("d%d,%t,%02x%02x%02x,%02x%02x%02x", dither.PixelSize, dither.ColorMode,
 		dither.FgColor.R, dither.FgColor.G, dither.FgColor.B,
 		dither.BgColor.R, dither.BgColor.G, dither.BgColor.B)
 }

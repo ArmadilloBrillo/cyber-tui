@@ -3154,6 +3154,47 @@ func TestHTTPUpdateSettings_SendsImagePixelSize(t *testing.T) {
 	}
 }
 
+func TestHTTPSettings_ImageColor_RoundTrips(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/settings" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == "PATCH" {
+			gotBody = nil
+			json.NewDecoder(r.Body).Decode(&gotBody)
+			writeOK(t, w, map[string]any{})
+			return
+		}
+		writeOK(t, w, map[string]any{"imageColor": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	settings, err := c.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if !settings.ImageColor {
+		t.Error("ImageColor should parse as true from the response")
+	}
+
+	if err := c.UpdateSettings(model.Settings{ImageColor: true}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if gotBody["imageColor"] != true {
+		t.Errorf("PATCH body imageColor = %v, want true", gotBody["imageColor"])
+	}
+
+	// Switching back to monochrome must reach the server as an explicit false.
+	if err := c.UpdateSettings(model.Settings{}); err != nil {
+		t.Fatalf("UpdateSettings (false): %v", err)
+	}
+	if got, present := gotBody["imageColor"]; !present || got != false {
+		t.Errorf("PATCH body imageColor = %v (present=%v), want explicit false", got, present)
+	}
+}
+
 // --- Notes ---
 
 func TestHTTPGetNotes_ParsesList(t *testing.T) {

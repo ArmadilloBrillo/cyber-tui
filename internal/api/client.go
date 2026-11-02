@@ -465,6 +465,7 @@ type wireSettings struct {
 	FollowedTopics       []string              `json:"followedTopics"`
 	MutedTopics          []string              `json:"mutedTopics"`
 	ImagePixelSize       string                `json:"imagePixelSize"`
+	ImageColor           bool                  `json:"imageColor"`
 	TimeDisplayFormat    string                `json:"timeDisplayFormat"`
 	DefaultPublicPost    bool                  `json:"defaultPublicPost"`
 	MutedUsersByRoom     map[string][]string   `json:"mutedUsersByRoom"`
@@ -488,6 +489,7 @@ type wirePatchSettings struct {
 	DefaultPublicPost    bool                  `json:"defaultPublicPost"`
 	MutedTopics          []string              `json:"mutedTopics"`
 	ImagePixelSize       string                `json:"imagePixelSize,omitempty"`
+	ImageColor           bool                  `json:"imageColor"`
 }
 
 // --- CIRC wire types ---
@@ -1107,6 +1109,7 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 		FollowedTopics:       w.FollowedTopics,
 		MutedTopics:          w.MutedTopics,
 		ImagePixelSize:       w.ImagePixelSize,
+		ImageColor:           w.ImageColor,
 		TimeDisplayFormat:    w.TimeDisplayFormat,
 		DefaultPublicPost:    w.DefaultPublicPost,
 		MutedUsersByRoom:     w.MutedUsersByRoom,
@@ -1577,6 +1580,7 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 		DefaultPublicPost:    update.DefaultPublicPost,
 		MutedTopics:          mutedTopics,
 		ImagePixelSize:       update.ImagePixelSize,
+		ImageColor:           update.ImageColor,
 	})
 	return err
 }

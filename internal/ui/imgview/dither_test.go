@@ -41,6 +41,59 @@ func TestDither_OutputIsBlendBetweenFgAndBg(t *testing.T) {
 	}
 }
 
+func gradientImage(size int) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, size, size))
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x * 16), G: uint8(y * 16), B: 128, A: 255})
+		}
+	}
+	return img
+}
+
+// Colour mode quantizes each channel to the 6 web-safe levels (multiples of 51).
+func TestDither_ColorMode_OutputIsWebSafe(t *testing.T) {
+	out := imgview.Dither(gradientImage(16), imgview.DitherOptions{PixelSize: 1, FgColor: testFg, BgColor: testBg, ColorMode: true})
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			c := out.RGBAAt(x, y)
+			if c.R%51 != 0 || c.G%51 != 0 || c.B%51 != 0 || c.A != 255 {
+				t.Fatalf("pixel (%d,%d) = %+v, want every channel a multiple of 51 with A=255", x, y, c)
+			}
+		}
+	}
+}
+
+func TestDither_ColorMode_IgnoresFgAndBg(t *testing.T) {
+	img := gradientImage(16)
+	a := imgview.Dither(img, imgview.DitherOptions{PixelSize: 1, FgColor: testFg, BgColor: testBg, ColorMode: true})
+	b := imgview.Dither(img, imgview.DitherOptions{PixelSize: 1, FgColor: color.RGBA{R: 255, A: 255}, BgColor: color.RGBA{B: 255, A: 255}, ColorMode: true})
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			if av, bv := a.RGBAAt(x, y), b.RGBAAt(x, y); av != bv {
+				t.Fatalf("pixel (%d,%d): %+v vs %+v, want identical regardless of FgColor/BgColor", x, y, av, bv)
+			}
+		}
+	}
+}
+
+func TestDither_ColorMode_KeepsHue(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	out := imgview.Dither(img, imgview.DitherOptions{PixelSize: 1, FgColor: testFg, BgColor: testBg, ColorMode: true})
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			if c := out.RGBAAt(x, y); c != (color.RGBA{R: 255, A: 255}) {
+				t.Fatalf("pixel (%d,%d) = %+v, want pure red preserved", x, y, c)
+			}
+		}
+	}
+}
+
 // TestDither_PixelationSamplesTopLeftTexelOnly checks that pixelation picks
 // the top-left texel of each PixelSize block and ignores the rest of the
 // block's content, rather than averaging it.
