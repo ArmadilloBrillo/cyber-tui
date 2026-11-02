@@ -522,6 +522,7 @@ func (l TabsLayout) renderHelpModal(a App) string {
 			localSection = section("post detail (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"))
 		} else {
 			localSection = section("post detail",
+				row("Enter", "reveal CW post"),
 				row("d", "delete own"),
 				row("e", "edit own, <5min"),
 				row("p", "view profile"),

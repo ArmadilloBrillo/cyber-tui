@@ -25,8 +25,8 @@ const postMaxBodyLines = 4
 // 0 for the reading pane where the full content should be shown).
 // inlineImagesEnabled mirrors renderPostBody's parameter of the same name;
 // the returned []postImageSlot is nil whenever it's false.
-func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled bool) (string, []postImageSlot) {
-	content, imgSlots := renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines, inlineImagesEnabled)
+func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled, revealCW bool) (string, []postImageSlot) {
+	content, imgSlots := renderPostBody(p, bookmarked, watched, width, loc, timeFormat, maxBodyLines, inlineImagesEnabled, revealCW)
 	boxStyle := theme.Border
 	if selected {
 		boxStyle = theme.ActiveBorder
@@ -44,7 +44,7 @@ func RenderPost(p model.Post, selected bool, bookmarked bool, watched bool, widt
 // arrow-key navigation) can cache this per post ID/width and skip the
 // markdown re-parse, instead of rebuilding every loaded post on every
 // keystroke.
-func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled bool) (string, []postImageSlot) {
+func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc *time.Location, timeFormat string, maxBodyLines int, inlineImagesEnabled, revealCW bool) (string, []postImageSlot) {
 	innerWidth := width - 4
 
 	left := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -90,7 +90,11 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 	if badges != "" {
 		rows = append(rows, badges)
 	}
-	if p.Title != "" {
+	gated := cwGated(p, revealCW)
+	if p.ContentWarning != "" {
+		rows = append(rows, cwLabel(p.ContentWarning))
+	}
+	if p.Title != "" && !gated {
 		rows = append(rows, theme.Highlight.Render(p.Title))
 	}
 	// 1 = the card's own top border row, added by RenderPost/FeedModel.renderPost.
@@ -98,7 +102,9 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 
 	var body string
 	var imgSlots []postImageSlot
-	if innerWidth > 0 {
+	if gated {
+		body = cwHiddenBar("enter to open", innerWidth)
+	} else if innerWidth > 0 {
 		if inlineImagesEnabled {
 			rendered, hits := markdown.RenderLocatingImages(p.Content, innerWidth)
 			// Feed's card is compact and truncates body text to maxBodyLines,
@@ -135,7 +141,7 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 		body = markdown.Render(p.Content, 0)
 	}
 
-	if att := renderAttachments(p.Attachments); att != "" {
+	if att := renderAttachments(p.Attachments); att != "" && !gated {
 		body = body + "\n" + att
 	}
 
@@ -159,6 +165,39 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 		rows = append(rows, "\n"+topics)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...), imgSlots
+}
+
+// cwGated reports whether p's title, body and attachments must stay hidden:
+// the API requires a content-warned post to reveal them only on request.
+func cwGated(p model.Post, revealCW bool) bool { return p.ContentWarning != "" && !revealCW }
+
+// cwLabel renders the "CW: <text>" line shown wherever a content-warned post
+// appears, revealed or not.
+func cwLabel(cw string) string { return theme.Error.Render("CW: " + cw) }
+
+// cwHiddenBar renders the spoiler-style strip shown in place of a hidden
+// post's title, body and attachments: a fixed-width ░ run (like cIRC's
+// spoiler mask) with hint set into it on a shaded background.
+func cwHiddenBar(hint string, innerWidth int) string {
+	label := theme.SpoilerHint.Render(" " + hint + " ")
+	pad := min(innerWidth, 32) - lipgloss.Width(label)
+	if pad < 2 {
+		return label
+	}
+	left := pad / 2
+	return theme.Subtle.Render(strings.Repeat("░", left)) + label + theme.Subtle.Render(strings.Repeat("░", pad-left))
+}
+
+// cwPreview returns the one-line preview text for compact list rows: the CW
+// label while gated, else the title or the first line of the body.
+func cwPreview(p model.Post, revealCW bool) string {
+	if cwGated(p, revealCW) {
+		return "CW: " + p.ContentWarning
+	}
+	if p.Title != "" {
+		return p.Title
+	}
+	return markdown.FirstLine(p.Content)
 }
 
 // imageIcon returns a 🖼 icon (with leading spaces) when any image is present
@@ -262,7 +301,16 @@ func listFooter(loading, exhausted bool) string {
 // every wrapped line for the timestamp column so long messages never push it
 // off-screen; continuation lines are indented to align under the body.
 func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, muted map[string]bool) string {
-	return renderCircMessagesStyled(msgs, loc, timeDisplayFormat, viewportWidth, currentUser, nil, 0, muted)
+	return renderCircMessagesStyled(msgs, loc, timeDisplayFormat, viewportWidth, currentUser, nil, 0, muted, false)
+}
+
+// otherNickStyle is how a username other than the current user's is drawn:
+// the per-name colour when the colorNicknames setting is on, else Highlight.
+func otherNickStyle(username string, colorNicks bool) lipgloss.Style {
+	if colorNicks {
+		return theme.NickStyle(username)
+	}
+	return theme.Highlight
 }
 
 // renderCircMessagesStyled is renderCircMessages plus style/attachment
@@ -273,7 +321,8 @@ func renderCircMessages(msgs []model.Message, loc *time.Location, timeDisplayFor
 // passing (nil, 0), so its many existing call sites are unaffected. muted
 // (username, lowercased -> true) hides a sender's messages entirely — the
 // message contributes no output, keeping msgs/offsets/heights 1:1.
-func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, revealed map[string]bool, frame int, muted map[string]bool) string {
+// colorNicks is the colorNicknames setting (see otherNickStyle).
+func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, revealed map[string]bool, frame int, muted map[string]bool, colorNicks bool) string {
 	if viewportWidth < 20 {
 		viewportWidth = 80
 	}
@@ -291,7 +340,7 @@ func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisp
 		tsWidth := lipgloss.Width(ts)
 
 		if slices.Contains(msg.Style, styleArt) {
-			sb.WriteString(renderArtMessage(msg.From.Username, msg.Body, ts, viewportWidth))
+			sb.WriteString(renderArtMessage(msg.From.Username, msg.Body, ts, viewportWidth, otherNickStyle(msg.From.Username, colorNicks && msg.From.Username != currentUser)))
 			continue
 		}
 
@@ -301,11 +350,11 @@ func renderCircMessagesStyled(msgs []model.Message, loc *time.Location, timeDisp
 		}
 
 		if msg.IsAction {
-			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser))
+			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser, colorNicks))
 			continue
 		}
 
-		usernameStyle := theme.Highlight
+		usernameStyle := otherNickStyle(msg.From.Username, colorNicks)
 		if currentUser != "" && msg.From.Username == currentUser {
 			usernameStyle = theme.MeHighlight
 		}
@@ -454,6 +503,7 @@ type chatBodyCacheEntry struct {
 	timeDisplayFormat   string
 	revealed            bool
 	muted               bool
+	colorNicks          bool
 	inlineImagesEnabled bool
 	body                string
 	deleted             bool
@@ -483,7 +533,7 @@ type chatBodyCacheEntry struct {
 // matching postImageSlot's convention elsewhere. realRows (keyed by
 // circMsgImageKey) supplies each image's already-known real row count, if
 // any — see chatImageBandRows.
-func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int, muted map[string]bool, inlineImagesEnabled bool, realRows map[string]int, cache map[string]chatBodyCacheEntry) (content string, offsets []int, heights []int, imgSlots [][]postImageSlot) {
+func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, timeDisplayFormat string, viewportWidth int, currentUser string, selectedID string, revealed map[string]bool, frame int, muted map[string]bool, colorNicks bool, inlineImagesEnabled bool, realRows map[string]int, cache map[string]chatBodyCacheEntry) (content string, offsets []int, heights []int, imgSlots [][]postImageSlot) {
 	offsets = make([]int, len(msgs))
 	heights = make([]int, len(msgs))
 	imgSlots = make([][]postImageSlot, len(msgs))
@@ -508,17 +558,17 @@ func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, t
 		if !animated {
 			if e, hit := cache[msg.ID]; hit && e.width == viewportWidth && e.currentUser == currentUser &&
 				e.timeDisplayFormat == timeDisplayFormat && e.revealed == revealState && e.muted == muteState &&
-				e.inlineImagesEnabled == inlineImagesEnabled && e.body == msg.Body && e.deleted == msg.Deleted &&
+				e.colorNicks == colorNicks && e.inlineImagesEnabled == inlineImagesEnabled && e.body == msg.Body && e.deleted == msg.Deleted &&
 				e.themeName == themeName {
 				rendered, ok = e.rendered, true
 			}
 		}
 		if !ok {
-			rendered = renderCircMessagesStyled([]model.Message{renderMsg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame, muted)
+			rendered = renderCircMessagesStyled([]model.Message{renderMsg}, loc, timeDisplayFormat, viewportWidth, currentUser, revealed, frame, muted, colorNicks)
 			if !animated && cache != nil {
 				cache[msg.ID] = chatBodyCacheEntry{
 					rendered: rendered, width: viewportWidth, currentUser: currentUser,
-					timeDisplayFormat: timeDisplayFormat, revealed: revealState, muted: muteState,
+					timeDisplayFormat: timeDisplayFormat, revealed: revealState, muted: muteState, colorNicks: colorNicks,
 					inlineImagesEnabled: inlineImagesEnabled, body: msg.Body, deleted: msg.Deleted, themeName: themeName,
 				}
 			}
@@ -570,13 +620,13 @@ func renderCircMessagesWithSelection(msgs []model.Message, loc *time.Location, t
 // line — no username bracket, matching how real IRC clients narrate actions
 // in the third person. The API returns IsAction messages with Body already
 // stripped of the username (just the action text), so it's assembled here.
-func renderActionLine(username, body, ts string, viewportWidth int, currentUser string) string {
+func renderActionLine(username, body, ts string, viewportWidth int, currentUser string, colorNicks bool) string {
 	username = sanitize.Strip(username)
 	const suffix = " *"
 	tsWidth := lipgloss.Width(ts)
 	const tsGap = 2
 
-	usernameStyle := theme.Highlight
+	usernameStyle := otherNickStyle(username, colorNicks)
 	if currentUser != "" && username == currentUser {
 		usernameStyle = theme.MeHighlight
 	}
@@ -668,7 +718,7 @@ func renderChatMessagesStyled(msgs []model.Message, currentUser string, loc *tim
 		}
 		ts := displayTime(msg.CreatedAt, loc, timeDisplayFormat, true)
 		if msg.IsAction {
-			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser))
+			sb.WriteString(renderActionLine(msg.From.Username, msg.Body, ts, viewportWidth, currentUser, false))
 			sb.WriteString("\n")
 			continue
 		}

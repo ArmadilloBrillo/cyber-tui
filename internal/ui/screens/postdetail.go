@@ -117,12 +117,17 @@ type PostDetailModel struct {
 	replyOffsets []int       // start line of each reply within the viewport content
 	replyHeights []int       // rendered height of each reply (matches offsets; set by buildContent)
 	postHeight   int         // rendered height of the full post block; set by refreshContent
+	// cwRevealed is the reader's per-post request to see a content-warned
+	// post. Reset on every SetPost: notification and profile-reply paths land
+	// here without the reader ever seeing the post's CW card.
+	cwRevealed bool
 
 	// inlineImagesEnabled mirrors SharedConfigMsg.InlineImagesEnabled — the
 	// fully-gated value (config flag AND protocol available AND imageViewer
 	// != "browser" AND not an ephemeral SSH session). postImages/replyImages
 	// are only ever populated when this is true.
 	inlineImagesEnabled bool
+	revealCW            bool              // SharedConfigMsg.RevealContentWarnings
 	postImages          []postImageSlot   // every eligible image in the post; set by buildContent
 	replyImages         [][]postImageSlot // parallel to flatTree/replyOffsets — one slice per reply; set by buildContent
 	selectedReply       int
@@ -173,6 +178,7 @@ func NewPostDetailModel() PostDetailModel {
 
 func (m PostDetailModel) SetPost(post model.Post) PostDetailModel {
 	m.post = post
+	m.cwRevealed = false
 	m.replies = nil
 	m.flatTree = nil
 	m.replyOffsets = nil
@@ -233,6 +239,7 @@ func (m PostDetailModel) PostID() string { return m.post.ID }
 // (which SetPost itself doesn't reset) are cleared.
 func (m PostDetailModel) Close() PostDetailModel {
 	m.post = model.Post{}
+	m.cwRevealed = false
 	m.replies = nil
 	m.flatTree = nil
 	m.replyOffsets = nil
@@ -395,9 +402,10 @@ func (m PostDetailModel) CanEditSelected() bool {
 // ApplyPostEdit overwrites the edited fields of the open post after a
 // successful PATCH. Attachments is only applied when attachmentsTouched —
 // see FeedModel.ApplyPostEdit's doc comment for why.
-func (m PostDetailModel) ApplyPostEdit(content, title string, topics []string, isPublic, isNSFW bool, editedAt time.Time, attachments []model.Attachment, attachmentsTouched bool) PostDetailModel {
+func (m PostDetailModel) ApplyPostEdit(content, title, contentWarning string, topics []string, isPublic, isNSFW bool, editedAt time.Time, attachments []model.Attachment, attachmentsTouched bool) PostDetailModel {
 	m.post.Content = content
 	m.post.Title = title
+	m.post.ContentWarning = contentWarning
 	m.post.Topics = topics
 	m.post.IsPublic = isPublic
 	m.post.IsNSFW = isNSFW
@@ -584,6 +592,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
+		m.revealCW = msg.RevealContentWarnings
 		m = m.SetRelaxed(msg.Relaxed)
 		m = m.SetLocation(msg.Loc)
 		if msg.MaxThreadDepth != m.maxThreadDepth {
@@ -630,6 +639,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 			content := msg.Content
 			postID := m.post.ID
 			title := m.editPanel.TitleValue()
+			contentWarning := m.editPanel.CWValue()
 			topics := ParseTopics(m.editPanel.TopicsRaw())
 			isPublic := m.editPanel.IsPublic()
 			isNSFW := m.editPanel.IsNSFW()
@@ -641,7 +651,7 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 				m.viewport.Height = m.viewportHeight()
 			}
 			return m, func() tea.Msg {
-				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
+				return SubmitPostEditMsg{PostID: postID, Content: content, Title: title, ContentWarning: contentWarning, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AttachmentTouched: attachmentTouched, AudioAttachment: audioAttachment, OtherAttachments: otherAttachments}
 			}
 		}
 		content := msg.Content
@@ -762,6 +772,14 @@ func (m PostDetailModel) Update(msg tea.Msg) (PostDetailModel, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			return m, func() tea.Msg { return BackToFeedMsg{} }
+		case "enter":
+			if m.selectedReply == -1 && m.post.ContentWarning != "" {
+				m.cwRevealed = !m.cwRevealed
+				if m.ready {
+					m = m.refreshContent()
+				}
+			}
+			return m, nil
 		case "d":
 			if m.selectedReply == -1 {
 				// Post selected — only allow delete if it's the user's own post.
@@ -1037,13 +1055,23 @@ func (m PostDetailModel) renderFullPost(selected bool) (string, []postImageSlot)
 	if badges != "" {
 		rows = append(rows, badges)
 	}
-	if m.post.Title != "" {
+	gated := cwGated(m.post, m.cwRevealed || m.revealCW)
+	if m.post.ContentWarning != "" {
+		rows = append(rows, cwLabel(m.post.ContentWarning))
+	}
+	if m.post.Title != "" && !gated {
 		rows = append(rows, theme.Title.Render(m.post.Title))
 	}
 
-	body, imgSlots := m.renderBodyWithInlineImage(m.post.Content, innerWidth, 1+lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, rows...)))
-	if att := renderAttachments(m.post.Attachments); att != "" {
-		body = body + "\n" + att
+	var body string
+	var imgSlots []postImageSlot
+	if gated {
+		body = cwHiddenBar("enter to reveal", innerWidth)
+	} else {
+		body, imgSlots = m.renderBodyWithInlineImage(m.post.Content, innerWidth, 1+lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, rows...)))
+		if att := renderAttachments(m.post.Attachments); att != "" {
+			body = body + "\n" + att
+		}
 	}
 
 	var topicsSB strings.Builder

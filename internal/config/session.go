@@ -97,11 +97,6 @@ type Config struct {
 	// RasterImage shader effect. Only applies when ImageViewer != "browser".
 	Dithering bool `json:"dithering,omitempty"`
 
-	// DitherSharpness controls the dithering pixelation block size: "rough"
-	// (chunkiest), "medium" (default), "sharp", or "crisp" (no pixelation).
-	// Only meaningful when Dithering is on. See GetDitherSharpness.
-	DitherSharpness string `json:"ditherSharpness,omitempty"`
-
 	// FeedManualRefreshOnly disables Feed's background poll (see
 	// docs/39-feed-background-poll.md) — the 60s tea.Tick chain that fetches
 	// a peek page to stage the "(N) new posts" badge. Off (auto-poll) by
@@ -138,6 +133,12 @@ type Config struct {
 	// arrow-key cycling (same as Search's hidden entry) when true. Off by
 	// default (tab shown) when absent from the JSON file.
 	HideGlobeTab bool `json:"hideGlobeTab,omitempty"`
+
+	// RevealContentWarnings shows content-warned posts in full everywhere,
+	// keeping only the "CW: <text>" label. Off by default: the API requires
+	// such posts to reveal title, body and attachments only on request, and
+	// turning this on is the reader's standing request.
+	RevealContentWarnings bool `json:"revealContentWarnings,omitempty"`
 
 	// ImageScale multiplies the fullscreen image modal's display size,
 	// relative to the image's own native (1:1 pixel) size — 1.0 shows it at
@@ -181,17 +182,6 @@ func (c Config) GetImageScale() float64 {
 		s = MaxImageScale
 	}
 	return s
-}
-
-// GetDitherSharpness returns DitherSharpness, substituting the default
-// ("medium") for an empty or unrecognized value.
-func (c Config) GetDitherSharpness() string {
-	switch c.DitherSharpness {
-	case "rough", "sharp", "crisp":
-		return c.DitherSharpness
-	default:
-		return "medium"
-	}
 }
 
 // GetMaxThreadDepth returns MaxThreadDepth, substituting the default (3) when

@@ -210,6 +210,10 @@ func (m JournalModel) location() *time.Location {
 // bypass global key shortcuts when a text input has focus).
 func (m JournalModel) ComposeActive() bool { return m.editMode }
 
+// AcceptsInsertedText reports whether an InsertIconMsg would land anywhere,
+// so App only opens prompts like ctrl+g's where the result is used.
+func (m JournalModel) AcceptsInsertedText() bool { return m.editMode && !m.topicsFocused }
+
 func (m JournalModel) Init() tea.Cmd { return nil }
 
 func (m JournalModel) Update(msg tea.Msg) (JournalModel, tea.Cmd) {

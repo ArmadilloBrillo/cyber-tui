@@ -82,6 +82,7 @@ type Post struct {
 	BookmarksCount int
 	IsPublic       bool
 	IsNSFW         bool
+	ContentWarning string // empty = none; non-empty gates title, body and attachments until revealed
 	Deleted        bool
 	CreatedAt      time.Time
 	EditedAt       time.Time // zero value means never edited
@@ -192,10 +193,12 @@ type Settings struct {
 	ShowFollowerCount    bool
 	AutoWatchOnReply     bool
 	ShowGuildPostsInFeed bool
+	ColorNicknames       bool // colour cIRC usernames by a hash of the name
 	IconTheme            string
 	FollowedTopics       []string
 	MutedTopics          []string
-	ImagePixelSize       string // named preset or pixel multiplier, e.g. "sharp", "2"
+	ImagePixelSize       string // "rough", "medium", "sharp" or "crisp"; drives dither pixel size
+	ImageColor           bool   // dither in colour (web-safe palette) instead of the theme fg/bg
 	TimeDisplayFormat    string // "datetime", "relative", "unix", or "swatch"
 	DefaultPublicPost    bool
 	MutedUsersByRoom     map[string][]string // roomID -> muted usernames; server-managed via /mute commands, cIRC only

@@ -322,12 +322,12 @@ func maskSpoilerBody(body string) string {
 // verbatim: no word-wrap, no markdown, matching renderDeletedTombstone's
 // dedicated-builder convention. ASCII art is column-sensitive, so wrapping
 // or markdown-escaping it would corrupt the picture.
-func renderArtMessage(username, body, ts string, viewportWidth int) string {
+func renderArtMessage(username, body, ts string, viewportWidth int, nameStyle lipgloss.Style) string {
 	const tsGap = 2 // matches renderCircMessages/renderDeletedTombstone's minimum gap
 	tsWidth := lipgloss.Width(ts)
 	rawPrefixWidth := len(username) + 4 // "<username>  ", same accounting as renderCircMessages' styledPrefix
 	pad := max(viewportWidth-rawPrefixWidth-tsWidth, 0) + tsGap
-	header := "<" + theme.Highlight.Render(username) + ">" + strings.Repeat(" ", pad) + theme.Subtle.Render(ts)
+	header := "<" + nameStyle.Render(username) + ">" + strings.Repeat(" ", pad) + theme.Subtle.Render(ts)
 	var sb strings.Builder
 	sb.WriteString(header + "\n")
 	for line := range strings.SplitSeq(strings.TrimRight(body, "\n"), "\n") {

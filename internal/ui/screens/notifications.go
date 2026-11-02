@@ -512,7 +512,7 @@ func (m NotificationsModel) Update(msg tea.Msg) (NotificationsModel, tea.Cmd) {
 						func() tea.Msg { return StartConversationMsg{Username: username} },
 					)
 				}
-				// Post/reply keyword matches fall through to the
+				// Post keyword matches fall through to the
 				// TargetID-based post navigation below.
 			case "chat_mention":
 				// Jump straight to the cIRC room the mention happened in.
@@ -835,8 +835,6 @@ func baseNotifSummary(n model.Notification) string {
 			return "keyword " + kw + " matched in #" + n.RoomName + "."
 		case n.RoomSlug != "":
 			return "keyword " + kw + " matched in #" + n.RoomSlug + "."
-		case n.ReplyContent != "":
-			return "keyword " + kw + " matched in a reply."
 		case n.PostContent != "":
 			return "keyword " + kw + " matched in a post."
 		case n.MessageContent != "":

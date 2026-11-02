@@ -2716,7 +2716,7 @@ func (c *tooSoonPostClient) GetPost(postID string) (model.Post, error) {
 func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testing.T) {
 	a := NewApp(&tooSoonPostClient{MockClient: api.NewMockClient()})
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
 	if _, ok := msg.(postConvertedToNoteMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postConvertedToNoteMsg", msg)
 	}
@@ -2725,7 +2725,7 @@ func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testin
 func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
 	a := NewApp(api.NewMockClient())
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
 	if _, ok := msg.(postCreatedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
 	}
@@ -2739,7 +2739,7 @@ type createPostErrClient struct {
 	err error
 }
 
-func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error) {
+func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
 	return model.Post{}, c.err
 }
 func (c *createPostErrClient) CreateNote(content string, topics []string) (model.Note, error) {
@@ -2749,7 +2749,7 @@ func (c *createPostErrClient) CreateNote(content string, topics []string) (model
 func TestCreatePostCmd_RateLimited_ReturnsPostSubmitFailedMsg(t *testing.T) {
 	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrRateLimited})
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
 	if _, ok := msg.(postSubmitFailedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postSubmitFailedMsg (editor must stay open)", msg)
 	}
@@ -2758,7 +2758,7 @@ func TestCreatePostCmd_RateLimited_ReturnsPostSubmitFailedMsg(t *testing.T) {
 func TestCreatePostCmd_Unauthorized_ReturnsActionErrMsg(t *testing.T) {
 	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrUnauthorized})
 
-	msg := a.createPostCmd("hello", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
 	if _, ok := msg.(actionErrMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want actionErrMsg so handleUnauthorized redirects to login", msg)
 	}
@@ -2797,11 +2797,13 @@ type editPostRecordingClient struct {
 	*api.MockClient
 	gotAttachments []model.Attachment
 	gotTouched     bool
+	gotCW          string
 }
 
-func (c *editPostRecordingClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, attachments []model.Attachment, attachmentTouched bool) error {
+func (c *editPostRecordingClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, contentWarning string, attachments []model.Attachment, attachmentTouched bool) error {
 	c.gotAttachments = attachments
 	c.gotTouched = attachmentTouched
+	c.gotCW = contentWarning
 	return nil
 }
 
@@ -2817,7 +2819,7 @@ func TestEditPostCmd_SendsAudioAttachment(t *testing.T) {
 	audio := model.Attachment{Type: "audio", Src: "https://youtu.be/dQw4w9WgXcQ", Origin: "youtube", Artist: "a", Title: "t"}
 	legacyImage := model.Attachment{Type: "image", Src: "https://example.com/pic.png"}
 
-	msg := a.editPostCmd("p1", "content", "title", nil, false, false, true, &audio, []model.Attachment{legacyImage})()
+	msg := a.editPostCmd("p1", "content", "title", "", nil, false, false, true, &audio, []model.Attachment{legacyImage})()
 	if _, ok := msg.(postEditedMsg); !ok {
 		t.Fatalf("editPostCmd() = %T, want postEditedMsg", msg)
 	}
@@ -2827,6 +2829,25 @@ func TestEditPostCmd_SendsAudioAttachment(t *testing.T) {
 	want := []model.Attachment{legacyImage, audio}
 	if !slices.Equal(client.gotAttachments, want) {
 		t.Errorf("EditPost attachments = %+v, want %+v (other attachment first, then audio)", client.gotAttachments, want)
+	}
+}
+
+// TestEditPostCmd_PassesContentWarning checks the CW reaches the API and the
+// postEditedMsg Feed/PostDetail apply locally.
+func TestEditPostCmd_PassesContentWarning(t *testing.T) {
+	client := &editPostRecordingClient{MockClient: api.NewMockClient()}
+	a := NewApp(client)
+
+	msg := a.editPostCmd("p1", "content", "title", "spoilers", nil, false, false, false, nil, nil)()
+	edited, ok := msg.(postEditedMsg)
+	if !ok {
+		t.Fatalf("editPostCmd() = %T, want postEditedMsg", msg)
+	}
+	if client.gotCW != "spoilers" {
+		t.Errorf("EditPost contentWarning = %q, want spoilers", client.gotCW)
+	}
+	if edited.contentWarning != "spoilers" {
+		t.Errorf("postEditedMsg.contentWarning = %q, want spoilers", edited.contentWarning)
 	}
 }
 
@@ -3175,37 +3196,41 @@ func TestPostEditedMsg_AttachmentsTouched_UpdatesPostDetailCache(t *testing.T) {
 	}
 }
 
-// --- applyAttachURL: ctrl+g dispatch (posts/replies warn, chat /gif, else markdown insert) ---
+// --- ctrl+g: inert wherever applyAttachURL's result would be dropped ---
 
-// TestApplyAttachURL_FeedPanelActive_Warns covers the branch that must win
-// when the Feed new-post panel is open: API v0.8.7 rejects type:"image" in a
-// post's attachments array (and inline markdown pointing anywhere but
-// bunker.cyberspace.online), so ctrl+g here warns instead of attaching or
-// inserting markdown that would only fail later at submit.
-func TestApplyAttachURL_FeedPanelActive_Warns(t *testing.T) {
+// assertCtrlGDisabled presses ctrl+g and checks it was consumed (so it never
+// reaches the textarea) without opening the attach-URL prompt or notifying —
+// either the focused field ignores InsertIconMsg, or it's a post/reply, which
+// only accepts images already hosted on bunker (cyber-tui can't upload).
+func assertCtrlGDisabled(t *testing.T, a App) {
+	t.Helper()
+	a2, cmd, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlG})
+	if !consumed {
+		t.Fatal("expected ctrl+g to be consumed")
+	}
+	if cmd != nil {
+		t.Error("expected no cmd")
+	}
+	if a2.attachURLPromptOpen {
+		t.Error("expected the attach-URL prompt to stay closed")
+	}
+	if a2.notifyText != "" {
+		t.Errorf("expected no notification, got %q", a2.notifyText)
+	}
+}
+
+func TestHandleKeys_CtrlG_FeedPanelActive_Disabled(t *testing.T) {
 	a := loggedInApp()
 	m, _ := a.feed.Update(keyMsg("n"))
 	a.feed = m
 	if !a.feed.PanelActive() {
 		t.Fatal("setup: expected Feed's new-post panel open after 'n'")
 	}
-
-	a2, cmd := a.applyAttachURL("https://example.com/pic.png")
-	if cmd == nil {
-		t.Error("expected a cmd (the warning notification's expiry tick)")
-	}
-	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
-		t.Errorf("expected a warning notification, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
-	}
-	if got := a2.feed.ComposeView(80); strings.Contains(got, "https://example.com/pic.png") {
-		t.Errorf("ComposeView() = %q, should not contain the URL — no native attachment set", got)
-	}
+	assertCtrlGDisabled(t, a)
 }
 
-// TestApplyAttachURL_PostDetailEditPanelActive_Warns mirrors the Feed case
-// for PostDetail's edit panel (opened via 'e', separate from the Feed
-// instance).
-func TestApplyAttachURL_PostDetailEditPanelActive_Warns(t *testing.T) {
+// PostDetail's edit panel is opened via 'e', separate from the Feed instance.
+func TestHandleKeys_CtrlG_PostDetailEditPanelActive_Disabled(t *testing.T) {
 	a := loggedInApp()
 	a.currentUser = model.User{Username: "op", IsSupporter: true}
 	a.active = screenPostDetail
@@ -3220,15 +3245,10 @@ func TestApplyAttachURL_PostDetailEditPanelActive_Warns(t *testing.T) {
 	if !a.postDetail.EditPanelActive() {
 		t.Fatal("setup: expected PostDetail's edit panel open after 'e'")
 	}
-
-	a2, cmd := a.applyAttachURL("https://example.com/pic.png")
-	if cmd == nil {
-		t.Error("expected a cmd (the warning notification's expiry tick)")
-	}
-	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
-		t.Errorf("expected a warning notification, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
-	}
+	assertCtrlGDisabled(t, a)
 }
+
+// --- applyAttachURL: attach-URL prompt dispatch (chat /gif, else markdown insert) ---
 
 // TestApplyAttachURL_DefaultBranch_ReturnsInsertIconMsg covers the leftover
 // incidental surfaces (guild threads, journal, bio editing — anything not
@@ -3320,10 +3340,7 @@ func TestApplyAttachURL_CMailNonGIF_WarnsInsteadOfInserting(t *testing.T) {
 	}
 }
 
-// TestApplyAttachURL_ReplyCompose_Warns: API v0.8.7 rejects type:"image" in a
-// reply's attachments array the same as posts, so ctrl+g on the reply
-// compose box warns rather than attaching or inserting markdown.
-func TestApplyAttachURL_ReplyCompose_Warns(t *testing.T) {
+func TestHandleKeys_CtrlG_ReplyCompose_Disabled(t *testing.T) {
 	a := loggedInApp()
 	a.active = screenPostDetail
 	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", Content: "body"})
@@ -3332,20 +3349,95 @@ func TestApplyAttachURL_ReplyCompose_Warns(t *testing.T) {
 	if !a.postDetail.ReplyComposeActive() {
 		t.Fatal("setup: expected the reply compose box open")
 	}
+	assertCtrlGDisabled(t, a)
+}
 
-	a2, _ := a.applyAttachURL("https://example.com/pic.png")
-	if a2.notifyLevel != notifyWarn || a2.notifyText == "" {
-		t.Errorf("expected a warning notification, got level=%v text=%q", a2.notifyLevel, a2.notifyText)
+func TestHandleKeys_CtrlG_SearchQueryFocused_Disabled(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenSearch
+	a.search = a.search.FocusQuery()
+	if !a.search.InputFocused() {
+		t.Fatal("setup: expected the search query focused")
 	}
+	assertCtrlGDisabled(t, a)
+}
+
+func TestHandleKeys_CtrlG_FeedFlagPrompt_Disabled(t *testing.T) {
+	a := setupFeedFlagPromptOpen(loggedInApp())
+	if !a.feed.ComposeActive() || a.feed.PanelActive() {
+		t.Fatal("setup: expected the flag prompt open with no post panel")
+	}
+	assertCtrlGDisabled(t, a)
+}
+
+func TestHandleKeys_CtrlG_GuildPanelSlugFocused_Disabled(t *testing.T) {
+	a := setupGuildPanelOpen(t, loggedInApp())
+	g, _ := a.guilds.Update(tea.KeyMsg{Type: tea.KeyTab})
+	a.guilds = g
+	if a.guilds.AcceptsInsertedText() {
+		t.Fatal("setup: expected tab to move focus from title to slug")
+	}
+	assertCtrlGDisabled(t, a)
+}
+
+func TestHandleKeys_CtrlG_JournalTopicsFocused_Disabled(t *testing.T) {
+	a := setupJournalNewNote(t, loggedInApp())
+	j, _ := a.journal.Update(tea.KeyMsg{Type: tea.KeyTab})
+	a.journal = j
+	if a.journal.AcceptsInsertedText() {
+		t.Fatal("setup: expected tab to move focus to topics")
+	}
+	assertCtrlGDisabled(t, a)
+}
+
+func TestHandleKeys_CtrlG_ProfileNonBioFieldFocused_Disabled(t *testing.T) {
+	a := setupProfileEditForm(t, loggedInApp())
+	p, _ := a.profile.Update(tea.KeyMsg{Type: tea.KeyTab})
+	a.profile = p
+	if a.profile.AcceptsInsertedText() {
+		t.Fatal("setup: expected tab to move focus off the bio field")
+	}
+	assertCtrlGDisabled(t, a)
 }
 
 // --- ctrl+g / attach-URL prompt ---
 
-func TestHandleKeys_CtrlG_OpensAttachURLPrompt_WhenInputFocused(t *testing.T) {
-	a := setupChatroomsDetailWithURL(loggedInApp())
-	if !a.chatrooms.InputFocused() {
-		t.Fatal("setup: expected chatrooms input focused in detail mode")
+func setupGuildPanelOpen(t *testing.T, a App) App {
+	t.Helper()
+	a.active = screenGuilds
+	a.guilds = a.guilds.OpenGuild("g1").SetGuildPosts(nil, "")
+	g, _ := a.guilds.Update(keyMsg("n"))
+	a.guilds = g
+	if !a.guilds.ComposeActive() {
+		t.Fatal("setup: expected the guild new-thread panel open after 'n'")
 	}
+	return a
+}
+
+func setupJournalNewNote(t *testing.T, a App) App {
+	t.Helper()
+	a.active = screenJournal
+	j, _ := a.journal.Update(keyMsg("n"))
+	a.journal = j
+	if !a.journal.ComposeActive() {
+		t.Fatal("setup: expected journal edit mode after 'n'")
+	}
+	return a
+}
+
+func setupProfileEditForm(t *testing.T, a App) App {
+	t.Helper()
+	a.active = screenProfile
+	p, _ := a.profile.Update(keyMsg("e"))
+	a.profile = p
+	if !a.profile.ComposeActive() {
+		t.Fatal("setup: expected profile edit mode after 'e'")
+	}
+	return a
+}
+
+func assertCtrlGOpensPrompt(t *testing.T, a App) {
+	t.Helper()
 	a2, _, consumed := a.handleKeys(tea.KeyMsg{Type: tea.KeyCtrlG})
 	if !consumed {
 		t.Fatal("expected ctrl+g to be consumed while a compose field is focused")
@@ -3353,6 +3445,34 @@ func TestHandleKeys_CtrlG_OpensAttachURLPrompt_WhenInputFocused(t *testing.T) {
 	if !a2.attachURLPromptOpen {
 		t.Error("expected attachURLPromptOpen = true after ctrl+g")
 	}
+}
+
+func TestHandleKeys_CtrlG_OpensAttachURLPrompt_WhenInputFocused(t *testing.T) {
+	a := setupChatroomsDetailWithURL(loggedInApp())
+	if !a.chatrooms.InputFocused() {
+		t.Fatal("setup: expected chatrooms input focused in detail mode")
+	}
+	assertCtrlGOpensPrompt(t, a)
+}
+
+func TestHandleKeys_CtrlG_CMailDetail_OpensPrompt(t *testing.T) {
+	a := setupCMailDetail(loggedInApp())
+	if !a.cmail.InputFocused() {
+		t.Fatal("setup: expected C-Mail input focused in detail mode")
+	}
+	assertCtrlGOpensPrompt(t, a)
+}
+
+func TestHandleKeys_CtrlG_GuildPanelTitleFocused_OpensPrompt(t *testing.T) {
+	assertCtrlGOpensPrompt(t, setupGuildPanelOpen(t, loggedInApp()))
+}
+
+func TestHandleKeys_CtrlG_JournalBodyFocused_OpensPrompt(t *testing.T) {
+	assertCtrlGOpensPrompt(t, setupJournalNewNote(t, loggedInApp()))
+}
+
+func TestHandleKeys_CtrlG_ProfileBioFocused_OpensPrompt(t *testing.T) {
+	assertCtrlGOpensPrompt(t, setupProfileEditForm(t, loggedInApp()))
 }
 
 // --- ctrl+j / song prompt ---
@@ -4155,126 +4275,6 @@ func TestScanPeekedPosts_SuppressedWhileViewingFeed(t *testing.T) {
 	}
 	if got.polledUnreadCount != 0 {
 		t.Errorf("polledUnreadCount = %d, want 0 (entry created already read)", got.polledUnreadCount)
-	}
-}
-
-// --- keyword alerts on the replies poll (SearchReplies) ---
-
-func TestKeywordReplyMatch_FirstResponseSeedsBaseline_NoAlert(t *testing.T) {
-	a := loggedInApp()
-	a.desktopNotifications = true
-	a.keywordAlerts = []string{"cyberdeck"}
-	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-
-	reply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
-	m, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{reply}})
-	got := m.(App)
-	if cmd != nil {
-		t.Error("expected no toast on the first (baseline) response for a keyword")
-	}
-	if got.notifications.UnreadCount() != 0 {
-		t.Errorf("notifications.UnreadCount() = %d, want 0", got.notifications.UnreadCount())
-	}
-}
-
-func TestKeywordReplyMatch_EmitsForNewReply(t *testing.T) {
-	a := loggedInApp()
-	a.desktopNotifications = true
-	a.keywordAlerts = []string{"cyberdeck"}
-	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-
-	// Baseline: nothing yet.
-	m, _ := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: nil})
-	a = m.(App)
-
-	newReply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
-	m, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{newReply}})
-	got := m.(App)
-	if cmd == nil {
-		t.Error("expected a toast cmd for a newly-seen matching reply")
-	}
-	if got.notifications.UnreadCount() != 1 {
-		t.Errorf("notifications.UnreadCount() = %d, want 1", got.notifications.UnreadCount())
-	}
-	view := got.notifications.View()
-	if !strings.Contains(view, "cyberdeck") {
-		t.Errorf("expected the matched keyword to render in the Notifications tab, got: %q", view)
-	}
-}
-
-func TestKeywordReplyMatch_NoAlert_ForAlreadySeenReply(t *testing.T) {
-	a := loggedInApp()
-	a.desktopNotifications = true
-	a.keywordAlerts = []string{"cyberdeck"}
-	a.notifications, _ = a.notifications.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-
-	reply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
-	m, _ := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{reply}}) // baseline
-	a = m.(App)
-
-	// Same reply ID reappearing in a later poll must not alert again.
-	_, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{reply}})
-	if cmd != nil {
-		t.Error("expected no repeat toast for an already-seen reply")
-	}
-}
-
-func TestKeywordReplyMatch_SuppressedWhileViewingFeed(t *testing.T) {
-	a := loggedInApp()
-	a.desktopNotifications = true
-	a.keywordAlerts = []string{"cyberdeck"}
-	a.focusReported, a.focused = true, true
-	a.active = screenFeed
-
-	m, _ := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: nil}) // baseline
-	a = m.(App)
-
-	newReply := model.Reply{ID: "r1", PostID: "p1", Content: "check out this cyberdeck build", AuthorUsername: "trinity"}
-	m, cmd := a.Update(keywordReplyMatchMsg{keyword: "cyberdeck", replies: []model.Reply{newReply}})
-	got := m.(App)
-	if cmd != nil {
-		t.Error("expected no toast while actively viewing Feed")
-	}
-	if got.polledUnreadCount != 0 {
-		t.Errorf("polledUnreadCount = %d, want 0 (entry created already read)", got.polledUnreadCount)
-	}
-}
-
-func TestKeywordReplyPollTick_DeadChainWithoutKeywords(t *testing.T) {
-	a := loggedInApp()
-	a.sessionGen = 3
-	_, cmd := a.Update(keywordReplyPollTickMsg{gen: 3})
-	if cmd != nil {
-		t.Error("expected the poll chain to die when no keywords are configured")
-	}
-}
-
-func TestKeywordReplyPollTick_FetchesPerKeywordAndReschedules(t *testing.T) {
-	a := loggedInApp()
-	a.sessionGen = 3
-	a.keywordAlerts = []string{"cyberdeck", "wetware"}
-
-	_, cmd := a.Update(keywordReplyPollTickMsg{gen: 3})
-	if cmd == nil {
-		t.Fatal("expected a batched cmd (reschedule + one fetch per keyword)")
-	}
-	batch, ok := cmd().(tea.BatchMsg)
-	if !ok {
-		t.Fatalf("expected tea.BatchMsg, got %T", cmd())
-	}
-	if len(batch) != 1+len(a.keywordAlerts) {
-		t.Fatalf("expected %d cmds (1 reschedule + %d fetches), got %d", 1+len(a.keywordAlerts), len(a.keywordAlerts), len(batch))
-	}
-	// batch[0] is the reschedule tick — invoking it would block for
-	// keywordReplyPollInterval, so only the fetch cmds (batch[1:]) run here.
-	var matchCount int
-	for _, c := range batch[1:] {
-		if _, ok := c().(keywordReplyMatchMsg); ok {
-			matchCount++
-		}
-	}
-	if matchCount != len(a.keywordAlerts) {
-		t.Errorf("expected %d keywordReplyMatchMsg (one per keyword), got %d", len(a.keywordAlerts), matchCount)
 	}
 }
 
@@ -6244,7 +6244,7 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 	}
 
 	a.dithering = true
-	a.ditherSharpness = "sharp"
+	a.settings.ImagePixelSize = "sharp"
 
 	cmd = a.syncInlineImages()
 	if cmd == nil {
@@ -6256,6 +6256,21 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 	}
 	if !a.inlineImageFetching[newKey] {
 		t.Errorf("expected a fetch scheduled under the new dither-enabled key %q, fetching=%v", newKey, a.inlineImageFetching)
+	}
+}
+
+// Switching imageColor must change the cache key too, or images encoded in
+// the old mode keep being served.
+func TestInlineImageCacheKey_ImageColorChangesKey(t *testing.T) {
+	a, _ := feedAppWithOneImage(t)
+	a.dithering = true
+	img := a.feed.VisibleInlineImages()[0]
+
+	mono := inlineImageCacheKey(img, a.graphicsProtocol, a.ditherOptions())
+	a.settings.ImageColor = true
+	colour := inlineImageCacheKey(img, a.graphicsProtocol, a.ditherOptions())
+	if mono == colour {
+		t.Errorf("cache key unchanged by imageColor: %q", mono)
 	}
 }
 
@@ -7486,5 +7501,39 @@ func TestSaveProfileCmd_DoesNotMutateLiveApp(t *testing.T) {
 	loaded, ok := msg.(profileLoadedMsg)
 	if !ok || loaded.user.Bio != "new" || loaded.user.Username != "alice" {
 		t.Errorf("expected profileLoadedMsg carrying the updated user, got %#v", msg)
+	}
+}
+
+// TestHandleSettings_RevealContentWarningsPersists checks the setting reaches
+// App state, the broadcast to post screens, and the config file.
+func TestHandleSettings_RevealContentWarningsPersists(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	a := loggedInApp()
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{RevealContentWarnings: true, ImageViewer: "terminal"})
+	if !ok || cmd == nil {
+		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
+	}
+	saved, ok := cmd().(settingsSavedMsg)
+	if !ok {
+		t.Fatal("expected settingsSavedMsg")
+	}
+	a2, cmd2, _ := a.handleSettings(saved)
+	if !a2.revealContentWarnings {
+		t.Error("expected revealContentWarnings to be true after save")
+	}
+	batch, ok := cmd2().(tea.BatchMsg)
+	if !ok || len(batch) < 2 {
+		t.Fatalf("expected a batch with notify + save cmds, got %T", cmd2())
+	}
+	batch[1]()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if !cfg.RevealContentWarnings {
+		t.Error("expected RevealContentWarnings persisted to config")
 	}
 }

@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.8.11) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.9.0) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -306,6 +306,20 @@ Notes:
 |---|---|---|
 | 4 new notification types | `guild_chat_message`, `moderator_permissions_changed`, `edit_access_granted`/`edit_access_removed`, `gift_received`/`gift_sent` — `notifSummary`/`notifIcon` cases and category-filter grouping added in `notifications.go`. Unverified against a live payload (all rare/admin- or feature-gated triggers). | **Done** — 2026-09-16 |
 
+### API v0.9.0 (2026-10-28)
+
+Changes from v0.8.12, see `docs/api-diff-v0.8.12-to-v0.9.0.diff`.
+
+| Area | Description | Priority |
+|---|---|---|
+| `contentWarning` on posts | Optional, max 60 chars on create/edit (`""` or `null` removes it). Clients show `CW: <contentWarning>` and reveal title, body and attachments on request. | **Done** (PR #203): sent from compose/edit, gated in feed and post detail, plus a setting to always reveal |
+| `colorNicknames` setting | Default off. Colours usernames in cIRC message lines; hue is `fnv32a(lowercase(username)) % 360`, lightness chosen by the client to suit the background. Needs the settings field, a Settings screen toggle and cIRC line rendering. | **Done**, see `docs/58-circ-color-nicknames-localtime.md` |
+| `/localtime HH:MM` command | cIRC only. Posts "It's HH:MM o'clock where @you is"; the client must supply local time (24h) since the server can't see the clock. Was rejected client-side as an unknown command (missing from `circOnlySlashCommands`); now allowed, and a bare `/localtime` is filled in with the current time. | **Done**, see `docs/58-circ-color-nicknames-localtime.md` |
+| `audioAttachment` `origin: "latex"` | Website-posted tracks (entries and cIRC/C-Mail `/song`) can carry `origin: "latex"` with a direct MP3 `src` and a `cover` image URL. The API only accepts YouTube on create, so ctrl+j is unaffected. The read path has no YouTube assumptions: the `[AUDIO]` line renders regardless of origin, `o` opens the MP3 `src`, and an untouched attachment is preserved on post edit. `cover` is not decoded (`wireAttachment`, `internal/api/client.go:76-83`) or shown. As of 2026-10-31 no latex track was found live (about 350 posts and 300 cIRC messages checked). | Deferred: revisit cover display when a live example exists |
+| `imageColor` setting | Default off. Renders images in colour instead of the theme's foreground/background. On the website it keeps the dithering and switches the shader to a per-channel web-safe palette. Now backs a Settings dithering "color" row (`monochrome` / `color`) and is sent on `PATCH`. | **Done**, see `docs/60-image-color.md` |
+| `imagePixelSize` values documented | One of `rough`, `medium`, `sharp`, `crisp`. Now backs the Settings dithering "sharpness" row and is sent on `PATCH`; replaces the local `ditherSharpness` config key. | **Done** (PR #205), see `docs/59-image-pixel-size.md` |
+| cIRC history limits | Scrollback stops at the newest 1000 messages or 180 days. RTDB reads now require `orderBy="timestamp"` with `limitToLast` up to 1000 and deny `endAt`/`endBefore`; scrollback must use `GET /v1/circ/:roomId`. Client RTDB reads use `limitToLast=50` without `endBefore` (`client.go:1999`, `:2671`), so no change needed. A `before` past the limit returns an empty page (confirmed live 2026-11-02); `PrependMessages` marks history exhausted on an empty page and stops further fetches (`internal/ui/screens/chatrooms.go:1052`, covered by `TestChatrooms_PrependMessages_EmptyMarksExhausted`). The `cursor: null` on the last page inside the limit is ignored, costing one extra empty request. | No change needed, verified |
+
 ### Replies
 
 | Endpoint | Method | Description | Priority |
@@ -336,7 +350,7 @@ Notes:
 | --------------- | ------------------------------------- | -------------------------------------------------------------------- |
 | Notes (Journal) | List, create, edit, delete, revision history | — |
 | Profile         | View and edit all fields              | —                                                                    |
-| Settings        | All TUI-relevant fields editable; `mutedUsersByRoom` read and enforced (feature 37); `mutedTopics` (muted topics) managed from the Topics tab and filtered everywhere (feature 54) | `keyboardBindings`, `keyboardPreset` — web UI concepts with no TUI equivalent; intentionally omitted; `followedTopics`, `iconTheme`, `imagePixelSize` still deferred |
+| Settings        | All TUI-relevant fields editable; `mutedUsersByRoom` read and enforced (feature 37); `mutedTopics` (muted topics) managed from the Topics tab and filtered everywhere (feature 54) | `keyboardBindings`, `keyboardPreset` — web UI concepts with no TUI equivalent; intentionally omitted; `followedTopics`, `iconTheme` still deferred |
 | Follows         | Follow, unfollow, list following and followers | — |
 | Notifications   | All v0.4 types received and displayed with dedicated text and icons; unread-only toggle (`u`); category filter panel (`f`) | — |
 

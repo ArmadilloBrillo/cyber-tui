@@ -186,6 +186,7 @@ type wirePost struct {
 	BookmarksCount int              `json:"bookmarksCount"`
 	IsPublic       bool             `json:"isPublic"`
 	IsNSFW         bool             `json:"isNSFW"`
+	ContentWarning string           `json:"contentWarning"`
 	Deleted        bool             `json:"deleted"`
 	CreatedAt      apiTimestamp     `json:"createdAt"`
 	EditedAt       apiTimestamp     `json:"editedAt"`
@@ -362,13 +363,14 @@ type flagResponseData struct {
 }
 
 type createPostRequest struct {
-	Content     string           `json:"content"`
-	Title       string           `json:"title,omitempty"`
-	Topics      []string         `json:"topics"`
-	IsPublic    bool             `json:"isPublic"`
-	IsNSFW      bool             `json:"isNSFW"`
-	Slug        string           `json:"slug,omitempty"`
-	Attachments []wireAttachment `json:"attachments,omitempty"`
+	Content        string           `json:"content"`
+	Title          string           `json:"title,omitempty"`
+	Topics         []string         `json:"topics"`
+	IsPublic       bool             `json:"isPublic"`
+	IsNSFW         bool             `json:"isNSFW"`
+	ContentWarning string           `json:"contentWarning,omitempty"`
+	Slug           string           `json:"slug,omitempty"`
+	Attachments    []wireAttachment `json:"attachments,omitempty"`
 }
 
 type createPostResponseData struct {
@@ -384,12 +386,13 @@ type createPostResponseData struct {
 // JSON), while a non-nil pointer — even to an empty slice — is sent as-is,
 // replacing them (per the API: "Send [] to remove them").
 type editPostRequest struct {
-	Content     string            `json:"content"`
-	Title       string            `json:"title"`
-	Topics      []string          `json:"topics"`
-	IsPublic    bool              `json:"isPublic"`
-	IsNSFW      bool              `json:"isNSFW"`
-	Attachments *[]wireAttachment `json:"attachments,omitempty"`
+	Content        string            `json:"content"`
+	Title          string            `json:"title"`
+	Topics         []string          `json:"topics"`
+	IsPublic       bool              `json:"isPublic"`
+	IsNSFW         bool              `json:"isNSFW"`
+	ContentWarning string            `json:"contentWarning"`
+	Attachments    *[]wireAttachment `json:"attachments,omitempty"`
 }
 
 type editReplyRequest struct {
@@ -457,17 +460,19 @@ type wireSettings struct {
 	ShowFollowerCount    bool                  `json:"showFollowerCount"`
 	AutoWatchOnReply     bool                  `json:"autoWatchOnReply"`
 	ShowGuildPostsInFeed bool                  `json:"showGuildPostsInFeed"`
+	ColorNicknames       bool                  `json:"colorNicknames"`
 	IconTheme            string                `json:"iconTheme"`
 	FollowedTopics       []string              `json:"followedTopics"`
 	MutedTopics          []string              `json:"mutedTopics"`
 	ImagePixelSize       string                `json:"imagePixelSize"`
+	ImageColor           bool                  `json:"imageColor"`
 	TimeDisplayFormat    string                `json:"timeDisplayFormat"`
 	DefaultPublicPost    bool                  `json:"defaultPublicPost"`
 	MutedUsersByRoom     map[string][]string   `json:"mutedUsersByRoom"`
 }
 
 // wirePatchSettings is the PATCH /v1/settings payload — only the fields the
-// UI manages. Deferred fields (iconTheme, imagePixelSize, followedTopics,
+// UI manages. Deferred fields (iconTheme, followedTopics,
 // mutedUsersByRoom) are intentionally excluded so the API never receives
 // them — mutedUsersByRoom is server-managed via /mute commands, not PATCH.
 // mutedTopics IS sent: the Topics tab's mute/unmute (docs/54-muted-topics.md)
@@ -479,9 +484,12 @@ type wirePatchSettings struct {
 	ShowFollowerCount    bool                  `json:"showFollowerCount"`
 	AutoWatchOnReply     bool                  `json:"autoWatchOnReply"`
 	ShowGuildPostsInFeed bool                  `json:"showGuildPostsInFeed"`
+	ColorNicknames       bool                  `json:"colorNicknames"`
 	TimeDisplayFormat    string                `json:"timeDisplayFormat"`
 	DefaultPublicPost    bool                  `json:"defaultPublicPost"`
 	MutedTopics          []string              `json:"mutedTopics"`
+	ImagePixelSize       string                `json:"imagePixelSize,omitempty"`
+	ImageColor           bool                  `json:"imageColor"`
 }
 
 // --- CIRC wire types ---
@@ -999,6 +1007,7 @@ func wirePostToModel(w wirePost) model.Post {
 		BookmarksCount: w.BookmarksCount,
 		IsPublic:       w.IsPublic,
 		IsNSFW:         w.IsNSFW,
+		ContentWarning: w.ContentWarning,
 		Deleted:        w.Deleted,
 		CreatedAt:      t,
 		EditedAt:       parseTime(string(w.EditedAt)),
@@ -1095,10 +1104,12 @@ func wireSettingsToModel(w wireSettings) model.Settings {
 		ShowFollowerCount:    w.ShowFollowerCount,
 		AutoWatchOnReply:     w.AutoWatchOnReply,
 		ShowGuildPostsInFeed: w.ShowGuildPostsInFeed,
+		ColorNicknames:       w.ColorNicknames,
 		IconTheme:            w.IconTheme,
 		FollowedTopics:       w.FollowedTopics,
 		MutedTopics:          w.MutedTopics,
 		ImagePixelSize:       w.ImagePixelSize,
+		ImageColor:           w.ImageColor,
 		TimeDisplayFormat:    w.TimeDisplayFormat,
 		DefaultPublicPost:    w.DefaultPublicPost,
 		MutedUsersByRoom:     w.MutedUsersByRoom,
@@ -1339,19 +1350,20 @@ func (c *HTTPClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	return all, nil
 }
 
-func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, attachment *model.Attachment) (model.Post, error) {
+func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
 	var attachments []wireAttachment
 	if attachment != nil {
 		attachments = []wireAttachment{wireAttachmentFromModel(*attachment)}
 	}
 	env, err := c.doJSON("POST", "/v1/posts", createPostRequest{
-		Content:     content,
-		Title:       title,
-		Topics:      topics,
-		IsPublic:    isPublic,
-		IsNSFW:      isNSFW,
-		Slug:        slug,
-		Attachments: attachments,
+		Content:        content,
+		Title:          title,
+		Topics:         topics,
+		IsPublic:       isPublic,
+		IsNSFW:         isNSFW,
+		ContentWarning: contentWarning,
+		Slug:           slug,
+		Attachments:    attachments,
 	})
 	if err != nil {
 		return model.Post{}, err
@@ -1362,17 +1374,18 @@ func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, is
 	}
 	sanitize.Strings(&data)
 	return model.Post{
-		ID:       data.PostID,
-		Title:    data.Title,
-		Slug:     data.Slug,
-		Content:  content,
-		Topics:   topics,
-		IsPublic: isPublic,
-		IsNSFW:   isNSFW,
+		ID:             data.PostID,
+		Title:          data.Title,
+		Slug:           data.Slug,
+		Content:        content,
+		Topics:         topics,
+		IsPublic:       isPublic,
+		IsNSFW:         isNSFW,
+		ContentWarning: contentWarning,
 	}, nil
 }
 
-func (c *HTTPClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, attachments []model.Attachment, attachmentTouched bool) error {
+func (c *HTTPClient) EditPost(postID, content, title string, topics []string, isPublic, isNSFW bool, contentWarning string, attachments []model.Attachment, attachmentTouched bool) error {
 	var wireAttachments *[]wireAttachment
 	if attachmentTouched {
 		list := make([]wireAttachment, len(attachments))
@@ -1382,12 +1395,13 @@ func (c *HTTPClient) EditPost(postID, content, title string, topics []string, is
 		wireAttachments = &list
 	}
 	_, err := c.doJSON("PATCH", "/v1/posts/"+url.PathEscape(postID), editPostRequest{
-		Content:     content,
-		Title:       title,
-		Topics:      topics,
-		IsPublic:    isPublic,
-		IsNSFW:      isNSFW,
-		Attachments: wireAttachments,
+		Content:        content,
+		Title:          title,
+		Topics:         topics,
+		IsPublic:       isPublic,
+		IsNSFW:         isNSFW,
+		ContentWarning: contentWarning,
+		Attachments:    wireAttachments,
 	})
 	return err
 }
@@ -1561,9 +1575,12 @@ func (c *HTTPClient) UpdateSettings(update model.Settings) error {
 		ShowFollowerCount:    update.ShowFollowerCount,
 		AutoWatchOnReply:     update.AutoWatchOnReply,
 		ShowGuildPostsInFeed: update.ShowGuildPostsInFeed,
+		ColorNicknames:       update.ColorNicknames,
 		TimeDisplayFormat:    update.TimeDisplayFormat,
 		DefaultPublicPost:    update.DefaultPublicPost,
 		MutedTopics:          mutedTopics,
+		ImagePixelSize:       update.ImagePixelSize,
+		ImageColor:           update.ImageColor,
 	})
 	return err
 }

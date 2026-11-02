@@ -141,6 +141,14 @@ var settingsGroups = []settingsGroup{
 				},
 			},
 			{
+				label: "color nicknames", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.ColorNicknames },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.settings.ColorNicknames = !m.settings.ColorNicknames
+					return m
+				},
+			},
+			{
 				label: "timezone", kind: "enum",
 				options: config.AvailableTimezones,
 				getEnum: func(m SettingsModel) string {
@@ -222,17 +230,35 @@ var settingsGroups = []settingsGroup{
 				kind:    "enum",
 				options: []string{"rough", "medium", "sharp", "crisp"},
 				getEnum: func(m SettingsModel) string {
-					if m.ditherSharpness == "" {
+					if m.settings.ImagePixelSize == "" {
 						return "medium"
 					}
-					return m.ditherSharpness
+					return m.settings.ImagePixelSize
 				},
 				cycle: func(m SettingsModel, delta int) SettingsModel {
-					cur := m.ditherSharpness
+					cur := m.settings.ImagePixelSize
 					if cur == "" {
 						cur = "medium"
 					}
-					m.ditherSharpness = cycleStringEnum(cur, []string{"rough", "medium", "sharp", "crisp"}, delta)
+					m.settings.ImagePixelSize = cycleStringEnum(cur, []string{"rough", "medium", "sharp", "crisp"}, delta)
+					return m
+				},
+				showIf: func(m SettingsModel) bool {
+					return m.imageViewer != "browser" && m.dithering
+				},
+			},
+			{
+				label:   "    color",
+				kind:    "enum",
+				options: []string{"monochrome", "color"},
+				getEnum: func(m SettingsModel) string {
+					if m.settings.ImageColor {
+						return "color"
+					}
+					return "monochrome"
+				},
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					m.settings.ImageColor = !m.settings.ImageColor
 					return m
 				},
 				showIf: func(m SettingsModel) bool {
@@ -264,6 +290,11 @@ var settingsGroups = []settingsGroup{
 					m.feedManualRefreshOnly = !m.feedManualRefreshOnly
 					return m
 				},
+			},
+			{
+				label: "always reveal content warnings", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.revealCW },
+				toggle:  func(m SettingsModel) SettingsModel { m.revealCW = !m.revealCW; return m },
 			},
 		},
 	},
@@ -329,7 +360,7 @@ var settingsGroups = []settingsGroup{
 				// Words/phrases that raise a Notifications-tab entry (and,
 				// subject to the desktop-notifications toggle above, an OSC 9
 				// toast) wherever content is scanned — cIRC, C-Mail, posts,
-				// replies, and post topics/tags. Edited in place (kind
+				// and post topics/tags. Edited in place (kind
 				// "keywordlist" has its own key handling in Update/View,
 				// there being only one such row, unlike bool/enum's
 				// getter/setter closures).
@@ -357,8 +388,6 @@ type SettingsModel struct {
 	originalInlineImages            bool           // last saved baseline
 	dithering                       bool           // live local config value
 	originalDithering               bool           // last saved baseline
-	ditherSharpness                 string         // live local config value ("rough"/"medium"/"sharp")
-	originalDitherSharpness         string         // last saved baseline
 	feedManualRefreshOnly           bool           // live local config value (true = feed background poll off)
 	originalFeedManualRefreshOnly   bool           // last saved baseline
 	typingIndicatorsEnabled         bool           // live local config value (positive polarity)
@@ -367,6 +396,8 @@ type SettingsModel struct {
 	originalDesktopNotifications    bool           // last saved baseline
 	showGlobeTab                    bool           // live local config value (Globe tab shown on the tab bar/cycling)
 	originalShowGlobeTab            bool           // last saved baseline
+	revealCW                        bool           // live local config value (config.Config.RevealContentWarnings)
+	originalRevealCW                bool           // last saved baseline
 	keywordAlerts                   []string       // live local config value (config.Config.KeywordAlerts); edited via the KeywordEditorModel popup, not inline
 	originalKeywordAlerts           []string       // last saved baseline
 	hardBreakKey                    string         // live local config value (config.Config.HardBreakKey)
@@ -394,7 +425,7 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 }
 
 // SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typingIndicatorsEnabled bool, desktopNotifications bool, showGlobeTab bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, ditherSharpness string, keywordAlerts []string) SettingsModel {
+func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typingIndicatorsEnabled bool, desktopNotifications bool, showGlobeTab bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, keywordAlerts []string) SettingsModel {
 	m.err = nil
 	m.original = m.settings
 	m.wanderLust = wanderLust
@@ -419,8 +450,6 @@ func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typ
 	m.originalInlineImages = inlineImages
 	m.dithering = dithering
 	m.originalDithering = dithering
-	m.ditherSharpness = ditherSharpness
-	m.originalDitherSharpness = ditherSharpness
 	m.keywordAlerts = keywordAlerts
 	m.originalKeywordAlerts = keywordAlerts
 	return m
@@ -430,6 +459,13 @@ func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typ
 func (m SettingsModel) SetSavedHardBreakKey(key string) SettingsModel {
 	m.hardBreakKey = key
 	m.originalHardBreakKey = key
+	return m
+}
+
+// SetSavedRevealCW advances the reveal-content-warnings baseline after a save.
+func (m SettingsModel) SetSavedRevealCW(reveal bool) SettingsModel {
+	m.revealCW = reveal
+	m.originalRevealCW = reveal
 	return m
 }
 
@@ -463,13 +499,13 @@ func (m SettingsModel) IsDirty() bool {
 		m.typingIndicatorsEnabled != m.originalTypingIndicatorsEnabled ||
 		m.desktopNotifications != m.originalDesktopNotifications ||
 		m.showGlobeTab != m.originalShowGlobeTab ||
+		m.revealCW != m.originalRevealCW ||
 		m.maxThreadDepth != m.originalMaxThreadDepth ||
 		m.timezone != m.originalTimezone ||
 		m.imageViewer != m.originalImageViewer ||
 		m.graphicsProtocol != m.originalGraphicsProtocol ||
 		m.inlineImages != m.originalInlineImages ||
 		m.dithering != m.originalDithering ||
-		m.ditherSharpness != m.originalDitherSharpness ||
 		m.hardBreakKey != m.originalHardBreakKey ||
 		!stringSlicesEqual(m.keywordAlerts, m.originalKeywordAlerts)
 }
@@ -494,6 +530,9 @@ func settingsEqual(a, b model.Settings) bool {
 		a.ShowFollowerCount == b.ShowFollowerCount &&
 		a.AutoWatchOnReply == b.AutoWatchOnReply &&
 		a.ShowGuildPostsInFeed == b.ShowGuildPostsInFeed &&
+		a.ColorNicknames == b.ColorNicknames &&
+		a.ImagePixelSize == b.ImagePixelSize &&
+		a.ImageColor == b.ImageColor &&
 		a.DefaultPublicPost == b.DefaultPublicPost &&
 		a.TimeDisplayFormat == b.TimeDisplayFormat
 }
@@ -584,6 +623,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.originalDesktopNotifications = msg.DesktopNotifications
 			m.showGlobeTab = msg.ShowGlobeTab
 			m.originalShowGlobeTab = msg.ShowGlobeTab
+			m.revealCW = msg.RevealContentWarnings
+			m.originalRevealCW = msg.RevealContentWarnings
 			m.maxThreadDepth = msg.MaxThreadDepth
 			m.originalMaxThreadDepth = msg.MaxThreadDepth
 			tz := msg.Timezone
@@ -604,8 +645,6 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.originalInlineImages = msg.InlineImages
 			m.dithering = msg.Dithering
 			m.originalDithering = msg.Dithering
-			m.ditherSharpness = msg.DitherSharpness
-			m.originalDitherSharpness = msg.DitherSharpness
 			m.keywordAlerts = msg.KeywordAlerts
 			m.originalKeywordAlerts = msg.KeywordAlerts
 			m.hardBreakKey = msg.HardBreakKey
@@ -675,12 +714,12 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				gp := m.graphicsProtocol
 				ii := m.inlineImages
 				dt := m.dithering
-				ds := m.ditherSharpness
 				ka := m.keywordAlerts
 				hb := m.hardBreakKey
+				rcw := m.revealCW
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, DitherSharpness: ds, KeywordAlerts: ka, HardBreakKey: hb, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, KeywordAlerts: ka, HardBreakKey: hb, RevealContentWarnings: rcw, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -693,13 +732,13 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.typingIndicatorsEnabled = m.originalTypingIndicatorsEnabled
 			m.desktopNotifications = m.originalDesktopNotifications
 			m.showGlobeTab = m.originalShowGlobeTab
+			m.revealCW = m.originalRevealCW
 			m.maxThreadDepth = m.originalMaxThreadDepth
 			m.timezone = m.originalTimezone
 			m.imageViewer = m.originalImageViewer
 			m.graphicsProtocol = m.originalGraphicsProtocol
 			m.inlineImages = m.originalInlineImages
 			m.dithering = m.originalDithering
-			m.ditherSharpness = m.originalDitherSharpness
 			m.keywordAlerts = m.originalKeywordAlerts
 			m.hardBreakKey = m.originalHardBreakKey
 			m.err = nil

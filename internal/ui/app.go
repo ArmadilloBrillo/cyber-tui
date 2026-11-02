@@ -491,6 +491,8 @@ type App struct {
 	// hardBreakKey is the local config value for the compose hard-break key.
 	// Defaults to "alt+enter".
 	hardBreakKey string
+	// revealContentWarnings is the local config value (config.Config.RevealContentWarnings).
+	revealContentWarnings bool
 	// feedManualRefreshOnly is the local config value disabling Feed's
 	// background poll (see docs/39-feed-background-poll.md). Defaults to
 	// false (auto-poll on).
@@ -514,18 +516,10 @@ type App struct {
 	// what's already known" baseline approach, kept separately here since
 	// FeedModel has no notion of keyword alerts.
 	keywordSeenPostIDs map[string]struct{}
-	// keywordReplySeen tracks, per configured keyword, the set of reply IDs
-	// already accounted for by the replies keyword-alert poll (see
-	// keywordReplyPollTickMsg) — a set rather than a "last seen id" cursor
-	// because SearchReplies' result ordering isn't documented, so a cursor
-	// would risk missing replies depending on how the server orders them.
-	// The first response for a given keyword only seeds this (baseline, no
-	// alert), same reasoning as keywordSeenPostIDs above.
-	keywordReplySeen map[string]map[string]struct{}
 	// keywordAlerts is the local config value (config.Config.KeywordAlerts):
 	// user-edited words/phrases that raise a Notifications-tab entry (and,
 	// subject to desktopNotifications, an OSC 9 toast) wherever content is
-	// scanned — cIRC, C-Mail, posts, replies, and post topics/tags. Empty by
+	// scanned — cIRC, C-Mail, posts, and post topics/tags. Empty by
 	// default.
 	keywordAlerts []string
 	// showGlobeTab is the local config value (inverted from
@@ -579,12 +573,6 @@ type App struct {
 	// dithering is the user's preference from config.Dithering. See
 	// ditheringEnabled for the gated value used when encoding images.
 	dithering bool
-
-	// ditherSharpness is the user's preference from config.GetDitherSharpness
-	// ("rough"/"medium"/"sharp"), controlling the dithering pixelation block
-	// size via imgview.PixelSizeForSharpness. Only meaningful when dithering
-	// is on.
-	ditherSharpness string
 
 	// imageScale multiplies the computed size of the fullscreen image modal.
 	// Starts from config.Config.GetImageScale() and is live-adjustable with
@@ -743,11 +731,11 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	a.showGlobeTab = !s.HideGlobeTab
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.hardBreakKey = s.GetHardBreakKey()
+	a.revealContentWarnings = s.RevealContentWarnings
 	a.imageViewer = s.ImageViewer
 	a.graphicsProtocolName = s.GraphicsProtocol
 	a.inlineImages = s.InlineImages
 	a.dithering = s.Dithering
-	a.ditherSharpness = s.GetDitherSharpness()
 	a.imageScale = s.GetImageScale()
 	a.customPalette = s.CustomPalette
 	return a
@@ -1054,7 +1042,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, KeywordAlerts: a.keywordAlerts, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, DitherSharpness: a.ditherSharpness, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, HardBreakKey: a.hardBreakKey}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, KeywordAlerts: a.keywordAlerts, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, HardBreakKey: a.hardBreakKey, RevealContentWarnings: a.revealContentWarnings}
 	*a = a.updateAll(msg)
 }
 
@@ -1230,6 +1218,17 @@ func (a *App) handleKeys(msg tea.Msg) (*App, tea.Cmd, bool) {
 		}
 	case "ctrl+g":
 		if a.activeScreenHasFocusedInput() {
+			// Consumed but inert everywhere applyAttachURL's result would be
+			// dropped — including posts/replies, which only accept images
+			// already hosted on bunker.cyberspace.online.
+			attachTarget := (a.active == screenChatrooms && a.chatrooms.InputFocused()) ||
+				(a.active == screenCMail && a.cmail.InputFocused()) ||
+				(a.active == screenGuilds && a.guilds.AcceptsInsertedText()) ||
+				(a.active == screenJournal && a.journal.AcceptsInsertedText()) ||
+				(a.active == screenProfile && a.profile.AcceptsInsertedText())
+			if !attachTarget {
+				return a, nil, true
+			}
 			a.attachURLPromptOpen = true
 			var cmd tea.Cmd
 			a.attachURLPrompt, cmd = a.attachURLPrompt.Open("attach image/gif url", "")
@@ -1415,7 +1414,7 @@ func (a *App) handlePostDetail(msg tea.Msg) (*App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AudioAttachment), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.ContentWarning, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AudioAttachment), true
 	case postCreatedMsg:
 		a.feed = a.feed.CloseComposeAfterSuccess()
 		return a, a.loadFeedCmd(), true
@@ -1438,15 +1437,15 @@ func (a *App) handlePostDetail(msg tea.Msg) (*App, tea.Cmd, bool) {
 		*a, notifyCmd = a.notify(notifyInfo, "saved to your Journal")
 		return a, notifyCmd, true
 	case screens.SubmitPostEditMsg:
-		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentTouched, msg.AudioAttachment, msg.OtherAttachments), true
+		return a, a.editPostCmd(msg.PostID, msg.Content, msg.Title, msg.ContentWarning, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AttachmentTouched, msg.AudioAttachment, msg.OtherAttachments), true
 	case postEditedMsg:
 		// Both Feed and PostDetail may hold their own local copy of this post;
 		// PostDetail's ApplyPostEdit has no postID param, so guard it here —
 		// otherwise editing from Feed while PostDetail has an unrelated post
 		// open would overwrite that unrelated post's content.
-		a.feed = a.feed.ApplyPostEdit(msg.postID, msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
+		a.feed = a.feed.ApplyPostEdit(msg.postID, msg.content, msg.title, msg.contentWarning, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
 		if a.postDetail.PostID() == msg.postID {
-			a.postDetail = a.postDetail.ApplyPostEdit(msg.content, msg.title, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
+			a.postDetail = a.postDetail.ApplyPostEdit(msg.content, msg.title, msg.contentWarning, msg.topics, msg.isPublic, msg.isNSFW, msg.editedAt, msg.attachments, msg.attachmentsTouched)
 		}
 		return a, nil, true
 	case screens.SubmitReplyMsg:
@@ -1879,9 +1878,9 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		gp := msg.GraphicsProtocol
 		ii := msg.InlineImages
 		dt := msg.Dithering
-		ds := msg.DitherSharpness
 		ka := msg.KeywordAlerts
 		hb := msg.HardBreakKey
+		rcw := msg.RevealContentWarnings
 		a.settingsSaveSeq++
 		seq := a.settingsSaveSeq
 		return a, func() tea.Msg {
@@ -1890,7 +1889,7 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, ditherSharpness: ds, keywordAlerts: ka, hardBreakKey: hb}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, keywordAlerts: ka, hardBreakKey: hb, revealContentWarnings: rcw}
 		}, true
 
 	case settingsSavedMsg:
@@ -1918,10 +1917,6 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		// subsystem, see cmail.go's SharedConfigMsg handler.
 		a.typingIndicatorsEnabled = msg.typingIndicatorsEnabled
 		a.desktopNotifications = msg.desktopNotifications
-		// hadNoKeywords detects an empty→non-empty transition so the
-		// (possibly dead) replies keyword-alert poll chain gets restarted
-		// immediately below — same reasoning as wasManual above.
-		hadNoKeywords := len(a.keywordAlerts) == 0
 		a.keywordAlerts = msg.keywordAlerts
 		a.showGlobeTab = msg.showGlobeTab
 		a.maxThreadDepth = msg.maxThreadDepth
@@ -1948,20 +1943,23 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		a.graphicsProtocolName = msg.graphicsProtocol
 		a.inlineImages = msg.inlineImages
 		a.dithering = msg.dithering
-		a.ditherSharpness = msg.ditherSharpness
 		a.hardBreakKey = msg.hardBreakKey
+		a.revealContentWarnings = msg.revealContentWarnings
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.keywordAlerts)
+		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.keywordAlerts)
 		a.settingsScreen = a.settingsScreen.SetSavedHardBreakKey(msg.hardBreakKey)
+		a.settingsScreen = a.settingsScreen.SetSavedRevealCW(msg.revealContentWarnings)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
 		*a, notifyCmd = a.notify(notifyInfo, "settings saved")
-		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ds, ka := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.ditherSharpness, msg.keywordAlerts
+		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ka := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.keywordAlerts
 		hb := msg.hardBreakKey
+		rcw := msg.revealContentWarnings
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
 				cfg.HardBreakKey = hb
+				cfg.RevealContentWarnings = rcw
 				cfg.WanderLust = wl
 				cfg.FeedManualRefreshOnly = fmro
 				cfg.TypingIndicatorsDisabled = !tie
@@ -1974,16 +1972,12 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 				cfg.GraphicsProtocol = gp
 				cfg.InlineImages = ii
 				cfg.Dithering = dt
-				cfg.DitherSharpness = ds
 			})
 			return nil
 		}
 		cmds := []tea.Cmd{notifyCmd, saveCmd}
 		if wasManual && !a.feedManualRefreshOnly {
 			cmds = append(cmds, a.scheduleFeedPollCmd())
-		}
-		if hadNoKeywords && len(a.keywordAlerts) > 0 {
-			cmds = append(cmds, a.scheduleKeywordReplyPollCmd())
 		}
 		return a, tea.Batch(cmds...), true
 
@@ -3342,9 +3336,10 @@ func (a *App) ditherOptions() *imgview.DitherOptions {
 		bg, _ = imgview.ParseHexColor(string(theme.ColorBackground))
 	}
 	return &imgview.DitherOptions{
-		PixelSize: imgview.PixelSizeForSharpness(a.ditherSharpness),
+		PixelSize: imgview.PixelSizeForSharpness(a.settings.ImagePixelSize),
 		FgColor:   fg,
 		BgColor:   bg,
+		ColorMode: a.settings.ImageColor,
 	}
 }
 
@@ -3508,13 +3503,13 @@ func inlineImageCacheKey(slot screens.InlineImageSlot, proto imgview.GraphicsPro
 // ditherKeyFragment returns a compact, deterministic string identifying
 // dither's effect on the encoded output, for use as an inlineImageCacheKey
 // component — "-" when dithering is off, otherwise a value that changes
-// whenever the resulting pixels would: sharpness (PixelSize) or the active
-// theme's colors (FgColor/BgColor).
+// whenever the resulting pixels would: sharpness (PixelSize), colour mode, or
+// the active theme's colors (FgColor/BgColor).
 func ditherKeyFragment(dither *imgview.DitherOptions) string {
 	if dither == nil {
 		return "-"
 	}
-	return fmt.Sprintf("d%d,%02x%02x%02x,%02x%02x%02x", dither.PixelSize,
+	return fmt.Sprintf("d%d,%t,%02x%02x%02x,%02x%02x%02x", dither.PixelSize, dither.ColorMode,
 		dither.FgColor.R, dither.FgColor.G, dither.FgColor.B,
 		dither.BgColor.R, dither.BgColor.G, dither.BgColor.B)
 }
@@ -4384,13 +4379,12 @@ func (a App) handleAttachURLPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // applyAttachURL dispatches a submitted attach-URL prompt result. Posts and
-// replies no longer get a native image/gif attachment here — the API (v0.8.7)
-// now returns 400 for type:"image" in a post/reply's attachments array, and
-// 400s the same way for an inline markdown image in content that doesn't
-// point at bunker.cyberspace.online (see docs/00-latest-api-reference.md).
-// Since cyber-tui can't upload to bunker itself, no URL a user pastes here
-// will ever be accepted for a post/reply, so this warns instead of inserting
-// markdown that would only fail later at submit. circ/C-Mail can still only
+// replies never reach here — the API (v0.8.7) returns 400 for type:"image" in
+// a post/reply's attachments array, and for an inline markdown image in
+// content that doesn't point at bunker.cyberspace.online (see
+// docs/00-latest-api-reference.md), so ctrl+g only opens the prompt on
+// circ/C-Mail and the guild/journal/bio free-text fields (see handleKeys).
+// circ/C-Mail can still only
 // embed an animated GIF, via the server's own /gif command — visually
 // confirmed on the website, whereas markdown in a message's content does not
 // render there. Where nothing can actually render, this warns instead of
@@ -4399,12 +4393,6 @@ func (a App) handleAttachURLPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (a App) applyAttachURL(url string) (App, tea.Cmd) {
 	if url == "" {
 		return a, nil
-	}
-	if a.active == screenFeed && a.feed.PanelActive() {
-		return a.notify(notifyWarn, "cyberspace.online only accepts post/reply images uploaded via the website — attach a song instead (ctrl+j), or add the image there first")
-	}
-	if a.active == screenPostDetail && (a.postDetail.EditPanelActive() || a.postDetail.ReplyComposeActive()) {
-		return a.notify(notifyWarn, "cyberspace.online only accepts post/reply images uploaded via the website — attach a song instead (ctrl+j), or add the image there first")
 	}
 	if a.active == screenChatrooms || a.active == screenCMail {
 		if !urlutil.IsGIFURL(url) {
@@ -4678,13 +4666,6 @@ func (a *App) afterLoginCmd() tea.Cmd {
 	if !a.feedManualRefreshOnly {
 		feedPollCmd = a.scheduleFeedPollCmd()
 	}
-	// Same dead-chain-unless-restarted reasoning as feedPollCmd above: only
-	// start the replies keyword-alert poll when there's actually something to
-	// search for. settingsSavedMsg restarts it if a keyword is added later.
-	var keywordReplyPollCmd tea.Cmd
-	if len(a.keywordAlerts) > 0 {
-		keywordReplyPollCmd = a.scheduleKeywordReplyPollCmd()
-	}
 	return tea.Batch(
 		a.loadFeedCmd(),
 		a.loadBookmarksCmd(""),
@@ -4701,7 +4682,6 @@ func (a *App) afterLoginCmd() tea.Cmd {
 		a.loadNotifsCmd(),
 		a.schedulePollCmd(),
 		feedPollCmd,
-		keywordReplyPollCmd,
 		a.loadSettingsCmd(),
 		a.scheduleWanderCmd(),
 		a.checkAndWanderCmd(),
@@ -4799,11 +4779,11 @@ type postDeletedMsg struct {
 // PATCH response echoes back no fields worth using (same as CreatePost), so
 // editedAt is set optimistically to the time the request completed.
 type postEditedMsg struct {
-	postID           string
-	content, title   string
-	topics           []string
-	isPublic, isNSFW bool
-	editedAt         time.Time
+	postID                         string
+	content, title, contentWarning string
+	topics                         []string
+	isPublic, isNSFW               bool
+	editedAt                       time.Time
 	// attachments/attachmentsTouched mirror EditPost's own pair: Feed/
 	// PostDetail's local copy only overwrites its cached Attachments when
 	// attachmentsTouched — otherwise the edit didn't touch them server-side
@@ -4831,9 +4811,9 @@ type settingsSavedMsg struct {
 	graphicsProtocol        string
 	inlineImages            bool
 	dithering               bool
-	ditherSharpness         string
 	keywordAlerts           []string
 	hardBreakKey            string
+	revealContentWarnings   bool
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made
@@ -5168,90 +5148,6 @@ func (a *App) scheduleFeedPollCmd() tea.Cmd {
 	return tea.Tick(feedPollInterval, func(time.Time) tea.Msg { return feedPollTickMsg{gen: gen} })
 }
 
-// keywordReplyPollInterval is how often the replies keyword-alert poll (see
-// keywordReplyPollTickMsg) checks each configured keyword via SearchReplies
-// — same cadence as the feed peek poll.
-const keywordReplyPollInterval = 60 * time.Second
-
-type keywordReplyPollTickMsg struct{ gen int }
-
-// keywordReplyMatchMsg carries one keyword's SearchReplies results back from
-// fetchKeywordRepliesCmd for scanKeywordReplyMatches to diff against what's
-// already been seen for that keyword.
-type keywordReplyMatchMsg struct {
-	keyword string
-	replies []model.Reply
-}
-
-func (a *App) scheduleKeywordReplyPollCmd() tea.Cmd {
-	gen := a.sessionGen
-	return tea.Tick(keywordReplyPollInterval, func(time.Time) tea.Msg { return keywordReplyPollTickMsg{gen: gen} })
-}
-
-// fetchKeywordRepliesCmd searches replies for keyword — one call per
-// configured keyword per poll tick, independent of feed size or platform
-// activity (see the plan's cost comparison against fanning out
-// GetPostReplies per post). Errors are swallowed (nil msg), same as
-// fetchFeedPeekCmd — a missed poll just tries again next tick.
-func (a *App) fetchKeywordRepliesCmd(keyword string) tea.Cmd {
-	return func() tea.Msg {
-		replies, _, err := a.client.SearchReplies(keyword, "")
-		if err != nil {
-			return nil
-		}
-		return keywordReplyMatchMsg{keyword: keyword, replies: replies}
-	}
-}
-
-// scanKeywordReplyMatches diffs a keyword's fresh SearchReplies results
-// against keywordReplySeen[keyword], alerting only for reply IDs not seen
-// before. The first call for a given keyword only seeds the set (baseline,
-// no alerts) so enabling keyword alerts doesn't replay every existing
-// matching reply on the platform.
-func (a App) scanKeywordReplyMatches(keyword string, replies []model.Reply) (App, tea.Cmd) {
-	if a.keywordReplySeen == nil {
-		a.keywordReplySeen = make(map[string]map[string]struct{})
-	}
-	seen, seeded := a.keywordReplySeen[keyword]
-	if !seeded {
-		seen = make(map[string]struct{}, len(replies))
-		for _, r := range replies {
-			seen[r.ID] = struct{}{}
-		}
-		a.keywordReplySeen[keyword] = seen
-		return a, nil
-	}
-	var cmds []tea.Cmd
-	for _, r := range replies {
-		if _, known := seen[r.ID]; known {
-			continue
-		}
-		seen[r.ID] = struct{}{}
-		viewing := a.active == screenFeed && a.focusReported && a.focused
-		n := model.Notification{
-			ID:             localKeywordIDPrefix + r.ID,
-			Type:           "keyword_match",
-			Read:           viewing,
-			CreatedAt:      time.Now(),
-			Actor:          model.NotificationActor{Username: r.AuthorUsername},
-			TargetID:       r.PostID,
-			TargetType:     "reply",
-			ReplyID:        r.ID,
-			ReplyContent:   r.Content,
-			MatchedKeyword: keyword,
-		}
-		a.notifications = a.notifications.AddLocalMention(n)
-		if !n.Read {
-			a.polledUnreadCount++
-		}
-		if !a.shouldDesktopNotify(screenFeed) {
-			continue
-		}
-		cmds = append(cmds, desktopNotifyCmd("keyword \""+keyword+"\"", "@"+r.AuthorUsername+": "+r.Content))
-	}
-	return a, tea.Batch(cmds...)
-}
-
 func (a *App) loadFeedPageCmd(cursor string) tea.Cmd {
 	return func() tea.Msg {
 		posts, nextCursor, err := a.client.GetFeed(cursor)
@@ -5577,9 +5473,9 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string, audioAttachm
 // createPostCmd sends a post with its audio attachment, if any (native
 // image/gif post attachments were removed — API v0.8.7 rejects type:"image"
 // in a post's attachments array).
-func (a *App) createPostCmd(content, title, slug string, topics []string, isPublic, isNSFW bool, audioAttachment *model.Attachment) tea.Cmd {
+func (a *App) createPostCmd(content, title, slug, contentWarning string, topics []string, isPublic, isNSFW bool, audioAttachment *model.Attachment) tea.Cmd {
 	return func() tea.Msg {
-		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, audioAttachment)
+		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, contentWarning, audioAttachment)
 		if err != nil {
 			if errors.Is(err, api.ErrUnauthorized) {
 				return actionErrMsg{err} // let handleUnauthorized redirect to login
@@ -5771,25 +5667,6 @@ func (a *App) handleNotifications(msg tea.Msg) (*App, tea.Cmd, bool) {
 		a.feed = a.feed.SetPendingNew(msg.posts)
 		var cmd tea.Cmd
 		*a, cmd = a.scanPeekedPostsForKeywords(msg.posts)
-		return a, cmd, true
-	case keywordReplyPollTickMsg:
-		if msg.gen != a.sessionGen {
-			return a, nil, true
-		}
-		if len(a.keywordAlerts) == 0 {
-			// Chain dies here — restarted from settingsSavedMsg when a
-			// keyword is added mid-session (mirrors feedPollTickMsg's own
-			// manual-refresh-only dead-chain handling above).
-			return a, nil, true
-		}
-		cmds := []tea.Cmd{a.scheduleKeywordReplyPollCmd()}
-		for _, kw := range a.keywordAlerts {
-			cmds = append(cmds, a.fetchKeywordRepliesCmd(kw))
-		}
-		return a, tea.Batch(cmds...), true
-	case keywordReplyMatchMsg:
-		var cmd tea.Cmd
-		*a, cmd = a.scanKeywordReplyMatches(msg.keyword, msg.replies)
 		return a, cmd, true
 	}
 	return a, nil, false
@@ -6555,7 +6432,7 @@ func (a *App) deletePostCmd(postID string, fromFeed bool) tea.Cmd {
 // panel found on the post but doesn't manage (e.g. an audio one) — when
 // attachmentTouched, they're resent alongside the resolved attachmentURL
 // since EditPost replaces the whole attachments array wholesale.
-func (a *App) editPostCmd(postID, content, title string, topics []string, isPublic, isNSFW bool, attachmentTouched bool, audioAttachment *model.Attachment, otherAttachments []model.Attachment) tea.Cmd {
+func (a *App) editPostCmd(postID, content, title, contentWarning string, topics []string, isPublic, isNSFW bool, attachmentTouched bool, audioAttachment *model.Attachment, otherAttachments []model.Attachment) tea.Cmd {
 	return func() tea.Msg {
 		var attachments []model.Attachment
 		if attachmentTouched {
@@ -6564,11 +6441,11 @@ func (a *App) editPostCmd(postID, content, title string, topics []string, isPubl
 				attachments = append(attachments, *audioAttachment)
 			}
 		}
-		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW, attachments, attachmentTouched); err != nil {
+		if err := a.client.EditPost(postID, content, title, topics, isPublic, isNSFW, contentWarning, attachments, attachmentTouched); err != nil {
 			return editErrorMsg(err)
 		}
 		return postEditedMsg{
-			postID: postID, content: content, title: title, topics: topics,
+			postID: postID, content: content, title: title, contentWarning: contentWarning, topics: topics,
 			isPublic: isPublic, isNSFW: isNSFW, editedAt: time.Now(),
 			attachments: attachments, attachmentsTouched: attachmentTouched,
 		}
@@ -6673,7 +6550,7 @@ func (a *App) deleteRoomMessageCmd(roomID, messageID string) tea.Cmd {
 // Published notes have no title, are private, and not marked NSFW.
 func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, "", "", topics, false, false, nil)
+		_, err := a.client.CreatePost(content, "", "", topics, false, false, "", nil)
 		if err != nil {
 			if errors.Is(err, api.ErrUnauthorized) {
 				return actionErrMsg{err} // let handleUnauthorized redirect to login

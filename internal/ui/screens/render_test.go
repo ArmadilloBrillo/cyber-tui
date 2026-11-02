@@ -655,8 +655,8 @@ func TestRenderCircMessagesStyled_Blink_HidesAndShowsWithoutChangingLineCount(t 
 	msg := circMsg("molly", "hello there")
 	msg.Style = []string{"blink"}
 
-	visible := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, 0, nil)
-	hidden := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, blinkPhaseFrames, nil)
+	visible := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, 0, nil, false)
+	hidden := renderCircMessagesStyled([]model.Message{msg}, time.UTC, "datetime", width, "", nil, blinkPhaseFrames, nil, false)
 
 	if !strings.Contains(ansi.Strip(visible), "hello there") {
 		t.Errorf("expected the visible phase to contain the body text, got: %q", visible)
@@ -713,7 +713,7 @@ func TestRenderCircMessagesWithSelection_MutedSenderKeepsOffsetsAligned(t *testi
 	msgs := []model.Message{muted, visible}
 
 	content, offsets, heights, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "", "", nil, 0,
-		map[string]bool{"alice": true}, false, nil, nil)
+		map[string]bool{"alice": true}, false, false, nil, nil)
 
 	if len(offsets) != len(msgs) || len(heights) != len(msgs) {
 		t.Fatalf("offsets/heights not 1:1 with msgs: len(offsets)=%d len(heights)=%d want %d", len(offsets), len(heights), len(msgs))
@@ -848,14 +848,14 @@ func TestFeedRenderPost_CacheInvalidatesOnEditedAtOnlyChange(t *testing.T) {
 func TestRenderPost_ShowsEditedMarkerWhenEditedAtSet(t *testing.T) {
 	base := model.Post{ID: "p1", AuthorUsername: "alice", Content: "hello"}
 
-	unedited, _ := RenderPost(base, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false)
+	unedited, _ := RenderPost(base, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false, false)
 	if strings.Contains(unedited, "(edited)") {
 		t.Errorf("expected no (edited) marker for a never-edited post, got: %q", unedited)
 	}
 
 	edited := base
 	edited.EditedAt = time.Now()
-	got, _ := RenderPost(edited, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false)
+	got, _ := RenderPost(edited, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, false, false)
 	if !strings.Contains(ansi.Strip(got), "(edited)") {
 		t.Errorf("expected (edited) marker for an edited post, got: %q", got)
 	}
@@ -874,8 +874,8 @@ func TestRenderCircMessagesWithSelection_HighlightsImageBandWhenSelected(t *test
 	msg.ImageUrl = "https://example.com/a.png"
 	msgs := []model.Message{msg}
 
-	unselected, _, unselHeights, unselSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, true, nil, nil)
-	selected, _, selHeights, selSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "m1", nil, 0, nil, true, nil, nil)
+	unselected, _, unselHeights, unselSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, true, nil, nil)
+	selected, _, selHeights, selSlots := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "m1", nil, 0, nil, false, true, nil, nil)
 
 	if unselHeights[0] != selHeights[0] {
 		t.Errorf("heights differ between selected/unselected: %d vs %d, want equal", unselHeights[0], selHeights[0])
@@ -924,7 +924,7 @@ func TestRenderCircMessagesWithSelection_UsesCachedBodyOnHit(t *testing.T) {
 		},
 	}
 
-	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, nil, cache)
+	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, false, nil, cache)
 
 	if !strings.Contains(content, "CACHED-SENTINEL") {
 		t.Errorf("expected the matching cache entry to be reused, got: %q", content)
@@ -952,7 +952,7 @@ func TestRenderCircMessagesWithSelection_StaleCacheEntryIsRecomputed(t *testing.
 		},
 	}
 
-	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, nil, cache)
+	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, false, nil, cache)
 
 	if strings.Contains(content, "CACHED-SENTINEL") {
 		t.Errorf("expected a stale cache entry (body mismatch) to be recomputed, not reused, got: %q", content)
@@ -984,7 +984,7 @@ func TestRenderCircMessagesWithSelection_AnimatedMessageNeverCached(t *testing.T
 		},
 	}
 
-	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, nil, cache)
+	content, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", width, "alice", "", nil, 0, nil, false, false, nil, cache)
 
 	if strings.Contains(content, "CACHED-SENTINEL") {
 		t.Errorf("expected an animated-style message to bypass the cache entirely, got: %q", content)
@@ -1129,7 +1129,7 @@ func BenchmarkRenderCircMessagesWithSelection(b *testing.B) {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, false, nil, nil)
+				renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, false, false, nil, nil)
 			}
 		})
 	}
@@ -1160,5 +1160,126 @@ func BenchmarkFeedBuildContent_SelectionChange(b *testing.B) {
 				m.buildContent()
 			}
 		})
+	}
+}
+
+func TestRenderPost_ContentWarningGatesTitleBodyAttachments(t *testing.T) {
+	p := model.Post{
+		ID: "p1", AuthorUsername: "alice", Title: "Episode 4", Content: "the twist is",
+		ContentWarning: "spoilers",
+		Attachments:    []model.Attachment{{Type: "audio", Origin: "youtube", Src: "https://youtu.be/x", Artist: "band", Title: "song"}},
+	}
+
+	gated, slots := RenderPost(p, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, true, false)
+	plain := ansi.Strip(gated)
+	if !strings.Contains(plain, "CW: spoilers") {
+		t.Errorf("gated card missing CW label: %q", plain)
+	}
+	for _, hidden := range []string{"Episode 4", "the twist is", "song"} {
+		if strings.Contains(plain, hidden) {
+			t.Errorf("gated card leaks %q: %q", hidden, plain)
+		}
+	}
+	if slots != nil {
+		t.Errorf("gated card returned image slots: %+v", slots)
+	}
+
+	revealed, _ := RenderPost(p, false, false, false, 80, time.UTC, "datetime", postMaxBodyLines, true, true)
+	plain = ansi.Strip(revealed)
+	for _, want := range []string{"CW: spoilers", "Episode 4", "the twist is"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("revealed card missing %q: %q", want, plain)
+		}
+	}
+}
+
+func TestCWPreview(t *testing.T) {
+	cases := []struct {
+		name   string
+		p      model.Post
+		reveal bool
+		want   string
+	}{
+		{"gated", model.Post{Title: "t", Content: "c", ContentWarning: "cw"}, false, "CW: cw"},
+		{"revealed title", model.Post{Title: "t", Content: "c", ContentWarning: "cw"}, true, "t"},
+		{"no cw body", model.Post{Content: "first\nsecond"}, false, "first"},
+	}
+	for _, tc := range cases {
+		if got := cwPreview(tc.p, tc.reveal); got != tc.want {
+			t.Errorf("%s: cwPreview = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestFeedRenderPost_CacheInvalidatesOnContentWarningOnlyChange(t *testing.T) {
+	m := NewFeedModel()
+	m.width = 80
+	post := model.Post{ID: "p1", AuthorUsername: "alice", Content: "same content"}
+
+	before, _ := m.renderPost(post, false)
+	if !strings.Contains(ansi.Strip(before), "same content") {
+		t.Fatalf("expected body before CW is set, got: %q", before)
+	}
+	post.ContentWarning = "spoilers"
+	after, _ := m.renderPost(post, false)
+	if strings.Contains(ansi.Strip(after), "same content") {
+		t.Errorf("expected cache to invalidate after CW-only change, got stale body: %q", after)
+	}
+}
+
+func TestCWHiddenBar(t *testing.T) {
+	bar := ansi.Strip(cwHiddenBar("enter to open", 76))
+	if got := lipgloss.Width(bar); got != 32 {
+		t.Errorf("width = %d, want 32 (capped)", got)
+	}
+	if !strings.HasPrefix(bar, "░") || !strings.HasSuffix(bar, "░") || !strings.Contains(bar, " enter to open ") {
+		t.Errorf("expected ░ either side of the hint, got %q", bar)
+	}
+	if got := lipgloss.Width(ansi.Strip(cwHiddenBar("enter to open", 20))); got != 20 {
+		t.Errorf("width at innerWidth 20 = %d, want 20", got)
+	}
+	if got := ansi.Strip(cwHiddenBar("enter to open", 10)); got != " enter to open " {
+		t.Errorf("narrow fallback = %q, want the hint alone", got)
+	}
+}
+
+func TestRenderCircMessages_ColorNicknames(t *testing.T) {
+	withTrueColor(t)
+	msgs := []model.Message{circMsg("bob", "hi"), circMsg("alice", "yo")}
+
+	off := renderCircMessagesStyled(msgs, time.UTC, "datetime", 80, "alice", nil, 0, nil, false)
+	on := renderCircMessagesStyled(msgs, time.UTC, "datetime", 80, "alice", nil, 0, nil, true)
+
+	if !strings.Contains(off, theme.Highlight.Render("bob")) {
+		t.Error("with colorNicks off, other users should use Highlight")
+	}
+	if !strings.Contains(on, theme.NickStyle("bob").Render("bob")) {
+		t.Error("with colorNicks on, other users should use NickStyle")
+	}
+	if !strings.Contains(on, theme.MeHighlight.Render("alice")) {
+		t.Error("own username should keep MeHighlight with colorNicks on")
+	}
+}
+
+func TestRenderCircMessagesWithSelection_ColorNicknamesTogglesCache(t *testing.T) {
+	withTrueColor(t)
+	msgs := []model.Message{{ID: "m1", From: model.User{Username: "bob"}, Body: "hi", CreatedAt: circMsgTime}}
+	cache := map[string]chatBodyCacheEntry{}
+
+	off, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, false, false, nil, cache)
+	on, _, _, _ := renderCircMessagesWithSelection(msgs, time.UTC, "datetime", 80, "alice", "", nil, 0, nil, true, false, nil, cache)
+	if off == on {
+		t.Error("toggling colorNicks should miss the cache and re-render")
+	}
+	if !strings.Contains(on, theme.NickStyle("bob").Render("bob")) {
+		t.Error("re-render with colorNicks on should use NickStyle")
+	}
+}
+
+func TestRenderActionLine_ColorNicknames(t *testing.T) {
+	withTrueColor(t)
+	got := renderActionLine("bob", "waves", "12:00", 80, "alice", true)
+	if !strings.Contains(got, theme.NickStyle("bob").Render("bob")) {
+		t.Error("/me line should use NickStyle with colorNicks on")
 	}
 }

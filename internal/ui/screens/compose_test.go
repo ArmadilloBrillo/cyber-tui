@@ -99,7 +99,7 @@ func TestPostComposePanel_OpenForEdit_TextareaHeightMatchesBodyLines(t *testing.
 	if m.textarea.Height() != m.bodyLines {
 		t.Errorf("textarea.Height() = %d, want %d (m.bodyLines) — panel will render taller than PanelHeight() reports", m.textarea.Height(), m.bodyLines)
 	}
-	if got, want := m.PanelHeight(), m.bodyLines+6; got != want {
+	if got, want := m.PanelHeight(), m.bodyLines+7; got != want {
 		t.Errorf("PanelHeight() = %d, want %d", got, want)
 	}
 }
@@ -351,5 +351,76 @@ func TestPostComposePanel_HardBreak_ScrollsWhenBodyAtMaxHeight(t *testing.T) {
 	m, _ = m.Update(altEnter)
 	if row := rowAfterTail(m.View()); !strings.Contains(row, "┃") {
 		t.Errorf("the new line after a hard break is out of view; row below tail = %q", row)
+	}
+}
+
+func TestPostComposePanel_CW_TabOrder(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.Open(false)
+	m.focus = postFieldSlug
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != postFieldCW {
+		t.Fatalf("create: focus after Tab from slug = %v, want postFieldCW", m.focus)
+	}
+
+	m, _ = m.OpenForEdit(model.Post{ID: "p1"})
+	m.focus = postFieldTitle
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != postFieldCW {
+		t.Fatalf("edit: focus after Tab from title = %v, want postFieldCW (slug skipped)", m.focus)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != postFieldBody {
+		t.Errorf("edit: focus after Tab from cw = %v, want postFieldBody", m.focus)
+	}
+}
+
+func TestPostComposePanel_CW_TypedAndRendered(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.Open(false)
+	m.focus = postFieldSlug
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" spoilers ")})
+	if got := m.CWValue(); got != "spoilers" {
+		t.Errorf("CWValue() = %q, want trimmed %q", got, "spoilers")
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "cw      spoilers") {
+		t.Errorf("expected a cw row in the view, got: %q", view)
+	}
+}
+
+func TestPostComposePanel_CW_PrefillAndReset(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.OpenForEdit(model.Post{ID: "p1", ContentWarning: "spoilers"})
+	if got := m.CWValue(); got != "spoilers" {
+		t.Errorf("OpenForEdit CWValue() = %q, want spoilers", got)
+	}
+	m = m.Close()
+	m, _ = m.Open(false)
+	if got := m.CWValue(); got != "" {
+		t.Errorf("Open after edit CWValue() = %q, want empty", got)
+	}
+}
+
+func TestPostComposePanel_CW_MaxSixtyChars(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.Open(false)
+	m.focus = postFieldSlug
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("a", 70))})
+	if got := len(m.CWValue()); got != 60 {
+		t.Errorf("len(CWValue()) = %d, want 60", got)
+	}
+}
+
+func TestPostComposePanel_CW_PanelHeightMatchesView(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.Open(false)
+	if got, want := strings.Count(m.View(), "\n")+1, m.PanelHeight(); got != want {
+		t.Errorf("create: rendered height = %d, PanelHeight() = %d", got, want)
+	}
+	m, _ = m.OpenForEdit(model.Post{ID: "p1", Content: "one line"})
+	if got, want := strings.Count(m.View(), "\n")+1, m.PanelHeight(); got != want {
+		t.Errorf("edit: rendered height = %d, PanelHeight() = %d", got, want)
 	}
 }

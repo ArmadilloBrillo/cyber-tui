@@ -251,7 +251,7 @@ func TestHTTPCreatePost_SendsAllFields(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass") //nolint:errcheck
 
-	post, err := c.CreatePost("body text", "My Title", "", []string{"cyber"}, true, true, nil)
+	post, err := c.CreatePost("body text", "My Title", "", []string{"cyber"}, true, true, "spoilers", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -272,6 +272,9 @@ func TestHTTPCreatePost_SendsAllFields(t *testing.T) {
 	}
 	if gotBody["title"] != "My Title" {
 		t.Errorf("request body title = %v, want My Title", gotBody["title"])
+	}
+	if gotBody["contentWarning"] != "spoilers" {
+		t.Errorf("request body contentWarning = %v, want spoilers", gotBody["contentWarning"])
 	}
 	if gotBody["isPublic"] != true {
 		t.Errorf("request body isPublic = %v, want true", gotBody["isPublic"])
@@ -2462,6 +2465,7 @@ func TestHTTPGetPost_ParsesPost(t *testing.T) {
 			"repliesCount":   3,
 			"isPublic":       true,
 			"isNSFW":         false,
+			"contentWarning": "spoilers",
 			"deleted":        false,
 			"createdAt":      "2026-01-01T10:00:00Z",
 		})
@@ -2479,6 +2483,9 @@ func TestHTTPGetPost_ParsesPost(t *testing.T) {
 	}
 	if post.Content != "hello world" {
 		t.Errorf("Content mismatch: %s", post.Content)
+	}
+	if post.ContentWarning != "spoilers" {
+		t.Errorf("ContentWarning = %q, want spoilers", post.ContentWarning)
 	}
 	if post.RepliesCount != 3 {
 		t.Errorf("RepliesCount mismatch: %d", post.RepliesCount)
@@ -3039,6 +3046,39 @@ func TestHTTPSettings_ShowGuildPostsInFeed_RoundTrips(t *testing.T) {
 	}
 }
 
+func TestHTTPSettings_ColorNicknames_RoundTrips(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/settings" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == "PATCH" {
+			json.NewDecoder(r.Body).Decode(&gotBody)
+			writeOK(t, w, map[string]any{})
+			return
+		}
+		writeOK(t, w, map[string]any{"colorNicknames": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	settings, err := c.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if !settings.ColorNicknames {
+		t.Error("ColorNicknames should parse as true from the response")
+	}
+
+	settings.ColorNicknames = false
+	if err := c.UpdateSettings(settings); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if gotBody["colorNicknames"] != false {
+		t.Errorf("PATCH body colorNicknames = %v, want false", gotBody["colorNicknames"])
+	}
+}
+
 func TestHTTPUpdateSettings_SendsMutedTopics(t *testing.T) {
 	var gotBody map[string]any
 	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3082,6 +3122,76 @@ func TestHTTPUpdateSettings_SendsMutedTopics(t *testing.T) {
 	}
 	if got, _ := gotBody["mutedTopics"].([]any); len(got) != 0 {
 		t.Errorf("PATCH body mutedTopics = %v, want []", gotBody["mutedTopics"])
+	}
+}
+
+func TestHTTPUpdateSettings_SendsImagePixelSize(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/settings" || r.Method != "PATCH" {
+			http.NotFound(w, r)
+			return
+		}
+		gotBody = nil
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeOK(t, w, map[string]any{})
+	})))
+	c.Login("u@example.com", "pass")
+
+	if err := c.UpdateSettings(model.Settings{ImagePixelSize: "crisp"}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if gotBody["imagePixelSize"] != "crisp" {
+		t.Errorf("PATCH body imagePixelSize = %v, want crisp", gotBody["imagePixelSize"])
+	}
+
+	// An account with no stored value must not get "" written back.
+	if err := c.UpdateSettings(model.Settings{}); err != nil {
+		t.Fatalf("UpdateSettings (empty): %v", err)
+	}
+	if _, present := gotBody["imagePixelSize"]; present {
+		t.Errorf("PATCH body sent imagePixelSize = %v when empty; want omitted", gotBody["imagePixelSize"])
+	}
+}
+
+func TestHTTPSettings_ImageColor_RoundTrips(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/settings" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == "PATCH" {
+			gotBody = nil
+			json.NewDecoder(r.Body).Decode(&gotBody)
+			writeOK(t, w, map[string]any{})
+			return
+		}
+		writeOK(t, w, map[string]any{"imageColor": true})
+	})))
+	c.Login("u@example.com", "pass")
+
+	settings, err := c.GetSettings()
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if !settings.ImageColor {
+		t.Error("ImageColor should parse as true from the response")
+	}
+
+	if err := c.UpdateSettings(model.Settings{ImageColor: true}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if gotBody["imageColor"] != true {
+		t.Errorf("PATCH body imageColor = %v, want true", gotBody["imageColor"])
+	}
+
+	// Switching back to monochrome must reach the server as an explicit false.
+	if err := c.UpdateSettings(model.Settings{}); err != nil {
+		t.Fatalf("UpdateSettings (false): %v", err)
+	}
+	if got, present := gotBody["imageColor"]; !present || got != false {
+		t.Errorf("PATCH body imageColor = %v (present=%v), want explicit false", got, present)
 	}
 }
 
@@ -3561,7 +3671,7 @@ func TestHTTPEditPost_CallsCorrectEndpoint(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	err := c.EditPost("p1", "corrected content", "New Title", []string{"go", "cli"}, true, false, nil, false)
+	err := c.EditPost("p1", "corrected content", "New Title", []string{"go", "cli"}, true, false, "", nil, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -3594,7 +3704,7 @@ func TestHTTPEditPost_SendsEmptyTitleToClear(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	if err := c.EditPost("p1", "content", "", nil, false, false, nil, false); err != nil {
+	if err := c.EditPost("p1", "content", "", nil, false, false, "", nil, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sawTitleKey {
@@ -3602,6 +3712,9 @@ func TestHTTPEditPost_SendsEmptyTitleToClear(t *testing.T) {
 	}
 	if gotBody["title"] != "" {
 		t.Errorf("title = %v, want empty string", gotBody["title"])
+	}
+	if cw, ok := gotBody["contentWarning"]; !ok || cw != "" {
+		t.Errorf("contentWarning = %v (present=%v), want empty string so the API clears it", cw, ok)
 	}
 }
 
@@ -3614,7 +3727,7 @@ func TestHTTPCreatePost_SendsAttachment(t *testing.T) {
 	c.Login("u@example.com", "pass")
 
 	attachment := &model.Attachment{Type: "gif", Src: "https://example.com/pic.gif", Width: 100, Height: 80}
-	if _, err := c.CreatePost("content", "", "", nil, false, false, attachment); err != nil {
+	if _, err := c.CreatePost("content", "", "", nil, false, false, "", attachment); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	attachments, ok := gotBody["attachments"].([]any)
@@ -3638,7 +3751,7 @@ func TestHTTPCreatePost_NoAttachmentURL_OmitsAttachments(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	if _, err := c.CreatePost("content", "", "", nil, false, false, nil); err != nil {
+	if _, err := c.CreatePost("content", "", "", nil, false, false, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sawAttachmentsKey {
@@ -3681,7 +3794,7 @@ func TestHTTPEditPost_AttachmentTouched(t *testing.T) {
 			})))
 			c.Login("u@example.com", "pass")
 
-			if err := c.EditPost("p1", "content", "title", nil, false, false, tc.attachments, tc.attachmentTouched); err != nil {
+			if err := c.EditPost("p1", "content", "title", nil, false, false, "", tc.attachments, tc.attachmentTouched); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if sawKey != tc.wantKeyPresent {
@@ -3704,7 +3817,7 @@ func TestHTTPEditPost_Forbidden(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	err := c.EditPost("p1", "content", "title", nil, false, false, nil, false)
+	err := c.EditPost("p1", "content", "title", nil, false, false, "", nil, false)
 	apiErr, ok := asAPIError(err)
 	if !ok {
 		t.Fatalf("expected *APIError, got %T: %v", err, err)

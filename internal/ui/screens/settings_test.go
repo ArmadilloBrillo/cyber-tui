@@ -204,6 +204,21 @@ func TestSettings_Tab_OnBool_IsNoop(t *testing.T) {
 	}
 }
 
+func TestSettings_ColorNicknames_SpaceTogglesAndMarksDirty(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.cursor = 10 // color nicknames
+	if flatItems(m)[m.cursor].label != "color nicknames" {
+		t.Fatalf("item %d = %q, want color nicknames", m.cursor, flatItems(m)[m.cursor].label)
+	}
+	m, _ = m.Update(keyMsg("space"))
+	if !m.settings.ColorNicknames {
+		t.Error("space should toggle ColorNicknames on")
+	}
+	if !m.IsDirty() {
+		t.Error("toggling ColorNicknames should mark settings dirty")
+	}
+}
+
 // --- Keyword list Tests ---
 //
 // The "alert keywords" row's own editing UX (add/delete/dedupe/scroll)
@@ -300,7 +315,7 @@ func TestSettings_Esc_ClearsError(t *testing.T) {
 func TestSettings_SetSaved_ClearsError(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetError(testErr)
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	if m.err != nil {
 		t.Error("SetSaved should clear error")
 	}
@@ -312,7 +327,7 @@ func TestSettings_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty after change")
 	}
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	if m.IsDirty() {
 		t.Error("after SetSaved, should not be dirty")
 	}
@@ -361,12 +376,71 @@ func TestSettings_Sharpness_ShowIf_HiddenUntilDitheringOn(t *testing.T) {
 	}
 }
 
+func TestSettings_ImageColor_ShowIf_HiddenUntilDitheringOn(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.imageViewer = "terminal"
+	m.dithering = false
+	if hasItemLabelled(m, "    color") {
+		t.Error("color item should be hidden while dithering is off")
+	}
+	m.dithering = true
+	if !hasItemLabelled(m, "    color") {
+		t.Error("color item should be visible once dithering is on")
+	}
+	m.imageViewer = "browser"
+	if hasItemLabelled(m, "    color") {
+		t.Error("color item should stay hidden when imageViewer == browser, even with dithering on")
+	}
+}
+
+func TestSettings_ImageColor_CycleTogglesAndSaves(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.imageViewer = "terminal"
+	m.dithering = true
+	m.originalDithering = true
+	var item settingsItem
+	for _, it := range flatItems(m) {
+		if it.label == "    color" {
+			item = it
+		}
+	}
+	if item.cycle == nil {
+		t.Fatal("setup: color item not found")
+	}
+	if got := item.getEnum(m); got != "monochrome" {
+		t.Fatalf("initial value = %q, want monochrome", got)
+	}
+
+	m = item.cycle(m, 1)
+	if got := item.getEnum(m); got != "color" {
+		t.Errorf("after cycle = %q, want color", got)
+	}
+	if !m.IsDirty() {
+		t.Error("changing color should mark settings dirty")
+	}
+
+	var got tea.Msg
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd != nil {
+		got = cmd()
+	}
+	save, ok := got.(SaveSettingsMsg)
+	if !ok {
+		t.Fatal("ctrl+s should emit SaveSettingsMsg")
+	}
+	if !save.Settings.ImageColor {
+		t.Error("SaveSettingsMsg.Settings.ImageColor should be true")
+	}
+	if !save.RemoteChanged {
+		t.Error("changing color should mark the save as RemoteChanged so it is PATCHed")
+	}
+}
+
 func TestSettings_Dithering_SaveMsg(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.dithering = true
 	m.originalDithering = false // make it dirty
-	m.ditherSharpness = "rough"
-	m.originalDitherSharpness = "medium"
+	m.settings.ImagePixelSize = "rough"
 	var got tea.Msg
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cmd != nil {
@@ -379,8 +453,11 @@ func TestSettings_Dithering_SaveMsg(t *testing.T) {
 	if !save.Dithering {
 		t.Error("SaveSettingsMsg.Dithering should reflect current dithering value")
 	}
-	if save.DitherSharpness != "rough" {
-		t.Errorf("SaveSettingsMsg.DitherSharpness = %q, want %q", save.DitherSharpness, "rough")
+	if save.Settings.ImagePixelSize != "rough" {
+		t.Errorf("SaveSettingsMsg.Settings.ImagePixelSize = %q, want %q", save.Settings.ImagePixelSize, "rough")
+	}
+	if !save.RemoteChanged {
+		t.Error("changing sharpness should mark the save as RemoteChanged so it is PATCHed")
 	}
 }
 
@@ -388,14 +465,12 @@ func TestSettings_Dithering_SetSaved_AdvancesBaseline(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.dithering = true
 	m.originalDithering = false
-	m.ditherSharpness = "sharp"
-	m.originalDitherSharpness = "medium"
 	if !m.IsDirty() {
 		t.Error("should be dirty before SetSaved")
 	}
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, true, "sharp", nil)
-	if m.originalDithering != true || m.originalDitherSharpness != "sharp" {
-		t.Error("SetSaved should update originalDithering/originalDitherSharpness to the saved values")
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, true, nil)
+	if m.originalDithering != true {
+		t.Error("SetSaved should update originalDithering to the saved value")
 	}
 	if m.IsDirty() {
 		t.Error("should not be dirty after SetSaved")
@@ -559,7 +634,7 @@ func TestSettings_View_DirtyFooterHint(t *testing.T) {
 
 func TestSettings_View_SavedMessage(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	view := m.View()
 	if !containsSubstring(view, "saved!") {
 		t.Error("View should show 'saved!' when saved=true")
@@ -588,7 +663,7 @@ func TestSettings_WanderGroup_Visible(t *testing.T) {
 func TestSettings_WanderToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
-	m.cursor = 15 // wander mode item (shifted by the new dithering toggle above it)
+	m.cursor = 16 // wander mode item (shifted by the dithering and color nicknames toggles above it)
 	m, _ = m.Update(keyMsg("enter"))
 	if m.wanderLust {
 		t.Error("toggling wander mode should flip wanderLust to false")
@@ -630,7 +705,7 @@ func TestSettings_WanderSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
 	m.originalWanderLust = false // dirty
-	m = m.SetSaved(true, false, true, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(true, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	if m.originalWanderLust != true {
 		t.Error("SetSaved should update originalWanderLust to the saved value")
 	}
@@ -711,7 +786,7 @@ func TestSettings_FeedAutoRefreshSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.feedManualRefreshOnly = true
 	m.originalFeedManualRefreshOnly = false // dirty
-	m = m.SetSaved(false, true, true, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(false, true, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	if m.originalFeedManualRefreshOnly != true {
 		t.Error("SetSaved should update originalFeedManualRefreshOnly to the saved value")
 	}
@@ -790,7 +865,7 @@ func TestSettings_TypingIndicatorsSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.typingIndicatorsEnabled = false
 	m.originalTypingIndicatorsEnabled = true // dirty
-	m = m.SetSaved(false, false, false, false, true, 3, "UTC", "terminal", "", false, false, "", nil)
+	m = m.SetSaved(false, false, false, false, true, 3, "UTC", "terminal", "", false, false, nil)
 	if m.originalTypingIndicatorsEnabled != false {
 		t.Error("SetSaved should update originalTypingIndicatorsEnabled to the saved value")
 	}
@@ -860,7 +935,7 @@ func TestSettings_Timezone_CyclesForward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.timezone = "UTC"
 	m.originalTimezone = "UTC"
-	m.cursor = 10 // timezone item
+	m.cursor = 11 // timezone item
 	m, _ = m.Update(keyMsg("tab"))
 	if m.timezone == "UTC" {
 		t.Error("tab should advance timezone from UTC")
@@ -871,7 +946,7 @@ func TestSettings_Timezone_CyclesBackward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.timezone = "UTC"
 	m.originalTimezone = "UTC"
-	m.cursor = 10
+	m.cursor = 11
 	m, _ = m.Update(keyMsg("shift+tab"))
 	if m.timezone == "UTC" {
 		t.Error("shift+tab should cycle timezone backward from UTC")
@@ -881,12 +956,12 @@ func TestSettings_Timezone_CyclesBackward(t *testing.T) {
 func TestSettings_Timezone_Wraps(t *testing.T) {
 	m := initSettings(defaultSettings())
 	items := flatItems(m)
-	last := items[10].options[len(items[10].options)-1]
+	last := items[11].options[len(items[11].options)-1]
 	m.timezone = last
 	m.originalTimezone = last
-	m.cursor = 10
+	m.cursor = 11
 	m, _ = m.Update(keyMsg("tab"))
-	first := items[10].options[0]
+	first := items[11].options[0]
 	if m.timezone != first {
 		t.Errorf("tab from last timezone should wrap to first, got %s", m.timezone)
 	}
@@ -1156,5 +1231,51 @@ func TestSettings_HardBreak_SeededFromSharedConfig(t *testing.T) {
 	}
 	if m.IsDirty() {
 		t.Error("seeding must not mark the screen dirty")
+	}
+}
+
+// --- Reveal content warnings tests ---
+
+func TestSettings_RevealCW_ToggleDirtySaveRevert(t *testing.T) {
+	m := initSettings(defaultSettings())
+	idx := -1
+	for i, it := range flatItems(m) {
+		if it.label == "always reveal content warnings" {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatal("expected an always reveal content warnings settings item")
+	}
+	m.cursor = idx
+	m, _ = m.Update(keyMsg("enter"))
+	if !m.revealCW || !m.IsDirty() {
+		t.Fatalf("toggle: revealCW = %v, dirty = %v, want both true", m.revealCW, m.IsDirty())
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd == nil {
+		t.Fatal("ctrl+s should emit a cmd")
+	}
+	save, ok := cmd().(SaveSettingsMsg)
+	if !ok || !save.RevealContentWarnings {
+		t.Errorf("SaveSettingsMsg = %+v, want RevealContentWarnings true", save)
+	}
+
+	m, _ = m.Update(keyMsg("esc"))
+	if m.revealCW {
+		t.Error("esc should revert revealCW to the saved baseline")
+	}
+}
+
+func TestSettings_RevealCW_SeededFromSharedConfig(t *testing.T) {
+	m := NewSettingsModel()
+	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 40, RevealContentWarnings: true})
+	if !m.revealCW {
+		t.Error("expected revealCW seeded from SharedConfigMsg")
+	}
+	if m.IsDirty() {
+		t.Error("seeding must also set the baseline, not mark the screen dirty")
 	}
 }

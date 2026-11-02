@@ -106,6 +106,7 @@ type ProfileModel struct {
 	mutedTopics         map[string]struct{} // Settings.MutedTopics; Posts-tab entries tagged with any are hidden
 	showFollowerCount   bool
 	inlineImagesEnabled bool
+	revealCW            bool // SharedConfigMsg.RevealContentWarnings
 
 	// Sub-tab state (view mode only).
 	activeTab   profileTab
@@ -314,6 +315,10 @@ func (m ProfileModel) AppendUserFollowers(follows []model.Follow, cursor string)
 // ComposeActive reports whether the edit form is open, used by app.go to
 // route key events past global shortcuts.
 func (m ProfileModel) ComposeActive() bool { return m.editMode }
+
+// AcceptsInsertedText reports whether an InsertIconMsg would land anywhere,
+// so App only opens prompts like ctrl+g's where the result is used.
+func (m ProfileModel) AcceptsInsertedText() bool { return m.editMode && m.focusedField == fieldBio }
 
 func (m ProfileModel) IsReadOnly() bool { return m.readOnly }
 
@@ -611,6 +616,7 @@ func (m ProfileModel) Update(msg tea.Msg) (ProfileModel, tea.Cmd) {
 		}
 		m.showFollowerCount = msg.Settings.ShowFollowerCount
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
+		m.revealCW = msg.RevealContentWarnings
 		w := msg.Width
 		if w > 80 {
 			w = 80
@@ -1131,10 +1137,7 @@ func (m ProfileModel) renderPostItem(p model.Post, selected bool) string {
 		innerWidth = 40
 	}
 	ts := theme.Subtle.Render(displayTime(p.CreatedAt, m.location(), m.timeDisplayFormat, true) + editedSuffix(p.EditedAt))
-	previewText := markdown.FirstLine(p.Content)
-	if p.Title != "" {
-		previewText = p.Title
-	}
+	previewText := cwPreview(p, m.revealCW)
 	left := theme.Highlight.Render("@"+p.AuthorUsername) + "  " + theme.Base.Render(truncateStr(previewText, innerWidth-lipgloss.Width(ts)-lipgloss.Width(theme.Highlight.Render("@"+p.AuthorUsername))-4))
 	gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(ts)
 	var line string

@@ -131,6 +131,7 @@ type GuildsModel struct {
 	// see TopicsModel's field of the same name for the convention.
 	postImages          [][]postImageSlot
 	inlineImagesEnabled bool
+	revealCW            bool // SharedConfigMsg.RevealContentWarnings
 }
 
 // NewGuildsModel returns a zero-value GuildsModel ready for first use.
@@ -159,6 +160,12 @@ func (m GuildsModel) visiblePosts() []model.Post {
 
 // ComposeActive reports whether the new-thread compose panel is open.
 func (m GuildsModel) ComposeActive() bool { return m.panel.IsActive() }
+
+// AcceptsInsertedText reports whether an InsertIconMsg would land anywhere,
+// so App only opens prompts like ctrl+g's where the result is used.
+func (m GuildsModel) AcceptsInsertedText() bool {
+	return m.panel.IsActive() && m.panel.FreeTextFocused()
+}
 
 // ActiveGuild returns the slug of the guild whose posts are currently displayed, or "" when in list view.
 func (m GuildsModel) ActiveGuild() string { return m.activeGuild }
@@ -442,6 +449,7 @@ func (m GuildsModel) Update(msg tea.Msg) (GuildsModel, tea.Cmd) {
 		m.ownApprenticeSlugs = msg.OwnApprenticeSlugs
 		m.guilds = sortGuildsForDisplay(m.guilds, m.ownGuildSlug, m.ownApprenticeSlugs)
 		m.inlineImagesEnabled = msg.InlineImagesEnabled
+		m.revealCW = msg.RevealContentWarnings
 		if m.ready {
 			m = m.refreshContent()
 		}
@@ -1057,7 +1065,7 @@ func (m GuildsModel) renderMemberItem(mem model.GuildMember, selected bool) stri
 func (m GuildsModel) renderPostItem(p model.Post, selected bool) (string, []postImageSlot) {
 	_, bookmarked := m.bookmarkedPostIDs[p.ID]
 	_, watched := m.watchedPostIDs[p.ID]
-	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled)
+	return RenderPost(p, selected, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, m.revealCW)
 }
 
 func (m GuildsModel) refreshContent() GuildsModel {
