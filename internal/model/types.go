@@ -198,6 +198,7 @@ type Settings struct {
 	FollowedTopics       []string
 	MutedTopics          []string
 	ImagePixelSize       string // "rough", "medium", "sharp" or "crisp"; drives dither pixel size
+	ImageColor           bool   // dither in colour (web-safe palette) instead of the theme fg/bg
 	TimeDisplayFormat    string // "datetime", "relative", "unix", or "swatch"
 	DefaultPublicPost    bool
 	MutedUsersByRoom     map[string][]string // roomID -> muted usernames; server-managed via /mute commands, cIRC only
