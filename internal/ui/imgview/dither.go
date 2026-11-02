@@ -9,11 +9,14 @@ import (
 
 // DitherOptions configures Dither. PixelSize is the pixelation block size in
 // source pixels (see PixelSizeForSharpness). FgColor/BgColor are the two
-// colors the dithered result is recolored through.
+// colors the dithered result is recolored through. ColorMode (the account's
+// imageColor setting) instead dithers each channel to the 216-colour
+// web-safe palette and ignores FgColor/BgColor.
 type DitherOptions struct {
 	PixelSize int
 	FgColor   color.RGBA
 	BgColor   color.RGBA
+	ColorMode bool
 }
 
 // ditherAmount blends a flat 0.5 threshold (0.0) against the full Bayer
@@ -42,8 +45,9 @@ var bayer8x8 = [64]float64{
 // Dither applies cyberspace.online webui's RasterImage duotone-dithering
 // effect: block-pixelate, convert to grayscale, threshold against an 8x8
 // Bayer ordered-dither pattern blended with posterization, then recolor the
-// result through opts.FgColor/opts.BgColor. Always returns a new image; img
-// is never mutated.
+// result through opts.FgColor/opts.BgColor. With opts.ColorMode the same
+// threshold dithers each RGB channel to the web-safe palette instead. Always
+// returns a new image; img is never mutated.
 func Dither(img image.Image, opts DitherOptions) *image.RGBA {
 	bounds := img.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
@@ -74,6 +78,11 @@ func Dither(img image.Image, opts DitherOptions) *image.RGBA {
 			bayerValue = bayerValue*0.7 + noise*0.3
 			threshold := 0.5*(1-ditherAmount) + bayerValue*ditherAmount
 
+			if opts.ColorMode {
+				out.SetRGBA(x, y, color.RGBA{R: webSafe(r, threshold), G: webSafe(g, threshold), B: webSafe(b, threshold), A: 255})
+				continue
+			}
+
 			dithered := 0.0
 			if gray >= threshold {
 				dithered = 1.0
@@ -90,6 +99,13 @@ func Dither(img image.Image, opts DitherOptions) *image.RGBA {
 		}
 	}
 	return out
+}
+
+// webSafe ordered-dithers one 16-bit channel to the 6 levels of the web-safe
+// palette, the source shader's colour-mode floor(rgb * 5.0 + threshold) / 5.0.
+func webSafe(v uint32, threshold float64) uint8 {
+	level := math.Min(math.Floor(float64(v)/65535.0*5+threshold), 5)
+	return uint8(level * 51)
 }
 
 // pseudoNoise reproduces the source shader's cheap GLSL hash-based random(),

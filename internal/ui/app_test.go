@@ -6259,6 +6259,21 @@ func TestSyncInlineImages_DitherToggleInvalidatesCache(t *testing.T) {
 	}
 }
 
+// Switching imageColor must change the cache key too, or images encoded in
+// the old mode keep being served.
+func TestInlineImageCacheKey_ImageColorChangesKey(t *testing.T) {
+	a, _ := feedAppWithOneImage(t)
+	a.dithering = true
+	img := a.feed.VisibleInlineImages()[0]
+
+	mono := inlineImageCacheKey(img, a.graphicsProtocol, a.ditherOptions())
+	a.settings.ImageColor = true
+	colour := inlineImageCacheKey(img, a.graphicsProtocol, a.ditherOptions())
+	if mono == colour {
+		t.Errorf("cache key unchanged by imageColor: %q", mono)
+	}
+}
+
 // TestInlineImageFailureCooldown_ClearedBySubsequentSuccess confirms a
 // success wipes any earlier failure record, so a transient blip doesn't
 // leave a stale cooldown blocking future retries after the URL recovers.
