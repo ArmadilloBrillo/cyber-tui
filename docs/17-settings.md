@@ -23,6 +23,7 @@ This feature aligns the codebase with API v0.3.2, which supports 13 preference f
 | `FollowedTopics` | []string | Topics subscribed to | Device-roaming |
 | `MutedTopics` | []string | Muted topics — posts tagged with any are hidden. Managed from the Topics tab (`m`), not this screen. See `docs/54-muted-topics.md`. | Device-roaming |
 | `ImagePixelSize` | string | `rough`, `medium`, `sharp` or `crisp` (dither pixel size, see `docs/59-image-pixel-size.md`) | Device-roaming |
+| `ImageColor` | bool | Dither images in colour (web-safe palette) instead of the theme fg/bg, see `docs/60-image-color.md` | Device-roaming |
 | `DefaultPublicPost` | bool | Posts default to public | Device-roaming |
 
 **Note:** `KeyboardBindings` and `MutedUsersByRoom` are opaque JSON objects — not modelled yet.
