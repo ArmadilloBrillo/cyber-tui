@@ -376,6 +376,66 @@ func TestSettings_Sharpness_ShowIf_HiddenUntilDitheringOn(t *testing.T) {
 	}
 }
 
+func TestSettings_ImageColor_ShowIf_HiddenUntilDitheringOn(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.imageViewer = "terminal"
+	m.dithering = false
+	if hasItemLabelled(m, "    color") {
+		t.Error("color item should be hidden while dithering is off")
+	}
+	m.dithering = true
+	if !hasItemLabelled(m, "    color") {
+		t.Error("color item should be visible once dithering is on")
+	}
+	m.imageViewer = "browser"
+	if hasItemLabelled(m, "    color") {
+		t.Error("color item should stay hidden when imageViewer == browser, even with dithering on")
+	}
+}
+
+func TestSettings_ImageColor_CycleTogglesAndSaves(t *testing.T) {
+	m := initSettings(defaultSettings())
+	m.imageViewer = "terminal"
+	m.dithering = true
+	m.originalDithering = true
+	var item settingsItem
+	for _, it := range flatItems(m) {
+		if it.label == "    color" {
+			item = it
+		}
+	}
+	if item.cycle == nil {
+		t.Fatal("setup: color item not found")
+	}
+	if got := item.getEnum(m); got != "monochrome" {
+		t.Fatalf("initial value = %q, want monochrome", got)
+	}
+
+	m = item.cycle(m, 1)
+	if got := item.getEnum(m); got != "color" {
+		t.Errorf("after cycle = %q, want color", got)
+	}
+	if !m.IsDirty() {
+		t.Error("changing color should mark settings dirty")
+	}
+
+	var got tea.Msg
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd != nil {
+		got = cmd()
+	}
+	save, ok := got.(SaveSettingsMsg)
+	if !ok {
+		t.Fatal("ctrl+s should emit SaveSettingsMsg")
+	}
+	if !save.Settings.ImageColor {
+		t.Error("SaveSettingsMsg.Settings.ImageColor should be true")
+	}
+	if !save.RemoteChanged {
+		t.Error("changing color should mark the save as RemoteChanged so it is PATCHed")
+	}
+}
+
 func TestSettings_Dithering_SaveMsg(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.dithering = true

@@ -247,6 +247,24 @@ var settingsGroups = []settingsGroup{
 					return m.imageViewer != "browser" && m.dithering
 				},
 			},
+			{
+				label:   "    color",
+				kind:    "enum",
+				options: []string{"monochrome", "color"},
+				getEnum: func(m SettingsModel) string {
+					if m.settings.ImageColor {
+						return "color"
+					}
+					return "monochrome"
+				},
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					m.settings.ImageColor = !m.settings.ImageColor
+					return m
+				},
+				showIf: func(m SettingsModel) bool {
+					return m.imageViewer != "browser" && m.dithering
+				},
+			},
 		},
 	},
 	{
@@ -514,6 +532,7 @@ func settingsEqual(a, b model.Settings) bool {
 		a.ShowGuildPostsInFeed == b.ShowGuildPostsInFeed &&
 		a.ColorNicknames == b.ColorNicknames &&
 		a.ImagePixelSize == b.ImagePixelSize &&
+		a.ImageColor == b.ImageColor &&
 		a.DefaultPublicPost == b.DefaultPublicPost &&
 		a.TimeDisplayFormat == b.TimeDisplayFormat
 }
