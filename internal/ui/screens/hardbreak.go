@@ -25,6 +25,7 @@ var hardBreakReserved = map[string]bool{
 	"ctrl+v": true, "ctrl+f": true, "ctrl+b": true, "ctrl+n": true, "ctrl+h": true,
 	"alt+d": true, "alt+f": true, "alt+b": true, "alt+c": true, "alt+l": true,
 	"alt+u": true, "alt+<": true, "alt+>": true, "alt+backspace": true, "alt+delete": true,
+	"ctrl+up": true, "ctrl+down": true, // cIRC/C-Mail sent-message history
 }
 
 // ValidateHardBreakKey checks a hard-break key. It must carry a modifier

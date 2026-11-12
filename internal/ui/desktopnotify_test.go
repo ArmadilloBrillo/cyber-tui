@@ -43,6 +43,13 @@ func TestDesktopNotifyString_StripsInjectedControls(t *testing.T) {
 	}
 }
 
+func TestDesktopNotifyString_LineBreaksBecomeSpaces(t *testing.T) {
+	got := desktopNotifyString("cIRC", "first\nsecond")
+	if want := "\x1b]9;cIRC: first second\x07"; got != want {
+		t.Errorf("desktopNotifyString = %q, want %q", got, want)
+	}
+}
+
 func TestDesktopNotifyString_Truncates(t *testing.T) {
 	body := strings.Repeat("x", 500)
 	got := desktopNotifyString("t", body)

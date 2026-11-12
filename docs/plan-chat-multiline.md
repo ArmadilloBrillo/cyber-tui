@@ -150,3 +150,13 @@ Live checks after steps 3 and 4, in a real terminal:
 - **Styling.** A styled cIRC message with a newline (the server turns it into spaces). cMail lists, blockquotes and code fences with line breaks.
 - **Layout.** Inline images near the bottom while the box grows or the hint toggles. Short and narrow terminals.
 - **Terminal quirks.** alt+enter is fullscreen in Windows Terminal; macOS Terminal needs Option-as-Meta.
+
+## Implementation notes (changes from the plan)
+- Step 1: no separate `hardBreaks` table test; `TestConvertPaste` already runs every case through it.
+- Step 2: the newline check treats the line the cursor lands on as text in progress, otherwise typing a paragraph break ("a", newline, newline, "b") was refused.
+- Step 3: Space with a bare `@` commits the hinted candidate, as before this feature. Refusing it broke picking a name with Tab after a bare `@`.
+- Step 4, after live testing:
+  - The textarea edits at the full 5-row height and `fitChatInput` shrinks it afterwards. Editing at the current height scrolled line 1 away as soon as line 2 appeared.
+  - The `> ` prompt shows only on the first row of each line, so wrapped rows read as the line they will be sent as.
+  - Wrapped rows are measured with a scratch textarea (textarea's word-wrap is unexported), so the box height is exact rather than estimated.
+- Step 5: line breaks in desktop notifications become spaces in `stripControl` itself, which covers every toast, not only cIRC mentions.

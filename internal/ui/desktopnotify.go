@@ -33,9 +33,13 @@ func desktopNotifyString(title, body string) string {
 	return "\x1b]9;" + text + "\x07"
 }
 
-// stripControl drops every C0/C1/DEL control rune (tab and newline included).
+// stripControl drops every C0/C1/DEL control rune; tab and line breaks become
+// spaces so a multi-line chat message doesn't glue its words together.
 func stripControl(s string) string {
 	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
 		if unicode.IsControl(r) {
 			return -1
 		}

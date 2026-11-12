@@ -302,11 +302,12 @@ var settingsGroups = []settingsGroup{
 		title: "compose",
 		items: []settingsItem{
 			{
-				// The key that inserts a markdown hard line break, for
-				// terminals that swallow the default alt+enter. Captured
+				// The key that inserts a line break: a markdown hard break
+				// in posts and replies, a plain newline in cIRC and C-Mail.
+				// For terminals that swallow the default alt+enter. Captured
 				// rather than typed: kind "keybind" has its own key handling
 				// in Update/handleCapture and View, like "keywordlist".
-				label: "hard line break key", kind: "keybind",
+				label: "line break key", kind: "keybind",
 			},
 		},
 	},
