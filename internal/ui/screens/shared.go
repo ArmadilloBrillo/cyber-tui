@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 	"github.com/ragnar/cyber-tui/internal/model"
+	"github.com/ragnar/cyber-tui/internal/ui/theme"
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
 )
 
@@ -297,10 +298,11 @@ func scrollChatInput(ta textarea.Model, y int) int {
 
 // renderChatInput draws the compose box itself instead of textarea.View, so
 // the caller controls the scroll offset (textarea keeps its own private)
-// and can draw beyond what textarea offers. The textarea stays the editing
-// engine: value, cursor and blink. Rows are padded or cut to the box width
-// like textarea's viewport does, so the box never changes width.
-func renderChatInput(ta textarea.Model, y int) string {
+// and can draw ghost text: a grey suggestion right after the cursor, with
+// the cursor cell showing its first character. The textarea stays the
+// editing engine: value, cursor and blink. Rows are padded or cut to the
+// box width like textarea's viewport does, so the box never changes width.
+func renderChatInput(ta textarea.Model, y int, ghost string) string {
 	if ta.Value() == "" {
 		return ta.View() // textarea's placeholder rendering, scrolled to top by Reset
 	}
@@ -321,15 +323,27 @@ func renderChatInput(ta textarea.Model, y int) string {
 			}
 			body := string(row.text)
 			if i == cursorRow {
-				col := ta.LineInfo().ColumnOffset
+				col := min(ta.LineInfo().ColumnOffset, len(row.text))
+				before := string(row.text[:col])
 				cur := ta.Cursor
-				cur.SetChar(" ")
-				after := ""
-				if col < len(row.text) {
+				// Typed text is never pushed out of the box: the ghost only
+				// gets the cells the row leaves free (usernames are ASCII,
+				// one cell per rune).
+				g := []rune(ghost)
+				g = g[:min(len(g), max(0, ta.Width()-lipgloss.Width(string(row.text))))]
+				switch {
+				case len(g) > 0:
+					cur.SetChar(string(g[0]))
+					// Grey in the blink-off phase too, so it never reads as typed.
+					cur.TextStyle = theme.Subtle
+					body = before + cur.View() + theme.Subtle.Render(string(g[1:])) + string(row.text[col:])
+				case col < len(row.text):
 					cur.SetChar(string(row.text[col]))
-					after = string(row.text[col+1:])
+					body = before + cur.View() + string(row.text[col+1:])
+				default:
+					cur.SetChar(" ")
+					body = before + cur.View()
 				}
-				body = string(row.text[:min(col, len(row.text))]) + cur.View() + after
 			}
 			line = prompt + body
 		} else {

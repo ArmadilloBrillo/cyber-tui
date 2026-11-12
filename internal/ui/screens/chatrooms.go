@@ -58,7 +58,7 @@ type roomPresenceSubscription struct {
 }
 
 // mentionCycle tracks an in-progress @-mention preview: repeated Tab presses
-// change which candidate the hint line shows, without touching m.input at
+// change which candidate the ghost text shows, without touching m.input at
 // all — text and cursor stay exactly as typed. Typing a space commits the
 // currently-previewed candidate as real text; any other key just clears the
 // preview, leaving whatever was actually typed untouched (see the
@@ -1114,8 +1114,7 @@ func (m ChatroomsModel) Init() tea.Cmd { return textarea.Blink }
 func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	m, cmd := m.updateInner(msg)
 	// One choke point for every viewport-height change the compose area
-	// causes (the box growing or shrinking, the mention hint toggling), so
-	// no input path is missed.
+	// causes (the box growing or shrinking), so no input path is missed.
 	if m.ready && m.mode == chatroomModeDetail {
 		m.input = fitChatInput(m.input)
 		m.inputYOffset = scrollChatInput(m.input, m.inputYOffset)
@@ -1623,7 +1622,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				// Commits whatever mentionActiveCandidate is currently
 				// showing — the active Tab-cycle's pick, or its passive
 				// default (the first match, shown before any Tab press) —
-				// so Space always commits exactly what the hint shows,
+				// so Space always commits exactly what the ghost text shows,
 				// never disagreeing with what the user sees.
 				if atPos, cursor, _, candidate, ok := m.mentionActiveCandidate(); ok {
 					// Replace the typed token in place with key edits: textarea
@@ -2225,9 +2224,6 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 // shrinking to make room for the flag/report overlay when it's open.
 func (m ChatroomsModel) viewportHeight() int {
 	h := m.height - theme.ChromeHeight - chatroomDetailHeaderRows - (m.input.Height() + 2) // input box: content + 2 border rows
-	if m.mentionHint() != "" {
-		h--
-	}
 	if m.flagPrompt.Active() {
 		h -= m.flagPrompt.Height()
 	}
@@ -2342,8 +2338,8 @@ func matchMentionCandidates(users []model.RoomUser, query string) []model.RoomUs
 // mentionActiveCandidate resolves the mention token at the cursor (if any)
 // and which candidate is currently being previewed — the active Tab-cycle's
 // selection, or with no cycle yet, the first match (the same default
-// the hint line shows before any Tab press). Shared by the hint line
-// renderer and Space's commit handler so they can never disagree about what
+// the ghost text shows before any Tab press). Shared by the ghost text
+// and Space's commit handler so they can never disagree about what
 // "the current candidate" is — that mismatch was the bug where Space typed
 // immediately after "@al" (no Tab press) inserted a literal space instead of
 // committing the name that was visibly previewed.
@@ -2366,17 +2362,34 @@ func (m ChatroomsModel) mentionActiveCandidate() (atPos, cursor int, query, cand
 	return ap, cursor, q, matches[0].Username, true
 }
 
-// mentionHint renders the one-row suggestion shown above the compose box
-// while a mention candidate is active, or "" when there is none. A row of
-// its own (rather than inline ghost text) works at any line and cursor
-// position of the multi-line input.
-func (m ChatroomsModel) mentionHint() string {
-	_, _, _, candidate, ok := m.mentionActiveCandidate()
+// mentionGhost returns the not-yet-typed rest of the previewed mention
+// candidate, drawn in grey right after the cursor, or "" when there is
+// nothing to show. matchMentionCandidates already guarantees the candidate
+// starts with the query (case-insensitively), so the rest is a plain slice.
+// No ghost while the cursor sits inside a name ("@a|l"): it would read as
+// "@alicel".
+func (m ChatroomsModel) mentionGhost() string {
+	if !m.input.Focused() {
+		return ""
+	}
+	_, cursor, query, candidate, ok := m.mentionActiveCandidate()
 	if !ok {
 		return ""
 	}
-	hint := theme.Highlight.Render("@"+candidate) + theme.Subtle.Render("  · tab next · space accept")
-	return lipgloss.NewStyle().MaxWidth(max(m.width, 1)).Render(hint)
+	if r := []rune(m.input.Value()); cursor < len(r) && isUsernameRune(r[cursor]) {
+		return ""
+	}
+	c, q := []rune(candidate), []rune(query)
+	if len(c) <= len(q) {
+		return ""
+	}
+	return string(c[len(q):])
+}
+
+// isUsernameRune reports whether r can appear in a username (letters,
+// digits and underscore, matching the @mention markdown rule).
+func isUsernameRune(r rune) bool {
+	return r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
 }
 
 // roomUserIsIdle reports whether u should be treated as idle given the
@@ -2465,10 +2478,7 @@ func (m ChatroomsModel) View() string {
 		case m.reconnectFailed:
 			header += theme.Error.Render("  (live updates lost)")
 		}
-		inputBox := theme.ActiveBorder.Render(renderChatInput(m.input, m.inputYOffset))
-		if hint := m.mentionHint(); hint != "" {
-			inputBox = lipgloss.JoinVertical(lipgloss.Left, hint, inputBox)
-		}
+		inputBox := theme.ActiveBorder.Render(renderChatInput(m.input, m.inputYOffset, m.mentionGhost()))
 
 		_, usersW := m.panelWidths()
 		messageArea := m.viewport.View()

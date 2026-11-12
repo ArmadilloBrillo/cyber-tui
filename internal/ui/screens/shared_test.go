@@ -422,7 +422,7 @@ func TestRenderChatInput_MatchesTextareaView(t *testing.T) {
 			}
 			ta = fitChatInput(ta)
 
-			got, want := ansi.Strip(renderChatInput(ta, 0)), ansi.Strip(ta.View())
+			got, want := ansi.Strip(renderChatInput(ta, 0, "")), ansi.Strip(ta.View())
 			if got != want {
 				t.Errorf("renderChatInput differs from textarea.View\n got:\n%q\nwant:\n%q", got, want)
 			}
@@ -450,7 +450,7 @@ func TestRenderChatInput_ShrinkBringsTopRowBack(t *testing.T) {
 	ta = fitChatInput(ta)
 	y = scrollChatInput(ta, y)
 
-	rows := chatInputRowsOf(t, renderChatInput(ta, y))
+	rows := chatInputRowsOf(t, renderChatInput(ta, y, ""))
 	if ta.Value() != "1\n2\n3\n4\n5" || !strings.HasPrefix(rows[0], "> 1") {
 		t.Errorf("value %q, first row %q; want 5 lines with line 1 visible", ta.Value(), rows[0])
 	}
@@ -461,7 +461,7 @@ func TestRenderChatInput_ViewWithoutUpdateStaysInBox(t *testing.T) {
 	ta = fitChatInput(ta)
 	ta.SetValue("1\n2\n3\n4\n5\n6\n7") // no fit, no Update: height still 1
 
-	rows := chatInputRowsOf(t, renderChatInput(ta, 0))
+	rows := chatInputRowsOf(t, renderChatInput(ta, 0, ""))
 	if len(rows) != ta.Height() || !strings.HasPrefix(rows[0], "> 7") {
 		t.Errorf("rows = %q; want %d row(s) showing the cursor line 7", rows, ta.Height())
 	}
@@ -481,5 +481,58 @@ func TestRenderChatInput_ResetAfterScrollShowsOneRow(t *testing.T) {
 
 	if y != 0 || ta.Height() != 1 {
 		t.Errorf("after reset: offset %d, height %d; want 0 and 1", y, ta.Height())
+	}
+}
+
+// ghostInput builds a focused 20-column compose box (22 with the prompt).
+func ghostInput(t *testing.T, value string) textarea.Model {
+	t.Helper()
+	ta := newChatInput("")
+	ta.SetWidth(22)
+	ta.Focus()
+	ta.SetValue(value)
+	return fitChatInput(ta)
+}
+
+func TestRenderChatInput_Ghost(t *testing.T) {
+	scrolled := ghostInput(t, "1\n2\n3\n4\n5\n6\n@al")
+	full := ghostInput(t, strings.Repeat("abcd ", 8))
+	full.CursorUp()
+	full.CursorUp()
+	full.CursorUp() // cursor now on the first, completely full row
+	midRow := ghostInput(t, "abcd @al, abcd abc")
+	midRow.SetCursor(8) // right after "@al"; the row has 2 free cells
+	for _, c := range []struct {
+		name  string
+		ta    textarea.Model
+		y     int
+		ghost string
+		row   int
+		want  string
+	}{
+		{"end of one line", ghostInput(t, "hey @al"), 0, "ice", 0, "> hey @alice"},
+		{"wrapped row", ghostInput(t, "some words that wrap @al"), 0, "ice", 1, "  wrap @alice"},
+		{"second line", ghostInput(t, "one\n@al"), 0, "ice", 1, "> @alice"},
+		{"line exactly box width", ghostInput(t, strings.Repeat("x", 20)), 0, "ice", 1, "  ice"},
+		{"scrolled box", scrolled, scrollChatInput(scrolled, 0), "ice", 4, "> @alice"},
+		{"ghost cut to free cells", ghostInput(t, strings.Repeat("y", 17)+" @"), 0, "alice", 0, "> " + strings.Repeat("y", 17) + " @a"},
+		{"full row draws no ghost", full, 0, "ice", 0, "> abcd abcd abcd abcd "},
+		{"typed text after the cursor stays visible", midRow, 0, "ice", 0, "> abcd @alic, abcd abc"},
+		{"wide characters before", ghostInput(t, "日本 @al"), 0, "ice", 0, "> 日本 @alice"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rows := chatInputRowsOf(t, renderChatInput(c.ta, c.y, c.ghost))
+			if c.row >= len(rows) {
+				t.Fatalf("only %d rows: %q", len(rows), rows)
+			}
+			if got := strings.TrimRight(rows[c.row], " "); got != strings.TrimRight(c.want, " ") {
+				t.Errorf("row %d = %q, want %q (all rows %q)", c.row, got, c.want, rows)
+			}
+			for i, r := range rows {
+				if lipgloss.Width(r) != 22 {
+					t.Errorf("row %d width = %d, want 22: %q", i, lipgloss.Width(r), r)
+				}
+			}
+		})
 	}
 }

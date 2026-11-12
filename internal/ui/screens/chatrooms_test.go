@@ -1062,7 +1062,7 @@ func setInput(m ChatroomsModel, value string, cursor int) ChatroomsModel {
 	return m
 }
 
-// mentionPreview returns the candidate the hint line is offering, or "".
+// mentionPreview returns the candidate the ghost text is offering, or "".
 func mentionPreview(m ChatroomsModel) string {
 	_, _, _, candidate, _ := m.mentionActiveCandidate()
 	return candidate
@@ -1189,7 +1189,7 @@ func TestMentionSpace_CommitsCurrentPreviewThenInsertsSpace(t *testing.T) {
 // commit that preview at all: it fell through to plain space-insertion,
 // producing the literal typed text plus a space (e.g. "hey @al ") instead of
 // committing the name that was visibly showing (e.g. "hey @alice "). Space
-// must commit whatever the hint line is currently displaying, whether or
+// must commit whatever the ghost text is currently displaying, whether or
 // not an explicit Tab-cycle is active.
 func TestMentionSpace_CommitsPassiveDefaultPreviewWithoutTab(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
@@ -1315,27 +1315,93 @@ func TestMentionPreview_ReflectsActiveCyclePreview(t *testing.T) {
 	}
 }
 
-func TestMentionHint_ShowsAboveInputAndShrinksViewport(t *testing.T) {
+func TestMentionGhost_DrawnInlineViewportUnchanged(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	m.roomUsers = []model.RoomUser{{Username: "alice"}}
 	before := m.viewport.Height
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hey @al")})
 
-	if !strings.Contains(m.View(), "@alice  · tab next · space accept") {
-		t.Errorf("expected the mention hint in the view, got:\n%s", m.View())
+	if _, content, _ := inputBoxLines(t, m.View()); !strings.Contains(content, "> hey @alice") {
+		t.Errorf("expected the ghost right after the typed text, got %q", content)
 	}
-	if m.viewport.Height != before-1 {
-		t.Errorf("viewport height = %d, want %d (one row for the hint)", m.viewport.Height, before-1)
+	if m.viewport.Height != before {
+		t.Errorf("viewport height = %d, want unchanged %d", m.viewport.Height, before)
 	}
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("zz")})
-
-	if strings.Contains(m.View(), "tab next") {
-		t.Error("expected the hint to disappear once nothing matches")
+	if got := m.mentionGhost(); got != "" {
+		t.Errorf("ghost = %q, want none once nothing matches", got)
 	}
-	if m.viewport.Height != before {
-		t.Errorf("viewport height = %d, want %d restored", m.viewport.Height, before)
+}
+
+func TestMentionGhost_Cases(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "bob"}}
+	for _, c := range []struct {
+		name   string
+		value  string
+		cursor int
+		want   string
+	}{
+		{"end of line", "hey @al", 7, "ice"},
+		{"before a comma", "hey @al, ok", 7, "ice"},
+		{"before a space", "hey @al there", 7, "ice"},
+		{"cursor inside the name", "@al", 2, ""},
+		{"bare @", "@", 1, "alice"},
+		{"uppercase query", "@AL", 3, "ice"},
+		{"fully typed", "@alice", 6, ""},
+		{"second token at cursor", "@al hi @bo", 10, "b"},
+		{"first token at cursor", "@al hi @bo", 3, "ice"},
+		{"no mention", "hello", 5, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := setInput(m, c.value, c.cursor)
+			if got := m.mentionGhost(); got != c.want {
+				t.Errorf("mentionGhost() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestMentionGhost_MidTextShiftsFollowingText(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}}
+	m = setInput(m, "hey @al, ok", 7)
+
+	if _, content, _ := inputBoxLines(t, m.View()); !strings.Contains(content, "> hey @alice, ok") {
+		t.Errorf("expected the ghost before the comma with the rest shifted right, got %q", content)
+	}
+}
+
+func TestMentionGhost_NoneWhileBrowsing(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}}
+	m = m.SetMessages("zion", manyPlainMessages(2))
+	m = setInput(m, "hey @al", 7)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+
+	if m.selectedMsgID == "" {
+		t.Fatal("setup: expected up to enter browsing")
+	}
+	if got := m.mentionGhost(); got != "" {
+		t.Errorf("ghost = %q while browsing, want none", got)
+	}
+}
+
+// TestMentionGhost_CursorOverlayUsesGhostColor guards against the overlaid
+// character rendering in normal text colour during the cursor's text-style
+// blink phase, which would make it look typed.
+func TestMentionGhost_CursorOverlayUsesGhostColor(t *testing.T) {
+	withTrueColor(t)
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}}
+	m = setInput(m, "hey @al", 7)
+	m.input.Cursor.Blink = true // the phase cursor.Model.View() renders via TextStyle
+
+	if want := theme.Subtle.Inline(true).Render("i"); !strings.Contains(m.View(), want) {
+		t.Errorf("expected the cursor-overlaid character in ghost colour (%q), got:\n%s", want, m.View())
 	}
 }
 
