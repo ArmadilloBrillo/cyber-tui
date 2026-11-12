@@ -3,8 +3,10 @@ package screens
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
@@ -92,6 +94,125 @@ func insertAtCursor(ti textinput.Model, s string) textinput.Model {
 	ti.SetValue(string(out))
 	ti.SetCursor(pos + len(ins))
 	return ti
+}
+
+// Chat message limits from the API (cIRC and cMail send-message): 10 lines
+// and 2048 characters, except /art, whose canvas is 25 lines below the
+// command line.
+const (
+	chatMaxLines    = 10
+	chatMaxChars    = 2048
+	chatArtMaxLines = 26
+)
+
+var crlfToLF = strings.NewReplacer("\r\n", "\n", "\r", "\n")
+
+// newChatInput builds the multi-line compose box shared by cIRC and cMail.
+// Enter is left to the screen (send); the newline key goes through
+// updateChatInput.
+func newChatInput(placeholder string) textarea.Model {
+	ta := textarea.New()
+	ta.Prompt = "> "
+	ta.Placeholder = placeholder
+	ta.ShowLineNumbers = false
+	// ponytail: CharLimit counts display width, so CJK and emoji count as 2
+	// against the server's 2048; switch to a rune count if that bites.
+	ta.CharLimit = chatMaxChars
+	ta.KeyMap.InsertNewline.SetEnabled(false)
+	// textarea's defaults dim the prompt and blurred text and shade the
+	// cursor line; keep the plain look of the single-line input it replaced.
+	plain := lipgloss.NewStyle()
+	for _, st := range []*textarea.Style{&ta.FocusedStyle, &ta.BlurredStyle} {
+		st.Prompt, st.Text, st.CursorLine = plain, plain, plain
+	}
+	ta.SetHeight(1)
+	return ta
+}
+
+// isArtCommand reports whether a chat body is an /art post, which the server
+// stores as-is.
+func isArtCommand(s string) bool {
+	f := strings.Fields(s)
+	return len(f) > 0 && strings.ToLower(f[0]) == "/art"
+}
+
+// normalizeChatBody applies the server's line rules so the compose box shows
+// exactly what will be stored: runs of blank lines collapse to one and lines
+// past the tenth join it with spaces. /art bodies pass through unchanged.
+func normalizeChatBody(s string) string {
+	s = crlfToLF.Replace(s)
+	if isArtCommand(s) {
+		return s
+	}
+	var out []string
+	prevBlank := false
+	for line := range strings.SplitSeq(s, "\n") {
+		blank := strings.TrimSpace(line) == ""
+		if blank && prevBlank {
+			continue
+		}
+		prevBlank = blank
+		out = append(out, line)
+	}
+	if len(out) > chatMaxLines {
+		out[chatMaxLines-1] = strings.Join(out[chatMaxLines-1:], " ")
+		out = out[:chatMaxLines]
+	}
+	return strings.Join(out, "\n")
+}
+
+// chatInputOffset returns the cursor's rune offset into ta.Value().
+func chatInputOffset(ta textarea.Model) int {
+	lines := strings.Split(ta.Value(), "\n")
+	off := 0
+	for _, l := range lines[:ta.Line()] {
+		off += len([]rune(l)) + 1
+	}
+	li := ta.LineInfo()
+	return off + li.StartColumn + li.ColumnOffset
+}
+
+// updateChatInput routes a message to a chat compose box: newlineKey inserts
+// a line break when the result still obeys the server's line rules, pastes
+// have CRLF normalised first, and anything that changes the value other than
+// typing (a paste) is normalised afterwards.
+func updateChatInput(ta textarea.Model, msg tea.Msg, newlineKey string) (textarea.Model, tea.Cmd) {
+	km, isKey := msg.(tea.KeyMsg)
+	if isKey && !km.Paste && km.String() == newlineKey {
+		r := []rune(ta.Value())
+		off := chatInputOffset(ta)
+		next := string(r[:off]) + "\n" + string(r[off:])
+		// The line the cursor lands on is still being typed, so it doesn't
+		// count as blank: "a" + two newlines must allow typing "b" below.
+		lines := strings.Split(next, "\n")
+		lines[strings.Count(string(r[:off]), "\n")+1] = "x"
+		probe := strings.Join(lines, "\n")
+		ok := normalizeChatBody(probe) == probe
+		if isArtCommand(next) {
+			ok = strings.Count(next, "\n") < chatArtMaxLines
+		}
+		if ok {
+			ta.InsertString("\n")
+			ta, _ = ta.Update(nil) // InsertString alone doesn't scroll to the cursor
+		}
+		return ta, nil
+	}
+	if isKey && km.Paste {
+		// textarea's sanitizer maps \r and \n each to a newline, so a CRLF
+		// paste would otherwise gain a blank line after every line.
+		km.Runes = []rune(crlfToLF.Replace(string(km.Runes)))
+		msg = km
+	}
+	old := ta.Value()
+	ta, cmd := ta.Update(msg)
+	if v := ta.Value(); v != old && (!isKey || km.Paste) {
+		if n := normalizeChatBody(v); n != v {
+			// ponytail: SetValue leaves the cursor at the end; keep the
+			// offset if mid-text pastes that need trimming turn out common.
+			ta.SetValue(n)
+		}
+	}
+	return ta, cmd
 }
 
 // topicsCount returns the number of non-empty, trimmed comma-separated

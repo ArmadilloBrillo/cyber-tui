@@ -162,14 +162,10 @@ func TestRefreshRelativeTimestamps_CMail_OnlyTouchesVisibleCacheEntries(t *testi
 	}
 }
 
-// TestCMailInputBox_WidthConstantBetweenEmptyAndTyped mirrors the same fix
-// (and same bug) in chatrooms.go: textinput.View()'s empty placeholder
-// render and its typed-content render total different widths — typed
-// content adds Prompt's width plus one more for the phantom end-of-line
-// cursor glyph, neither subtracted from its own padding math, silently
-// growing the box 3 columns wider than the header above it the instant any
-// character is typed. Reuses inputBoxLines from chatrooms_test.go (same
-// package).
+// TestCMailInputBox_WidthConstantBetweenEmptyAndTyped guards the compose
+// box against widening once typing starts (the placeholder and typed
+// renders take different paths). Reuses inputBoxLines from
+// chatrooms_test.go (same package).
 func TestCMailInputBox_WidthConstantBetweenEmptyAndTyped(t *testing.T) {
 	conv := model.Conversation{ID: "c1", Participants: []model.User{{Username: "neo"}, {Username: "trinity"}}}
 	m := NewCMailModel("neo", "", api.NewMockClient())
@@ -210,9 +206,20 @@ func cmailInConversation(client api.Client, convID string) CMailModel {
 	m.activeConv = &conv
 	m.mode = cmailModeDetail
 	m.input.Focus() // real usage always focuses on conversation open; without this,
-	// textinput.Update() no-ops (it early-returns when unfocused), silently
+	// textarea.Update() no-ops (it early-returns when unfocused), silently
 	// breaking any test that types through the normal forwarding path.
 	return m
+}
+
+func TestCMail_NewlineKey_InsertsLineBreak(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.input.SetValue("one")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("two")})
+
+	if got := m.input.Value(); got != "one\ntwo" {
+		t.Errorf("input = %q, want %q", got, "one\ntwo")
+	}
 }
 
 // --- slash commands ---

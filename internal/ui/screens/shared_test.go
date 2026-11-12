@@ -1,8 +1,10 @@
 package screens
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/model"
@@ -258,4 +260,92 @@ func TestUpdateTopicsInput(t *testing.T) {
 			t.Errorf("Value() = %q, want unchanged %q", got.Value(), "music")
 		}
 	})
+}
+
+func TestNormalizeChatBody(t *testing.T) {
+	twelve := "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12"
+	for name, tc := range map[string]struct{ in, want string }{
+		"plain":                {"hello", "hello"},
+		"single breaks kept":   {"a\nb\nc", "a\nb\nc"},
+		"blank line kept":      {"a\n\nb", "a\n\nb"},
+		"blank run collapses":  {"a\n\n\n\nb", "a\n\nb"},
+		"whitespace-only run":  {"a\n \n\t\nb", "a\n \nb"},
+		"crlf":                 {"a\r\nb\rc", "a\nb\nc"},
+		"past tenth joins":     {twelve, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10 11 12"},
+		"art untouched":        {"/art\n\n\n x\n" + twelve, "/art\n\n\n x\n" + twelve},
+		"art uppercase":        {"/ART\n\n\nx", "/ART\n\n\nx"},
+		"art-like word is not": {"/artist\n\n\nx", "/artist\n\nx"},
+	} {
+		if got := normalizeChatBody(tc.in); got != tc.want {
+			t.Errorf("%s: normalizeChatBody(%q) = %q, want %q", name, tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestChatInputOffset_MultiLine(t *testing.T) {
+	ta := newChatInput("")
+	ta.SetWidth(40)
+	ta.Focus()
+	ta.SetValue("ab\ncde\nf")
+	ta.CursorUp()   // line 1, column clamped to 1 ("f" has length 1)
+	ta.SetCursor(2) // "cd|e"
+
+	if got, want := chatInputOffset(ta), len("ab\ncd"); got != want {
+		t.Errorf("chatInputOffset = %d, want %d", got, want)
+	}
+}
+
+func chatInputWith(t *testing.T, v string) textarea.Model {
+	t.Helper()
+	ta := newChatInput("")
+	ta.SetWidth(80)
+	ta.Focus()
+	ta.SetValue(v)
+	return ta
+}
+
+func TestUpdateChatInput_NewlineKey(t *testing.T) {
+	nl := tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+	ten := strings.TrimSuffix(strings.Repeat("x\n", 10), "\n")
+	art := "/art" + strings.Repeat("\n", chatArtMaxLines-1)
+	for name, tc := range map[string]struct {
+		in   string
+		want string
+	}{
+		"inserts":                {"a", "a\n"},
+		"one blank line allowed": {"a\n", "a\n\n"},
+		"second blank refused":   {"a\n\n", "a\n\n"},
+		"eleventh line refused":  {ten, ten},
+		"art keeps blank lines":  {"/art\n\n", "/art\n\n\n"},
+		"art 27th line refused":  {art, art},
+	} {
+		ta, _ := updateChatInput(chatInputWith(t, tc.in), nl, DefaultHardBreakKey)
+		if got := ta.Value(); got != tc.want {
+			t.Errorf("%s: value = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestUpdateChatInput_NewlineKey_MidTextDoubleBlankRefused(t *testing.T) {
+	ta := chatInputWith(t, "a\n\nb")
+	ta.SetCursor(0) // start of "b"
+	ta, _ = updateChatInput(ta, tea.KeyMsg{Type: tea.KeyEnter, Alt: true}, DefaultHardBreakKey)
+
+	if got := ta.Value(); got != "a\n\nb" {
+		t.Errorf("value = %q, want unchanged %q", got, "a\n\nb")
+	}
+}
+
+func TestUpdateChatInput_PasteNormalised(t *testing.T) {
+	for name, tc := range map[string]struct{ paste, want string }{
+		"crlf":      {"a\r\nb", "a\nb"},
+		"blank run": {"a\n\n\n\nb", "a\n\nb"},
+		"12 lines":  {"1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10 11 12"},
+	} {
+		paste := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.paste), Paste: true}
+		ta, _ := updateChatInput(chatInputWith(t, ""), paste, DefaultHardBreakKey)
+		if got := ta.Value(); got != tc.want {
+			t.Errorf("%s: value = %q, want %q", name, got, tc.want)
+		}
+	}
 }
