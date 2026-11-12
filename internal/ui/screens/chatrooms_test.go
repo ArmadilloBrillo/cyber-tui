@@ -283,7 +283,7 @@ func chatroomsInRoom(client api.Client, roomID string) ChatroomsModel {
 	m.activeRoom = &room
 	m.mode = chatroomModeDetail
 	m.input.Focus() // enterRoomDetail always focuses the input in real usage;
-	// without this, textinput.Update() no-ops (it early-returns when
+	// without this, textarea.Update() no-ops (it early-returns when
 	// unfocused), silently breaking any test that types through the normal
 	// forwarding path rather than driving ChatroomsModel's own key handling.
 	return m
@@ -882,17 +882,9 @@ func inputBoxLines(t *testing.T, view string) (top, content, bottom string) {
 	return strings.TrimRight(lines[topIdx], " "), strings.TrimRight(lines[topIdx+1], " "), strings.TrimRight(lines[botIdx], " ")
 }
 
-// TestInputBox_WidthConstantBetweenEmptyAndTyped is a regression test for a
-// bug where textinput.View()'s *empty* placeholder rendering and its normal
-// (typed-content) rendering total different widths — the placeholder path
-// sums to exactly Width, but typed content adds Prompt's width plus one more
-// for the phantom end-of-line cursor glyph, neither subtracted from its own
-// padding math. Without compensating for that gap when setting input.Width,
-// the box silently rendered 3 columns wider than the header/divider above it
-// the instant any character was typed, pushing its right border off-screen
-// on any terminal where those 3 columns were the difference between fitting
-// and not (reproduced via tmux against the built binary, not just this
-// test). Both states must render at exactly m.width.
+// TestInputBox_WidthConstantBetweenEmptyAndTyped guards the compose box
+// against widening once typing starts (the placeholder and typed renders
+// take different paths); both states must render at exactly m.width.
 func TestInputBox_WidthConstantBetweenEmptyAndTyped(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 
@@ -1057,20 +1049,8 @@ func TestMentionTab_CompletesUserFromHistoryNotOnline(t *testing.T) {
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 
-	if got := m.mentionGhostText(); got != "tha" {
-		t.Errorf("ghost = %q, want %q — offline history-only user should still be completable", got, "tha")
-	}
-}
-
-// --- spliceMention ---
-
-func TestSpliceMention(t *testing.T) {
-	newValue, newCursor := spliceMention("hey @al there", 4, 7, "alice")
-	if newValue != "hey @alice there" {
-		t.Errorf("newValue = %q, want %q", newValue, "hey @alice there")
-	}
-	if newCursor != 10 {
-		t.Errorf("newCursor = %d, want 10 (right after the inserted name, no trailing space)", newCursor)
+	if got := mentionPreview(m); got != "bertha" {
+		t.Errorf("preview = %q, want %q — offline history-only user should still be completable", got, "bertha")
 	}
 }
 
@@ -1080,6 +1060,12 @@ func setInput(m ChatroomsModel, value string, cursor int) ChatroomsModel {
 	m.input.SetValue(value)
 	m.input.SetCursor(cursor)
 	return m
+}
+
+// mentionPreview returns the candidate the hint line is offering, or "".
+func mentionPreview(m ChatroomsModel) string {
+	_, _, _, candidate, _ := m.mentionActiveCandidate()
+	return candidate
 }
 
 func TestMentionTab_FirstPressPreviewsWithoutTouchingText(t *testing.T) {
@@ -1092,13 +1078,13 @@ func TestMentionTab_FirstPressPreviewsWithoutTouchingText(t *testing.T) {
 	if m.input.Value() != "hey @al" {
 		t.Errorf("input = %q, want unchanged %q — Tab must not touch real text", m.input.Value(), "hey @al")
 	}
-	if m.input.Position() != 7 {
-		t.Errorf("cursor = %d, want unchanged 7 — Tab must not move the cursor", m.input.Position())
+	if chatInputOffset(m.input) != 7 {
+		t.Errorf("cursor = %d, want unchanged 7 — Tab must not move the cursor", chatInputOffset(m.input))
 	}
 	// alice (index 0) is already the implicit default preview before any Tab
 	// — the first Tab must skip straight to the next match (albert) so it's
 	// a visible change, not a no-op.
-	if m.mentionCycle == nil || m.mentionGhostText() != "bert" {
+	if m.mentionCycle == nil || mentionPreview(m) != "albert" {
 		t.Fatal("expected the first Tab to preview albert")
 	}
 }
@@ -1114,8 +1100,8 @@ func TestMentionTab_SecondPressCyclesPreviewToNextMatch(t *testing.T) {
 	if m.input.Value() != "hey @al" {
 		t.Errorf("input = %q, want still unchanged %q", m.input.Value(), "hey @al")
 	}
-	if got := m.mentionGhostText(); got != "ice" {
-		t.Errorf("ghost = %q, want %q (second Tab should wrap back to the first match, alice)", got, "ice")
+	if got := mentionPreview(m); got != "alice" {
+		t.Errorf("preview = %q, want %q (second Tab should wrap back to the first match)", got, "alice")
 	}
 }
 
@@ -1128,8 +1114,8 @@ func TestMentionTab_ThirdPressWrapsPreviewAround(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> alice
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert again
 
-	if got := m.mentionGhostText(); got != "bert" {
-		t.Errorf("ghost = %q, want %q (third Tab should cycle back to albert)", got, "bert")
+	if got := mentionPreview(m); got != "albert" {
+		t.Errorf("preview = %q, want %q (third Tab should cycle back)", got, "albert")
 	}
 }
 
@@ -1144,15 +1130,15 @@ func TestMentionTab_ReflectsPersonLeavingMidCycle(t *testing.T) {
 	m = setInput(m, "hey @al", 7)
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert
-	if got := m.mentionGhostText(); got != "bert" {
-		t.Fatalf("setup: ghost = %q, want %q (albert)", got, "bert")
+	if got := mentionPreview(m); got != "albert" {
+		t.Fatalf("setup: preview = %q, want %q", got, "albert")
 	}
 
 	m.roomUsers = []model.RoomUser{{Username: "alice"}} // albert left
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 
-	if got := m.mentionGhostText(); got != "ice" {
-		t.Errorf("ghost = %q, want %q (alice) — must not keep offering albert after they left", got, "ice")
+	if got := mentionPreview(m); got != "alice" {
+		t.Errorf("preview = %q, want %q — must not keep offering albert after they left", got, "alice")
 	}
 }
 
@@ -1165,15 +1151,15 @@ func TestMentionTab_ReflectsPersonJoiningMidCycle(t *testing.T) {
 	m = setInput(m, "hey @al", 7)
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert
-	if got := m.mentionGhostText(); got != "bert" {
-		t.Fatalf("setup: ghost = %q, want %q (albert)", got, "bert")
+	if got := mentionPreview(m); got != "albert" {
+		t.Fatalf("setup: preview = %q, want %q", got, "albert")
 	}
 
 	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}, {Username: "alan"}} // alan joined
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 
-	if got := m.mentionGhostText(); got != "an" {
-		t.Errorf("ghost = %q, want %q (alan) — a newly-joined match must become reachable without a fresh cycle", got, "an")
+	if got := mentionPreview(m); got != "alan" {
+		t.Errorf("preview = %q, want %q — a newly-joined match must become reachable without a fresh cycle", got, "alan")
 	}
 }
 
@@ -1189,8 +1175,8 @@ func TestMentionSpace_CommitsCurrentPreviewThenInsertsSpace(t *testing.T) {
 	if m.input.Value() != "hey @alice " {
 		t.Errorf("input = %q, want %q", m.input.Value(), "hey @alice ")
 	}
-	if m.input.Position() != len([]rune("hey @alice ")) {
-		t.Errorf("cursor = %d, want end of the committed text", m.input.Position())
+	if chatInputOffset(m.input) != len([]rune("hey @alice ")) {
+		t.Errorf("cursor = %d, want end of the committed text", chatInputOffset(m.input))
 	}
 	if m.mentionCycle != nil {
 		t.Error("expected the preview to be cleared after committing")
@@ -1203,15 +1189,15 @@ func TestMentionSpace_CommitsCurrentPreviewThenInsertsSpace(t *testing.T) {
 // commit that preview at all: it fell through to plain space-insertion,
 // producing the literal typed text plus a space (e.g. "hey @al ") instead of
 // committing the name that was visibly showing (e.g. "hey @alice "). Space
-// must commit whatever mentionGhostText is currently displaying, whether or
+// must commit whatever the hint line is currently displaying, whether or
 // not an explicit Tab-cycle is active.
 func TestMentionSpace_CommitsPassiveDefaultPreviewWithoutTab(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
 	m = setInput(m, "hey @al", 7)
 
-	if got, want := m.mentionGhostText(), "ice"; got != want {
-		t.Fatalf("setup: mentionGhostText() = %q, want %q (alice previewed by default)", got, want)
+	if got, want := mentionPreview(m), "alice"; got != want {
+		t.Fatalf("setup: preview = %q, want %q (alice previewed by default)", got, want)
 	}
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}) // no Tab press first
@@ -1226,7 +1212,7 @@ func TestMentionSpace_NoOpWithoutActivePreview(t *testing.T) {
 	m = setInput(m, "hey", 3)
 
 	// Real space keystrokes from bubbletea's decoder carry Runes: []rune(" ")
-	// alongside Type: KeySpace — textinput's insert logic reads Runes, so a
+	// alongside Type: KeySpace — textarea's insert logic reads Runes, so a
 	// KeySpace msg without it (unlike the real thing) would insert nothing.
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
 
@@ -1280,9 +1266,9 @@ func TestMentionTab_NoOpWithNoMatches(t *testing.T) {
 	}
 }
 
-// --- mentionGhostText ---
+// --- mention preview ---
 
-func TestMentionGhostText(t *testing.T) {
+func TestMentionPreview(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}, {Username: "bob"}}
 
@@ -1293,87 +1279,103 @@ func TestMentionGhostText(t *testing.T) {
 		want   string
 	}{
 		{"bare @ previews the first online username", "@", 1, "alice"},
-		{"partial query previews just the remainder", "hey @al", 7, "ice"},
-		{"cursor not at the end is unambiguous-placement limitation", "hey @al there", 7, ""},
+		{"partial query previews the first match", "hey @al", 7, "alice"},
+		{"cursor mid-text still previews", "hey @al there", 7, "alice"},
 		{"no matches", "hey @zzz", 8, ""},
-		{"fully typed name has nothing left to preview", "hey @alice", 10, ""},
+		{"fully typed name still offered", "hey @alice", 10, "alice"},
 		{"no mention in progress", "hello", 5, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			m := setInput(m, c.value, c.cursor)
-			got := m.mentionGhostText()
+			got := mentionPreview(m)
 			if got != c.want {
-				t.Errorf("mentionGhostText() = %q, want %q", got, c.want)
+				t.Errorf("preview = %q, want %q", got, c.want)
 			}
 		})
 	}
 }
 
-// TestMentionGhostText_ReflectsActiveCyclePreview confirms the ghost text
+// TestMentionPreview_ReflectsActiveCyclePreview confirms the hint
 // tracks whichever candidate Tab-cycling currently has selected, not always
 // the first match — otherwise cycling wouldn't visibly do anything.
-func TestMentionGhostText_ReflectsActiveCyclePreview(t *testing.T) {
+func TestMentionPreview_ReflectsActiveCyclePreview(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "albert"}}
 	m = setInput(m, "hey @al", 7)
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> albert (skips the already-shown alice)
-	if got, want := m.mentionGhostText(), "bert"; got != want {
-		t.Errorf("after first Tab, mentionGhostText() = %q, want %q", got, want)
+	if got, want := mentionPreview(m), "albert"; got != want {
+		t.Errorf("after first Tab, preview = %q, want %q", got, want)
 	}
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> alice
-	if got, want := m.mentionGhostText(), "ice"; got != want {
-		t.Errorf("after second Tab, mentionGhostText() = %q, want %q", got, want)
+	if got, want := mentionPreview(m), "alice"; got != want {
+		t.Errorf("after second Tab, preview = %q, want %q", got, want)
 	}
 }
 
-// TestMentionGhostText_RendersAdjacentToCursorAtConstantWidth is a
-// regression test for two related bugs:
-//  1. The ghost text landing far past the visible cursor instead of right
-//     next to it — caused by appending it after textinput.View()'s own
-//     padding, which always fills out to whatever Width it's given.
-//  2. A one-cell gap between the typed text and the ghost from the cursor's
-//     own blank glyph — fixed by overlaying the cursor on the ghost's first
-//     rune instead (mirrors this file's withTrueColor doc comment: tests
-//     here run under the default no-color profile, so cursor.Model.View()
-//     and theme.Subtle.Render both produce plain unstyled text, meaning
-//     the rebuilt line reads as an unbroken "hey @al" + "ice" with nothing
-//     in between).
-//
-// This reproduces View()'s actual construction rather than measuring
-// through the full rendered View(), whose lines get padded to the width of
-// the widest line in the block — the message-area+panel row — by
-// lipgloss.JoinVertical, which would contaminate a width measurement taken
-// that way.
-func TestMentionGhostText_RendersAdjacentToCursorAtConstantWidth(t *testing.T) {
+func TestMentionHint_ShowsAboveInputAndShrinksViewport(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
 	m.roomUsers = []model.RoomUser{{Username: "alice"}}
-	m = setInput(m, "hey @al", 7)
+	before := m.viewport.Height
 
-	baseline := lipgloss.Width(m.input.View()) // no ghost
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hey @al")})
 
-	ghost := m.mentionGhostText()
-	if ghost == "" {
-		t.Fatal("expected a ghost text to be present for this setup")
+	if !strings.Contains(m.View(), "@alice  · tab next · space accept") {
+		t.Errorf("expected the mention hint in the view, got:\n%s", m.View())
 	}
-	ghostRunes := []rune(ghost)
-	cur := m.input.Cursor
-	cur.SetChar(string(ghostRunes[0]))
-	cur.TextStyle = theme.Subtle
-	textView := m.input.TextStyle.Inline(true).Render(m.input.Value())
-	promptView := m.input.PromptStyle.Render(m.input.Prompt)
-	rest := theme.Subtle.Render(string(ghostRunes[1:]))
-	valWidth := lipgloss.Width(m.input.Value())
-	pad := max(0, m.input.Width-valWidth-lipgloss.Width(ghost)+1) // see View()'s matching comment
-	content := promptView + textView + cur.View() + rest + strings.Repeat(" ", pad)
-
-	if w := lipgloss.Width(content); w != baseline {
-		t.Errorf("rebuilt content width = %d, want %d (same as with no ghost at all) — must not widen the box", w, baseline)
+	if m.viewport.Height != before-1 {
+		t.Errorf("viewport height = %d, want %d (one row for the hint)", m.viewport.Height, before-1)
 	}
-	if !strings.Contains(content, "hey @alice") {
-		t.Errorf("expected the typed text and ghost to read as an unbroken %q with the cursor overlaying its first character, got: %q", "hey @alice", content)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("zz")})
+
+	if strings.Contains(m.View(), "tab next") {
+		t.Error("expected the hint to disappear once nothing matches")
+	}
+	if m.viewport.Height != before {
+		t.Errorf("viewport height = %d, want %d restored", m.viewport.Height, before)
+	}
+}
+
+func TestMentionSpace_CommitsOnSecondLine(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}}
+	m.input.SetValue("first line\nhi @al")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+
+	if got := m.input.Value(); got != "first line\nhi @alice " {
+		t.Errorf("input = %q, want %q", got, "first line\nhi @alice ")
+	}
+}
+
+func TestMentionSpace_MidTextDoesNotDoubleSpace(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}}
+	m = setInput(m, "hey @al there", 7)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+
+	if got := m.input.Value(); got != "hey @alice there" {
+		t.Errorf("input = %q, want %q", got, "hey @alice there")
+	}
+	if got, want := chatInputOffset(m.input), len("hey @alice "); got != want {
+		t.Errorf("cursor = %d, want %d (past the existing space)", got, want)
+	}
+}
+
+func TestMentionSpace_BareAtCommitsTabbedCandidate(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.roomUsers = []model.RoomUser{{Username: "alice"}, {Username: "bob"}}
+	m = setInput(m, "hey @", 5)
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // -> bob
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+
+	if got := m.input.Value(); got != "hey @bob " {
+		t.Errorf("input = %q, want %q", got, "hey @bob ")
 	}
 }
 
@@ -1490,24 +1492,6 @@ func TestChatrooms_SettingsRefresh_WhileBrowsing_KeepsSelectionVisible(t *testin
 	if itemStart < m.viewport.YOffset || itemEnd >= m.viewport.YOffset+m.viewport.Height {
 		t.Errorf("selected message (lines %d-%d) not visible in viewport window [%d, %d)",
 			itemStart, itemEnd, m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height)
-	}
-}
-
-// TestMentionGhostText_CursorOverlayUsesGhostColor guards against the
-// overlaid character rendering in normal text color during the cursor's
-// text-style blink phase, which would make it indistinguishable from
-// something the user actually typed.
-func TestMentionGhostText_CursorOverlayUsesGhostColor(t *testing.T) {
-	withTrueColor(t)
-	m := chatroomsInRoom(api.NewMockClient(), "zion")
-	m.roomUsers = []model.RoomUser{{Username: "alice"}}
-	m = setInput(m, "hey @al", 7)
-	m.input.Cursor.Blink = true // the phase cursor.Model.View() renders via TextStyle
-
-	view := m.View()
-	wantChar := theme.Subtle.Inline(true).Render("i")
-	if !strings.Contains(view, wantChar) {
-		t.Errorf("expected the cursor-overlaid character styled in ghost color (%q) somewhere in the view, got:\n%s", wantChar, view)
 	}
 }
 

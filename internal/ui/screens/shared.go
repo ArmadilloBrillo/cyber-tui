@@ -76,8 +76,7 @@ func filterSlugCharsKeyMsg(msg tea.KeyMsg, extraAllowed string) (tea.KeyMsg, boo
 
 // insertAtCursor splices s into ti's value at the current cursor position
 // and moves the cursor to just after it. textinput.Model has no public
-// InsertString (unlike textarea.Model), so this does the splice by hand —
-// same shape as chatrooms.go's spliceMention.
+// InsertString (unlike textarea.Model), so this does the splice by hand.
 func insertAtCursor(ti textinput.Model, s string) textinput.Model {
 	val, pos := []rune(ti.Value()), ti.Position()
 	if pos < 0 {
