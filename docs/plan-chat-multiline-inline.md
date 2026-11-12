@@ -124,3 +124,9 @@ Add an "Implementation notes" section to `docs/plan-chat-multiline-inline.md` fo
   - Tab cycling and Space accept.
   - A narrow terminal.
   - Watch for jitter or a wrong column while the cursor blinks.
+
+## Implementation notes
+- `renderChatInput` returns only the drawn box, not the offset. The offset is stored by `scrollChatInput`, called from the cIRC `Update` wrapper. `renderChatInput` still applies `chatInputScroll` itself, so a `View()` straight after `SetValue` without an `Update` stays correct.
+- The rows record only the text and whether a row is the first of its line. The line index from the plan was not needed.
+- The ghost is cut to the free cells before the row is padded or cut to the box width. That final cut hides a missing ghost limit in the "ghost cut" test, so a test with typed text after the cursor was added: without the limit, that text gets pushed off the row and the test fails. Both this case and the inside-a-name rule were checked by breaking the code on purpose.
+- Two test comments still said "hint line" and now say "ghost text".
