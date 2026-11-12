@@ -2,11 +2,13 @@ package screens
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 	"github.com/ragnar/cyber-tui/internal/model"
 	"github.com/ragnar/cyber-tui/internal/ui/urlutil"
@@ -223,35 +225,143 @@ func updateChatInput(ta textarea.Model, msg tea.Msg, newlineKey string) (textare
 // content scrolls inside it.
 const chatInputMaxRows = 5
 
+// chatInputRow is one display row of the compose box: a soft-wrapped slice
+// of one line of the value.
+type chatInputRow struct {
+	text  []rune // the row's runes, whitespace shown as ' ' like textarea draws it
+	first bool   // first row of its line (gets the prompt)
+}
+
+// chatInputRows lists the compose box's display rows using textarea's own
+// word-wrap: it is unexported, so a scratch one-line textarea per line
+// reports each row's start and width through LineInfo as its cursor steps
+// from row to row.
+func chatInputRows(ta textarea.Model) []chatInputRow {
+	probe := textarea.New()
+	probe.Prompt = ""
+	probe.ShowLineNumbers = false
+	probe.SetWidth(ta.Width())
+	var rows []chatInputRow
+	for line := range strings.SplitSeq(ta.Value(), "\n") {
+		r := []rune(strings.Map(func(c rune) rune {
+			if unicode.IsSpace(c) {
+				return ' '
+			}
+			return c
+		}, line))
+		probe.SetValue(line)
+		probe.SetCursor(0)
+		n, start := probe.LineInfo().Height, 0
+		// Loop a fixed n times: SetCursor clamps, so a column-based stop
+		// could spin forever.
+		for i := range n {
+			probe.SetCursor(start)
+			li := probe.LineInfo()
+			// wrap() pads every line's last row with one extra space, so
+			// Width can run one past the runes actually there.
+			rows = append(rows, chatInputRow{text: r[li.StartColumn:min(li.StartColumn+li.Width, len(r))], first: i == 0})
+			start = li.StartColumn + li.Width
+		}
+	}
+	return rows
+}
+
+// chatInputCursorRow returns the display row the cursor is on: the rows of
+// every earlier line plus its row within its own line, the same count
+// textarea's cursorLineNumber makes.
+func chatInputCursorRow(ta textarea.Model, rows []chatInputRow) int {
+	line, row := 0, 0
+	for row < len(rows) && line < ta.Line() {
+		row++
+		if row < len(rows) && rows[row].first {
+			line++
+		}
+	}
+	return row + ta.LineInfo().RowOffset
+}
+
+// chatInputScroll keeps the cursor row inside the h visible rows starting at
+// y, and never scrolls past the last row, so shrinking the content brings
+// the top rows back into view.
+func chatInputScroll(y, cursorRow, h, total int) int {
+	y = min(max(y, cursorRow-h+1), cursorRow)
+	return max(0, min(y, total-h))
+}
+
+// scrollChatInput returns the compose box's scroll offset for its current
+// content and cursor, starting from the previous offset y.
+func scrollChatInput(ta textarea.Model, y int) int {
+	rows := chatInputRows(ta)
+	return chatInputScroll(y, chatInputCursorRow(ta, rows), ta.Height(), len(rows))
+}
+
+// renderChatInput draws the compose box itself instead of textarea.View, so
+// the caller controls the scroll offset (textarea keeps its own private)
+// and can draw beyond what textarea offers. The textarea stays the editing
+// engine: value, cursor and blink. Rows are padded or cut to the box width
+// like textarea's viewport does, so the box never changes width.
+func renderChatInput(ta textarea.Model, y int) string {
+	if ta.Value() == "" {
+		return ta.View() // textarea's placeholder rendering, scrolled to top by Reset
+	}
+	rows := chatInputRows(ta)
+	cursorRow := chatInputCursorRow(ta, rows)
+	h := ta.Height()
+	y = chatInputScroll(y, cursorRow, h, len(rows))
+	promptW := lipgloss.Width(ta.Prompt)
+	boxW := promptW + ta.Width()
+	out := make([]string, 0, h)
+	for i := y; i < y+h; i++ {
+		var line string
+		if i < len(rows) {
+			row := rows[i]
+			prompt := strings.Repeat(" ", promptW)
+			if row.first {
+				prompt = ta.Prompt
+			}
+			body := string(row.text)
+			if i == cursorRow {
+				col := ta.LineInfo().ColumnOffset
+				cur := ta.Cursor
+				cur.SetChar(" ")
+				after := ""
+				if col < len(row.text) {
+					cur.SetChar(string(row.text[col]))
+					after = string(row.text[col+1:])
+				}
+				body = string(row.text[:min(col, len(row.text))]) + cur.View() + after
+			}
+			line = prompt + body
+		} else {
+			line = ta.Prompt
+		}
+		if w := lipgloss.Width(line); w < boxW {
+			line += strings.Repeat(" ", boxW-w)
+		} else if w > boxW {
+			line = ansi.Truncate(line, boxW, "")
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
 // fitChatInput sizes the compose box to its content, 1..chatInputMaxRows
 // rows including soft-wrapped ones, and shows the "> " prompt only on the
 // first row of each line, so wrapped rows read as the same line they will
 // be sent as.
 func fitChatInput(ta textarea.Model) textarea.Model {
-	// textarea's word-wrap is unexported; a scratch textarea per line
-	// reports how many rows that line wraps to via LineInfo().Height.
-	probe := textarea.New()
-	probe.Prompt = ""
-	probe.ShowLineNumbers = false
-	probe.SetWidth(ta.Width())
-	var starts []bool
-	for line := range strings.SplitSeq(ta.Value(), "\n") {
-		probe.SetValue(line)
-		starts = append(starts, true)
-		for range probe.LineInfo().Height - 1 {
-			starts = append(starts, false)
-		}
-	}
+	rows := chatInputRows(ta)
 	ta.SetPromptFunc(lipgloss.Width(ta.Prompt), func(row int) string {
-		if row < len(starts) && !starts[row] {
+		if row < len(rows) && !rows[row].first {
 			return ""
 		}
 		return ta.Prompt
 	})
-	// ponytail: shrinking back from past the cap can leave the top row
-	// scrolled off until the cursor moves; textarea has no public scroll
-	// reset short of moving the cursor.
-	if h := min(len(starts), chatInputMaxRows); h != ta.Height() {
+	// ponytail: in C-Mail (which still draws with textarea.View), shrinking
+	// back from past the cap can leave the top row scrolled off until the
+	// cursor moves; cIRC draws via renderChatInput, which clamps its own
+	// offset. Switch C-Mail over if it bites.
+	if h := min(len(rows), chatInputMaxRows); h != ta.Height() {
 		ta.SetHeight(h)
 		ta, _ = ta.Update(nil) // re-scroll to the cursor at the new height
 	}

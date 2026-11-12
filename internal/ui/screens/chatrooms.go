@@ -209,6 +209,7 @@ type ChatroomsModel struct {
 	mutedUsersByRoom map[string][]string // roomID -> muted usernames, from Settings
 	keywordAlerts    []string            // user's configured keyword alerts, from SharedConfigMsg
 	newlineKey       string              // inserts a line break in the compose box; the hard-break key from SharedConfigMsg
+	inputYOffset     int                 // compose box scroll offset; see renderChatInput
 	colorNicknames   bool                // Settings.ColorNicknames, from SharedConfigMsg
 
 	// canGoBack is true when the active room was opened via a deep link
@@ -1117,6 +1118,7 @@ func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	// no input path is missed.
 	if m.ready && m.mode == chatroomModeDetail {
 		m.input = fitChatInput(m.input)
+		m.inputYOffset = scrollChatInput(m.input, m.inputYOffset)
 		if h := m.viewportHeight(); h != m.viewport.Height {
 			atBottom := m.viewport.AtBottom()
 			m.viewport.Height = h
@@ -2463,7 +2465,7 @@ func (m ChatroomsModel) View() string {
 		case m.reconnectFailed:
 			header += theme.Error.Render("  (live updates lost)")
 		}
-		inputBox := theme.ActiveBorder.Render(m.input.View())
+		inputBox := theme.ActiveBorder.Render(renderChatInput(m.input, m.inputYOffset))
 		if hint := m.mentionHint(); hint != "" {
 			inputBox = lipgloss.JoinVertical(lipgloss.Left, hint, inputBox)
 		}
