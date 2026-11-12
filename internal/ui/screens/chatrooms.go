@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -28,12 +28,8 @@ const (
 	chatroomModeDetail                     // header + full-width message history + input
 )
 
-// Rows consumed by the detail view's header and input box (outside the message viewport).
-const (
-	chatroomDetailHeaderRows = 2 // "Room Name  #slug  ·  N online" header + divider rule
-	chatroomInputRows        = 3 // bordered textinput: 1 content + 2 border rows
-	chatroomDetailChrome     = chatroomDetailHeaderRows + chatroomInputRows
-)
+// Rows the detail view's header takes above the message viewport.
+const chatroomDetailHeaderRows = 2 // "Room Name  #slug  ·  N online" header + divider rule
 
 // roomCardHeight is the number of terminal lines each room card occupies:
 // top border + 2 content rows + bottom border = 4.
@@ -62,7 +58,7 @@ type roomPresenceSubscription struct {
 }
 
 // mentionCycle tracks an in-progress @-mention preview: repeated Tab presses
-// change which candidate is shown as ghost text, without touching m.input at
+// change which candidate the ghost text shows, without touching m.input at
 // all — text and cursor stay exactly as typed. Typing a space commits the
 // currently-previewed candidate as real text; any other key just clears the
 // preview, leaving whatever was actually typed untouched (see the
@@ -194,7 +190,7 @@ type ChatroomsModel struct {
 	messages    []model.Message
 	listVP      viewport.Model // scrolls the room list in list mode
 	viewport    viewport.Model // scrolls message history in detail mode
-	input       textinput.Model
+	input       textarea.Model
 	width       int
 	height      int
 	ready       bool
@@ -212,6 +208,8 @@ type ChatroomsModel struct {
 
 	mutedUsersByRoom map[string][]string // roomID -> muted usernames, from Settings
 	keywordAlerts    []string            // user's configured keyword alerts, from SharedConfigMsg
+	newlineKey       string              // inserts a line break in the compose box; the hard-break key from SharedConfigMsg
+	inputYOffset     int                 // compose box scroll offset; see renderChatInput
 	colorNicknames   bool                // Settings.ColorNicknames, from SharedConfigMsg
 
 	// canGoBack is true when the active room was opened via a deep link
@@ -450,10 +448,9 @@ func matchedKeywordInMessage(msg model.Message, currentUser string, keywords []s
 
 // NewChatroomsModel creates a new ChatroomsModel for the given authenticated user.
 func NewChatroomsModel(currentUser string, client api.Client) ChatroomsModel {
-	inp := textinput.New()
-	inp.Placeholder = "type a message..."
 	return ChatroomsModel{
-		input:         inp,
+		input:         newChatInput("type a message..."),
+		newlineKey:    DefaultHardBreakKey,
 		currentUser:   currentUser,
 		client:        client,
 		mode:          chatroomModeList,
@@ -1088,7 +1085,7 @@ func (m ChatroomsModel) SetLocation(loc *time.Location) ChatroomsModel {
 	return m
 }
 
-func (m ChatroomsModel) Init() tea.Cmd { return textinput.Blink }
+func (m ChatroomsModel) Init() tea.Cmd { return textarea.Blink }
 
 // Update processes msg via updateInner, then (re)arms the style-animation
 // ticker (see maybeStartStyleAnim) if a loaded message needs one, and records
@@ -1116,6 +1113,19 @@ func (m ChatroomsModel) Init() tea.Cmd { return textinput.Blink }
 // source of truth.
 func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	m, cmd := m.updateInner(msg)
+	// One choke point for every viewport-height change the compose area
+	// causes (the box growing or shrinking), so no input path is missed.
+	if m.ready && m.mode == chatroomModeDetail {
+		m.input = fitChatInput(m.input)
+		m.inputYOffset = scrollChatInput(m.input, m.inputYOffset)
+		if h := m.viewportHeight(); h != m.viewport.Height {
+			atBottom := m.viewport.AtBottom()
+			m.viewport.Height = h
+			if atBottom {
+				m.viewport.GotoBottom()
+			}
+		}
+	}
 	var tickCmd tea.Cmd
 	m, tickCmd = m.maybeStartStyleAnim()
 	if tickCmd != nil {
@@ -1242,14 +1252,13 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 
 	case InsertIconMsg:
 		if m.mode == chatroomModeDetail {
-			m.input = insertAtCursor(m.input, msg.Icon)
+			m.input.InsertString(msg.Icon)
 		}
 		return m, nil
 
 	case SetComposeValueMsg:
 		if m.mode == chatroomModeDetail {
 			m.input.SetValue(msg.Value)
-			m.input.CursorEnd()
 		}
 		return m, nil
 
@@ -1273,18 +1282,10 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				m = m.refreshMessages()
 			}
 		}
-		// textinput.View() renders 3 columns wider than Width the instant
-		// there's any typed content: it adds Prompt's width (never
-		// subtracted from its own padding math) plus 1 more for the phantom
-		// end-of-line cursor glyph — neither of which its *empty*
-		// placeholder rendering adds. Compensating here keeps the box at a
-		// constant intended width once you start typing (previously it
-		// silently grew 3 columns wider than the header/divider above it,
-		// pushing the right border off-screen on any terminal where those
-		// 3 columns were the difference between fitting and not).
-		m.input.Width = msg.Width - 4 - lipgloss.Width(m.input.Prompt) - 1
+		m.input.SetWidth(msg.Width - 4) // ActiveBorder: 2 border + 2 padding columns
 
 	case SharedConfigMsg:
+		m.newlineKey = resolveHardBreakKey(msg.HardBreakKey)
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.mutedUsersByRoom = msg.Settings.MutedUsersByRoom
 		m.keywordAlerts = msg.KeywordAlerts
@@ -1601,7 +1602,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			}
 			switch msg.String() {
 			case "tab":
-				if c := m.mentionCycle; c != nil && m.input.Position() == c.queryEnd {
+				if c := m.mentionCycle; c != nil && chatInputOffset(m.input) == c.queryEnd {
 					m.mentionCycle = &mentionCycle{atPos: c.atPos, queryEnd: c.queryEnd, index: c.index + 1}
 					return m, nil
 				}
@@ -1621,14 +1622,21 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				// Commits whatever mentionActiveCandidate is currently
 				// showing — the active Tab-cycle's pick, or its passive
 				// default (the first match, shown before any Tab press) —
-				// so Space always commits exactly what's ghost-previewed,
+				// so Space always commits exactly what the ghost text shows,
 				// never disagreeing with what the user sees.
 				if atPos, cursor, _, candidate, ok := m.mentionActiveCandidate(); ok {
-					newValue, newCursor := spliceMention(m.input.Value(), atPos, cursor, candidate)
-					runes := []rune(newValue)
-					runes = append(runes[:newCursor], append([]rune{' '}, runes[newCursor:]...)...)
-					m.input.SetValue(string(runes))
-					m.input.SetCursor(newCursor + 1)
+					// Replace the typed token in place with key edits: textarea
+					// can only set the cursor column on the current row, so a
+					// SetValue round-trip would lose the position off the last line.
+					for range cursor - atPos {
+						m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+					}
+					m.input.InsertString("@" + candidate)
+					if r, off := []rune(m.input.Value()), chatInputOffset(m.input); off < len(r) && r[off] == ' ' {
+						m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyRight})
+					} else {
+						m.input.InsertString(" ")
+					}
 					m.mentionCycle = nil
 					return m, nil
 				}
@@ -1658,18 +1666,16 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			case "ctrl+up":
 				if v, ok := m.histFor(m.activeRoomID).prev(m.input.Value()); ok {
 					m.input.SetValue(v)
-					m.input.CursorEnd()
 				}
 				return m, nil
 			case "ctrl+down":
 				if v, ok := m.histFor(m.activeRoomID).next(); ok {
 					m.input.SetValue(v)
-					m.input.CursorEnd()
 				}
 				return m, nil
 			case "enter":
 				if m.activeRoom != nil {
-					val := m.input.Value()
+					val := strings.Trim(normalizeChatBody(m.input.Value()), "\n")
 					if val != "" {
 						m.histFor(m.activeRoomID).record(val)
 						roomID := m.activeRoom.Slug
@@ -1706,6 +1712,9 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				}
 				return m, nil
 			case "up":
+				if !chatInputOnFirstRow(m.input) {
+					break // move the cursor within the multi-line input
+				}
 				sel := selectableMessageIndices(m.messages, m.mutedUsers())
 				if len(sel) == 0 {
 					m.viewport.ScrollUp(1)
@@ -1727,6 +1736,9 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				}
 				return m, nil
 			case "down":
+				if !chatInputOnLastRow(m.input) {
+					break
+				}
 				m.viewport.ScrollDown(1)
 				return m, nil
 			case "pgup":
@@ -1760,7 +1772,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 			msg = km
 		}
 		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
+		m.input, cmd = updateChatInput(m.input, msg, m.newlineKey)
 		return m, cmd
 	}
 
@@ -2211,7 +2223,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 // viewportHeight returns the message-history viewport height in rows,
 // shrinking to make room for the flag/report overlay when it's open.
 func (m ChatroomsModel) viewportHeight() int {
-	h := m.height - theme.ChromeHeight - chatroomDetailChrome
+	h := m.height - theme.ChromeHeight - chatroomDetailHeaderRows - (m.input.Height() + 2) // input box: content + 2 border rows
 	if m.flagPrompt.Active() {
 		h -= m.flagPrompt.Height()
 	}
@@ -2323,39 +2335,19 @@ func matchMentionCandidates(users []model.RoomUser, query string) []model.RoomUs
 	return out
 }
 
-// spliceMention replaces value's [atPos:cursor) rune span with "@username"
-// and returns the cursor position right after the inserted name — no
-// trailing space, so a repeated Tab press can keep replacing the same span
-// to cycle to the next candidate.
-func spliceMention(value string, atPos, cursor int, username string) (newValue string, newCursor int) {
-	runes := []rune(value)
-	if cursor > len(runes) {
-		cursor = len(runes)
-	}
-	if atPos > cursor {
-		atPos = cursor
-	}
-	replacement := []rune("@" + username)
-	out := make([]rune, 0, len(runes)-(cursor-atPos)+len(replacement))
-	out = append(out, runes[:atPos]...)
-	out = append(out, replacement...)
-	out = append(out, runes[cursor:]...)
-	return string(out), atPos + len(replacement)
-}
-
 // mentionActiveCandidate resolves the mention token at the cursor (if any)
 // and which candidate is currently being previewed — the active Tab-cycle's
 // selection, or with no cycle yet, the first match (the same default
-// mentionGhostText shows before any Tab press). Shared by the ghost preview
-// renderer and Space's commit handler so they can never disagree about what
+// the ghost text shows before any Tab press). Shared by the ghost text
+// and Space's commit handler so they can never disagree about what
 // "the current candidate" is — that mismatch was the bug where Space typed
 // immediately after "@al" (no Tab press) inserted a literal space instead of
 // committing the name that was visibly previewed.
 func (m ChatroomsModel) mentionActiveCandidate() (atPos, cursor int, query, candidate string, ok bool) {
-	cursor = m.input.Position()
-	if cursor != len([]rune(m.input.Value())) {
+	if m.selectedMsgID != "" || !strings.Contains(m.input.Value(), "@") {
 		return 0, 0, "", "", false
 	}
+	cursor = chatInputOffset(m.input)
 	q, ap, mok := mentionQueryAt(m.input.Value(), cursor)
 	if !mok {
 		return 0, 0, "", "", false
@@ -2370,26 +2362,34 @@ func (m ChatroomsModel) mentionActiveCandidate() (atPos, cursor int, query, cand
 	return ap, cursor, q, matches[0].Username, true
 }
 
-// mentionGhostText returns the plain (unstyled) uncommitted remainder of the
-// mention preview for display right after the cursor — only when the
-// mention token reaches the very end of the input. That's the only place a
-// preview can render unambiguously: with trailing text after the token
-// ("hey @al there"), there's no sensible place to draw it without
-// overlapping what's already typed — Tab/Space still work there, just
-// without this visual hint. Styling is applied by the caller (View()),
-// which needs the first rune split off separately to overlay it on the
-// cursor.
-func (m ChatroomsModel) mentionGhostText() string {
-	_, _, query, candidate, ok := m.mentionActiveCandidate()
+// mentionGhost returns the not-yet-typed rest of the previewed mention
+// candidate, drawn in grey right after the cursor, or "" when there is
+// nothing to show. matchMentionCandidates already guarantees the candidate
+// starts with the query (case-insensitively), so the rest is a plain slice.
+// No ghost while the cursor sits inside a name ("@a|l"): it would read as
+// "@alicel".
+func (m ChatroomsModel) mentionGhost() string {
+	if !m.input.Focused() {
+		return ""
+	}
+	_, cursor, query, candidate, ok := m.mentionActiveCandidate()
 	if !ok {
 		return ""
 	}
-	top := []rune(candidate)
-	q := []rune(query)
-	if len(top) <= len(q) {
-		return "" // already fully typed/matched — nothing left to preview
+	if r := []rune(m.input.Value()); cursor < len(r) && isUsernameRune(r[cursor]) {
+		return ""
 	}
-	return string(top[len(q):])
+	c, q := []rune(candidate), []rune(query)
+	if len(c) <= len(q) {
+		return ""
+	}
+	return string(c[len(q):])
+}
+
+// isUsernameRune reports whether r can appear in a username (letters,
+// digits and underscore, matching the @mention markdown rule).
+func isUsernameRune(r rune) bool {
+	return r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
 }
 
 // roomUserIsIdle reports whether u should be treated as idle given the
@@ -2478,65 +2478,7 @@ func (m ChatroomsModel) View() string {
 		case m.reconnectFailed:
 			header += theme.Error.Render("  (live updates lost)")
 		}
-		// textinput.View() always renders its own cursor — there's no way to
-		// make it overlay ghost text through that API, and its own padding
-		// sits right after the cursor regardless of Width, so appending
-		// anything after View()'s output leaves a gap. Bypass View()
-		// entirely when a ghost is showing: hand-build the line from
-		// textinput's own exported style fields, with the cursor overlaying
-		// the ghost's first rune (the same thing textinput.View() would do
-		// with a blank space) instead of a separate cursor cell.
-		ghost := m.mentionGhostText()
-		var inputContent string
-		if ghost != "" {
-			ghostRunes := []rune(ghost)
-			cur := m.input.Cursor
-			cur.SetChar(string(ghostRunes[0]))
-			// Without this, the blink-off phase renders the overlaid
-			// character in the cursor's default TextStyle — i.e. normal
-			// text color, indistinguishable from something actually typed.
-			cur.TextStyle = theme.Subtle
-			textView := m.input.TextStyle.Inline(true).Render(m.input.Value())
-			promptView := m.input.PromptStyle.Render(m.input.Prompt)
-			rest := theme.Subtle.Render(string(ghostRunes[1:]))
-			valWidth := lipgloss.Width(m.input.Value())
-			// +1 matches a quirk of textinput.View()'s own padding math (the
-			// no-ghost path below): it computes padding as Width-valWidth,
-			// without accounting for the phantom end-of-line cursor glyph's
-			// own column — so a no-ghost render is always exactly one column
-			// wider than Width alone would suggest. Matching that here keeps
-			// the box from jittering by one column when a ghost appears or
-			// disappears between frames.
-			pad := max(0, m.input.Width-valWidth-lipgloss.Width(ghost)+1)
-			inputContent = promptView + textView + cur.View() + rest + strings.Repeat(" ", pad)
-		} else if m.input.Value() == "" {
-			// textinput.View()'s empty-input placeholder path
-			// (placeholderView(), internal) totals its render at exactly
-			// Width, unlike the typed-content path above (Width+len(Prompt)+1
-			// — the whole reason input.Width is pre-reduced by that amount).
-			// Hand-building this state too, the same way the ghost branch
-			// above does, guarantees the same total without needing to
-			// separately verify a second internal quirk: matching
-			// PromptWidth+1+(rest+pad) to the typed path's confirmed-correct
-			// total just requires rest+pad to sum to input.Width exactly,
-			// which the pad line below does by definition.
-			promptView := m.input.PromptStyle.Render(m.input.Prompt)
-			cur := m.input.Cursor
-			placeholder := []rune(m.input.Placeholder)
-			cur.TextStyle = m.input.PlaceholderStyle
-			var rest string
-			if len(placeholder) > 0 {
-				cur.SetChar(string(placeholder[0]))
-				rest = m.input.PlaceholderStyle.Inline(true).Render(string(placeholder[1:]))
-			} else {
-				cur.SetChar(" ")
-			}
-			pad := max(0, m.input.Width-lipgloss.Width(rest))
-			inputContent = promptView + cur.View() + rest + strings.Repeat(" ", pad)
-		} else {
-			inputContent = m.input.View()
-		}
-		inputBox := theme.ActiveBorder.Render(inputContent)
+		inputBox := theme.ActiveBorder.Render(renderChatInput(m.input, m.inputYOffset, m.mentionGhost()))
 
 		_, usersW := m.panelWidths()
 		messageArea := m.viewport.View()

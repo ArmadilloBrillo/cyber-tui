@@ -1,10 +1,14 @@
 package screens
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ragnar/cyber-tui/internal/model"
 )
 
@@ -258,4 +262,277 @@ func TestUpdateTopicsInput(t *testing.T) {
 			t.Errorf("Value() = %q, want unchanged %q", got.Value(), "music")
 		}
 	})
+}
+
+func TestNormalizeChatBody(t *testing.T) {
+	twelve := "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12"
+	for name, tc := range map[string]struct{ in, want string }{
+		"plain":                {"hello", "hello"},
+		"single breaks kept":   {"a\nb\nc", "a\nb\nc"},
+		"blank line kept":      {"a\n\nb", "a\n\nb"},
+		"blank run collapses":  {"a\n\n\n\nb", "a\n\nb"},
+		"whitespace-only run":  {"a\n \n\t\nb", "a\n \nb"},
+		"crlf":                 {"a\r\nb\rc", "a\nb\nc"},
+		"past tenth joins":     {twelve, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10 11 12"},
+		"art untouched":        {"/art\n\n\n x\n" + twelve, "/art\n\n\n x\n" + twelve},
+		"art uppercase":        {"/ART\n\n\nx", "/ART\n\n\nx"},
+		"art-like word is not": {"/artist\n\n\nx", "/artist\n\nx"},
+	} {
+		if got := normalizeChatBody(tc.in); got != tc.want {
+			t.Errorf("%s: normalizeChatBody(%q) = %q, want %q", name, tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestChatInputOffset_MultiLine(t *testing.T) {
+	ta := newChatInput("")
+	ta.SetWidth(40)
+	ta.Focus()
+	ta.SetValue("ab\ncde\nf")
+	ta.CursorUp()   // line 1, column clamped to 1 ("f" has length 1)
+	ta.SetCursor(2) // "cd|e"
+
+	if got, want := chatInputOffset(ta), len("ab\ncd"); got != want {
+		t.Errorf("chatInputOffset = %d, want %d", got, want)
+	}
+}
+
+func chatInputWith(t *testing.T, v string) textarea.Model {
+	t.Helper()
+	ta := newChatInput("")
+	ta.SetWidth(80)
+	ta.Focus()
+	ta.SetValue(v)
+	return ta
+}
+
+func TestUpdateChatInput_NewlineKey(t *testing.T) {
+	nl := tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+	ten := strings.TrimSuffix(strings.Repeat("x\n", 10), "\n")
+	art := "/art" + strings.Repeat("\n", chatArtMaxLines-1)
+	for name, tc := range map[string]struct {
+		in   string
+		want string
+	}{
+		"inserts":                {"a", "a\n"},
+		"one blank line allowed": {"a\n", "a\n\n"},
+		"second blank refused":   {"a\n\n", "a\n\n"},
+		"eleventh line refused":  {ten, ten},
+		"art keeps blank lines":  {"/art\n\n", "/art\n\n\n"},
+		"art 27th line refused":  {art, art},
+	} {
+		ta, _ := updateChatInput(chatInputWith(t, tc.in), nl, DefaultHardBreakKey)
+		if got := ta.Value(); got != tc.want {
+			t.Errorf("%s: value = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestUpdateChatInput_NewlineKey_MidTextDoubleBlankRefused(t *testing.T) {
+	ta := chatInputWith(t, "a\n\nb")
+	ta.SetCursor(0) // start of "b"
+	ta, _ = updateChatInput(ta, tea.KeyMsg{Type: tea.KeyEnter, Alt: true}, DefaultHardBreakKey)
+
+	if got := ta.Value(); got != "a\n\nb" {
+		t.Errorf("value = %q, want unchanged %q", got, "a\n\nb")
+	}
+}
+
+func TestUpdateChatInput_PasteNormalised(t *testing.T) {
+	for name, tc := range map[string]struct{ paste, want string }{
+		"crlf":      {"a\r\nb", "a\nb"},
+		"blank run": {"a\n\n\n\nb", "a\n\nb"},
+		"12 lines":  {"1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10 11 12"},
+	} {
+		paste := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.paste), Paste: true}
+		ta, _ := updateChatInput(chatInputWith(t, ""), paste, DefaultHardBreakKey)
+		if got := ta.Value(); got != tc.want {
+			t.Errorf("%s: value = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestFitChatInput_GrowingKeepsFirstLineVisible(t *testing.T) {
+	// Built like the screens build it: no SetValue, whose Reset scrolls to
+	// the top and would mask the bug.
+	ta := newChatInput("")
+	ta.SetWidth(40)
+	ta.Focus()
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("one")},
+		{Type: tea.KeyEnter, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune("two")},
+	} {
+		ta, _ = updateChatInput(ta, k, DefaultHardBreakKey)
+		ta = fitChatInput(ta)
+		_ = ta.View() // the app renders after every key; View feeds textarea's scroll state
+	}
+
+	view := ta.View()
+	if !strings.Contains(view, "one") || !strings.Contains(view, "two") {
+		t.Errorf("expected both lines visible in a 2-row box, got:\n%s", view)
+	}
+}
+
+func TestFitChatInput_PromptOnlyOnFirstRowOfEachLine(t *testing.T) {
+	ta := chatInputWith(t, strings.Repeat("word ", 30)+"\nnext")
+	ta = fitChatInput(ta)
+
+	rows := strings.Split(ta.View(), "\n")
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows (2 wrapped + 1), got %d:\n%s", len(rows), ta.View())
+	}
+	for i, want := range []bool{true, false, true} {
+		if got := strings.HasPrefix(rows[i], "> "); got != want {
+			t.Errorf("row %d has prompt = %v, want %v: %q", i, got, want, rows[i])
+		}
+	}
+}
+
+func TestRenderChatInput_MatchesTextareaView(t *testing.T) {
+	const w = 22 // box width incl. the 2-column prompt; text width 20
+	cases := []struct {
+		name  string
+		value string
+		setup func(ta *textarea.Model)
+	}{
+		{"one line", "hello", nil},
+		{"multi-line", "one\ntwo\nthree", nil},
+		{"empty middle line", "a\n\nb", nil},
+		{"wrapped line", strings.Repeat("word ", 7), nil},
+		{"line exactly box width", strings.Repeat("x", 20), nil},
+		{"spaces-only longer than width", strings.Repeat(" ", 25), nil},
+		{"word longer than width", strings.Repeat("y", 27), nil},
+		{"cursor mid-row", "hello world", func(ta *textarea.Model) { ta.SetCursor(3) }},
+		{"cursor on earlier line", "one\ntwo", func(ta *textarea.Model) { ta.CursorUp() }},
+		{"wide characters", "日本語のテキスト 日本語", nil},
+		{"ideographic space and nbsp", "a　b c", nil},
+		{"blurred", "hello", func(ta *textarea.Model) { ta.Blur() }},
+		{"placeholder focused", "", nil},
+		{"placeholder blurred", "", func(ta *textarea.Model) { ta.Blur() }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ta := newChatInput("type a message...")
+			ta.SetWidth(w)
+			ta.Focus()
+			ta.SetValue(c.value)
+			if c.setup != nil {
+				c.setup(&ta)
+			}
+			ta = fitChatInput(ta)
+
+			got, want := ansi.Strip(renderChatInput(ta, 0, "")), ansi.Strip(ta.View())
+			if got != want {
+				t.Errorf("renderChatInput differs from textarea.View\n got:\n%q\nwant:\n%q", got, want)
+			}
+		})
+	}
+}
+
+func chatInputRowsOf(t *testing.T, s string) []string {
+	t.Helper()
+	return strings.Split(ansi.Strip(s), "\n")
+}
+
+func TestRenderChatInput_ShrinkBringsTopRowBack(t *testing.T) {
+	ta := chatInputWith(t, "1\n2\n3\n4\n5\n6\n7")
+	ta = fitChatInput(ta)
+	y := scrollChatInput(ta, 0)
+	if y != 2 {
+		t.Fatalf("setup: offset = %d, want 2 (cursor on line 7 of a 5-row box)", y)
+	}
+
+	ta, _ = updateChatInput(ta, tea.KeyMsg{Type: tea.KeyBackspace}, DefaultHardBreakKey) // "6\n" -> joins
+	ta, _ = updateChatInput(ta, tea.KeyMsg{Type: tea.KeyBackspace}, DefaultHardBreakKey)
+	ta, _ = updateChatInput(ta, tea.KeyMsg{Type: tea.KeyBackspace}, DefaultHardBreakKey)
+	ta, _ = updateChatInput(ta, tea.KeyMsg{Type: tea.KeyBackspace}, DefaultHardBreakKey)
+	ta = fitChatInput(ta)
+	y = scrollChatInput(ta, y)
+
+	rows := chatInputRowsOf(t, renderChatInput(ta, y, ""))
+	if ta.Value() != "1\n2\n3\n4\n5" || !strings.HasPrefix(rows[0], "> 1") {
+		t.Errorf("value %q, first row %q; want 5 lines with line 1 visible", ta.Value(), rows[0])
+	}
+}
+
+func TestRenderChatInput_ViewWithoutUpdateStaysInBox(t *testing.T) {
+	ta := chatInputWith(t, "")
+	ta = fitChatInput(ta)
+	ta.SetValue("1\n2\n3\n4\n5\n6\n7") // no fit, no Update: height still 1
+
+	rows := chatInputRowsOf(t, renderChatInput(ta, 0, ""))
+	if len(rows) != ta.Height() || !strings.HasPrefix(rows[0], "> 7") {
+		t.Errorf("rows = %q; want %d row(s) showing the cursor line 7", rows, ta.Height())
+	}
+	for i, r := range rows {
+		if lipgloss.Width(r) != 2+ta.Width() {
+			t.Errorf("row %d width = %d, want %d", i, lipgloss.Width(r), 2+ta.Width())
+		}
+	}
+}
+
+func TestRenderChatInput_ResetAfterScrollShowsOneRow(t *testing.T) {
+	ta := fitChatInput(chatInputWith(t, "1\n2\n3\n4\n5\n6\n7"))
+	y := scrollChatInput(ta, 0)
+	ta.Reset()
+	ta = fitChatInput(ta)
+	y = scrollChatInput(ta, y)
+
+	if y != 0 || ta.Height() != 1 {
+		t.Errorf("after reset: offset %d, height %d; want 0 and 1", y, ta.Height())
+	}
+}
+
+// ghostInput builds a focused 20-column compose box (22 with the prompt).
+func ghostInput(t *testing.T, value string) textarea.Model {
+	t.Helper()
+	ta := newChatInput("")
+	ta.SetWidth(22)
+	ta.Focus()
+	ta.SetValue(value)
+	return fitChatInput(ta)
+}
+
+func TestRenderChatInput_Ghost(t *testing.T) {
+	scrolled := ghostInput(t, "1\n2\n3\n4\n5\n6\n@al")
+	full := ghostInput(t, strings.Repeat("abcd ", 8))
+	full.CursorUp()
+	full.CursorUp()
+	full.CursorUp() // cursor now on the first, completely full row
+	midRow := ghostInput(t, "abcd @al, abcd abc")
+	midRow.SetCursor(8) // right after "@al"; the row has 2 free cells
+	for _, c := range []struct {
+		name  string
+		ta    textarea.Model
+		y     int
+		ghost string
+		row   int
+		want  string
+	}{
+		{"end of one line", ghostInput(t, "hey @al"), 0, "ice", 0, "> hey @alice"},
+		{"wrapped row", ghostInput(t, "some words that wrap @al"), 0, "ice", 1, "  wrap @alice"},
+		{"second line", ghostInput(t, "one\n@al"), 0, "ice", 1, "> @alice"},
+		{"line exactly box width", ghostInput(t, strings.Repeat("x", 20)), 0, "ice", 1, "  ice"},
+		{"scrolled box", scrolled, scrollChatInput(scrolled, 0), "ice", 4, "> @alice"},
+		{"ghost cut to free cells", ghostInput(t, strings.Repeat("y", 17)+" @"), 0, "alice", 0, "> " + strings.Repeat("y", 17) + " @a"},
+		{"full row draws no ghost", full, 0, "ice", 0, "> abcd abcd abcd abcd "},
+		{"typed text after the cursor stays visible", midRow, 0, "ice", 0, "> abcd @alic, abcd abc"},
+		{"wide characters before", ghostInput(t, "日本 @al"), 0, "ice", 0, "> 日本 @alice"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rows := chatInputRowsOf(t, renderChatInput(c.ta, c.y, c.ghost))
+			if c.row >= len(rows) {
+				t.Fatalf("only %d rows: %q", len(rows), rows)
+			}
+			if got := strings.TrimRight(rows[c.row], " "); got != strings.TrimRight(c.want, " ") {
+				t.Errorf("row %d = %q, want %q (all rows %q)", c.row, got, c.want, rows)
+			}
+			for i, r := range rows {
+				if lipgloss.Width(r) != 22 {
+					t.Errorf("row %d width = %d, want 22: %q", i, lipgloss.Width(r), r)
+				}
+			}
+		})
+	}
 }

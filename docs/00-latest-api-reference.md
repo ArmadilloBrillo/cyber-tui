@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.9.0
+# ᑕ¥βєяรקค¢є API v0.9.1
 
 ## Access
 
@@ -1076,6 +1076,8 @@ POST /v1/cmail/:conversationId
 
 Sends into an existing conversation (start one first via `POST /v1/cmail`). `senderUsername` is always set from your authenticated account — any value in the body is ignored. Blocked in either direction (you blocked them, or they blocked you) returns `403`. Returns `{ "data": { "conversationId": "...", "messageId": "..." } }` (`201`).
 
+`content` may contain line breaks (`\n`), up to 10 lines and 2048 characters. Runs of blank lines collapse to one, and lines past the tenth join it with spaces. Clients should render line breaks.
+
 Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. `/art` and the `/mute` family are cIRC-only and return `400` here.
 
 ### Mark as Read
@@ -1205,7 +1207,9 @@ POST /v1/circ/:roomId
 
 `username` and `isChatAdmin` are always set from your authenticated account — any values in the body are ignored. Returns `{ "data": { "roomId": "...", "messageId": "..." } }` (`201`). Returns `403` if the room isn't available to you.
 
-Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side.
+`content` may contain line breaks (`\n`), up to 10 lines and 2048 characters. Runs of blank lines collapse to one, and lines past the tenth join it with spaces. Clients should render line breaks.
+
+Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. Line breaks in a styled message's text become spaces.
 
 ### Delete Your Message
 

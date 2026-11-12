@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.9.0) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.9.1) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -319,6 +319,12 @@ Changes from v0.8.12, see `docs/api-diff-v0.8.12-to-v0.9.0.diff`.
 | `imageColor` setting | Default off. Renders images in colour instead of the theme's foreground/background. On the website it keeps the dithering and switches the shader to a per-channel web-safe palette. Now backs a Settings dithering "color" row (`monochrome` / `color`) and is sent on `PATCH`. | **Done**, see `docs/60-image-color.md` |
 | `imagePixelSize` values documented | One of `rough`, `medium`, `sharp`, `crisp`. Now backs the Settings dithering "sharpness" row and is sent on `PATCH`; replaces the local `ditherSharpness` config key. | **Done** (PR #205), see `docs/59-image-pixel-size.md` |
 | cIRC history limits | Scrollback stops at the newest 1000 messages or 180 days. RTDB reads now require `orderBy="timestamp"` with `limitToLast` up to 1000 and deny `endAt`/`endBefore`; scrollback must use `GET /v1/circ/:roomId`. Client RTDB reads use `limitToLast=50` without `endBefore` (`client.go:1999`, `:2671`), so no change needed. A `before` past the limit returns an empty page (confirmed live 2026-11-02); `PrependMessages` marks history exhausted on an empty page and stops further fetches (`internal/ui/screens/chatrooms.go:1052`, covered by `TestChatrooms_PrependMessages_EmptyMarksExhausted`). The `cursor: null` on the last page inside the limit is ignored, costing one extra empty request. | No change needed, verified |
+
+### API v0.9.1 (2026-11-11)
+
+| Area | Description | Priority |
+|---|---|---|
+| Multi-line cIRC and C-Mail messages | `content` on `POST /v1/circ/:roomId` and `POST /v1/cmail/:id` may contain `\n`: up to 10 lines and 2048 characters. Runs of blank lines collapse to one and lines past the tenth join it with spaces; in cIRC a styled message's line breaks become spaces. Both compose boxes are now a growing textarea (1 to 5 rows); the line break key inserts a newline, the box mirrors the server's line rules, `/art` is exempt (up to 25 art lines, stored as-is), and C-Mail bubbles render line breaks. | **Done**, see `docs/plan-chat-multiline.md` |
 
 ### Replies
 

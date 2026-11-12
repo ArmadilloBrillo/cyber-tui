@@ -686,7 +686,7 @@ func (r *renderer) rawTextNode(node ast.Node) string {
 		switch n := child.(type) {
 		case *ast.Text:
 			sb.WriteString(strings.TrimRight(string(n.Value(r.source)), "\n"))
-			if n.SoftLineBreak() {
+			if n.SoftLineBreak() || n.HardLineBreak() {
 				sb.WriteByte(' ')
 			}
 		case *ast.String:

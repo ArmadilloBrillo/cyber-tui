@@ -7395,6 +7395,29 @@ func TestHelpModal_ComposeShowsConfiguredHardBreakKey(t *testing.T) {
 	}
 }
 
+func TestChatRoom_HelpAndHintsShowNewlineKey(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenChatrooms
+	a.hardBreakKey = "ctrl+l"
+	a.chatrooms = a.chatrooms.SetRooms([]model.Room{{ID: "r1", Slug: "zion", Name: "Zion"}})
+	cm, _ := a.chatrooms.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	cm, _ = cm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	a.chatrooms = cm
+
+	if help := ansi.Strip(TabsLayout{}.renderHelpModal(a)); !strings.Contains(help, "ctrl+l") || !strings.Contains(help, "new line") {
+		t.Errorf("help should list the configured newline key inside a room, got:\n%s", help)
+	}
+	found := false
+	for _, h := range (TabsLayout{}).screenHints(&a) {
+		if h.key == "ctrl+l" && h.desc == "new line" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("status hints should list the configured newline key inside a room")
+	}
+}
+
 func TestHelpModal_ListsBork(t *testing.T) {
 	t.Run("feed compose", func(t *testing.T) {
 		a := loggedInApp()

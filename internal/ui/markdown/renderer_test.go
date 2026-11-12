@@ -906,6 +906,12 @@ func TestRender_HardBreakKeepsLineBreak(t *testing.T) {
 	}
 }
 
+func TestRender_HardBreakInsideEmphasisKeepsSpace(t *testing.T) {
+	if out := strip(Render("**one  \ntwo**", 80)); !strings.Contains(out, "one two") {
+		t.Errorf("expected words separated by a space, got %q", out)
+	}
+}
+
 func TestRender_NoLeadingOrTrailingBlankLines(t *testing.T) {
 	out := strip(Render("a\n\nb\n\n", 80))
 	if strings.HasPrefix(out, "\n") || strings.HasSuffix(strings.TrimRight(out, " "), "\n") {

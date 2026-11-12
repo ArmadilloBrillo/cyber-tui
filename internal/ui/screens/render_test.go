@@ -195,6 +195,26 @@ func TestRenderChatMessages_SystemNotice(t *testing.T) {
 	}
 }
 
+func TestRenderChatMessages_LineBreaksKept(t *testing.T) {
+	msg := model.Message{ID: "m1", From: model.User{Username: "trinity"}, Body: "alpha\nbeta", CreatedAt: circMsgTime}
+	out := renderChatMessages([]model.Message{msg}, "neuromancer", time.UTC, "datetime", 60)
+
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "alpha") && strings.Contains(l, "beta") {
+			t.Errorf("expected alpha and beta on separate lines, got %q", l)
+		}
+	}
+}
+
+func TestRenderCircMessages_LineBreaksKept(t *testing.T) {
+	out := renderCircMessages([]model.Message{circMsg("alice", "alpha\nbeta")}, time.UTC, "datetime", 60, "", nil)
+
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], "alpha") || !strings.Contains(lines[1], "beta") {
+		t.Errorf("expected alpha and beta on two lines, got %q", lines)
+	}
+}
+
 // TestRenderCircMessages_ActionLine confirms an IsAction message (e.g. from
 // /me) renders in classic IRC form "* username body *" with no username
 // bracket, and that a regular message immediately after is unaffected.
