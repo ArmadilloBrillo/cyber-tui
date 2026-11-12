@@ -349,3 +349,40 @@ func TestUpdateChatInput_PasteNormalised(t *testing.T) {
 		}
 	}
 }
+
+func TestFitChatInput_GrowingKeepsFirstLineVisible(t *testing.T) {
+	// Built like the screens build it: no SetValue, whose Reset scrolls to
+	// the top and would mask the bug.
+	ta := newChatInput("")
+	ta.SetWidth(40)
+	ta.Focus()
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("one")},
+		{Type: tea.KeyEnter, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune("two")},
+	} {
+		ta, _ = updateChatInput(ta, k, DefaultHardBreakKey)
+		ta = fitChatInput(ta)
+		_ = ta.View() // the app renders after every key; View feeds textarea's scroll state
+	}
+
+	view := ta.View()
+	if !strings.Contains(view, "one") || !strings.Contains(view, "two") {
+		t.Errorf("expected both lines visible in a 2-row box, got:\n%s", view)
+	}
+}
+
+func TestFitChatInput_PromptOnlyOnFirstRowOfEachLine(t *testing.T) {
+	ta := chatInputWith(t, strings.Repeat("word ", 30)+"\nnext")
+	ta = fitChatInput(ta)
+
+	rows := strings.Split(ta.View(), "\n")
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows (2 wrapped + 1), got %d:\n%s", len(rows), ta.View())
+	}
+	for i, want := range []bool{true, false, true} {
+		if got := strings.HasPrefix(rows[i], "> "); got != want {
+			t.Errorf("row %d has prompt = %v, want %v: %q", i, got, want, rows[i])
+		}
+	}
+}

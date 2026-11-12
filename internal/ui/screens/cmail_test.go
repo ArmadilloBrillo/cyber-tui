@@ -1508,7 +1508,7 @@ func TestCMail_VisibleInlineImages_LastMessageImage_FallbackStage(t *testing.T) 
 	// Height must be tall enough to fit the image's own band but shorter
 	// than the total content, so GotoBottom actually clamps "bottom" to
 	// the true content end — see Chatrooms' equivalent test for why.
-	// actual viewport.Height = 18 - theme.ChromeHeight(3) - cmailDetailChrome(5) = 10
+	// actual viewport.Height = 18 - theme.ChromeHeight(3) - header(2) - 1-row input box(3) = 10
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 18})
 	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
 	msgs := manyPlainCMailMessages(5)
@@ -1921,5 +1921,68 @@ func TestUserConvsReceived_SkipsActiveConversation(t *testing.T) {
 		if km, ok := msg.(DMKeywordMsg); ok {
 			t.Errorf("expected no cross-conversation alert for the currently open conversation, got %+v", km)
 		}
+	}
+}
+
+// --- multi-line compose box ---
+
+func TestCMail_NewlineKey_GrowsBoxAndShrinksViewport(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	before := m.viewport.Height
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("one")})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+
+	if got := m.input.Height(); got != 2 {
+		t.Errorf("input height = %d, want 2", got)
+	}
+	if m.viewport.Height != before-1 {
+		t.Errorf("viewport height = %d, want %d", m.viewport.Height, before-1)
+	}
+}
+
+func TestCMail_Enter_SendsMultiLineBodyAndResetsBox(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	before := m.viewport.Height
+	m.input.SetValue("one\n\n\ntwo\n")
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("expected a send command")
+	}
+	send, ok := cmd().(SendCMailMsg)
+	if !ok || send.Body != "one\n\ntwo" {
+		t.Errorf("sent %#v, want SendCMailMsg with body %q", send, "one\n\ntwo")
+	}
+	if m.input.Height() != 1 || m.viewport.Height != before {
+		t.Errorf("after send: input height %d, viewport %d; want 1 and %d", m.input.Height(), m.viewport.Height, before)
+	}
+}
+
+func TestCMail_Up_MovesCursorBeforeEnteringBrowsing(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m = m.SetConversationMessages("c1", manyPlainCMailMessages(3))
+	m.input.SetValue("one\ntwo")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "" || m.input.Line() != 0 {
+		t.Fatalf("first up: selectedMsgID %q, input line %d; want no selection and line 0", m.selectedMsgID, m.input.Line())
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID == "" {
+		t.Error("second up from the first row should enter message browsing")
+	}
+}
+
+func TestCMail_NewlineKey_AnnouncesTyping(t *testing.T) {
+	m := cmailInConversation(api.NewMockClient(), "c1")
+	m.input.SetValue("hi")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+
+	if !m.announcingTyping {
+		t.Error("expected a newline to count as typing")
 	}
 }

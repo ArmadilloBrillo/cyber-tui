@@ -176,6 +176,11 @@ func chatInputOffset(ta textarea.Model) int {
 // have CRLF normalised first, and anything that changes the value other than
 // typing (a paste) is normalised afterwards.
 func updateChatInput(ta textarea.Model, msg tea.Msg, newlineKey string) (textarea.Model, tea.Cmd) {
+	// Edit at full height so textarea only scrolls once the content really
+	// outgrows the box; fitChatInput shrinks it back afterwards. Editing at
+	// the current (smaller) height scrolls line 1 away as soon as line 2
+	// appears, and growing the box later never scrolls it back.
+	ta.SetHeight(chatInputMaxRows)
 	km, isKey := msg.(tea.KeyMsg)
 	if isKey && !km.Paste && km.String() == newlineKey {
 		r := []rune(ta.Value())
@@ -212,6 +217,57 @@ func updateChatInput(ta textarea.Model, msg tea.Msg, newlineKey string) (textare
 		}
 	}
 	return ta, cmd
+}
+
+// chatInputMaxRows is how tall the chat compose box grows before its
+// content scrolls inside it.
+const chatInputMaxRows = 5
+
+// fitChatInput sizes the compose box to its content, 1..chatInputMaxRows
+// rows including soft-wrapped ones, and shows the "> " prompt only on the
+// first row of each line, so wrapped rows read as the same line they will
+// be sent as.
+func fitChatInput(ta textarea.Model) textarea.Model {
+	// textarea's word-wrap is unexported; a scratch textarea per line
+	// reports how many rows that line wraps to via LineInfo().Height.
+	probe := textarea.New()
+	probe.Prompt = ""
+	probe.ShowLineNumbers = false
+	probe.SetWidth(ta.Width())
+	var starts []bool
+	for line := range strings.SplitSeq(ta.Value(), "\n") {
+		probe.SetValue(line)
+		starts = append(starts, true)
+		for range probe.LineInfo().Height - 1 {
+			starts = append(starts, false)
+		}
+	}
+	ta.SetPromptFunc(lipgloss.Width(ta.Prompt), func(row int) string {
+		if row < len(starts) && !starts[row] {
+			return ""
+		}
+		return ta.Prompt
+	})
+	// ponytail: shrinking back from past the cap can leave the top row
+	// scrolled off until the cursor moves; textarea has no public scroll
+	// reset short of moving the cursor.
+	if h := min(len(starts), chatInputMaxRows); h != ta.Height() {
+		ta.SetHeight(h)
+		ta, _ = ta.Update(nil) // re-scroll to the cursor at the new height
+	}
+	return ta
+}
+
+// chatInputOnFirstRow and chatInputOnLastRow report whether the cursor sits
+// on the compose box's first or last visual row, where up/down leave the
+// input for the message list instead of moving the cursor.
+func chatInputOnFirstRow(ta textarea.Model) bool {
+	return ta.Line() == 0 && ta.LineInfo().RowOffset == 0
+}
+
+func chatInputOnLastRow(ta textarea.Model) bool {
+	li := ta.LineInfo()
+	return ta.Line() == ta.LineCount()-1 && li.RowOffset == li.Height-1
 }
 
 // topicsCount returns the number of non-empty, trimmed comma-separated

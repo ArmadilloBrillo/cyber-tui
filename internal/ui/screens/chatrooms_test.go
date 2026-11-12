@@ -2578,7 +2578,7 @@ func TestChatrooms_VisibleInlineImages_LastMessageImage_FallbackStage(t *testing
 	// message), so GotoBottom actually clamps "bottom" to the true content
 	// end instead of overshooting past it — either extreme would mask the
 	// regression this test exists to catch.
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 18}) // actual viewport.Height = 18 - theme.ChromeHeight(3) - chatroomDetailChrome(5) = 10
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 18}) // actual viewport.Height = 18 - theme.ChromeHeight(3) - header(2) - 1-row input box(3) = 10
 	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
 	msgs := manyPlainMessages(5)
 	msgs = append(msgs, model.Message{ID: "last", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()})
@@ -2595,7 +2595,7 @@ func TestChatrooms_VisibleInlineImages_LastMessageImage_FallbackStage(t *testing
 // (smaller) size — the tightest case, since less clearance is reserved.
 func TestChatrooms_VisibleInlineImages_LastMessageImage_AfterRealRowsKnown(t *testing.T) {
 	m := chatroomsInRoom(api.NewMockClient(), "zion")
-	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 18}) // actual viewport.Height = 18 - theme.ChromeHeight(3) - chatroomDetailChrome(5) = 10 // see FallbackStage's comment on sizing
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 18}) // actual viewport.Height = 18 - theme.ChromeHeight(3) - header(2) - 1-row input box(3) = 10 // see FallbackStage's comment on sizing
 	m, _ = m.Update(SharedConfigMsg{InlineImagesEnabled: true})
 	msgs := manyPlainMessages(5)
 	msgs = append(msgs, model.Message{ID: "last", From: model.User{Username: "trinity"}, ImageUrl: "https://example.com/a.png", CreatedAt: time.Now()})
@@ -2620,5 +2620,90 @@ func TestChatroomsModel_SetComposeValueMsg_ReplacesInput(t *testing.T) {
 
 	if got := m.input.Value(); got != "/gif https://example.com/pic.gif" {
 		t.Errorf("input.Value() = %q, want the replaced /gif command", got)
+	}
+}
+
+// --- multi-line compose box ---
+
+var newlineKeyMsg = tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+
+func TestChatrooms_NewlineKey_GrowsBoxAndShrinksViewport(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	before := m.viewport.Height
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("one")})
+	m, _ = m.Update(newlineKeyMsg)
+
+	if got := m.input.Height(); got != 2 {
+		t.Errorf("input height = %d, want 2", got)
+	}
+	if m.viewport.Height != before-1 {
+		t.Errorf("viewport height = %d, want %d", m.viewport.Height, before-1)
+	}
+}
+
+func TestChatrooms_InputHeight_CappedAtMaxRows(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m, _ = m.Update(SetComposeValueMsg{Value: "1\n2\n3\n4\n5\n6\n7\n8"})
+
+	if got := m.input.Height(); got != chatInputMaxRows {
+		t.Errorf("input height = %d, want %d", got, chatInputMaxRows)
+	}
+}
+
+func TestChatrooms_LongLine_GrowsBoxByWrappedRows(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("a", m.input.Width()+10))})
+
+	if got := m.input.Height(); got != 2 {
+		t.Errorf("input height = %d, want 2 for a line that wraps once", got)
+	}
+}
+
+func TestChatrooms_Enter_SendsMultiLineBodyAndResetsBox(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	before := m.viewport.Height
+	m.input.SetValue("one\ntwo\n")
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if cmd == nil {
+		t.Fatal("expected a send command")
+	}
+	send, ok := cmd().(SendRoomMessageMsg)
+	if !ok || send.Body != "one\ntwo" {
+		t.Errorf("sent %#v, want SendRoomMessageMsg with body %q", send, "one\ntwo")
+	}
+	if m.input.Height() != 1 || m.viewport.Height != before {
+		t.Errorf("after send: input height %d, viewport %d; want 1 and %d", m.input.Height(), m.viewport.Height, before)
+	}
+}
+
+func TestChatrooms_Up_MovesCursorBeforeEnteringBrowsing(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m = m.SetMessages("zion", manyPlainMessages(3))
+	m.input.SetValue("one\ntwo")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID != "" || m.input.Line() != 0 {
+		t.Fatalf("first up: selectedMsgID %q, input line %d; want no selection and line 0", m.selectedMsgID, m.input.Line())
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedMsgID == "" {
+		t.Error("second up from the first row should enter message browsing")
+	}
+}
+
+func TestChatrooms_HistoryRecall_MultiLineResizesBox(t *testing.T) {
+	m := chatroomsInRoom(api.NewMockClient(), "zion")
+	m.input.SetValue("one\ntwo\nthree")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlUp})
+
+	if m.input.Value() != "one\ntwo\nthree" || m.input.Height() != 3 {
+		t.Errorf("recalled %q at height %d, want the 3-line message at height 3", m.input.Value(), m.input.Height())
 	}
 }

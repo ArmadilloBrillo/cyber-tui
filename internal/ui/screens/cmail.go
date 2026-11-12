@@ -24,12 +24,8 @@ const (
 	cmailModeDetail                   // full-width history + input
 )
 
-// Rows consumed by the detail view's header and input box (outside the history viewport).
-const (
-	cmailDetailHeaderRows = 2 // "@otheruser" header + divider rule
-	cmailInputRows        = 3 // bordered textinput: 1 content + 2 border rows
-	cmailDetailChrome     = cmailDetailHeaderRows + cmailInputRows
-)
+// Rows the detail view's header takes above the history viewport.
+const cmailDetailHeaderRows = 2 // "@otheruser" header + divider rule
 
 // Typing-indicator cadence. dmTypingDefaultStaleAfterMs is used for the read
 // subscription (showing the other participant typing) since we open it
@@ -884,6 +880,18 @@ func (m CMailModel) Init() tea.Cmd { return textarea.Blink }
 // cascading tea.Cmd-return change through refreshMessages' many call sites.
 func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 	m, cmd := m.updateInner(msg)
+	// One choke point for the compose box growing or shrinking, so no input
+	// path is missed — same as ChatroomsModel.Update.
+	if m.ready && m.mode == cmailModeDetail {
+		m.input = fitChatInput(m.input)
+		if h := m.viewportHeight(); h != m.viewport.Height {
+			atBottom := m.viewport.AtBottom()
+			m.viewport.Height = h
+			if atBottom {
+				m.viewport.GotoBottom()
+			}
+		}
+	}
 	var tickCmd tea.Cmd
 	m, tickCmd = m.maybeStartStyleAnim()
 	if tickCmd != nil {
@@ -897,6 +905,12 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		m = m.zeroActiveConvUnread()
 	}
 	return m, cmd
+}
+
+// viewportHeight returns the message-history viewport height in rows: what
+// the header and the (growing) compose box leave over.
+func (m CMailModel) viewportHeight() int {
+	return max(1, m.height-theme.ChromeHeight-cmailDetailHeaderRows-(m.input.Height()+2)) // input box: content + 2 border rows
 }
 
 // maybeStartStyleAnim starts the slow/wave/glitch animation ticker if the
@@ -942,7 +956,7 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		listH := msg.Height - theme.ChromeHeight
-		detailH := msg.Height - theme.ChromeHeight - cmailDetailChrome
+		detailH := m.viewportHeight()
 		if !m.ready {
 			m.listVP = viewport.New(msg.Width, listH)
 			m.viewport = viewport.New(msg.Width, detailH)
@@ -1388,7 +1402,7 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 				return m, nil
 			case "enter":
 				if m.activeConv != nil {
-					val := m.input.Value()
+					val := strings.Trim(normalizeChatBody(m.input.Value()), "\n")
 					if val != "" {
 						m.histFor(m.activeConvID).record(val)
 						convID := m.activeConv.ID
@@ -1416,6 +1430,9 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 				}
 				return m, nil
 			case "up":
+				if !chatInputOnFirstRow(m.input) {
+					break // move the cursor within the multi-line input
+				}
 				var sel []int
 				if m.activeConv != nil {
 					sel = selectableMessageIndices(m.activeConv.Messages, nil)
@@ -1438,6 +1455,9 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 				}
 				return m, nil
 			case "down":
+				if !chatInputOnLastRow(m.input) {
+					break
+				}
 				m.viewport.ScrollDown(1)
 				return m, nil
 			case "pgup":

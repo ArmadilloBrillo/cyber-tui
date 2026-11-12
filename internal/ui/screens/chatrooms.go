@@ -28,12 +28,8 @@ const (
 	chatroomModeDetail                     // header + full-width message history + input
 )
 
-// Rows consumed by the detail view's header and input box (outside the message viewport).
-const (
-	chatroomDetailHeaderRows = 2 // "Room Name  #slug  ·  N online" header + divider rule
-	chatroomInputRows        = 3 // bordered input: 1 content + 2 border rows
-	chatroomDetailChrome     = chatroomDetailHeaderRows + chatroomInputRows
-)
+// Rows the detail view's header takes above the message viewport.
+const chatroomDetailHeaderRows = 2 // "Room Name  #slug  ·  N online" header + divider rule
 
 // roomCardHeight is the number of terminal lines each room card occupies:
 // top border + 2 content rows + bottom border = 4.
@@ -1117,8 +1113,10 @@ func (m ChatroomsModel) Init() tea.Cmd { return textarea.Blink }
 func (m ChatroomsModel) Update(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 	m, cmd := m.updateInner(msg)
 	// One choke point for every viewport-height change the compose area
-	// causes (the mention hint toggling), so no input path is missed.
+	// causes (the box growing or shrinking, the mention hint toggling), so
+	// no input path is missed.
 	if m.ready && m.mode == chatroomModeDetail {
+		m.input = fitChatInput(m.input)
 		if h := m.viewportHeight(); h != m.viewport.Height {
 			atBottom := m.viewport.AtBottom()
 			m.viewport.Height = h
@@ -1676,7 +1674,7 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				return m, nil
 			case "enter":
 				if m.activeRoom != nil {
-					val := m.input.Value()
+					val := strings.Trim(normalizeChatBody(m.input.Value()), "\n")
 					if val != "" {
 						m.histFor(m.activeRoomID).record(val)
 						roomID := m.activeRoom.Slug
@@ -1713,6 +1711,9 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				}
 				return m, nil
 			case "up":
+				if !chatInputOnFirstRow(m.input) {
+					break // move the cursor within the multi-line input
+				}
 				sel := selectableMessageIndices(m.messages, m.mutedUsers())
 				if len(sel) == 0 {
 					m.viewport.ScrollUp(1)
@@ -1734,6 +1735,9 @@ func (m ChatroomsModel) updateInner(msg tea.Msg) (ChatroomsModel, tea.Cmd) {
 				}
 				return m, nil
 			case "down":
+				if !chatInputOnLastRow(m.input) {
+					break
+				}
 				m.viewport.ScrollDown(1)
 				return m, nil
 			case "pgup":
@@ -2218,7 +2222,7 @@ func (m ChatroomsModel) updateBrowsingKey(msg tea.KeyMsg) (ChatroomsModel, tea.C
 // viewportHeight returns the message-history viewport height in rows,
 // shrinking to make room for the flag/report overlay when it's open.
 func (m ChatroomsModel) viewportHeight() int {
-	h := m.height - theme.ChromeHeight - chatroomDetailChrome
+	h := m.height - theme.ChromeHeight - chatroomDetailHeaderRows - (m.input.Height() + 2) // input box: content + 2 border rows
 	if m.mentionHint() != "" {
 		h--
 	}
