@@ -1710,6 +1710,20 @@ func TestCMail_RenderConvCards_DeletedOtherUser_ShowsMarker(t *testing.T) {
 	}
 }
 
+func TestCMail_RenderConvCards_MultiLinePreviewStaysOneLine(t *testing.T) {
+	m := NewCMailModel("neo", "", api.NewMockClient())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = m.SetConversations([]model.Conversation{{
+		ID:           "c1",
+		Participants: []model.User{{Username: "neo"}, {Username: "trinity"}},
+		Messages:     []model.Message{{ID: "m1", Body: "line one\nline two"}},
+	}})
+
+	if got := m.renderConvCards(); !strings.Contains(got, "line one line two") {
+		t.Errorf("renderConvCards() = %q, want the preview joined onto one line", got)
+	}
+}
+
 // --- copy message text (see updateCMailBrowsingKey's "y" case) ---
 
 func TestCMailBrowsing_Y_EmitsCopyMessageTextMsg(t *testing.T) {

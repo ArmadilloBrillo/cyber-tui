@@ -68,7 +68,14 @@ func convertPaste(msg tea.KeyMsg) tea.KeyMsg {
 	if !msg.Paste || msg.Type != tea.KeyRunes {
 		return msg
 	}
-	s := strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(string(msg.Runes))
+	msg.Runes = []rune(hardBreaks(string(msg.Runes)))
+	return msg
+}
+
+// hardBreaks is convertPaste's text rewrite, shared with the C-Mail bubble
+// renderer so a chat message's bare newlines show as line breaks.
+func hardBreaks(s string) string {
+	s = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(s)
 	lines := strings.Split(s, "\n")
 	var b strings.Builder
 	inFence, prevBlank := false, false
@@ -97,8 +104,7 @@ func convertPaste(msg tea.KeyMsg) tea.KeyMsg {
 			b.WriteString(hardBreakText)
 		}
 	}
-	msg.Runes = []rune(b.String())
-	return msg
+	return b.String()
 }
 
 // HardBreakLabel returns the key to display for a stored binding, treating an

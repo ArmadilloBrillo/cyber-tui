@@ -1764,7 +1764,7 @@ func (m CMailModel) renderConvCards() string {
 		if preview == "" && len(c.Messages) > 0 {
 			preview = c.Messages[len(c.Messages)-1].Body
 		}
-		previewLine := theme.Subtle.Render(truncate(preview, innerWidth))
+		previewLine := theme.Subtle.Render(truncateStr(preview, innerWidth))
 
 		content := lipgloss.JoinVertical(lipgloss.Left, headerLine, previewLine)
 
@@ -2208,9 +2208,4 @@ func (m CMailModel) View() string {
 		}
 		return m.listVP.View()
 	}
-}
-
-// truncate shortens s to at most max terminal columns, appending "…" if cut.
-func truncate(s string, max int) string {
-	return markdown.TruncateToWidth(s, max)
 }
