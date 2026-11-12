@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -24,12 +24,8 @@ const (
 	cmailModeDetail                   // full-width history + input
 )
 
-// Rows consumed by the detail view's header and input box (outside the history viewport).
-const (
-	cmailDetailHeaderRows = 2 // "@otheruser" header + divider rule
-	cmailInputRows        = 3 // bordered textinput: 1 content + 2 border rows
-	cmailDetailChrome     = cmailDetailHeaderRows + cmailInputRows
-)
+// Rows the detail view's header takes above the history viewport.
+const cmailDetailHeaderRows = 2 // "@otheruser" header + divider rule
 
 // Typing-indicator cadence. dmTypingDefaultStaleAfterMs is used for the read
 // subscription (showing the other participant typing) since we open it
@@ -209,11 +205,12 @@ type CMailModel struct {
 	activeConv    *model.Conversation
 	listVP        viewport.Model // scrolls the conversation list in list mode
 	viewport      viewport.Model // scrolls message history in detail mode
-	input         textinput.Model
+	input         textarea.Model
 	ready         bool
 	err           error
 	currentUser   string
 	keywordAlerts []string // user's configured keyword alerts, from SharedConfigMsg
+	newlineKey    string   // inserts a line break in the compose box; the hard-break key from SharedConfigMsg
 
 	// keywordConvSeen/keywordConvsSeeded support the free cross-conversation
 	// keyword scan off the always-on account-wide conversation-list stream
@@ -369,10 +366,9 @@ type CMailConvSelectedMsg struct {
 // currentUserID is the account's RTDB uid, used to open the account-wide
 // conversation-list subscription (see OpenUserConvsSubscription).
 func NewCMailModel(currentUser, currentUserID string, client api.Client) CMailModel {
-	inp := textinput.New()
-	inp.Placeholder = "compose c-mail..."
 	return CMailModel{
-		input:         inp,
+		input:         newChatInput("compose c-mail..."),
+		newlineKey:    DefaultHardBreakKey,
 		currentUser:   currentUser,
 		currentUserID: currentUserID,
 		client:        client,
@@ -556,7 +552,7 @@ func scheduleTypingHeartbeatCmd(convID string, heartbeatMs int) tea.Cmd {
 // run off this one tea.Tick, coalesced from two independent same-cadence
 // chains — see the typingAnimTickMsg handler. Free-runs for as long as a
 // conversation is open, independent of whether anyone is actually typing —
-// same always-on shape as this screen's textinput.Blink cursor animation.
+// same always-on shape as this screen's textarea.Blink cursor animation.
 func scheduleTypingAnimCmd(convID string) tea.Cmd {
 	return tea.Tick(dmTypingAnimInterval, func(time.Time) tea.Msg {
 		return typingAnimTickMsg{convID: convID}
@@ -876,7 +872,7 @@ func (m CMailModel) SelectedConv() int { return m.selectedConv }
 // HasActiveConv reports whether the detail view is currently open.
 func (m CMailModel) HasActiveConv() bool { return m.mode == cmailModeDetail }
 
-func (m CMailModel) Init() tea.Cmd { return textinput.Blink }
+func (m CMailModel) Init() tea.Cmd { return textarea.Blink }
 
 // Update processes msg via updateInner, then (re)arms the style-animation
 // ticker if a loaded message needs one — same wrap-the-switch shape as
@@ -884,6 +880,18 @@ func (m CMailModel) Init() tea.Cmd { return textinput.Blink }
 // cascading tea.Cmd-return change through refreshMessages' many call sites.
 func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 	m, cmd := m.updateInner(msg)
+	// One choke point for the compose box growing or shrinking, so no input
+	// path is missed — same as ChatroomsModel.Update.
+	if m.ready && m.mode == cmailModeDetail {
+		m.input = fitChatInput(m.input)
+		if h := m.viewportHeight(); h != m.viewport.Height {
+			atBottom := m.viewport.AtBottom()
+			m.viewport.Height = h
+			if atBottom {
+				m.viewport.GotoBottom()
+			}
+		}
+	}
 	var tickCmd tea.Cmd
 	m, tickCmd = m.maybeStartStyleAnim()
 	if tickCmd != nil {
@@ -897,6 +905,12 @@ func (m CMailModel) Update(msg tea.Msg) (CMailModel, tea.Cmd) {
 		m = m.zeroActiveConvUnread()
 	}
 	return m, cmd
+}
+
+// viewportHeight returns the message-history viewport height in rows: what
+// the header and the (growing) compose box leave over.
+func (m CMailModel) viewportHeight() int {
+	return max(1, m.height-theme.ChromeHeight-cmailDetailHeaderRows-(m.input.Height()+2)) // input box: content + 2 border rows
 }
 
 // maybeStartStyleAnim starts the slow/wave/glitch animation ticker if the
@@ -928,14 +942,13 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 
 	case InsertIconMsg:
 		if m.mode == cmailModeDetail {
-			m.input = insertAtCursor(m.input, msg.Icon)
+			m.input.InsertString(msg.Icon)
 		}
 		return m, nil
 
 	case SetComposeValueMsg:
 		if m.mode == cmailModeDetail {
 			m.input.SetValue(msg.Value)
-			m.input.CursorEnd()
 		}
 		return m, nil
 
@@ -943,7 +956,7 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		listH := msg.Height - theme.ChromeHeight
-		detailH := msg.Height - theme.ChromeHeight - cmailDetailChrome
+		detailH := m.viewportHeight()
 		if !m.ready {
 			m.listVP = viewport.New(msg.Width, listH)
 			m.viewport = viewport.New(msg.Width, detailH)
@@ -959,16 +972,10 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 				m = m.refreshMessages()
 			}
 		}
-		// See the matching comment in chatrooms.go: textinput.View() renders
-		// 3 columns wider than Width the instant there's any typed content
-		// (Prompt's width plus the phantom end-of-line cursor glyph, neither
-		// subtracted from its own padding math, unlike the empty-placeholder
-		// render). Compensating here keeps the box from silently growing
-		// wider than the header above it and pushing its right border
-		// off-screen as soon as the user starts typing.
-		m.input.Width = msg.Width - 4 - lipgloss.Width(m.input.Prompt) - 1
+		m.input.SetWidth(msg.Width - 4) // ActiveBorder: 2 border + 2 padding columns
 
 	case SharedConfigMsg:
+		m.newlineKey = resolveHardBreakKey(msg.HardBreakKey)
 		m.timeDisplayFormat = msg.Settings.TimeDisplayFormat
 		m.keywordAlerts = msg.KeywordAlerts
 		imagesChanged := msg.InlineImagesEnabled != m.inlineImagesEnabled
@@ -1386,18 +1393,16 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 			case "ctrl+up":
 				if v, ok := m.histFor(m.activeConvID).prev(m.input.Value()); ok {
 					m.input.SetValue(v)
-					m.input.CursorEnd()
 				}
 				return m, nil
 			case "ctrl+down":
 				if v, ok := m.histFor(m.activeConvID).next(); ok {
 					m.input.SetValue(v)
-					m.input.CursorEnd()
 				}
 				return m, nil
 			case "enter":
 				if m.activeConv != nil {
-					val := m.input.Value()
+					val := strings.Trim(normalizeChatBody(m.input.Value()), "\n")
 					if val != "" {
 						m.histFor(m.activeConvID).record(val)
 						convID := m.activeConv.ID
@@ -1425,6 +1430,9 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 				}
 				return m, nil
 			case "up":
+				if !chatInputOnFirstRow(m.input) {
+					break // move the cursor within the multi-line input
+				}
 				var sel []int
 				if m.activeConv != nil {
 					sel = selectableMessageIndices(m.activeConv.Messages, nil)
@@ -1447,6 +1455,9 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 				}
 				return m, nil
 			case "down":
+				if !chatInputOnLastRow(m.input) {
+					break
+				}
 				m.viewport.ScrollDown(1)
 				return m, nil
 			case "pgup":
@@ -1484,7 +1495,7 @@ func (m CMailModel) updateInner(msg tea.Msg) (CMailModel, tea.Cmd) {
 		}
 		oldVal := m.input.Value()
 		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
+		m.input, cmd = updateChatInput(m.input, msg, m.newlineKey)
 		var typingCmd tea.Cmd
 		if newVal := m.input.Value(); newVal != oldVal && m.activeConv != nil {
 			m, typingCmd = m.handleTypingInputChanged(newVal)
@@ -1764,7 +1775,7 @@ func (m CMailModel) renderConvCards() string {
 		if preview == "" && len(c.Messages) > 0 {
 			preview = c.Messages[len(c.Messages)-1].Body
 		}
-		previewLine := theme.Subtle.Render(truncate(preview, innerWidth))
+		previewLine := theme.Subtle.Render(truncateStr(preview, innerWidth))
 
 		content := lipgloss.JoinVertical(lipgloss.Left, headerLine, previewLine)
 
@@ -2174,32 +2185,7 @@ func (m CMailModel) View() string {
 			header += theme.Error.Render("  (live updates lost)")
 		}
 		header += m.typingIndicator()
-		// textinput.View()'s empty-input placeholder path (placeholderView(),
-		// internal) totals its render at exactly Width, unlike the
-		// typed-content path — Width+len(Prompt)+1 (the whole reason
-		// input.Width is pre-reduced by that amount; see the matching
-		// comment on input.Width above). Hand-building this state, mirroring
-		// the same fix in chatrooms.go, guarantees the same total without
-		// needing to separately verify a second internal quirk.
-		var inputContent string
-		if m.input.Value() == "" {
-			promptView := m.input.PromptStyle.Render(m.input.Prompt)
-			cur := m.input.Cursor
-			placeholder := []rune(m.input.Placeholder)
-			cur.TextStyle = m.input.PlaceholderStyle
-			var rest string
-			if len(placeholder) > 0 {
-				cur.SetChar(string(placeholder[0]))
-				rest = m.input.PlaceholderStyle.Inline(true).Render(string(placeholder[1:]))
-			} else {
-				cur.SetChar(" ")
-			}
-			pad := max(0, m.input.Width-lipgloss.Width(rest))
-			inputContent = promptView + cur.View() + rest + strings.Repeat(" ", pad)
-		} else {
-			inputContent = m.input.View()
-		}
-		inputBox := theme.ActiveBorder.Render(inputContent)
+		inputBox := theme.ActiveBorder.Render(m.input.View())
 		divider := theme.Subtle.Render(strings.Repeat("─", max(m.width, 0)))
 		return lipgloss.JoinVertical(lipgloss.Left, header, divider, m.viewport.View(), inputBox)
 	default: // cmailModeList
@@ -2208,9 +2194,4 @@ func (m CMailModel) View() string {
 		}
 		return m.listVP.View()
 	}
-}
-
-// truncate shortens s to at most max terminal columns, appending "…" if cut.
-func truncate(s string, max int) string {
-	return markdown.TruncateToWidth(s, max)
 }

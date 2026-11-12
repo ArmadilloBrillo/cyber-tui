@@ -750,7 +750,7 @@ func renderChatMessagesStyled(msgs []model.Message, currentUser string, loc *tim
 		}
 		naturalW = min(naturalW, maxContentW)
 
-		raw := substituteChars(displayBody, msg.ID, msg.Style, frame)
+		raw := hardBreaks(substituteChars(displayBody, msg.ID, msg.Style, frame))
 		body := applyAttributeStyle(strings.TrimRight(markdown.Render(raw, naturalW), "\n"), msg.Style)
 		if slices.Contains(msg.Style, styleBlink) && !blinkVisible(frame) {
 			bodyLines := strings.Split(body, "\n")
