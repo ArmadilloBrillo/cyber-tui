@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"runtime/debug"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/api"
@@ -158,9 +160,45 @@ func main() {
 			}))
 		}
 	}
+	// Crash capture is always on, independent of cfg.Debug. SetCrashOutput
+	// catches fatal panics in our own goroutines; pointing os.Stderr at the
+	// same file while the TUI owns the screen catches what Bubble Tea prints
+	// for panics it recovers (and anything else that would draw over the UI).
+	var crashFile *os.File
+	if logsErr == nil {
+		if f, err := createLog(logsDir, "crash", stamp); err == nil {
+			crashFile = f
+			debug.SetCrashOutput(f, debug.CrashOptions{})
+			pruneLogs(logsDir, "crash", keepLogs)
+		}
+	}
+	realStderr := os.Stderr
+	if crashFile != nil {
+		os.Stderr = crashFile
+	}
+
 	p := tea.NewProgram(ui.NewRoot(app), opts...)
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	_, runErr := p.Run()
+	os.Stderr = realStderr
+
+	if crashFile != nil {
+		if runErr != nil {
+			fmt.Fprintf(crashFile, "%s run error: %v\n", time.Now().Format(time.RFC3339), runErr)
+		}
+		info, statErr := crashFile.Stat()
+		empty := statErr == nil && info.Size() == 0
+		// Release the runtime's duplicate handle first: Windows won't delete
+		// a file that is still open.
+		debug.SetCrashOutput(nil, debug.CrashOptions{})
+		crashFile.Close()
+		if empty {
+			os.Remove(crashFile.Name())
+		} else {
+			fmt.Fprintf(os.Stderr, "crash details written to %s\n", crashFile.Name())
+		}
+	}
+	if runErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
 		os.Exit(1)
 	}
 }

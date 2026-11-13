@@ -859,10 +859,25 @@ func NewRoot(a App) *Root { return &Root{app: &a} }
 func (r *Root) Init() tea.Cmd { return r.app.Init() }
 
 func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	defer recordPanic()
 	return r, r.app.step(msg)
 }
 
-func (r *Root) View() string { return r.app.view() }
+func (r *Root) View() string {
+	defer recordPanic()
+	return r.app.view()
+}
+
+// recordPanic writes the panic value to os.Stderr, which main points at the
+// crash file while the TUI runs, then re-panics so Bubble Tea still restores
+// the terminal. Bubble Tea writes the stack itself but sends the value to
+// stdout, where it is lost behind the alt-screen teardown.
+func recordPanic() {
+	if r := recover(); r != nil {
+		fmt.Fprintf(os.Stderr, "%s panic: %v\n", time.Now().Format(time.RFC3339), r)
+		panic(r)
+	}
+}
 
 // maybeNotifyNewCMail fires a "C-Mail: new message" desktop toast when the total
 // C-Mail unread count rose while handling a DM-stream message and the focus/tab
