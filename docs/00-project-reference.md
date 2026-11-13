@@ -192,7 +192,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 | `ErrRateLimited` | var | Sentinel for 429 responses |
 | `NewHTTPClient(baseURL)` | func | Production constructor |
 | `NewHTTPClientForTesting(baseURL, hc)` | func | Test constructor with injected `http.Client` |
-| `WithDebug(bool)` | method | Enables verbose request/response logging |
+| `WithDebug(bool)` | method | Enables metadata-only request and RTDB stream logging (no bodies, query strings or tokens) |
 
 **Internal helpers (unexported):**
 
@@ -777,7 +777,7 @@ Permissions: `0600` (owner read/write only)
 | `apiBaseURL` | string | `"https://api.cyberspace.online"` | Override for development |
 | `allowInsecureApi` | bool | `false` | Permit a plain `http://` `apiBaseURL` to a non-loopback host |
 | `useMock` | bool | `false` | Use `MockClient` instead of real API |
-| `debug` | bool | `false` | Verbose RTDB / HTTP output |
+| `debug` | bool | `false` | Write a metadata-only debug log to `<user cache dir>/cyber-tui/debug-<stamp>.log` (newest 10 kept). Toggle in Settings > diagnostics; applies on next launch. Crash stack traces go to `crash-<stamp>.log` in the same dir regardless of this setting |
 | `autoEmail` | string | — | Pre-fill email on login screen |
 | `autoPassword` | string | — | Pre-fill password (plain text; not recommended) |
 | `sshListenAddr` | string | — | Enable SSH server mode (e.g. `":2222"`) |

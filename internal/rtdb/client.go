@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -88,7 +89,7 @@ func (c *Client) Get(ctx context.Context, path string, params url.Values) ([]byt
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("rtdb: GET %s: %w", path, err)
+		return nil, fmt.Errorf("rtdb: GET %s: %w", path, withoutURL(err))
 	}
 	defer resp.Body.Close()
 
@@ -120,7 +121,7 @@ func (c *Client) Put(ctx context.Context, path string, val any) error {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("rtdb: PUT %s: %w", path, err)
+		return fmt.Errorf("rtdb: PUT %s: %w", path, withoutURL(err))
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
@@ -165,7 +166,7 @@ func (c *Client) Subscribe(ctx context.Context, path string, params url.Values) 
 			if streamCtx.Err() != nil {
 				return // context cancelled — not an error
 			}
-			ch <- SSEEvent{Err: fmt.Errorf("rtdb: SSE connect %s: %w", path, err)}
+			ch <- SSEEvent{Err: fmt.Errorf("rtdb: SSE connect %s: %w", path, withoutURL(err))}
 			return
 		}
 		defer resp.Body.Close()
@@ -320,4 +321,14 @@ func (c *Client) buildURL(path string, params url.Values) string {
 
 	path = strings.TrimRight(path, "/")
 	return c.baseURL + path + ".json?" + params.Encode()
+}
+
+// withoutURL drops the request URL from an http.Client error: *url.Error
+// prints the full URL, and ours carry the auth token in the query string.
+func withoutURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }

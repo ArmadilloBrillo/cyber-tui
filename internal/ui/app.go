@@ -493,6 +493,12 @@ type App struct {
 	hardBreakKey string
 	// revealContentWarnings is the local config value (config.Config.RevealContentWarnings).
 	revealContentWarnings bool
+	// debugLog is the local config value (config.Config.Debug). main reads
+	// it at startup, so changing it only takes effect on the next launch.
+	debugLog bool
+	// logDir is where main writes debug and crash logs ("" if unavailable),
+	// shown to the user when they toggle debugLog.
+	logDir string
 	// feedManualRefreshOnly is the local config value disabling Feed's
 	// background poll (see docs/39-feed-background-poll.md). Defaults to
 	// false (auto-poll on).
@@ -732,6 +738,7 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	a.maxThreadDepth = s.GetMaxThreadDepth()
 	a.hardBreakKey = s.GetHardBreakKey()
 	a.revealContentWarnings = s.RevealContentWarnings
+	a.debugLog = s.Debug
 	a.imageViewer = s.ImageViewer
 	a.graphicsProtocolName = s.GraphicsProtocol
 	a.inlineImages = s.InlineImages
@@ -752,6 +759,12 @@ func (a App) WithSavedSession(s config.Config) App {
 
 // WithGraphicsProtocol sets the terminal graphics protocol detected at startup.
 // When proto is ProtocolNone the image viewer feature is disabled entirely.
+// WithLogDir records the debug/crash log directory for the settings toast.
+func (a App) WithLogDir(dir string) App {
+	a.logDir = dir
+	return a
+}
+
 func (a App) WithGraphicsProtocol(proto imgview.GraphicsProtocol) App {
 	a.graphicsProtocol = proto
 	return a
@@ -859,10 +872,25 @@ func NewRoot(a App) *Root { return &Root{app: &a} }
 func (r *Root) Init() tea.Cmd { return r.app.Init() }
 
 func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	defer recordPanic()
 	return r, r.app.step(msg)
 }
 
-func (r *Root) View() string { return r.app.view() }
+func (r *Root) View() string {
+	defer recordPanic()
+	return r.app.view()
+}
+
+// recordPanic writes the panic value to os.Stderr, which main points at the
+// crash file while the TUI runs, then re-panics so Bubble Tea still restores
+// the terminal. Bubble Tea writes the stack itself but sends the value to
+// stdout, where it is lost behind the alt-screen teardown.
+func recordPanic() {
+	if r := recover(); r != nil {
+		fmt.Fprintf(os.Stderr, "%s panic: %v\n", time.Now().Format(time.RFC3339), r)
+		panic(r)
+	}
+}
 
 // maybeNotifyNewCMail fires a "C-Mail: new message" desktop toast when the total
 // C-Mail unread count rose while handling a DM-stream message and the focus/tab
@@ -1042,7 +1070,7 @@ func (a App) updateAll(msg tea.Msg) App {
 // Call this whenever loc, relaxed, or dimensions change outside of a
 // WindowSizeMsg (e.g. after login, timezone change, or density toggle).
 func (a *App) broadcastConfig() {
-	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, KeywordAlerts: a.keywordAlerts, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, HardBreakKey: a.hardBreakKey, RevealContentWarnings: a.revealContentWarnings}
+	msg := screens.SharedConfigMsg{Width: a.layout.ContentWidth(a.width), Height: a.height, Loc: a.loc, Relaxed: a.relaxed, Settings: a.settings, WanderLust: a.wanderLust, FeedManualRefreshOnly: a.feedManualRefreshOnly, TypingIndicatorsEnabled: a.typingIndicatorsEnabled, DesktopNotifications: a.desktopNotifications, KeywordAlerts: a.keywordAlerts, ShowGlobeTab: a.showGlobeTab, MaxThreadDepth: a.maxThreadDepth, Timezone: a.timezone, ImageViewer: a.imageViewer, GraphicsProtocol: a.graphicsProtocolName, InlineImages: a.inlineImages, InlineImagesEnabled: a.canInlineImages(), Dithering: a.dithering, OwnGuildSlug: a.currentUser.GuildSlug, OwnApprenticeSlugs: a.ownApprenticeSlugs, HardBreakKey: a.hardBreakKey, RevealContentWarnings: a.revealContentWarnings, DebugLog: a.debugLog}
 	*a = a.updateAll(msg)
 }
 
@@ -1881,6 +1909,7 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		ka := msg.KeywordAlerts
 		hb := msg.HardBreakKey
 		rcw := msg.RevealContentWarnings
+		dl := msg.DebugLog
 		a.settingsSaveSeq++
 		seq := a.settingsSaveSeq
 		return a, func() tea.Msg {
@@ -1889,7 +1918,7 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, keywordAlerts: ka, hardBreakKey: hb, revealContentWarnings: rcw}
+			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, keywordAlerts: ka, hardBreakKey: hb, revealContentWarnings: rcw, debugLog: dl}
 		}, true
 
 	case settingsSavedMsg:
@@ -1945,19 +1974,34 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		a.dithering = msg.dithering
 		a.hardBreakKey = msg.hardBreakKey
 		a.revealContentWarnings = msg.revealContentWarnings
+		savedText := "settings saved"
+		if msg.debugLog != a.debugLog {
+			switch {
+			case !msg.debugLog:
+				savedText += " · debug log stops on restart"
+			case a.logDir != "":
+				savedText += " · debug log starts on restart: " + a.logDir
+			default:
+				savedText += " · debug log starts on restart"
+			}
+		}
+		a.debugLog = msg.debugLog
 		a.loc = config.ParseTimezoneLabel(msg.timezone)
 		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.keywordAlerts)
 		a.settingsScreen = a.settingsScreen.SetSavedHardBreakKey(msg.hardBreakKey)
 		a.settingsScreen = a.settingsScreen.SetSavedRevealCW(msg.revealContentWarnings)
+		a.settingsScreen = a.settingsScreen.SetSavedDebugLog(msg.debugLog)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
-		*a, notifyCmd = a.notify(notifyInfo, "settings saved")
+		*a, notifyCmd = a.notify(notifyInfo, savedText)
 		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ka := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.keywordAlerts
 		hb := msg.hardBreakKey
 		rcw := msg.revealContentWarnings
+		dl := msg.debugLog
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
+				cfg.Debug = dl
 				cfg.HardBreakKey = hb
 				cfg.RevealContentWarnings = rcw
 				cfg.WanderLust = wl
@@ -4814,6 +4858,7 @@ type settingsSavedMsg struct {
 	keywordAlerts           []string
 	hardBreakKey            string
 	revealContentWarnings   bool
+	debugLog                bool
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made

@@ -768,7 +768,11 @@ func (c *HTTPClient) InitRTDB(idToken, rtdbUrl string) error {
 		return fmt.Errorf("api: InitRTDB: rtdbUrl is empty")
 	}
 	if c.isDebug() {
-		fmt.Printf("[rtdb debug] InitRTDB: url=%q\n", rtdbUrl)
+		host := ""
+		if u, err := url.Parse(rtdbUrl); err == nil {
+			host = u.Host
+		}
+		log.Printf("[rtdb] InitRTDB: host=%q", host)
 	}
 	c.rtdbClient = rtdb.New(rtdbUrl, idToken)
 	return nil
@@ -837,12 +841,29 @@ func (c *HTTPClient) doRequest(method, path string, bodyBytes []byte) (*envelope
 		return &env, resp.StatusCode, nil
 	}
 
-	env, status, err := attempt()
+	// Debug log is metadata only: no query string (search terms), headers or
+	// bodies, and no URL in network errors (it would carry the query too).
+	logged := func() (*envelope, int, error) {
+		start := time.Now()
+		env, status, err := attempt()
+		if c.isDebug() {
+			p, _, _ := strings.Cut(path, "?")
+			logErr := err
+			var ue *url.Error
+			if errors.As(err, &ue) {
+				logErr = ue.Err
+			}
+			log.Printf("api: %s %s -> %d in %s err=%v", method, p, status, time.Since(start).Round(time.Millisecond), logErr)
+		}
+		return env, status, err
+	}
+
+	env, status, err := logged()
 	if status == 401 && !strings.HasPrefix(path, "/v1/auth/") {
 		if refreshErr := c.refresh(); refreshErr != nil {
 			return nil, ErrUnauthorized
 		}
-		env, _, err = attempt()
+		env, _, err = logged()
 	}
 	return env, err
 }
@@ -2297,7 +2318,7 @@ func (c *HTTPClient) SubscribeRoomPresence(ctx context.Context, roomID string, s
 					return
 				}
 				if c.isDebug() {
-					log.Printf("[chat_presence %s] event=%q data=%s", roomID, ev.Event, ev.Data)
+					log.Printf("[chat_presence %s] event=%q bytes=%d", roomID, ev.Event, len(ev.Data))
 				}
 				if ev.Event != "put" && ev.Event != "patch" {
 					continue
@@ -2568,7 +2589,7 @@ func (c *HTTPClient) SubscribeUserConversations(ctx context.Context, uid string,
 					return
 				}
 				if c.isDebug() {
-					log.Printf("[user_conversations %s] event=%q data=%s", uid, ev.Event, ev.Data)
+					log.Printf("[user_conversations %s] event=%q bytes=%d", uid, ev.Event, len(ev.Data))
 				}
 				if ev.Event != "put" && ev.Event != "patch" {
 					continue
