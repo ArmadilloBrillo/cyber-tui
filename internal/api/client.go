@@ -841,12 +841,29 @@ func (c *HTTPClient) doRequest(method, path string, bodyBytes []byte) (*envelope
 		return &env, resp.StatusCode, nil
 	}
 
-	env, status, err := attempt()
+	// Debug log is metadata only: no query string (search terms), headers or
+	// bodies, and no URL in network errors (it would carry the query too).
+	logged := func() (*envelope, int, error) {
+		start := time.Now()
+		env, status, err := attempt()
+		if c.isDebug() {
+			p, _, _ := strings.Cut(path, "?")
+			logErr := err
+			var ue *url.Error
+			if errors.As(err, &ue) {
+				logErr = ue.Err
+			}
+			log.Printf("api: %s %s -> %d in %s err=%v", method, p, status, time.Since(start).Round(time.Millisecond), logErr)
+		}
+		return env, status, err
+	}
+
+	env, status, err := logged()
 	if status == 401 && !strings.HasPrefix(path, "/v1/auth/") {
 		if refreshErr := c.refresh(); refreshErr != nil {
 			return nil, ErrUnauthorized
 		}
-		env, _, err = attempt()
+		env, _, err = logged()
 	}
 	return env, err
 }
