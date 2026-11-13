@@ -3,10 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/url"
 	"os"
+	"runtime"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ragnar/cyber-tui/internal/api"
@@ -61,6 +63,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "useMock=true — running with mock data")
 	}
 
+	// Stray log.Printf calls must never reach the terminal: they draw over
+	// the TUI (and the SSH host's terminal in server mode). Debug mode below
+	// redirects to a file instead.
+	log.SetOutput(io.Discard)
+
 	// SSH server mode (experimental)
 	if cfg.SSHListenAddr != "" {
 		if err := validateSSHAddr(cfg.SSHListenAddr, cfg.AllowRemoteSSH); err != nil {
@@ -81,18 +88,23 @@ func main() {
 		return
 	}
 
-	// cfg.Debug ("debug": true in ~/.cyber-tui.json) enables verbose RTDB
-	// output (api.HTTPClient.isDebug) — redirect the standard log package to
-	// a file for the run so that output, wherever it's logged from, never
-	// hits the terminal and corrupts the alt-screen display. Set up before
-	// protocol detection below so that TEMPORARY diagnostic logging (see
-	// imgview.ProbeSixel) is captured too.
+	// cfg.Debug sends the standard log package to a dated file in the user
+	// cache dir. Set up before protocol detection below so that TEMPORARY
+	// diagnostic logging (see imgview.ProbeSixel) is captured too.
+	logsDir, logsErr := logDir()
+	stamp := runStamp()
 	if cfg.Debug {
-		logFile, err := tea.LogToFile("cyber-tui-debug.log", "")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "debug: %v\n", err)
+		if logsErr != nil {
+			fmt.Fprintf(os.Stderr, "debug log: %v\n", logsErr)
+		} else if f, err := createLog(logsDir, "debug", stamp); err != nil {
+			fmt.Fprintf(os.Stderr, "debug log: %v\n", err)
 		} else {
-			defer logFile.Close()
+			defer f.Close()
+			log.SetOutput(f)
+			log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+			log.Printf("cyber-tui %s (commit %s, built %s) %s %s/%s",
+				version.Version, version.Commit, version.Date, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+			pruneLogs(logsDir, "debug", keepLogs)
 		}
 	}
 
@@ -129,16 +141,18 @@ func main() {
 	// CYBERSPACE_DEBUG_KEYS logs every raw tea.KeyMsg (key + KeyType + runes) to
 	// cyber-tui-keys.log, to diagnose terminal-specific keybinding quirks (e.g.
 	// a terminal not sending the expected byte for a given ctrl-combo) without
-	// having to instrument app logic — see docs/00-project-reference.md.
+	// having to instrument app logic — see docs/00-project-reference.md. It
+	// has its own logger so it doesn't take the global one from debug mode.
 	if os.Getenv("CYBERSPACE_DEBUG_KEYS") != "" {
-		logFile, err := tea.LogToFile("cyber-tui-keys.log", "")
+		keysFile, err := os.OpenFile("cyber-tui-keys.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "CYBERSPACE_DEBUG_KEYS: %v\n", err)
 		} else {
-			defer logFile.Close()
+			defer keysFile.Close()
+			keysLog := log.New(keysFile, "", log.LstdFlags)
 			opts = append(opts, tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
 				if km, ok := msg.(tea.KeyMsg); ok {
-					log.Printf("key: %q type=%v runes=%v alt=%v", km.String(), km.Type, km.Runes, km.Alt)
+					keysLog.Printf("key: %q type=%v runes=%v alt=%v", km.String(), km.Type, km.Runes, km.Alt)
 				}
 				return msg // pure observer — never alters the message
 			}))
