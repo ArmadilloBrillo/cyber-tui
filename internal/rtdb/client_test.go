@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,19 @@ import (
 )
 
 // --- Get tests ---
+
+func TestGet_ConnectErrorOmitsToken(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	srv.Close() // closed server: the request fails at connect time
+
+	_, err := rtdb.New(srv.URL, "SECRET-TOKEN").Get(context.Background(), "/x", nil)
+	if err == nil {
+		t.Fatal("expected connect error")
+	}
+	if strings.Contains(err.Error(), "SECRET-TOKEN") {
+		t.Errorf("error leaks auth token: %v", err)
+	}
+}
 
 func TestGet_Success(t *testing.T) {
 	want := `{"key":"value"}`

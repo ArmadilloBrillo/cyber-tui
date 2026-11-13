@@ -768,7 +768,11 @@ func (c *HTTPClient) InitRTDB(idToken, rtdbUrl string) error {
 		return fmt.Errorf("api: InitRTDB: rtdbUrl is empty")
 	}
 	if c.isDebug() {
-		fmt.Printf("[rtdb debug] InitRTDB: url=%q\n", rtdbUrl)
+		host := ""
+		if u, err := url.Parse(rtdbUrl); err == nil {
+			host = u.Host
+		}
+		log.Printf("[rtdb] InitRTDB: host=%q", host)
 	}
 	c.rtdbClient = rtdb.New(rtdbUrl, idToken)
 	return nil
@@ -2297,7 +2301,7 @@ func (c *HTTPClient) SubscribeRoomPresence(ctx context.Context, roomID string, s
 					return
 				}
 				if c.isDebug() {
-					log.Printf("[chat_presence %s] event=%q data=%s", roomID, ev.Event, ev.Data)
+					log.Printf("[chat_presence %s] event=%q bytes=%d", roomID, ev.Event, len(ev.Data))
 				}
 				if ev.Event != "put" && ev.Event != "patch" {
 					continue
@@ -2568,7 +2572,7 @@ func (c *HTTPClient) SubscribeUserConversations(ctx context.Context, uid string,
 					return
 				}
 				if c.isDebug() {
-					log.Printf("[user_conversations %s] event=%q data=%s", uid, ev.Event, ev.Data)
+					log.Printf("[user_conversations %s] event=%q bytes=%d", uid, ev.Event, len(ev.Data))
 				}
 				if ev.Event != "put" && ev.Event != "patch" {
 					continue
