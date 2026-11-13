@@ -1,4 +1,4 @@
-# ᑕ¥βєяรקค¢є API v0.9.1
+# ᑕ¥βєяรקค¢є API v0.9.2
 
 ## Access
 
@@ -1078,7 +1078,7 @@ Sends into an existing conversation (start one first via `POST /v1/cmail`). `sen
 
 `content` may contain line breaks (`\n`), up to 10 lines and 2048 characters. Runs of blank lines collapse to one, and lines past the tenth join it with spaces. Clients should render line breaks.
 
-Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. `/art` and the `/mute` family are cIRC-only and return `400` here.
+Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/coin`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. `/art` and the `/mute` family are cIRC-only and return `400` here.
 
 ### Mark as Read
 
@@ -1209,7 +1209,7 @@ POST /v1/circ/:roomId
 
 `content` may contain line breaks (`\n`), up to 10 lines and 2048 characters. Runs of blank lines collapse to one, and lines past the tenth join it with spaces. Clients should render line breaks.
 
-Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. Line breaks in a styled message's text become spaces.
+Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/coin`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. Line breaks in a styled message's text become spaces.
 
 ### Delete Your Message
 
@@ -1467,6 +1467,7 @@ Both cIRC and C-Mail sends understand IRC-style slash commands. When a message's
 | `/me <action>` | Third-person action, e.g. `/me waves` |
 | `/poke` `/hug` `/hi5` `/slap` `[@user]` | Emote at a user (or a solo line with no target) |
 | `/dice <notation>` | Roll dice: `/dice`, `/dice:SIDES`, `/dice:COUNT:SIDES`, or full notation (`4d6kh3`, `2d6+3`, `adv`, `d%`, `6x4d6kh3`) |
+| `/coin` | Flip a coin: heads or tails |
 | `/8ball <question>` | Ask the magic 8-ball |
 | `/fortune` | A random fortune cookie |
 | `/gif <https url>` | Post an animated GIF by link |
