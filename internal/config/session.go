@@ -44,7 +44,8 @@ type Config struct {
 	AllowInsecureAPI bool `json:"allowInsecureApi,omitempty"`
 	// UseMock runs the app against mock data (no credentials needed).
 	UseMock bool `json:"useMock,omitempty"`
-	// Debug enables verbose RTDB debug output.
+	// Debug writes a metadata-only debug log to the user cache dir; read at
+	// startup, so a change applies on the next launch.
 	Debug bool `json:"debug,omitempty"`
 	// AutoEmail and AutoPassword pre-fill credentials for automatic login on startup.
 	// Stored in plain text — the file is created with mode 0600.
