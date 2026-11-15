@@ -1,4 +1,4 @@
-Run the apifetch developer tool to call the cyberspace.online API using the saved session from ~/.cyber-tui.json.
+Run the apifetch developer tool to call the cyberspace.online API using the saved session from the cyber-tui config file (~/.config/cyber-tui/config.json).
 
 Usage: /apifetch <path> [options]
 

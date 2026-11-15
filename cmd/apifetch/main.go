@@ -25,6 +25,10 @@ func main() {
 	}
 	path := flag.Arg(0)
 
+	if _, _, err := config.Migrate(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: load config: %v\n", err)

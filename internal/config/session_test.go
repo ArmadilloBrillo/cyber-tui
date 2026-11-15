@@ -19,7 +19,22 @@ func withTempHome(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
+	t.Setenv("XDG_CONFIG_HOME", "") // never touch a developer's real config
 	return dir
+}
+
+// configPath returns DefaultPath under a withTempHome home, with its
+// directory created so tests can write the file directly.
+func configPath(t *testing.T, _ string) string {
+	t.Helper()
+	p, err := config.DefaultPath()
+	if err != nil {
+		t.Fatalf("DefaultPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	return p
 }
 
 func TestLoadMissing(t *testing.T) {
@@ -98,7 +113,7 @@ func TestSaveAndLoad_CustomPalette(t *testing.T) {
 
 func TestLoad_CustomPaletteAbsentIsNil(t *testing.T) {
 	home := withTempHome(t)
-	path := filepath.Join(home, ".cyber-tui.json")
+	path := configPath(t, home)
 	if err := os.WriteFile(path, []byte(`{"theme":"cyber"}`), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -130,7 +145,7 @@ func TestIsWanderEnabled_False(t *testing.T) {
 func TestLoad_WanderLustDefaultsFalse(t *testing.T) {
 	home := withTempHome(t)
 	// Write a config that has no wanderLust key.
-	path := filepath.Join(home, ".cyber-tui.json")
+	path := configPath(t, home)
 	if err := os.WriteFile(path, []byte(`{"refreshToken":"tok"}`), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -145,7 +160,7 @@ func TestLoad_WanderLustDefaultsFalse(t *testing.T) {
 
 func TestLoad_WanderLustExplicitFalsePreserved(t *testing.T) {
 	home := withTempHome(t)
-	path := filepath.Join(home, ".cyber-tui.json")
+	path := configPath(t, home)
 	if err := os.WriteFile(path, []byte(`{"wanderLust":false}`), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -212,7 +227,7 @@ func TestFilePermissions(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	path := filepath.Join(home, ".cyber-tui.json")
+	path := configPath(t, home)
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("Stat: %v", err)

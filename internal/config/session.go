@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 )
 
 // Config holds all persistent state for the app: session tokens, user preferences,
-// and app settings. It is stored as JSON in ~/.cyber-tui.json (mode 0600).
+// and app settings. It is stored as JSON at DefaultPath() (mode 0600).
 //
 // App settings (APIBaseURL, UseMock, etc.) are edited manually in the file.
 // Session fields (RefreshToken, Username, Email, SavedAt) are written on login.
@@ -31,7 +32,7 @@ type Config struct {
 	// Empty string defaults to UTC.
 	Timezone string `json:"timezone,omitempty"`
 
-	// App settings — edit manually in ~/.cyber-tui.json.
+	// App settings — edit manually in the config file (DefaultPath).
 	// Theme selects the color palette: "cyber" (default), "c64", "vt320", "bland", "custom".
 	Theme string `json:"theme,omitempty"`
 	// CustomPalette holds the user-built palette for the "custom" theme,
@@ -203,13 +204,36 @@ func (c Config) GetHardBreakKey() string {
 	return c.HardBreakKey
 }
 
-// DefaultPath returns the canonical path for the config file: ~/.cyber-tui.json.
-func DefaultPath() (string, error) {
+// Dir returns the config directory: %AppData%\cyber-tui on Windows, and
+// $XDG_CONFIG_HOME/cyber-tui or ~/.config/cyber-tui elsewhere. macOS
+// deliberately skips os.UserConfigDir (~/Library/Application Support) in
+// favour of ~/.config, like most terminal tools. It does not create the dir.
+func Dir() (string, error) {
+	if runtime.GOOS == "windows" {
+		d, err := os.UserConfigDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(d, "cyber-tui"), nil
+	}
+	// The XDG spec says a relative value must be ignored.
+	if x := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(x) {
+		return filepath.Join(x, "cyber-tui"), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cyber-tui.json"), nil
+	return filepath.Join(home, ".config", "cyber-tui"), nil
+}
+
+// DefaultPath returns the canonical path for the config file: Dir()/config.json.
+func DefaultPath() (string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.json"), nil
 }
 
 // Load reads the config file at the default path.
@@ -233,10 +257,14 @@ func Load() (Config, error) {
 	return c, nil
 }
 
-// Save writes the config to the default path with mode 0600 (owner read/write only).
+// Save writes the config to the default path with mode 0600 (owner read/write only),
+// creating the config directory (0700) if needed.
 func Save(c Config) error {
 	path, err := DefaultPath()
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
