@@ -103,7 +103,7 @@ cyber-tui/
 
 Application entry point. Orchestrates startup:
 
-1. Loads `~/.cyber-tui.json` via `config.Load()`
+1. Moves a legacy `~/.cyber-tui.json` to the new location via `config.Migrate()`, then loads it via `config.Load()`
 2. Applies theme via `theme.Set(config.Theme)`
 3. Selects API client: `api.MockClient` when `config.UseMock == true`, otherwise `api.HTTPClient`
 4. Decides which mode to start:
@@ -210,7 +210,7 @@ Production REST HTTP client. Exported type: `HTTPClient`.
 Development and test mock implementing `Client`. Exported type: `MockClient`.
 
 - `NewMockClient()` creates a client pre-populated with static data: 3 users (neuromancer, molly_millions, wintermute), posts, replies, notifications, and conversations.
-- Enabled by setting `useMock: true` in `~/.cyber-tui.json`.
+- Enabled by setting `useMock: true` in the config file.
 - Allows full UI development without API credentials.
 
 #### `client_test.go` / `mock_test.go`
@@ -223,7 +223,7 @@ Unit tests covering login/refresh flows, error handling (401, rate limiting, mal
 
 #### `session.go`
 
-Reads and writes the user's persistent configuration at `~/.cyber-tui.json`.
+Reads and writes the user's persistent configuration at `DefaultPath()` (see Configuration File below). `migrate.go` moves the legacy `~/.cyber-tui.json` there.
 
 **Exported identifiers:**
 
@@ -232,7 +232,9 @@ Reads and writes the user's persistent configuration at `~/.cyber-tui.json`.
 | `Config` | struct | All persisted state (see Configuration File section below) |
 | `Load()` | func | Reads config from disk; returns empty Config if missing |
 | `Save(Config)` | func | Writes config with mode 0600 |
-| `DefaultPath()` | func | Returns `~/.cyber-tui.json` |
+| `Dir()` | func | Config directory: `$XDG_CONFIG_HOME/cyber-tui` or `~/.config/cyber-tui` (Linux, macOS), `%AppData%\cyber-tui` (Windows); does not create it |
+| `DefaultPath()` | func | Returns `Dir()/config.json` |
+| `Migrate()` | func | Moves legacy `~/.cyber-tui.json` to `DefaultPath()` (symlink-aware, copy fallback); new file wins if both exist |
 | `Clear()` | func | Deletes the config file |
 | `GetLocation()` | method | Parses `Config.Timezone` to `*time.Location` |
 | `ParseTimezoneLabel(label)` | func | Converts "UTC+5:30" string to `*time.Location` |
@@ -463,7 +465,7 @@ Settings are organised into static `settingsGroups`, each containing `settingsIt
 
 **Deferred fields** (read from API, never patched): `iconTheme`, `followedTopics`
 
-**Local-only fields** (persisted to `~/.cyber-tui.json`, never sent to the API): `imageViewer` (enum, "terminal"/"browser" — "terminal" tries inline/fullscreen-modal rendering via `internal/ui/imgview` when a graphics protocol was detected, falling back to the browser only if none was; "browser" always opens images externally regardless of protocol detection), `inlineImages` (bool, gates Feed/Post Detail's automatic inline rendering independent of the fullscreen modal), `feedManualRefreshOnly` (bool, "feed" group, "auto-refresh (background poll)" — disables the 60s feed background poll; see `docs/39-feed-background-poll.md`), `typingIndicatorsEnabled` (bool, "c-mail" group, "typing indicators" — positive polarity; disables C-Mail's typing-presence subscription, announce/clear calls, and merged anim/idle-check tick; see `docs/00-battery-audit.md` item #6), `desktopNotifications` (bool, "desktop" group, "notifications (OSC 9 terminals)" — off by default; OSC 9 toast for new C-Mail and new activity, carrying the Notifications-tab row text, when the window is unfocused or focused on a different tab than the event; never fires from an SSH session; see `docs/53-desktop-notifications.md`)
+**Local-only fields** (persisted to the config file, never sent to the API): `imageViewer` (enum, "terminal"/"browser" — "terminal" tries inline/fullscreen-modal rendering via `internal/ui/imgview` when a graphics protocol was detected, falling back to the browser only if none was; "browser" always opens images externally regardless of protocol detection), `inlineImages` (bool, gates Feed/Post Detail's automatic inline rendering independent of the fullscreen modal), `feedManualRefreshOnly` (bool, "feed" group, "auto-refresh (background poll)" — disables the 60s feed background poll; see `docs/39-feed-background-poll.md`), `typingIndicatorsEnabled` (bool, "c-mail" group, "typing indicators" — positive polarity; disables C-Mail's typing-presence subscription, announce/clear calls, and merged anim/idle-check tick; see `docs/00-battery-audit.md` item #6), `desktopNotifications` (bool, "desktop" group, "notifications (OSC 9 terminals)" — off by default; OSC 9 toast for new C-Mail and new activity, carrying the Notifications-tab row text, when the window is unfocused or focused on a different tab than the event; never fires from an SSH session; see `docs/53-desktop-notifications.md`)
 
 - `j`/`k` navigate; Space/Enter toggle booleans or cycle enum options
 - ctrl+s emits `SaveSettingsMsg` with the updated settings; ESC discards
@@ -718,7 +720,7 @@ Color palettes and Lip Gloss style objects for four retro themes, plus a user-ed
 | **c64** | Commodore 64 purple background with cyan and bright magenta |
 | **vt320** | VT320 terminal dim green with amber accents |
 | **bland** | No forced colors — renders in the terminal's own default palette; active/selected states use bold/underline and a thicker active-pane border instead of color |
-| **custom** | User-built palette, edited in-TUI via the theme picker (`t`, then `e` on the "custom" row) and persisted to `~/.cyber-tui.json`. See `docs/40-custom-themes.md`. |
+| **custom** | User-built palette, edited in-TUI via the theme picker (`t`, then `e` on the "custom" row) and persisted to the config file. See `docs/40-custom-themes.md`. |
 
 Because all colors are package variables, styles automatically inherit the new palette when `Set()` is called — no re-initialization needed.
 
@@ -761,7 +763,7 @@ Lightweight, unauthenticated helpers for YouTube video links — no `internal/ap
 
 ## Configuration File
 
-Location: `~/.cyber-tui.json`  
+Location: `~/.config/cyber-tui/config.json` on Linux and macOS (`$XDG_CONFIG_HOME/cyber-tui/config.json` if set), `%AppData%\cyber-tui\config.json` on Windows. Moved automatically from the legacy `~/.cyber-tui.json`.  
 Permissions: `0600` (owner read/write only)
 
 | Field | Type | Default | Purpose |
@@ -777,7 +779,7 @@ Permissions: `0600` (owner read/write only)
 | `apiBaseURL` | string | `"https://api.cyberspace.online"` | Override for development |
 | `allowInsecureApi` | bool | `false` | Permit a plain `http://` `apiBaseURL` to a non-loopback host |
 | `useMock` | bool | `false` | Use `MockClient` instead of real API |
-| `debug` | bool | `false` | Write a metadata-only debug log to `<user cache dir>/cyber-tui/debug-<stamp>.log` (newest 10 kept). Toggle in Settings > diagnostics; applies on next launch. Crash stack traces go to `crash-<stamp>.log` in the same dir regardless of this setting |
+| `debug` | bool | `false` | Write a metadata-only debug log to `logs/debug-<stamp>.log` next to the config file (newest 10 kept). Toggle in Settings > diagnostics; applies on next launch. Crash stack traces go to `crash-<stamp>.log` in the same dir regardless of this setting |
 | `autoEmail` | string | — | Pre-fill email on login screen |
 | `autoPassword` | string | — | Pre-fill password (plain text; not recommended) |
 | `sshListenAddr` | string | — | Enable SSH server mode (e.g. `":2222"`) |

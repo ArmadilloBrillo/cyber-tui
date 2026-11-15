@@ -163,7 +163,7 @@ func Set(name string) {
 
 // Palette is the set of colors a theme is built from, named after the UI
 // role each one drives rather than the color itself — so the theme editor
-// and ~/.cyber-tui.json read as "what does this control" instead of raw
+// and the config file read as "what does this control" instead of raw
 // color names. It's the data-driven counterpart to the literal
 // setCyber/setC64/etc. themes, used for the user-editable "custom" theme and
 // exposed so other packages (the theme editor screen, and a future "detect

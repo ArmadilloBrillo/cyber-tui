@@ -748,7 +748,7 @@ func (a App) WithSavedPreferences(s config.Config) App {
 	return a
 }
 
-// WithSavedSession attaches a persisted session loaded from ~/.cyber-tui.json.
+// WithSavedSession attaches a persisted session loaded from the config file.
 // When set, Init attempts to resume the session via token refresh instead of
 // showing the login screen.
 func (a App) WithSavedSession(s config.Config) App {
@@ -1926,7 +1926,7 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		// save's UpdateSettings network round-trip finishes. If that earlier
 		// save were still allowed to persist once it does complete, it would
 		// silently overwrite the newer values — in memory and in
-		// ~/.cyber-tui.json — with its own stale snapshot. Only the
+		// the config file — with its own stale snapshot. Only the
 		// most-recently-dispatched save (the current seq) is applied; any
 		// other completion is dropped.
 		if msg.seq != a.settingsSaveSeq {

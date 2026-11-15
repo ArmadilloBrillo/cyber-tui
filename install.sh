@@ -145,9 +145,25 @@ cmd_remove() {
 	say "removed $target"
 
 	# Config is deliberately left alone: it holds the saved session token, and a
-	# reinstall should not force the user to log in again.
-	if [ -f "$HOME/.cyber-tui.json" ]; then
-		say "kept your config at ~/.cyber-tui.json — delete it to clear the saved session"
+	# reinstall should not force the user to log in again. The app moves the
+	# legacy ~/.cyber-tui.json to the per-OS location on startup, but the
+	# legacy file can still exist (never upgraded, or written by a downgrade).
+	case "$(uname -s)" in
+	MINGW* | MSYS* | CYGWIN*) config_dir="${APPDATA:-}/cyber-tui" ;;
+	*)
+		case "${XDG_CONFIG_HOME:-}" in
+		/*) config_dir="$XDG_CONFIG_HOME/cyber-tui" ;;
+		*) config_dir="$HOME/.config/cyber-tui" ;;
+		esac
+		;;
+	esac
+	for config_file in "$config_dir/config.json" "$HOME/.cyber-tui.json"; do
+		if [ -f "$config_file" ]; then
+			say "kept your config at $config_file — delete it to clear the saved session"
+		fi
+	done
+	if [ -d "$config_dir/logs" ]; then
+		say "kept debug and crash logs in $config_dir/logs"
 	fi
 
 	# A second copy earlier on the PATH would make the removal look like it failed.

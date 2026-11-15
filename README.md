@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/ArmadilloBrillo/cyber-tui/dev/insta
 | `remove` | `uninstall` | Delete the installed binary |
 | `help` | `-h`, `--help` | Show usage |
 
-`remove` leaves `~/.cyber-tui.json` alone, so your saved session survives a reinstall — delete that file yourself to clear it.
+`remove` leaves your [config file](#configuration) and its `logs/` folder alone, so your saved session survives a reinstall. Delete them yourself to clear it.
 
 Overrides:
 
@@ -88,7 +88,7 @@ Prefer not to pipe to a shell? Download [`install.sh`](install.sh), read it, the
 - **Timezone** — display timestamps in any UTC offset
 - **Markdown rendering** — GFM formatting and @mention highlighting in post, reply, and chat content
 - **Desktop notifications** — optional OS toast (OSC 9) for new C-Mail and activity while the app is backgrounded
-- **Session persistence** — refresh token saved to `~/.cyber-tui.json`; login only required when the token expires
+- **Session persistence** — refresh token saved to your [config file](#configuration); login only required when the token expires
 
 ---
 
@@ -122,13 +122,20 @@ make build
 ./dist/cyber-tui --version
 ```
 
-On first run you will be prompted to log in with your cyberspace.online email and password. Your session token is saved to `~/.cyber-tui.json` and subsequent launches auto-login — your password is never stored. Login is only required again when the token expires.
+On first run you will be prompted to log in with your cyberspace.online email and password. Your session token is saved to your [config file](#configuration) and subsequent launches auto-login — your password is never stored. Login is only required again when the token expires.
 
 ---
 
 ## Configuration
 
-All settings live in `~/.cyber-tui.json`. The file is created automatically on first login and written with mode **`0600`** (owner read/write only).
+All settings live in `config.json` in the standard config folder for your OS:
+
+| OS | Location |
+|---|---|
+| Linux, macOS | `~/.config/cyber-tui/config.json` (or `$XDG_CONFIG_HOME/cyber-tui/config.json` if set) |
+| Windows | `%AppData%\cyber-tui\config.json` |
+
+The file is created automatically on first login and written with mode **`0600`** (owner read/write only). Older versions kept it at `~/.cyber-tui.json`; it is moved to the new location automatically the first time you start a newer version. Debug and crash logs are written to a `logs/` folder next to it.
 
 You can add any of the following fields manually. Most are also editable live from the in-app Settings screen; a few (marked below) are config-file-only.
 

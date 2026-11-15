@@ -56,7 +56,7 @@ func main() {
 		}
 	}
 
-	// newClient builds a fresh API client. Set useMock: true in ~/.cyber-tui.json
+	// newClient builds a fresh API client. Set useMock: true in the config file
 	// to run against mock data. SSH server mode calls this once per connection so
 	// sessions never share authentication state.
 	newClient := func() api.Client {
@@ -126,7 +126,7 @@ func main() {
 		// env-var detection came up empty — Kitty/iTerm2 are higher fidelity
 		// when known. Autodetection is unreliable on some terminals (e.g.
 		// mintty/Git Bash on Windows not answering the DA1 probe); set
-		// "graphicsProtocol" in ~/.cyber-tui.json to bypass it.
+		// "graphicsProtocol" in the config file to bypass it.
 		if gfxProto == imgview.ProtocolNone && imgview.ProbeSixel(os.Stdin, os.Stdout) {
 			gfxProto = imgview.ProtocolSixel
 		}
