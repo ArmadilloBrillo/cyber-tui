@@ -31,6 +31,14 @@ func main() {
 		os.Exit(0)
 	}
 
+	from, to, err := config.Migrate()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+	if from != "" {
+		fmt.Fprintf(os.Stderr, "config moved from %s to %s\n", from, to)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
