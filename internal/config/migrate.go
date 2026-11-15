@@ -45,6 +45,10 @@ func Migrate() (from, to string, err error) {
 	return legacy, to, nil
 }
 
+// rename is swapped in tests to simulate a cross-filesystem rename failure
+// or another instance migrating first.
+var rename = os.Rename
+
 // move renames from to to, falling back to copy-then-remove (e.g. across
 // filesystems). A symlinked from (dotfile managers) is recreated as a link to
 // its absolute target: renaming a relative link into another dir breaks it.
@@ -58,7 +62,7 @@ func move(from, to string) error {
 		}
 		return copyThenRemove(from, to)
 	}
-	if err := os.Rename(from, to); err == nil {
+	if err := rename(from, to); err == nil {
 		return nil
 	}
 	return copyThenRemove(from, to)
