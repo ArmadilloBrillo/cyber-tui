@@ -78,6 +78,9 @@ type SharedConfigMsg struct {
 	// (config.Config.RevealContentWarnings); when true, post screens render
 	// content-warned posts ungated.
 	RevealContentWarnings bool
+	// DebugLog is the user's raw preference (config.Config.Debug), read by
+	// the settings screen only; it takes effect on the next launch.
+	DebugLog bool
 	// DesktopNotifications is the user's raw preference
 	// (config.Config.DesktopNotifications), used by the settings screen to
 	// display/edit the toggle — see docs/53-desktop-notifications.md.
@@ -194,6 +197,7 @@ type SaveSettingsMsg struct {
 	KeywordAlerts           []string
 	HardBreakKey            string
 	RevealContentWarnings   bool
+	DebugLog                bool
 	RemoteChanged           bool // true when API-managed fields differ from the last saved baseline
 }
 

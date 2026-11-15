@@ -355,6 +355,16 @@ var settingsGroups = []settingsGroup{
 		},
 	},
 	{
+		title: "diagnostics",
+		items: []settingsItem{
+			{
+				label: "debug log (on restart)", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.debugLog },
+				toggle:  func(m SettingsModel) SettingsModel { m.debugLog = !m.debugLog; return m },
+			},
+		},
+	},
+	{
 		title: "keyword alerts",
 		items: []settingsItem{
 			{
@@ -399,6 +409,8 @@ type SettingsModel struct {
 	originalShowGlobeTab            bool           // last saved baseline
 	revealCW                        bool           // live local config value (config.Config.RevealContentWarnings)
 	originalRevealCW                bool           // last saved baseline
+	debugLog                        bool           // live local config value (config.Config.Debug)
+	originalDebugLog                bool           // last saved baseline
 	keywordAlerts                   []string       // live local config value (config.Config.KeywordAlerts); edited via the KeywordEditorModel popup, not inline
 	originalKeywordAlerts           []string       // last saved baseline
 	hardBreakKey                    string         // live local config value (config.Config.HardBreakKey)
@@ -463,6 +475,13 @@ func (m SettingsModel) SetSavedHardBreakKey(key string) SettingsModel {
 	return m
 }
 
+// SetSavedDebugLog advances the debug-log baseline after a save.
+func (m SettingsModel) SetSavedDebugLog(on bool) SettingsModel {
+	m.debugLog = on
+	m.originalDebugLog = on
+	return m
+}
+
 // SetSavedRevealCW advances the reveal-content-warnings baseline after a save.
 func (m SettingsModel) SetSavedRevealCW(reveal bool) SettingsModel {
 	m.revealCW = reveal
@@ -501,6 +520,7 @@ func (m SettingsModel) IsDirty() bool {
 		m.desktopNotifications != m.originalDesktopNotifications ||
 		m.showGlobeTab != m.originalShowGlobeTab ||
 		m.revealCW != m.originalRevealCW ||
+		m.debugLog != m.originalDebugLog ||
 		m.maxThreadDepth != m.originalMaxThreadDepth ||
 		m.timezone != m.originalTimezone ||
 		m.imageViewer != m.originalImageViewer ||
@@ -626,6 +646,8 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.originalShowGlobeTab = msg.ShowGlobeTab
 			m.revealCW = msg.RevealContentWarnings
 			m.originalRevealCW = msg.RevealContentWarnings
+			m.debugLog = msg.DebugLog
+			m.originalDebugLog = msg.DebugLog
 			m.maxThreadDepth = msg.MaxThreadDepth
 			m.originalMaxThreadDepth = msg.MaxThreadDepth
 			tz := msg.Timezone
@@ -718,9 +740,10 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				ka := m.keywordAlerts
 				hb := m.hardBreakKey
 				rcw := m.revealCW
+				dl := m.debugLog
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, KeywordAlerts: ka, HardBreakKey: hb, RevealContentWarnings: rcw, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, WanderLust: wl, FeedManualRefreshOnly: fmro, TypingIndicatorsEnabled: tie, DesktopNotifications: dn, ShowGlobeTab: sgt, MaxThreadDepth: td, Timezone: tz, ImageViewer: iv, GraphicsProtocol: gp, InlineImages: ii, Dithering: dt, KeywordAlerts: ka, HardBreakKey: hb, RevealContentWarnings: rcw, DebugLog: dl, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil
@@ -734,6 +757,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 			m.desktopNotifications = m.originalDesktopNotifications
 			m.showGlobeTab = m.originalShowGlobeTab
 			m.revealCW = m.originalRevealCW
+			m.debugLog = m.originalDebugLog
 			m.maxThreadDepth = m.originalMaxThreadDepth
 			m.timezone = m.originalTimezone
 			m.imageViewer = m.originalImageViewer

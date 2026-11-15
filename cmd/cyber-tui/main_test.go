@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestValidateBaseURL(t *testing.T) {
 	cases := []struct {
@@ -45,6 +49,34 @@ func TestValidateSSHAddr(t *testing.T) {
 		err := validateSSHAddr(c.addr, c.allowRemote)
 		if (err != nil) != c.wantErr {
 			t.Errorf("validateSSHAddr(%q, %v) err = %v, wantErr %v", c.addr, c.allowRemote, err, c.wantErr)
+		}
+	}
+}
+
+func TestPruneLogs_KeepsNewestOfPrefix(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{
+		"debug-2026-01-01T00-00-00-1.log",
+		"debug-2026-01-02T00-00-00-1.log",
+		"debug-2026-01-03T00-00-00-1.log",
+		"crash-2026-01-01T00-00-00-1.log",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pruneLogs(dir, "debug", 2)
+
+	for name, want := range map[string]bool{
+		"debug-2026-01-01T00-00-00-1.log": false,
+		"debug-2026-01-02T00-00-00-1.log": true,
+		"debug-2026-01-03T00-00-00-1.log": true,
+		"crash-2026-01-01T00-00-00-1.log": true,
+	} {
+		_, err := os.Stat(filepath.Join(dir, name))
+		if got := err == nil; got != want {
+			t.Errorf("%s exists=%v, want %v", name, got, want)
 		}
 	}
 }

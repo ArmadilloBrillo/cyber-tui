@@ -335,7 +335,7 @@ type SendRoomMessageMsg struct {
 // text is rewritten locally by borkCommand and sent as a plain message.
 var baseSlashCommands = map[string]bool{
 	"/me": true, "/poke": true, "/hug": true, "/hi5": true, "/slap": true,
-	"/dice": true, "/8ball": true, "/fortune": true, "/help": true,
+	"/dice": true, "/coin": true, "/8ball": true, "/fortune": true, "/help": true,
 	"/gif": true, "/song": true, "/bork": true,
 }
 

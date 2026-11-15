@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -4277,5 +4279,35 @@ func TestHTTPPromoteGuild_NotFoundWhenNotInGuild(t *testing.T) {
 	}
 	if apiErr.Status != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", apiErr.Status)
+	}
+}
+
+func TestDoRequest_DebugLogIsMetadataOnly(t *testing.T) {
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	c := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":{"code":"boom","message":"server broke"}}`))
+	})).WithDebug(true)
+
+	c.Login("someone@example.com", "SECRET-PW")
+	c.Search("SECRET-TERM")
+
+	down := httptest.NewServer(http.NotFoundHandler())
+	down.Close() // request fails at connect time: *url.Error carries the full URL
+	api.NewHTTPClientForTesting(down.URL, down.Client()).WithDebug(true).Search("SECRET-NET")
+
+	got := buf.String()
+	for _, want := range []string{"api: POST /v1/auth/login -> 500", "api: GET /v1/search -> 500", "server broke", "connection refused"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log missing %q:\n%s", want, got)
+		}
+	}
+	for _, secret := range []string{"SECRET-PW", "SECRET-TERM", "SECRET-NET", "someone@example.com"} {
+		if strings.Contains(got, secret) {
+			t.Errorf("log leaks %q:\n%s", secret, got)
+		}
 	}
 }

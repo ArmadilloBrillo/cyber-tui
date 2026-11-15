@@ -1279,3 +1279,41 @@ func TestSettings_RevealCW_SeededFromSharedConfig(t *testing.T) {
 		t.Error("seeding must also set the baseline, not mark the screen dirty")
 	}
 }
+
+func TestSettings_DebugLog_ToggleSaveRevertSeed(t *testing.T) {
+	m := initSettings(defaultSettings())
+	idx := -1
+	for i, it := range flatItems(m) {
+		if it.label == "debug log (on restart)" {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatal("expected a debug log settings item")
+	}
+	m.cursor = idx
+	m, _ = m.Update(keyMsg("enter"))
+	if !m.debugLog || !m.IsDirty() {
+		t.Fatalf("toggle: debugLog = %v, dirty = %v, want both true", m.debugLog, m.IsDirty())
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd == nil {
+		t.Fatal("ctrl+s should emit a cmd")
+	}
+	if save, ok := cmd().(SaveSettingsMsg); !ok || !save.DebugLog {
+		t.Errorf("SaveSettingsMsg = %+v, want DebugLog true", save)
+	}
+
+	m, _ = m.Update(keyMsg("esc"))
+	if m.debugLog {
+		t.Error("esc should revert debugLog to the saved baseline")
+	}
+
+	m = NewSettingsModel()
+	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 40, DebugLog: true})
+	if !m.debugLog || m.IsDirty() {
+		t.Errorf("seed: debugLog = %v, dirty = %v, want true/false", m.debugLog, m.IsDirty())
+	}
+}
