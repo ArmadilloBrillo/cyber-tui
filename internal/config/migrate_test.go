@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -147,5 +148,52 @@ func TestDir_XDGConfigHome(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "relative/path")
 	if d, _ := config.Dir(); d != filepath.Join(home, ".config", "cyber-tui") {
 		t.Errorf("relative XDG_CONFIG_HOME must be ignored: Dir = %q", d)
+	}
+}
+
+func TestMigrate_RenameFailsFallsBackToCopy(t *testing.T) {
+	home := withTempHome(t)
+	legacy := writeLegacy(t, home, `{"refreshToken":"tok"}`)
+	config.SetRename(t, func(string, string) error {
+		return &os.LinkError{Op: "rename", Err: errors.New("invalid cross-device link")}
+	})
+
+	from, to, err := config.Migrate()
+	if err != nil || from != legacy {
+		t.Fatalf("Migrate = from %q, err %v; want move from %q", from, err, legacy)
+	}
+	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
+		t.Errorf("legacy file still present: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(to); err != nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("copied file mode = %v, err = %v, want 0600", info.Mode().Perm(), err)
+		}
+	}
+	cfg, err := config.Load()
+	if err != nil || cfg.RefreshToken != "tok" {
+		t.Errorf("Load after copy = %+v, %v; want refreshToken tok", cfg, err)
+	}
+}
+
+func TestMigrate_OtherInstanceMovedFirst(t *testing.T) {
+	home := withTempHome(t)
+	writeLegacy(t, home, `{"refreshToken":"old"}`)
+	// The other instance moves the file between our checks and our rename,
+	// so our rename (and the copy fallback) fail on the missing source.
+	config.SetRename(t, func(from, to string) error {
+		if err := os.Rename(from, to); err != nil {
+			t.Fatalf("simulated other instance: %v", err)
+		}
+		return os.ErrNotExist
+	})
+
+	from, _, err := config.Migrate()
+	if err != nil || from != "" {
+		t.Fatalf("Migrate = from %q, err %v; want no error and no move reported", from, err)
+	}
+	cfg, err := config.Load()
+	if err != nil || cfg.RefreshToken != "old" {
+		t.Errorf("Load = %+v, %v; want refreshToken old", cfg, err)
 	}
 }
