@@ -7,22 +7,23 @@ import (
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/ragnar/cyber-tui/internal/config"
 )
 
 // keepLogs is how many debug-*.log and crash-*.log files survive pruning.
 const keepLogs = 10
 
-// logDir returns the directory for debug and crash logs, creating it. It
-// falls back to the temp dir when the user cache dir is unavailable (e.g.
-// $HOME unset in a container).
+// logDir returns the directory for debug and crash logs, creating it:
+// logs/ next to the config file, so users find both in one place. It falls
+// back to the temp dir when that can't be created.
 func logDir() (string, error) {
-	bases := []string{os.TempDir()}
-	if c, err := os.UserCacheDir(); err == nil {
-		bases = append([]string{c}, bases...)
+	dirs := []string{filepath.Join(os.TempDir(), "cyber-tui")}
+	if c, err := config.Dir(); err == nil {
+		dirs = append([]string{filepath.Join(c, "logs")}, dirs...)
 	}
 	var err error
-	for _, b := range bases {
-		dir := filepath.Join(b, "cyber-tui")
+	for _, dir := range dirs {
 		if err = os.MkdirAll(dir, 0o700); err == nil {
 			return dir, nil
 		}
