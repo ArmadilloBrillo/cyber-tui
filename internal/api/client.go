@@ -172,25 +172,26 @@ func (t *apiTimestamp) UnmarshalJSON(b []byte) error {
 }
 
 type wirePost struct {
-	PostID         string           `json:"postId"`
-	AuthorID       string           `json:"authorId"`
-	AuthorUsername string           `json:"authorUsername"`
-	Content        string           `json:"content"`
-	Title          string           `json:"title"`
-	Slug           string           `json:"slug"`
-	GuildID        string           `json:"guildId"`
-	GuildSlug      string           `json:"guildSlug"`
-	IsGuildThread  bool             `json:"isGuildThread"`
-	Topics         []string         `json:"topics"`
-	RepliesCount   int              `json:"repliesCount"`
-	BookmarksCount int              `json:"bookmarksCount"`
-	IsPublic       bool             `json:"isPublic"`
-	IsNSFW         bool             `json:"isNSFW"`
-	ContentWarning string           `json:"contentWarning"`
-	Deleted        bool             `json:"deleted"`
-	CreatedAt      apiTimestamp     `json:"createdAt"`
-	EditedAt       apiTimestamp     `json:"editedAt"`
-	Attachments    []wireAttachment `json:"attachments"`
+	PostID          string           `json:"postId"`
+	AuthorID        string           `json:"authorId"`
+	AuthorUsername  string           `json:"authorUsername"`
+	Content         string           `json:"content"`
+	Title           string           `json:"title"`
+	Slug            string           `json:"slug"`
+	GuildID         string           `json:"guildId"`
+	GuildSlug       string           `json:"guildSlug"`
+	IsGuildThread   bool             `json:"isGuildThread"`
+	Topics          []string         `json:"topics"`
+	RepliesCount    int              `json:"repliesCount"`
+	BookmarksCount  int              `json:"bookmarksCount"`
+	IsPublic        bool             `json:"isPublic"`
+	IsNSFW          bool             `json:"isNSFW"`
+	ContentWarning  string           `json:"contentWarning"`
+	RepliesDisabled bool             `json:"repliesDisabled"`
+	Deleted         bool             `json:"deleted"`
+	CreatedAt       apiTimestamp     `json:"createdAt"`
+	EditedAt        apiTimestamp     `json:"editedAt"`
+	Attachments     []wireAttachment `json:"attachments"`
 }
 
 type wireUser struct {
@@ -1014,25 +1015,26 @@ func wirePostToModel(w wirePost) model.Post {
 	sanitize.Strings(&w)
 	t := parseTime(string(w.CreatedAt))
 	return model.Post{
-		ID:             w.PostID,
-		AuthorID:       w.AuthorID,
-		AuthorUsername: w.AuthorUsername,
-		Content:        w.Content,
-		Title:          w.Title,
-		Slug:           w.Slug,
-		GuildID:        w.GuildID,
-		GuildSlug:      w.GuildSlug,
-		IsGuildThread:  w.IsGuildThread,
-		Topics:         w.Topics,
-		RepliesCount:   w.RepliesCount,
-		BookmarksCount: w.BookmarksCount,
-		IsPublic:       w.IsPublic,
-		IsNSFW:         w.IsNSFW,
-		ContentWarning: w.ContentWarning,
-		Deleted:        w.Deleted,
-		CreatedAt:      t,
-		EditedAt:       parseTime(string(w.EditedAt)),
-		Attachments:    wireAttachmentsToModel(w.Attachments),
+		ID:              w.PostID,
+		AuthorID:        w.AuthorID,
+		AuthorUsername:  w.AuthorUsername,
+		Content:         w.Content,
+		Title:           w.Title,
+		Slug:            w.Slug,
+		GuildID:         w.GuildID,
+		GuildSlug:       w.GuildSlug,
+		IsGuildThread:   w.IsGuildThread,
+		Topics:          w.Topics,
+		RepliesCount:    w.RepliesCount,
+		BookmarksCount:  w.BookmarksCount,
+		IsPublic:        w.IsPublic,
+		IsNSFW:          w.IsNSFW,
+		ContentWarning:  w.ContentWarning,
+		RepliesDisabled: w.RepliesDisabled,
+		Deleted:         w.Deleted,
+		CreatedAt:       t,
+		EditedAt:        parseTime(string(w.EditedAt)),
+		Attachments:     wireAttachmentsToModel(w.Attachments),
 	}
 }
 

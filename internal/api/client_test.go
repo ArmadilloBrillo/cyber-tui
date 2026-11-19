@@ -2492,6 +2492,28 @@ func TestHTTPGetPost_ParsesPost(t *testing.T) {
 	if post.RepliesCount != 3 {
 		t.Errorf("RepliesCount mismatch: %d", post.RepliesCount)
 	}
+	if post.RepliesDisabled {
+		t.Errorf("RepliesDisabled = true, want false when the field is absent")
+	}
+}
+
+func TestHTTPGetPost_ParsesRepliesDisabled(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{
+			"postId":          "p99",
+			"content":         "closed",
+			"repliesDisabled": true,
+			"createdAt":       "2026-01-01T10:00:00Z",
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	post, err := c.GetPost("p99")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !post.RepliesDisabled {
+		t.Errorf("RepliesDisabled = false, want true")
+	}
 }
 
 func TestHTTPGetPostBySlug_ParsesPost(t *testing.T) {
