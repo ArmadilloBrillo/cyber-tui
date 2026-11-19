@@ -369,6 +369,8 @@ func TestChatrooms_Send_KnownCommandStillSends(t *testing.T) {
 		"/dice 4d6kh3",
 		"/dice:20:2",
 		"/localtime 09:30",
+		"/spin",
+		"/tarot will it ship?",
 	}
 	for _, body := range cases {
 		t.Run(body, func(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 // table (docs/00-latest-api-reference.md's Commands section).
 const mockHelpReply = "Commands: /me <action> · /poke /hug /hi5 /slap [@user] · " +
 	"/dice, /dice:SIDES, /dice:SIDES:COUNT, or notation (4d6kh3, 2d6+3, adv, d%, 6x4d6kh3) · " +
-	"/8ball <question> · /fortune · /gif <url> · /song <url> | artist | title [| genre] · /help"
+	"/coin · /spin · /8ball <question> · /fortune · /tarot [question] · /gif <url> · /song <url> | artist | title [| genre] · /help"
 
 // MockClient implements Client with static fake data.
 // Used during development before the real API is available.
