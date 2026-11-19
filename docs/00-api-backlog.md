@@ -333,7 +333,7 @@ Changes from v0.9.2, see `docs/api-diff-v0.9.2-to-v0.9.4.diff`. Plan in `docs/61
 
 | Area | Description | Priority |
 |---|---|---|
-| `repliesDisabled` on entries (read) | Entries carry `repliesDisabled: true` when nobody can reply, the author included. `POST /v1/replies` returns `403` for such an entry; clients should hide their reply action. | Planned (Stories 1-2) |
+| `repliesDisabled` on entries (read) | Entries carry `repliesDisabled: true` when nobody can reply, the author included. `POST /v1/replies` returns `403` for such an entry; clients should hide their reply action. | **Done**: `r` shows a notice instead of opening compose in feed and post detail, the reply hint is hidden, `[replies off]` badge on feed cards and the full post, a 403 from `POST /v1/replies` shows the same notice. See `docs/61-api-v0.9.4.md` Stories 1-2 |
 | `repliesDisabled` on entries (create) | Optional boolean on `POST /v1/posts`. Fixed once published: sending it on `PATCH /v1/posts/:id` returns `400`. | Planned (Story 3) |
 | `/spin` command | cIRC and C-Mail. Spins the bottle: in cIRC it points at an awake room member, alone at you or nobody; in C-Mail at either participant. | Planned (Story 4) |
 | `/tarot [question]` command | cIRC and C-Mail. Posts `pulled <card>: <fortune>`. Messages carry `isTarot` and a `tarot` object (`id`, `name`, `reversed`, `fortune`, `image`, `keywords`, `meaning`); `content` is complete on its own, so the client renders from `content` and does not parse `tarot`. | Planned (Story 4) |

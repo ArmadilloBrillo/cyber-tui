@@ -1384,6 +1384,10 @@ func (a *App) handleFeed(msg tea.Msg) (*App, tea.Cmd, bool) {
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.Post)
 		return a, a.loadRepliesCmd(msg.Post.ID), true
+	case screens.RepliesDisabledMsg:
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyInfo, "replies are disabled on this post")
+		return a, cmd, true
 	case screens.ShowPostForReplyMsg:
 		a.postDetailReturn = screenFeed
 		a.active = screenPostDetail
@@ -5509,6 +5513,12 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string, audioAttachm
 	return func() tea.Msg {
 		reply, err := a.client.CreateReply(postID, content, parentReplyID, audioAttachment)
 		if err != nil {
+			// The 'r' guard should prevent this; a 403 means an endpoint
+			// returned the post without repliesDisabled.
+			var apiErr *api.APIError
+			if errors.As(err, &apiErr) && apiErr.Status == 403 {
+				return notifyMsg{level: notifyError, text: "replies are disabled on this post"}
+			}
 			return actionErrMsg{err}
 		}
 		return replyCreatedMsg{postID: postID, replyID: reply.ID}

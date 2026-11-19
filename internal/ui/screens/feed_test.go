@@ -719,3 +719,30 @@ func TestFeed_ContentWarning_SettingRevealsCards(t *testing.T) {
 		t.Errorf("expected revealed card with CW label after the setting is on, got: %q", view)
 	}
 }
+
+// --- repliesDisabled ---
+
+func TestFeed_Reply_RepliesDisabled_EmitsNoticeNotCompose(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{{ID: "p1", AuthorUsername: "alice", Content: "closed", RepliesDisabled: true}}, "")
+
+	_, cmd := m.Update(keyRune("r"))
+	if cmd == nil {
+		t.Fatal("expected a cmd on r")
+	}
+	if msg := cmd(); msg != (screens.RepliesDisabledMsg{}) {
+		t.Errorf("r on closed post = %T, want RepliesDisabledMsg", msg)
+	}
+	if !m.SelectedRepliesDisabled() {
+		t.Error("SelectedRepliesDisabled() = false, want true")
+	}
+}
+
+func TestFeed_View_RepliesDisabled_ShowsMarker(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetPosts([]model.Post{{ID: "p1", AuthorUsername: "alice", Content: "closed", RepliesDisabled: true}}, "")
+	if !strings.Contains(m.View(), "[replies off]") {
+		t.Error("feed card missing [replies off] marker")
+	}
+}

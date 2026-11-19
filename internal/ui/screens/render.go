@@ -84,6 +84,9 @@ func renderPostBody(p model.Post, bookmarked bool, watched bool, width int, loc 
 	if p.IsPublic {
 		badgeParts = append(badgeParts, theme.Subtle.Render("[public]"))
 	}
+	if p.RepliesDisabled {
+		badgeParts = append(badgeParts, theme.Subtle.Render("[replies off]"))
+	}
 	badges := strings.Join(badgeParts, "  ")
 
 	rows := []string{header}

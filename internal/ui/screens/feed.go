@@ -29,6 +29,10 @@ type ShowPostMsg struct{ Post model.Post }
 // App navigates to post detail and opens the compose box immediately.
 type ShowPostForReplyMsg struct{ Post model.Post }
 
+// RepliesDisabledMsg is emitted instead of opening a reply compose when the
+// target post has replies disabled. App shows it as a notice.
+type RepliesDisabledMsg struct{}
+
 // CopyLinkMsg is emitted when the user presses 'l' on a selected post or
 // reply. Always carries the parent post — a reply has no URL of its own,
 // so callers pass its parent post's fields instead of the reply itself.
@@ -322,6 +326,16 @@ func (m FeedModel) CanEditSelected() bool {
 	}
 	p := visible[m.selectedIndex]
 	return p.AuthorUsername == m.currentUsername && m.currentUserIsSupporter && time.Since(p.CreatedAt) < postEditWindow
+}
+
+// SelectedRepliesDisabled reports whether the currently selected post has
+// replies disabled, so the status bar can hide the reply hint.
+func (m FeedModel) SelectedRepliesDisabled() bool {
+	visible := m.visiblePosts()
+	if m.selectedIndex >= len(visible) {
+		return false
+	}
+	return visible[m.selectedIndex].RepliesDisabled
 }
 
 // ApplyPostEdit overwrites the edited fields of a local post by ID after a
@@ -670,6 +684,9 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 		case "r":
 			if visible := m.visiblePosts(); len(visible) > 0 && m.selectedIndex < len(visible) {
 				post := visible[m.selectedIndex]
+				if post.RepliesDisabled {
+					return m, func() tea.Msg { return RepliesDisabledMsg{} }
+				}
 				return m, func() tea.Msg { return ShowPostForReplyMsg{Post: post} }
 			}
 		case "p":
@@ -919,6 +936,7 @@ type feedBodyCacheEntry struct {
 	topics              string // strings.Join(p.Topics, ",") — cheap to compare
 	isPublic            bool
 	isNSFW              bool
+	repliesDisabled     bool
 	editedAt            time.Time
 	inlineImagesEnabled bool
 	revealCW            bool
@@ -949,12 +967,12 @@ func (m FeedModel) renderPost(p model.Post, selected bool) (string, []postImageS
 	topics := strings.Join(p.Topics, ",")
 
 	body, imgSlots, ok := "", []postImageSlot(nil), false
-	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.contentWarning == p.ContentWarning && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == m.inlineImagesEnabled && e.revealCW == m.revealCW && e.themeName == theme.CurrentName() {
+	if e, hit := m.bodyCache[p.ID]; hit && e.width == m.width && e.bookmarked == bookmarked && e.watched == watched && e.content == p.Content && e.title == p.Title && e.contentWarning == p.ContentWarning && e.topics == topics && e.isPublic == p.IsPublic && e.isNSFW == p.IsNSFW && e.repliesDisabled == p.RepliesDisabled && e.editedAt.Equal(p.EditedAt) && e.inlineImagesEnabled == m.inlineImagesEnabled && e.revealCW == m.revealCW && e.themeName == theme.CurrentName() {
 		body, imgSlots, ok = e.body, e.imgSlots, true
 	}
 	if !ok {
 		body, imgSlots = renderPostBody(p, bookmarked, watched, m.width, m.location(), m.timeDisplayFormat, postMaxBodyLines, m.inlineImagesEnabled, m.revealCW)
-		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, contentWarning: p.ContentWarning, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, editedAt: p.EditedAt, inlineImagesEnabled: m.inlineImagesEnabled, revealCW: m.revealCW, themeName: theme.CurrentName()}
+		m.bodyCache[p.ID] = feedBodyCacheEntry{body: body, imgSlots: imgSlots, width: m.width, bookmarked: bookmarked, watched: watched, content: p.Content, title: p.Title, contentWarning: p.ContentWarning, topics: topics, isPublic: p.IsPublic, isNSFW: p.IsNSFW, repliesDisabled: p.RepliesDisabled, editedAt: p.EditedAt, inlineImagesEnabled: m.inlineImagesEnabled, revealCW: m.revealCW, themeName: theme.CurrentName()}
 	}
 
 	boxStyle := theme.Border

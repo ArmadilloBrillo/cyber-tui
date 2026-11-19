@@ -7560,3 +7560,55 @@ func TestHandleSettings_RevealContentWarningsPersists(t *testing.T) {
 		t.Error("expected RevealContentWarnings persisted to config")
 	}
 }
+
+// --- repliesDisabled ---
+
+func TestScreenHints_Feed_RepliesDisabled_NoReplyHint(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts([]model.Post{{ID: "p1", AuthorUsername: "alice", Content: "closed", RepliesDisabled: true}}, "")
+	if hasHint(TabsLayout{}.screenHints(&a), "r") {
+		t.Error("feed shows r reply hint on a post with replies disabled")
+	}
+	a.feed = a.feed.SetPosts([]model.Post{{ID: "p1", AuthorUsername: "alice", Content: "open"}}, "")
+	if !hasHint(TabsLayout{}.screenHints(&a), "r") {
+		t.Error("feed hides r reply hint on an open post")
+	}
+}
+
+func TestScreenHints_PostDetail_RepliesDisabled_NoReplyHint(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", AuthorUsername: "alice", Content: "closed", RepliesDisabled: true})
+	if hasHint(TabsLayout{}.screenHints(&a), "r") {
+		t.Error("post detail shows r reply hint on a post with replies disabled")
+	}
+}
+
+func TestRepliesDisabledMsg_ShowsNotice(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.Update(screens.RepliesDisabledMsg{})
+	if got := m.(App).notifyText; got != "replies are disabled on this post" {
+		t.Errorf("notifyText = %q, want the replies-disabled notice", got)
+	}
+}
+
+// replyErrClient returns a fixed error from CreateReply.
+type replyErrClient struct {
+	*api.MockClient
+	err error
+}
+
+func (c *replyErrClient) CreateReply(postID, content, parentReplyID string, attachment *model.Attachment) (model.Reply, error) {
+	return model.Reply{}, c.err
+}
+
+func TestCreateReplyCmd_Forbidden_ShowsRepliesDisabled(t *testing.T) {
+	a := NewApp(&replyErrClient{MockClient: api.NewMockClient(), err: &api.APIError{Status: 403, Code: "FORBIDDEN"}})
+	msg, ok := a.createReplyCmd("p1", "hi", "", nil)().(notifyMsg)
+	if !ok {
+		t.Fatal("createReplyCmd() on 403 did not return notifyMsg")
+	}
+	if msg.text != "replies are disabled on this post" || msg.level != notifyError {
+		t.Errorf("notifyMsg = %+v, want error-level replies-disabled text", msg)
+	}
+}
