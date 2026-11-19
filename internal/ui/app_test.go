@@ -2716,7 +2716,7 @@ func (c *tooSoonPostClient) GetPost(postID string) (model.Post, error) {
 func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testing.T) {
 	a := NewApp(&tooSoonPostClient{MockClient: api.NewMockClient()})
 
-	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, false, nil)()
 	if _, ok := msg.(postConvertedToNoteMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postConvertedToNoteMsg", msg)
 	}
@@ -2725,7 +2725,7 @@ func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testin
 func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
 	a := NewApp(api.NewMockClient())
 
-	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, false, nil)()
 	if _, ok := msg.(postCreatedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
 	}
@@ -2739,7 +2739,7 @@ type createPostErrClient struct {
 	err error
 }
 
-func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
+func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW, repliesDisabled bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
 	return model.Post{}, c.err
 }
 func (c *createPostErrClient) CreateNote(content string, topics []string) (model.Note, error) {
@@ -2749,7 +2749,7 @@ func (c *createPostErrClient) CreateNote(content string, topics []string) (model
 func TestCreatePostCmd_RateLimited_ReturnsPostSubmitFailedMsg(t *testing.T) {
 	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrRateLimited})
 
-	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, false, nil)()
 	if _, ok := msg.(postSubmitFailedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postSubmitFailedMsg (editor must stay open)", msg)
 	}
@@ -2758,7 +2758,7 @@ func TestCreatePostCmd_RateLimited_ReturnsPostSubmitFailedMsg(t *testing.T) {
 func TestCreatePostCmd_Unauthorized_ReturnsActionErrMsg(t *testing.T) {
 	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrUnauthorized})
 
-	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, false, nil)()
 	if _, ok := msg.(actionErrMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want actionErrMsg so handleUnauthorized redirects to login", msg)
 	}

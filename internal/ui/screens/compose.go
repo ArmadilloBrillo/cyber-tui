@@ -319,6 +319,7 @@ const (
 	postFieldPublic
 	postFieldNSFW
 	postFieldBork
+	postFieldNoReplies
 	postFieldCount
 )
 
@@ -336,6 +337,7 @@ type PostComposePanel struct {
 	isPublic    bool
 	isNSFW      bool
 	isBork      bool
+	noReplies   bool
 	focus       postField
 	active      bool
 	editing     bool // true when editing an existing post rather than creating one
@@ -416,6 +418,8 @@ func (m PostComposePanel) Open(defaultPublic bool) (PostComposePanel, tea.Cmd) {
 	m.isPublic = defaultPublic
 	m.isNSFW = false
 	m.isBork = false
+	m.noReplies = false
+	m = m.SetWidth(m.width) // toggles row width depends on m.editing
 	m.titleInput.SetValue("")
 	m.slugInput.SetValue("")
 	m.slugError = ""
@@ -446,6 +450,8 @@ func (m PostComposePanel) OpenForEdit(post model.Post) (PostComposePanel, tea.Cm
 	m.isPublic = post.IsPublic
 	m.isNSFW = post.IsNSFW
 	m.isBork = false
+	m.noReplies = false
+	m = m.SetWidth(m.width) // toggles row width depends on m.editing
 	m.titleInput.SetValue(post.Title)
 	m.slugInput.SetValue("")
 	m.slugError = ""
@@ -556,6 +562,10 @@ func (m PostComposePanel) IsPublic() bool    { return m.isPublic }
 func (m PostComposePanel) IsNSFW() bool      { return m.isNSFW }
 func (m PostComposePanel) IsBork() bool      { return m.isBork }
 
+// NoReplies reports whether the new post should be published with replies
+// disabled. Always false in edit mode: the field is fixed once published.
+func (m PostComposePanel) NoReplies() bool { return m.noReplies && !m.editing }
+
 // PanelHeight returns the total terminal rows the panel renders:
 // 2 (border) + 1 (title row) + 1 (slug row) + 1 (cw row) + 1 (sep) + bodyLines + 1 (sep) + 1 (topics row).
 // The slug row is omitted in edit mode (slug is immutable once published).
@@ -579,9 +589,13 @@ func (m PostComposePanel) SetWidth(w int) PostComposePanel {
 	}
 	const (
 		labelW   = 7  // "title  " or "topics " or "slug   "
-		togglesW = 33 // "  [x] public  [ ] nsfw  [ ] bork"
 		cursorW  = 1  // textinput.View() renders Width+1 (cursor always occupies one extra slot)
+		noReplyW = 16 // "  [ ] no replies", new posts only
 	)
+	togglesW := 33 // "  [x] public  [ ] nsfw  [ ] bork"
+	if !m.editing {
+		togglesW += noReplyW
+	}
 	titleInputW := innerW - labelW - cursorW
 	if titleInputW < 1 {
 		titleInputW = 1
@@ -614,8 +628,9 @@ func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
 		m.topicsInput.Blur()
 	}
 	m.focus = postField((int(m.focus) + delta + int(postFieldCount)) % int(postFieldCount))
-	if m.editing && m.focus == postFieldSlug {
-		// Slug is immutable once published — skip it in the edit-mode tab cycle.
+	if m.editing && (m.focus == postFieldSlug || m.focus == postFieldNoReplies) {
+		// Slug and repliesDisabled are immutable once published — skip them in
+		// the edit-mode tab cycle.
 		m.focus = postField((int(m.focus) + delta + int(postFieldCount)) % int(postFieldCount))
 	}
 	switch m.focus {
@@ -629,7 +644,7 @@ func (m PostComposePanel) moveFocus(delta int) (PostComposePanel, tea.Cmd) {
 		return m, m.textarea.Focus()
 	case postFieldTopics:
 		return m, m.topicsInput.Focus()
-	default: // postFieldPublic, postFieldNSFW, postFieldBork
+	default: // postFieldPublic, postFieldNSFW, postFieldBork, postFieldNoReplies
 		return m, nil
 	}
 }
@@ -723,6 +738,9 @@ func (m PostComposePanel) Update(msg tea.Msg) (PostComposePanel, tea.Cmd) {
 				return m, nil
 			case postFieldBork:
 				m.isBork = !m.isBork
+				return m, nil
+			case postFieldNoReplies:
+				m.noReplies = !m.noReplies
 				return m, nil
 			}
 		}
@@ -888,6 +906,17 @@ func (m PostComposePanel) View() string {
 		"  " + pubStyle.Render(pubCheck+" public") +
 		"  " + nsfwStyle.Render(nsfwCheck+" nsfw") +
 		"  " + borkStyle.Render(borkCheck+" bork")
+	if !m.editing {
+		noRepliesCheck := "[ ]"
+		if m.noReplies {
+			noRepliesCheck = "[x]"
+		}
+		noRepliesStyle := inactive
+		if m.focus == postFieldNoReplies {
+			noRepliesStyle = active
+		}
+		topicsRow += "  " + noRepliesStyle.Render(noRepliesCheck+" no replies")
+	}
 
 	rows := []string{titleRow}
 	if !m.editing {

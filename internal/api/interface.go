@@ -30,7 +30,7 @@ type Client interface {
 	// attachment, if non-nil, attaches an audio (YouTube) track — the only
 	// native attachment type the API still accepts on posts as of v0.8.7
 	// (type:"image" now returns 400; images are website-upload-only).
-	CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error)
+	CreatePost(content, title, slug string, topics []string, isPublic, isNSFW, repliesDisabled bool, contentWarning string, attachment *model.Attachment) (model.Post, error)
 	// GetPost fetches a single post by ID (used when jumping from a notification).
 	GetPost(postID string) (model.Post, error)
 	// GetPostBySlug fetches a single post by its author's username and per-author

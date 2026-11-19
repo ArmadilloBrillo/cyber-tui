@@ -364,14 +364,15 @@ type flagResponseData struct {
 }
 
 type createPostRequest struct {
-	Content        string           `json:"content"`
-	Title          string           `json:"title,omitempty"`
-	Topics         []string         `json:"topics"`
-	IsPublic       bool             `json:"isPublic"`
-	IsNSFW         bool             `json:"isNSFW"`
-	ContentWarning string           `json:"contentWarning,omitempty"`
-	Slug           string           `json:"slug,omitempty"`
-	Attachments    []wireAttachment `json:"attachments,omitempty"`
+	Content         string           `json:"content"`
+	Title           string           `json:"title,omitempty"`
+	Topics          []string         `json:"topics"`
+	IsPublic        bool             `json:"isPublic"`
+	IsNSFW          bool             `json:"isNSFW"`
+	ContentWarning  string           `json:"contentWarning,omitempty"`
+	RepliesDisabled bool             `json:"repliesDisabled,omitempty"`
+	Slug            string           `json:"slug,omitempty"`
+	Attachments     []wireAttachment `json:"attachments,omitempty"`
 }
 
 type createPostResponseData struct {
@@ -1373,20 +1374,21 @@ func (c *HTTPClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	return all, nil
 }
 
-func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
+func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW, repliesDisabled bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
 	var attachments []wireAttachment
 	if attachment != nil {
 		attachments = []wireAttachment{wireAttachmentFromModel(*attachment)}
 	}
 	env, err := c.doJSON("POST", "/v1/posts", createPostRequest{
-		Content:        content,
-		Title:          title,
-		Topics:         topics,
-		IsPublic:       isPublic,
-		IsNSFW:         isNSFW,
-		ContentWarning: contentWarning,
-		Slug:           slug,
-		Attachments:    attachments,
+		Content:         content,
+		Title:           title,
+		Topics:          topics,
+		IsPublic:        isPublic,
+		IsNSFW:          isNSFW,
+		ContentWarning:  contentWarning,
+		RepliesDisabled: repliesDisabled,
+		Slug:            slug,
+		Attachments:     attachments,
 	})
 	if err != nil {
 		return model.Post{}, err
@@ -1397,14 +1399,15 @@ func (c *HTTPClient) CreatePost(content, title, slug string, topics []string, is
 	}
 	sanitize.Strings(&data)
 	return model.Post{
-		ID:             data.PostID,
-		Title:          data.Title,
-		Slug:           data.Slug,
-		Content:        content,
-		Topics:         topics,
-		IsPublic:       isPublic,
-		IsNSFW:         isNSFW,
-		ContentWarning: contentWarning,
+		ID:              data.PostID,
+		Title:           data.Title,
+		Slug:            data.Slug,
+		Content:         content,
+		Topics:          topics,
+		IsPublic:        isPublic,
+		IsNSFW:          isNSFW,
+		ContentWarning:  contentWarning,
+		RepliesDisabled: repliesDisabled,
 	}, nil
 }
 

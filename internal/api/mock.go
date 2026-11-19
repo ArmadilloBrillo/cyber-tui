@@ -243,23 +243,24 @@ func (m *MockClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	}, nil
 }
 
-func (m *MockClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
+func (m *MockClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW, repliesDisabled bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
 	var attachments []model.Attachment
 	if attachment != nil {
 		attachments = []model.Attachment{*attachment}
 	}
 	return model.Post{
-		ID:             "new-1",
-		AuthorID:       mockUsers[0].ID,
-		AuthorUsername: mockUsers[0].Username,
-		Content:        content,
-		Title:          title,
-		CreatedAt:      time.Now(),
-		Topics:         topics,
-		IsPublic:       isPublic,
-		IsNSFW:         isNSFW,
-		ContentWarning: contentWarning,
-		Attachments:    attachments,
+		ID:              "new-1",
+		AuthorID:        mockUsers[0].ID,
+		AuthorUsername:  mockUsers[0].Username,
+		Content:         content,
+		Title:           title,
+		CreatedAt:       time.Now(),
+		Topics:          topics,
+		IsPublic:        isPublic,
+		IsNSFW:          isNSFW,
+		ContentWarning:  contentWarning,
+		RepliesDisabled: repliesDisabled,
+		Attachments:     attachments,
 	}, nil
 }
 

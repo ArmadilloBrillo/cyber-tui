@@ -516,7 +516,11 @@ func (l TabsLayout) renderHelpModal(a App) string {
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			localSection = section("feed (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"), row("tab, space", "tick public / nsfw / bork"))
+			toggles := "tick public / nsfw / bork / no replies"
+			if a.feed.ComposeEditing() {
+				toggles = "tick public / nsfw / bork"
+			}
+			localSection = section("feed (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"), row("tab, space", toggles))
 		} else {
 			localSection = section("feed",
 				row("p", "view profile"),

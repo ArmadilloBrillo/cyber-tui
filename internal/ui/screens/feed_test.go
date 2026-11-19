@@ -746,3 +746,20 @@ func TestFeed_View_RepliesDisabled_ShowsMarker(t *testing.T) {
 		t.Error("feed card missing [replies off] marker")
 	}
 }
+
+func TestFeed_ComposeSubmit_CarriesNoReplies(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = m.Update(keyRune("n"))
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab}) // title wraps back to the last toggle
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+
+	_, cmd := m.Update(screens.ComposeSubmitMsg{Content: "hello"})
+	got, ok := cmd().(screens.SubmitNewPostMsg)
+	if !ok {
+		t.Fatalf("submit cmd produced %T, want SubmitNewPostMsg", cmd())
+	}
+	if !got.RepliesDisabled {
+		t.Error("SubmitNewPostMsg.RepliesDisabled = false after ticking no replies, want true")
+	}
+}

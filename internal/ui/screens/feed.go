@@ -54,6 +54,7 @@ type SubmitNewPostMsg struct {
 	Topics          []string
 	IsPublic        bool
 	IsNSFW          bool
+	RepliesDisabled bool
 	AudioAttachment *model.Attachment // nil = no audio attachment
 }
 
@@ -586,12 +587,13 @@ func (m FeedModel) Update(msg tea.Msg) (FeedModel, tea.Cmd) {
 			}
 		}
 		slug := m.panel.SlugValue()
+		noReplies := m.panel.NoReplies()
 		// Keep the panel open and populated until App reports the outcome — a
 		// rate-limited / failed publish then drops the user straight back into
 		// their work (see postSubmitFailedMsg in app.go).
 		m.panel = m.panel.MarkSubmitting()
 		return m, func() tea.Msg {
-			return SubmitNewPostMsg{Content: content, Title: title, ContentWarning: contentWarning, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, AudioAttachment: audioAttachment}
+			return SubmitNewPostMsg{Content: content, Title: title, ContentWarning: contentWarning, Slug: slug, Topics: topics, IsPublic: isPublic, IsNSFW: isNSFW, RepliesDisabled: noReplies, AudioAttachment: audioAttachment}
 		}
 
 	case ComposeSaveAsNoteMsg:
