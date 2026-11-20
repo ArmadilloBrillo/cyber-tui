@@ -2716,7 +2716,7 @@ func (c *tooSoonPostClient) GetPost(postID string) (model.Post, error) {
 func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testing.T) {
 	a := NewApp(&tooSoonPostClient{MockClient: api.NewMockClient()})
 
-	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, false, nil)()
 	if _, ok := msg.(postConvertedToNoteMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postConvertedToNoteMsg", msg)
 	}
@@ -2725,7 +2725,7 @@ func TestCreatePostCmd_TooSoonConversion_ReturnsPostConvertedToNoteMsg(t *testin
 func TestCreatePostCmd_NormalSuccess_ReturnsPostCreatedMsg(t *testing.T) {
 	a := NewApp(api.NewMockClient())
 
-	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, false, nil)()
 	if _, ok := msg.(postCreatedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postCreatedMsg", msg)
 	}
@@ -2739,7 +2739,7 @@ type createPostErrClient struct {
 	err error
 }
 
-func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
+func (c *createPostErrClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW, repliesDisabled bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
 	return model.Post{}, c.err
 }
 func (c *createPostErrClient) CreateNote(content string, topics []string) (model.Note, error) {
@@ -2749,7 +2749,7 @@ func (c *createPostErrClient) CreateNote(content string, topics []string) (model
 func TestCreatePostCmd_RateLimited_ReturnsPostSubmitFailedMsg(t *testing.T) {
 	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrRateLimited})
 
-	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, false, nil)()
 	if _, ok := msg.(postSubmitFailedMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want postSubmitFailedMsg (editor must stay open)", msg)
 	}
@@ -2758,7 +2758,7 @@ func TestCreatePostCmd_RateLimited_ReturnsPostSubmitFailedMsg(t *testing.T) {
 func TestCreatePostCmd_Unauthorized_ReturnsActionErrMsg(t *testing.T) {
 	a := NewApp(&createPostErrClient{MockClient: api.NewMockClient(), err: api.ErrUnauthorized})
 
-	msg := a.createPostCmd("hello", "", "", "", nil, true, false, nil)()
+	msg := a.createPostCmd("hello", "", "", "", nil, true, false, false, nil)()
 	if _, ok := msg.(actionErrMsg); !ok {
 		t.Fatalf("createPostCmd() = %T, want actionErrMsg so handleUnauthorized redirects to login", msg)
 	}
@@ -7558,5 +7558,57 @@ func TestHandleSettings_RevealContentWarningsPersists(t *testing.T) {
 	}
 	if !cfg.RevealContentWarnings {
 		t.Error("expected RevealContentWarnings persisted to config")
+	}
+}
+
+// --- repliesDisabled ---
+
+func TestScreenHints_Feed_RepliesDisabled_NoReplyHint(t *testing.T) {
+	a := loggedInApp()
+	a.feed = a.feed.SetPosts([]model.Post{{ID: "p1", AuthorUsername: "alice", Content: "closed", RepliesDisabled: true}}, "")
+	if hasHint(TabsLayout{}.screenHints(&a), "r") {
+		t.Error("feed shows r reply hint on a post with replies disabled")
+	}
+	a.feed = a.feed.SetPosts([]model.Post{{ID: "p1", AuthorUsername: "alice", Content: "open"}}, "")
+	if !hasHint(TabsLayout{}.screenHints(&a), "r") {
+		t.Error("feed hides r reply hint on an open post")
+	}
+}
+
+func TestScreenHints_PostDetail_RepliesDisabled_NoReplyHint(t *testing.T) {
+	a := loggedInApp()
+	a.active = screenPostDetail
+	a.postDetail = a.postDetail.SetPost(model.Post{ID: "p1", AuthorUsername: "alice", Content: "closed", RepliesDisabled: true})
+	if hasHint(TabsLayout{}.screenHints(&a), "r") {
+		t.Error("post detail shows r reply hint on a post with replies disabled")
+	}
+}
+
+func TestRepliesDisabledMsg_ShowsNotice(t *testing.T) {
+	a := loggedInApp()
+	m, _ := a.Update(screens.RepliesDisabledMsg{})
+	if got := m.(App).notifyText; got != "replies are disabled on this post" {
+		t.Errorf("notifyText = %q, want the replies-disabled notice", got)
+	}
+}
+
+// replyErrClient returns a fixed error from CreateReply.
+type replyErrClient struct {
+	*api.MockClient
+	err error
+}
+
+func (c *replyErrClient) CreateReply(postID, content, parentReplyID string, attachment *model.Attachment) (model.Reply, error) {
+	return model.Reply{}, c.err
+}
+
+func TestCreateReplyCmd_Forbidden_ShowsRepliesDisabled(t *testing.T) {
+	a := NewApp(&replyErrClient{MockClient: api.NewMockClient(), err: &api.APIError{Status: 403, Code: "FORBIDDEN"}})
+	msg, ok := a.createReplyCmd("p1", "hi", "", nil)().(notifyMsg)
+	if !ok {
+		t.Fatal("createReplyCmd() on 403 did not return notifyMsg")
+	}
+	if msg.text != "replies are disabled on this post" || msg.level != notifyError {
+		t.Errorf("notifyMsg = %+v, want error-level replies-disabled text", msg)
 	}
 }

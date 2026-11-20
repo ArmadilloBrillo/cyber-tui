@@ -68,25 +68,26 @@ type Attachment struct {
 // Post maps to the post shape returned by GET /v1/posts.
 // Author is stored as flat fields (authorId + authorUsername) matching the API response.
 type Post struct {
-	ID             string
-	AuthorID       string
-	AuthorUsername string
-	Content        string
-	Title          string
-	Slug           string
-	GuildID        string
-	GuildSlug      string
-	IsGuildThread  bool
-	Topics         []string
-	RepliesCount   int
-	BookmarksCount int
-	IsPublic       bool
-	IsNSFW         bool
-	ContentWarning string // empty = none; non-empty gates title, body and attachments until revealed
-	Deleted        bool
-	CreatedAt      time.Time
-	EditedAt       time.Time // zero value means never edited
-	Attachments    []Attachment
+	ID              string
+	AuthorID        string
+	AuthorUsername  string
+	Content         string
+	Title           string
+	Slug            string
+	GuildID         string
+	GuildSlug       string
+	IsGuildThread   bool
+	Topics          []string
+	RepliesCount    int
+	BookmarksCount  int
+	IsPublic        bool
+	IsNSFW          bool
+	ContentWarning  string // empty = none; non-empty gates title, body and attachments until revealed
+	RepliesDisabled bool   // set at creation, immutable; the server rejects replies with 403
+	Deleted         bool
+	CreatedAt       time.Time
+	EditedAt        time.Time // zero value means never edited
+	Attachments     []Attachment
 }
 
 // Reply maps to the reply shape returned by GET /v1/posts/:id/replies.

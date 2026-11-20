@@ -896,3 +896,33 @@ func TestPostDetail_ContentWarning_SettingRevealsOnOpen(t *testing.T) {
 		t.Errorf("expected revealed post with CW label when the setting is on, got: %q", view)
 	}
 }
+
+// --- repliesDisabled ---
+
+func TestPostDetail_OpenCompose_RepliesDisabled_EmitsNoticeNotCompose(t *testing.T) {
+	m := initPostDetail()
+	p := pdPost("p1")
+	p.RepliesDisabled = true
+	m = m.SetPost(p)
+
+	m, cmd := m.OpenCompose()
+	if m.ReplyComposeActive() {
+		t.Error("reply compose opened on a post with replies disabled")
+	}
+	if cmd == nil {
+		t.Fatal("expected a cmd from OpenCompose")
+	}
+	if msg := cmd(); msg != (screens.RepliesDisabledMsg{}) {
+		t.Errorf("OpenCompose on closed post = %T, want RepliesDisabledMsg", msg)
+	}
+}
+
+func TestPostDetail_View_RepliesDisabled_ShowsMarker(t *testing.T) {
+	m := initPostDetail()
+	p := pdPost("p1")
+	p.RepliesDisabled = true
+	m = m.SetPost(p)
+	if !strings.Contains(m.View(), "[replies off]") {
+		t.Error("post detail missing [replies off] marker")
+	}
+}

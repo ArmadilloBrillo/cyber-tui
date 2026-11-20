@@ -1,0 +1,81 @@
+--- v0.9.2 (docs/00-latest-api-reference.md)
++++ v0.9.4 (https://api.cyberspace.online/docs.md, 2026-11-19)
+@@ -1,4 +1,4 @@
+-# ᑕ¥βєяรקค¢є API v0.9.2
++# ᑕ¥βєяรקค¢є API v0.9.4
+ 
+ ## Access
+ 
+@@ -182,7 +182,8 @@
+   "topics": ["tag1", "tag2"],
+   "isPublic": false,
+   "isNSFW": false,
+-  "contentWarning": "Optional short warning"
++  "contentWarning": "Optional short warning",
++  "repliesDisabled": false
+ }
+ ```
+ 
+@@ -193,6 +194,7 @@
+ - `isPublic` -- optional, makes entry visible without login
+ - `isNSFW` -- optional, NSFW flag
+ - `contentWarning` -- optional, max 60 characters. A short phrase readers see before the entry. Clients show `CW: <contentWarning>` and reveal the title, body and attachments only on request.
++- `repliesDisabled` -- optional boolean. Nobody can reply to the entry, the author included. Fixed once published. Entries carry it as `repliesDisabled: true`; clients should hide their reply action.
+ - `attachments` -- optional, max 1. Audio only:
+   `{ "type": "audio", "src": "<YouTube URL>", "origin": "youtube", "artist": "...", "title": "...", "genre": "..." }`.
+   `artist` (max 100), `title` (max 150) and `genre` (max 50, lowercase) are all required.
+@@ -236,7 +238,7 @@
+ - `contentWarning` -- max 60 characters. Send `""` or `null` to remove it.
+ - `attachments` -- replaces the existing attachments. Audio only, same shape as [Create Entry](#create-entry). Send `[]` to remove them.
+ 
+-The `slug` is fixed once an entry is published, so share links keep working; sending one returns `400`. `createdAt` never changes, and an edit sends no notifications -- the people who were notified when you published aren't notified again.
++The `slug` is fixed once an entry is published, so share links keep working; sending one returns `400`. `repliesDisabled` is fixed too; sending it returns `400`. `createdAt` never changes, and an edit sends no notifications -- the people who were notified when you published aren't notified again.
+ 
+ Returns `{ "data": { "postId": "..." } }` (200). The entry then carries an `editedAt` timestamp.
+ 
+@@ -299,7 +301,7 @@
+ ```
+ 
+ - `content` -- required, max 32,768 characters
+-- `postId` -- required, must reference an existing entry
++- `postId` -- required, must reference an existing entry. Returns `403` if the entry has `repliesDisabled`.
+ - `parentReplyId` -- optional, ID of the reply you're responding to (must belong to the same entry)
+ - `attachments` -- optional, max 1, audio only. Same shape and same image rule as [Create Entry](#create-entry).
+ 
+@@ -1078,7 +1080,7 @@
+ 
+ `content` may contain line breaks (`\n`), up to 10 lines and 2048 characters. Runs of blank lines collapse to one, and lines past the tenth join it with spaces. Clients should render line breaks.
+ 
+-Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/coin`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. `/art` and the `/mute` family are cIRC-only and return `400` here.
++Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/coin`, `/spin`, `/8ball`, `/fortune`, `/tarot`, `/gif`, `/song`, or a text style) is expanded server-side. `/art` and the `/mute` family are cIRC-only and return `400` here.
+ 
+ ### Mark as Read
+ 
+@@ -1209,7 +1211,7 @@
+ 
+ `content` may contain line breaks (`\n`), up to 10 lines and 2048 characters. Runs of blank lines collapse to one, and lines past the tenth join it with spaces. Clients should render line breaks.
+ 
+-Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/coin`, `/8ball`, `/fortune`, `/gif`, `/song`, or a text style) is expanded server-side. Line breaks in a styled message's text become spaces.
++Supports [commands](#commands) — a message whose `content` begins with `/` (e.g. `/me`, `/slap`, `/dice`, `/coin`, `/spin`, `/8ball`, `/fortune`, `/tarot`, `/gif`, `/song`, or a text style) is expanded server-side. Line breaks in a styled message's text become spaces.
+ 
+ ### Delete Your Message
+ 
+@@ -1468,8 +1470,10 @@
+ | `/poke` `/hug` `/hi5` `/slap` `[@user]` | Emote at a user (or a solo line with no target) |
+ | `/dice <notation>` | Roll dice: `/dice`, `/dice:SIDES`, `/dice:COUNT:SIDES`, or full notation (`4d6kh3`, `2d6+3`, `adv`, `d%`, `6x4d6kh3`) |
+ | `/coin` | Flip a coin: heads or tails |
++| `/spin` | Spin the bottle. In cIRC it points at someone in the room who is awake (not idle for 10 minutes); alone, at you or at nobody. In C-Mail, at either of you |
+ | `/8ball <question>` | Ask the magic 8-ball |
+ | `/fortune` | A random fortune cookie |
++| `/tarot [question]` | Pull a tarot card, optionally asking it a question. Posts `pulled The Fool: <fortune>` |
+ | `/gif <https url>` | Post an animated GIF by link |
+ | `/song <youtube url> \| <artist> \| <title> [\| <genre>]` | Attach a track to play in the jukebox. Requires supporter status |
+ | `/art <ascii art>` | Post ASCII art. cIRC only; max 80 columns × 25 lines |
+@@ -1508,6 +1512,7 @@
+ | `isDice` | The action was a dice roll |
+ | `isEightball`, `eightballAnswer` | The action was an 8-ball; the answer on its own for clients that want to highlight it |
+ | `isFortune`, `fortuneText` | The action was a fortune cookie; likewise |
++| `isTarot`, `tarot` | The action was a tarot draw. `content` is complete on its own; `tarot` is `{ id, name, reversed, fortune, image, keywords, meaning }`, where `meaning` is up to six upright or reversed points |
+ | `deleted` | cIRC only. The message was deleted by its author — `content` is `[DELETED]` and every field above is gone. Render it as a tombstone rather than as text |
+ 
+ Two things worth handling:

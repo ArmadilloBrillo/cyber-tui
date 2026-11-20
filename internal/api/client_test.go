@@ -253,7 +253,7 @@ func TestHTTPCreatePost_SendsAllFields(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass") //nolint:errcheck
 
-	post, err := c.CreatePost("body text", "My Title", "", []string{"cyber"}, true, true, "spoilers", nil)
+	post, err := c.CreatePost("body text", "My Title", "", []string{"cyber"}, true, true, false, "spoilers", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -277,6 +277,9 @@ func TestHTTPCreatePost_SendsAllFields(t *testing.T) {
 	}
 	if gotBody["contentWarning"] != "spoilers" {
 		t.Errorf("request body contentWarning = %v, want spoilers", gotBody["contentWarning"])
+	}
+	if _, ok := gotBody["repliesDisabled"]; ok {
+		t.Errorf("request body has repliesDisabled = %v, want it omitted when false", gotBody["repliesDisabled"])
 	}
 	if gotBody["isPublic"] != true {
 		t.Errorf("request body isPublic = %v, want true", gotBody["isPublic"])
@@ -2492,6 +2495,28 @@ func TestHTTPGetPost_ParsesPost(t *testing.T) {
 	if post.RepliesCount != 3 {
 		t.Errorf("RepliesCount mismatch: %d", post.RepliesCount)
 	}
+	if post.RepliesDisabled {
+		t.Errorf("RepliesDisabled = true, want false when the field is absent")
+	}
+}
+
+func TestHTTPGetPost_ParsesRepliesDisabled(t *testing.T) {
+	c := newClient(t, authHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeOK(t, w, map[string]any{
+			"postId":          "p99",
+			"content":         "closed",
+			"repliesDisabled": true,
+			"createdAt":       "2026-01-01T10:00:00Z",
+		})
+	})))
+	c.LoginWithRefreshToken("tok")
+	post, err := c.GetPost("p99")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !post.RepliesDisabled {
+		t.Errorf("RepliesDisabled = false, want true")
+	}
 }
 
 func TestHTTPGetPostBySlug_ParsesPost(t *testing.T) {
@@ -3729,7 +3754,7 @@ func TestHTTPCreatePost_SendsAttachment(t *testing.T) {
 	c.Login("u@example.com", "pass")
 
 	attachment := &model.Attachment{Type: "gif", Src: "https://example.com/pic.gif", Width: 100, Height: 80}
-	if _, err := c.CreatePost("content", "", "", nil, false, false, "", attachment); err != nil {
+	if _, err := c.CreatePost("content", "", "", nil, false, false, false, "", attachment); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	attachments, ok := gotBody["attachments"].([]any)
@@ -3753,7 +3778,7 @@ func TestHTTPCreatePost_NoAttachmentURL_OmitsAttachments(t *testing.T) {
 	})))
 	c.Login("u@example.com", "pass")
 
-	if _, err := c.CreatePost("content", "", "", nil, false, false, "", nil); err != nil {
+	if _, err := c.CreatePost("content", "", "", nil, false, false, false, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sawAttachmentsKey {
@@ -4309,5 +4334,26 @@ func TestDoRequest_DebugLogIsMetadataOnly(t *testing.T) {
 		if strings.Contains(got, secret) {
 			t.Errorf("log leaks %q:\n%s", secret, got)
 		}
+	}
+}
+
+func TestHTTPCreatePost_SendsRepliesDisabled(t *testing.T) {
+	var gotBody map[string]any
+	c := newClient(t, loginHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &gotBody)
+		writeOK(t, w, map[string]any{"postId": "new-post-1"})
+	})))
+	c.Login("u@example.com", "pass") //nolint:errcheck
+
+	post, err := c.CreatePost("body", "", "", nil, false, false, true, "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotBody["repliesDisabled"] != true {
+		t.Errorf("request body repliesDisabled = %v, want true", gotBody["repliesDisabled"])
+	}
+	if !post.RepliesDisabled {
+		t.Error("returned post.RepliesDisabled = false, want true")
 	}
 }
