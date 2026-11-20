@@ -415,55 +415,13 @@ func (m SettingsModel) SetSettings(s model.Settings) SettingsModel {
 	return m
 }
 
-// SetSaved marks the current settings as saved and advances the baseline.
-func (m SettingsModel) SetSaved(wanderLust bool, feedManualRefreshOnly bool, typingIndicatorsEnabled bool, desktopNotifications bool, showGlobeTab bool, maxThreadDepth int, timezone, imageViewer, graphicsProtocol string, inlineImages bool, dithering bool, keywordAlerts []string) SettingsModel {
+// SetSaved marks the current settings and the given local prefs as saved,
+// advancing both baselines.
+func (m SettingsModel) SetSaved(p LocalPrefs) SettingsModel {
 	m.err = nil
 	m.original = m.settings
-	m.local.WanderLust = wanderLust
-	m.originalLocal.WanderLust = wanderLust
-	m.local.FeedManualRefreshOnly = feedManualRefreshOnly
-	m.originalLocal.FeedManualRefreshOnly = feedManualRefreshOnly
-	m.local.TypingIndicatorsEnabled = typingIndicatorsEnabled
-	m.originalLocal.TypingIndicatorsEnabled = typingIndicatorsEnabled
-	m.local.DesktopNotifications = desktopNotifications
-	m.originalLocal.DesktopNotifications = desktopNotifications
-	m.local.ShowGlobeTab = showGlobeTab
-	m.originalLocal.ShowGlobeTab = showGlobeTab
-	m.local.MaxThreadDepth = maxThreadDepth
-	m.originalLocal.MaxThreadDepth = maxThreadDepth
-	m.local.Timezone = timezone
-	m.originalLocal.Timezone = timezone
-	m.local.ImageViewer = imageViewer
-	m.originalLocal.ImageViewer = imageViewer
-	m.local.GraphicsProtocol = graphicsProtocol
-	m.originalLocal.GraphicsProtocol = graphicsProtocol
-	m.local.InlineImages = inlineImages
-	m.originalLocal.InlineImages = inlineImages
-	m.local.Dithering = dithering
-	m.originalLocal.Dithering = dithering
-	m.local.KeywordAlerts = keywordAlerts
-	m.originalLocal.KeywordAlerts = keywordAlerts
-	return m
-}
-
-// SetSavedHardBreakKey advances the hard-break key baseline after a save.
-func (m SettingsModel) SetSavedHardBreakKey(key string) SettingsModel {
-	m.local.HardBreakKey = key
-	m.originalLocal.HardBreakKey = key
-	return m
-}
-
-// SetSavedDebugLog advances the debug-log baseline after a save.
-func (m SettingsModel) SetSavedDebugLog(on bool) SettingsModel {
-	m.local.DebugLog = on
-	m.originalLocal.DebugLog = on
-	return m
-}
-
-// SetSavedRevealCW advances the reveal-content-warnings baseline after a save.
-func (m SettingsModel) SetSavedRevealCW(reveal bool) SettingsModel {
-	m.local.RevealContentWarnings = reveal
-	m.originalLocal.RevealContentWarnings = reveal
+	m.local = p
+	m.originalLocal = p
 	return m
 }
 
@@ -667,7 +625,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				p := m.local
 				remoteChanged := !settingsEqual(m.settings, m.original)
 				return m, func() tea.Msg {
-					return SaveSettingsMsg{Settings: s, WanderLust: p.WanderLust, FeedManualRefreshOnly: p.FeedManualRefreshOnly, TypingIndicatorsEnabled: p.TypingIndicatorsEnabled, DesktopNotifications: p.DesktopNotifications, ShowGlobeTab: p.ShowGlobeTab, MaxThreadDepth: p.MaxThreadDepth, Timezone: p.Timezone, ImageViewer: p.ImageViewer, GraphicsProtocol: p.GraphicsProtocol, InlineImages: p.InlineImages, Dithering: p.Dithering, KeywordAlerts: p.KeywordAlerts, HardBreakKey: p.HardBreakKey, RevealContentWarnings: p.RevealContentWarnings, DebugLog: p.DebugLog, RemoteChanged: remoteChanged}
+					return SaveSettingsMsg{Settings: s, Prefs: p, RemoteChanged: remoteChanged}
 				}
 			}
 			return m, nil

@@ -334,7 +334,7 @@ func TestSettings_Esc_ClearsError(t *testing.T) {
 func TestSettings_SetSaved_ClearsError(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetError(testErr)
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
+	m = m.SetSaved(LocalPrefs{WanderLust: false, FeedManualRefreshOnly: false, TypingIndicatorsEnabled: true, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: false, KeywordAlerts: nil})
 	if m.err != nil {
 		t.Error("SetSaved should clear error")
 	}
@@ -346,7 +346,7 @@ func TestSettings_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty after change")
 	}
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
+	m = m.SetSaved(LocalPrefs{WanderLust: false, FeedManualRefreshOnly: false, TypingIndicatorsEnabled: true, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: false, KeywordAlerts: nil})
 	if m.IsDirty() {
 		t.Error("after SetSaved, should not be dirty")
 	}
@@ -469,7 +469,7 @@ func TestSettings_Dithering_SaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if !save.Dithering {
+	if !save.Prefs.Dithering {
 		t.Error("SaveSettingsMsg.Dithering should reflect current dithering value")
 	}
 	if save.Settings.ImagePixelSize != "rough" {
@@ -487,7 +487,7 @@ func TestSettings_Dithering_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty before SetSaved")
 	}
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, true, nil)
+	m = m.SetSaved(LocalPrefs{WanderLust: false, FeedManualRefreshOnly: false, TypingIndicatorsEnabled: true, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: true, KeywordAlerts: nil})
 	if m.originalLocal.Dithering != true {
 		t.Error("SetSaved should update originalDithering to the saved value")
 	}
@@ -708,7 +708,7 @@ func TestSettings_WanderSaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if save.WanderLust != false {
+	if save.Prefs.WanderLust != false {
 		t.Error("SaveSettingsMsg.WanderLust should reflect current wanderLust value")
 	}
 }
@@ -717,7 +717,7 @@ func TestSettings_WanderSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.local.WanderLust = true
 	m.originalLocal.WanderLust = false // dirty
-	m = m.SetSaved(true, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
+	m = m.SetSaved(LocalPrefs{WanderLust: true, FeedManualRefreshOnly: false, TypingIndicatorsEnabled: true, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: false, KeywordAlerts: nil})
 	if m.originalLocal.WanderLust != true {
 		t.Error("SetSaved should update originalWanderLust to the saved value")
 	}
@@ -789,7 +789,7 @@ func TestSettings_FeedAutoRefreshSaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if save.FeedManualRefreshOnly != true {
+	if save.Prefs.FeedManualRefreshOnly != true {
 		t.Error("SaveSettingsMsg.FeedManualRefreshOnly should reflect current feedManualRefreshOnly value")
 	}
 }
@@ -798,7 +798,7 @@ func TestSettings_FeedAutoRefreshSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.local.FeedManualRefreshOnly = true
 	m.originalLocal.FeedManualRefreshOnly = false // dirty
-	m = m.SetSaved(false, true, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
+	m = m.SetSaved(LocalPrefs{WanderLust: false, FeedManualRefreshOnly: true, TypingIndicatorsEnabled: true, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: false, KeywordAlerts: nil})
 	if m.originalLocal.FeedManualRefreshOnly != true {
 		t.Error("SetSaved should update originalFeedManualRefreshOnly to the saved value")
 	}
@@ -860,7 +860,7 @@ func TestSettings_TypingIndicatorsSaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if save.TypingIndicatorsEnabled != false {
+	if save.Prefs.TypingIndicatorsEnabled != false {
 		t.Error("SaveSettingsMsg.TypingIndicatorsEnabled should reflect current typingIndicatorsEnabled value")
 	}
 }
@@ -869,7 +869,7 @@ func TestSettings_TypingIndicatorsSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.local.TypingIndicatorsEnabled = false
 	m.originalLocal.TypingIndicatorsEnabled = true // dirty
-	m = m.SetSaved(false, false, false, false, true, 3, "UTC", "terminal", "", false, false, nil)
+	m = m.SetSaved(LocalPrefs{WanderLust: false, FeedManualRefreshOnly: false, TypingIndicatorsEnabled: false, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: false, KeywordAlerts: nil})
 	if m.originalLocal.TypingIndicatorsEnabled != false {
 		t.Error("SetSaved should update originalTypingIndicatorsEnabled to the saved value")
 	}
@@ -928,7 +928,7 @@ func TestSettings_ShowGlobeTabSaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if save.ShowGlobeTab != false {
+	if save.Prefs.ShowGlobeTab != false {
 		t.Error("SaveSettingsMsg.ShowGlobeTab should reflect current showGlobeTab value")
 	}
 }
@@ -1008,8 +1008,8 @@ func TestSettings_Timezone_SaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if save.Timezone != "UTC+2" {
-		t.Errorf("SaveSettingsMsg.Timezone should be UTC+2, got %s", save.Timezone)
+	if save.Prefs.Timezone != "UTC+2" {
+		t.Errorf("SaveSettingsMsg.Timezone should be UTC+2, got %s", save.Prefs.Timezone)
 	}
 }
 
@@ -1203,8 +1203,8 @@ func TestSettings_HardBreak_SaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatalf("ctrl+s produced %T, want SaveSettingsMsg", cmd())
 	}
-	if save.HardBreakKey != "ctrl+l" {
-		t.Errorf("SaveSettingsMsg.HardBreakKey = %q, want %q", save.HardBreakKey, "ctrl+l")
+	if save.Prefs.HardBreakKey != "ctrl+l" {
+		t.Errorf("SaveSettingsMsg.HardBreakKey = %q, want %q", save.Prefs.HardBreakKey, "ctrl+l")
 	}
 }
 
@@ -1214,9 +1214,12 @@ func TestSettings_HardBreak_SetSavedAdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Fatal("should be dirty before saving")
 	}
-	m = m.SetSavedHardBreakKey("ctrl+l")
+	m = m.SetSaved(m.local)
 	if m.IsDirty() {
-		t.Error("should be clean after SetSavedHardBreakKey")
+		t.Error("should be clean after SetSaved")
+	}
+	if m.originalLocal.HardBreakKey != "ctrl+l" {
+		t.Errorf("baseline HardBreakKey = %q, want ctrl+l", m.originalLocal.HardBreakKey)
 	}
 }
 
@@ -1264,7 +1267,7 @@ func TestSettings_RevealCW_ToggleDirtySaveRevert(t *testing.T) {
 		t.Fatal("ctrl+s should emit a cmd")
 	}
 	save, ok := cmd().(SaveSettingsMsg)
-	if !ok || !save.RevealContentWarnings {
+	if !ok || !save.Prefs.RevealContentWarnings {
 		t.Errorf("SaveSettingsMsg = %+v, want RevealContentWarnings true", save)
 	}
 
@@ -1307,7 +1310,7 @@ func TestSettings_DebugLog_ToggleSaveRevertSeed(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("ctrl+s should emit a cmd")
 	}
-	if save, ok := cmd().(SaveSettingsMsg); !ok || !save.DebugLog {
+	if save, ok := cmd().(SaveSettingsMsg); !ok || !save.Prefs.DebugLog {
 		t.Errorf("SaveSettingsMsg = %+v, want DebugLog true", save)
 	}
 

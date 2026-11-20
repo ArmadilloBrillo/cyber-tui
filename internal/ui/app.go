@@ -1899,21 +1899,7 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 
 	case screens.SaveSettingsMsg:
 		s := msg.Settings
-		wl := msg.WanderLust
-		fmro := msg.FeedManualRefreshOnly
-		tie := msg.TypingIndicatorsEnabled
-		dn := msg.DesktopNotifications
-		sgt := msg.ShowGlobeTab
-		td := msg.MaxThreadDepth
-		tz := msg.Timezone
-		iv := msg.ImageViewer
-		gp := msg.GraphicsProtocol
-		ii := msg.InlineImages
-		dt := msg.Dithering
-		ka := msg.KeywordAlerts
-		hb := msg.HardBreakKey
-		rcw := msg.RevealContentWarnings
-		dl := msg.DebugLog
+		p := msg.Prefs
 		a.settingsSaveSeq++
 		seq := a.settingsSaveSeq
 		return a, func() tea.Msg {
@@ -1922,7 +1908,7 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 					return actionErrMsg{err}
 				}
 			}
-			return settingsSavedMsg{seq: seq, settings: s, wanderLust: wl, feedManualRefreshOnly: fmro, typingIndicatorsEnabled: tie, desktopNotifications: dn, showGlobeTab: sgt, maxThreadDepth: td, timezone: tz, imageViewer: iv, graphicsProtocol: gp, inlineImages: ii, dithering: dt, keywordAlerts: ka, hardBreakKey: hb, revealContentWarnings: rcw, debugLog: dl}
+			return settingsSavedMsg{seq: seq, settings: s, prefs: p}
 		}, true
 
 	case settingsSavedMsg:
@@ -1936,26 +1922,27 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 		if msg.seq != a.settingsSaveSeq {
 			return a, nil, true
 		}
+		p := msg.prefs
 		a.settings = msg.settings
-		a.wanderLust = msg.wanderLust
+		a.wanderLust = p.WanderLust
 		// wasManual detects a manual→auto transition so the (possibly dead)
 		// feed-poll tea.Tick chain gets restarted immediately below, rather
 		// than staying off until the next app restart — see
 		// docs/39-feed-background-poll.md.
 		wasManual := a.feedManualRefreshOnly
-		a.feedManualRefreshOnly = msg.feedManualRefreshOnly
+		a.feedManualRefreshOnly = p.FeedManualRefreshOnly
 		// No "restart a dead chain" logic needed here, unlike the feed poll
 		// above — CMailModel reacts live to every SharedConfigMsg broadcast
 		// (broadcastConfig below) to start/stop its own typing-indicator
 		// subsystem, see cmail.go's SharedConfigMsg handler.
-		a.typingIndicatorsEnabled = msg.typingIndicatorsEnabled
-		a.desktopNotifications = msg.desktopNotifications
-		a.keywordAlerts = msg.keywordAlerts
-		a.showGlobeTab = msg.showGlobeTab
-		a.maxThreadDepth = msg.maxThreadDepth
-		a.timezone = msg.timezone
-		a.imageViewer = msg.imageViewer
-		if msg.graphicsProtocol != a.graphicsProtocolName {
+		a.typingIndicatorsEnabled = p.TypingIndicatorsEnabled
+		a.desktopNotifications = p.DesktopNotifications
+		a.keywordAlerts = p.KeywordAlerts
+		a.showGlobeTab = p.ShowGlobeTab
+		a.maxThreadDepth = p.MaxThreadDepth
+		a.timezone = p.Timezone
+		a.imageViewer = p.ImageViewer
+		if p.GraphicsProtocol != a.graphicsProtocolName {
 			// Only re-resolve when the override actually changed — saving an
 			// unrelated setting (dithering, wander mode, etc.) must not touch
 			// this. "" (auto) can only be re-resolved via env-var detection
@@ -1967,21 +1954,21 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 			// detection alone finds (often ProtocolNone), breaking inline
 			// images and the image viewer until a full restart re-probes
 			// Sixel.
-			if proto, ok := imgview.ProtocolFromName(msg.graphicsProtocol); ok {
+			if proto, ok := imgview.ProtocolFromName(p.GraphicsProtocol); ok {
 				a.graphicsProtocol = proto
 			} else {
 				a.graphicsProtocol = imgview.DetectProtocol()
 			}
 		}
-		a.graphicsProtocolName = msg.graphicsProtocol
-		a.inlineImages = msg.inlineImages
-		a.dithering = msg.dithering
-		a.hardBreakKey = msg.hardBreakKey
-		a.revealContentWarnings = msg.revealContentWarnings
+		a.graphicsProtocolName = p.GraphicsProtocol
+		a.inlineImages = p.InlineImages
+		a.dithering = p.Dithering
+		a.hardBreakKey = p.HardBreakKey
+		a.revealContentWarnings = p.RevealContentWarnings
 		savedText := "settings saved"
-		if msg.debugLog != a.debugLog {
+		if p.DebugLog != a.debugLog {
 			switch {
-			case !msg.debugLog:
+			case !p.DebugLog:
 				savedText += " · debug log stops on restart"
 			case a.logDir != "":
 				savedText += " · debug log starts on restart: " + a.logDir
@@ -1989,37 +1976,30 @@ func (a *App) handleSettings(msg tea.Msg) (*App, tea.Cmd, bool) {
 				savedText += " · debug log starts on restart"
 			}
 		}
-		a.debugLog = msg.debugLog
-		a.loc = config.ParseTimezoneLabel(msg.timezone)
-		a.settingsScreen = a.settingsScreen.SetSaved(msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.keywordAlerts)
-		a.settingsScreen = a.settingsScreen.SetSavedHardBreakKey(msg.hardBreakKey)
-		a.settingsScreen = a.settingsScreen.SetSavedRevealCW(msg.revealContentWarnings)
-		a.settingsScreen = a.settingsScreen.SetSavedDebugLog(msg.debugLog)
+		a.debugLog = p.DebugLog
+		a.loc = config.ParseTimezoneLabel(p.Timezone)
+		a.settingsScreen = a.settingsScreen.SetSaved(p)
 		a.broadcastConfig()
 		a.refreshViewports()
 		var notifyCmd tea.Cmd
 		*a, notifyCmd = a.notify(notifyInfo, savedText)
-		wl, fmro, tie, dn, sgt, td, tz, iv, gp, ii, dt, ka := msg.wanderLust, msg.feedManualRefreshOnly, msg.typingIndicatorsEnabled, msg.desktopNotifications, msg.showGlobeTab, msg.maxThreadDepth, msg.timezone, msg.imageViewer, msg.graphicsProtocol, msg.inlineImages, msg.dithering, msg.keywordAlerts
-		hb := msg.hardBreakKey
-		rcw := msg.revealContentWarnings
-		dl := msg.debugLog
 		saveCmd := func() tea.Msg {
 			a.saveConfig(func(cfg *config.Config) {
-				cfg.Debug = dl
-				cfg.HardBreakKey = hb
-				cfg.RevealContentWarnings = rcw
-				cfg.WanderLust = wl
-				cfg.FeedManualRefreshOnly = fmro
-				cfg.TypingIndicatorsDisabled = !tie
-				cfg.DesktopNotifications = dn
-				cfg.KeywordAlerts = ka
-				cfg.HideGlobeTab = !sgt
-				cfg.MaxThreadDepth = td
-				cfg.Timezone = tz
-				cfg.ImageViewer = iv
-				cfg.GraphicsProtocol = gp
-				cfg.InlineImages = ii
-				cfg.Dithering = dt
+				cfg.Debug = p.DebugLog
+				cfg.HardBreakKey = p.HardBreakKey
+				cfg.RevealContentWarnings = p.RevealContentWarnings
+				cfg.WanderLust = p.WanderLust
+				cfg.FeedManualRefreshOnly = p.FeedManualRefreshOnly
+				cfg.TypingIndicatorsDisabled = !p.TypingIndicatorsEnabled
+				cfg.DesktopNotifications = p.DesktopNotifications
+				cfg.KeywordAlerts = p.KeywordAlerts
+				cfg.HideGlobeTab = !p.ShowGlobeTab
+				cfg.MaxThreadDepth = p.MaxThreadDepth
+				cfg.Timezone = p.Timezone
+				cfg.ImageViewer = p.ImageViewer
+				cfg.GraphicsProtocol = p.GraphicsProtocol
+				cfg.InlineImages = p.InlineImages
+				cfg.Dithering = p.Dithering
 			})
 			return nil
 		}
@@ -4846,23 +4826,9 @@ type replyEditedMsg struct {
 }
 type settingsLoadedMsg struct{ settings model.Settings }
 type settingsSavedMsg struct {
-	seq                     int
-	settings                model.Settings
-	wanderLust              bool
-	feedManualRefreshOnly   bool
-	typingIndicatorsEnabled bool
-	desktopNotifications    bool
-	showGlobeTab            bool
-	maxThreadDepth          int
-	timezone                string
-	imageViewer             string
-	graphicsProtocol        string
-	inlineImages            bool
-	dithering               bool
-	keywordAlerts           []string
-	hardBreakKey            string
-	revealContentWarnings   bool
-	debugLog                bool
+	seq      int
+	settings model.Settings
+	prefs    screens.LocalPrefs
 }
 type wanderTickMsg struct{ gen int }
 type wanderDoneMsg struct{ at time.Time } // zero At means no update was made

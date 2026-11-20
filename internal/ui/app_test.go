@@ -2175,10 +2175,10 @@ func TestHandleSettings_ManualToAutoRestartsFeedPoll(t *testing.T) {
 	a := loggedInApp()
 	a.feedManualRefreshOnly = true
 
-	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{Prefs: screens.LocalPrefs{
 		FeedManualRefreshOnly: false,
 		ImageViewer:           "terminal",
-	})
+	}})
 	if !ok || cmd == nil {
 		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
 	}
@@ -7110,11 +7110,11 @@ func TestHandleSettings_SavingUnrelatedSettingPreservesProbedProtocol(t *testing
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = "" // auto — the only way DetectProtocol() ever gets consulted
 
-	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{Prefs: screens.LocalPrefs{
 		GraphicsProtocol: "", // unchanged
 		Dithering:        true,
 		ImageViewer:      "terminal",
-	})
+	}})
 	if !ok || cmd == nil {
 		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
 	}
@@ -7154,24 +7154,24 @@ func TestHandleSettings_OutOfOrderSaveDoesNotClobberNewer(t *testing.T) {
 
 	var cmd1 tea.Cmd
 	var ok bool
-	_, cmd1, ok = a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd1, ok = a.handleSettings(screens.SaveSettingsMsg{Prefs: screens.LocalPrefs{
 		WanderLust:       true,
 		Timezone:         "UTC+2",
 		ImageViewer:      "terminal",
 		GraphicsProtocol: "kitty", // unchanged from the pre-save value
-	})
+	}})
 	if !ok || cmd1 == nil {
 		t.Fatal("expected first SaveSettingsMsg to be handled")
 	}
 
 	var cmd2 tea.Cmd
-	_, cmd2, ok = a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd2, ok = a.handleSettings(screens.SaveSettingsMsg{Prefs: screens.LocalPrefs{
 		WanderLust:       true,
 		Timezone:         "UTC+5:30",
 		MaxThreadDepth:   7,
 		ImageViewer:      "terminal",
 		GraphicsProtocol: "sixel", // the user's real, later edit
-	})
+	}})
 	if !ok || cmd2 == nil {
 		t.Fatal("expected second SaveSettingsMsg to be handled")
 	}
@@ -7296,10 +7296,10 @@ func TestHandleSettings_ChangingGraphicsProtocolOverrideReResolves(t *testing.T)
 	a.graphicsProtocol = imgview.ProtocolSixel
 	a.graphicsProtocolName = ""
 
-	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{Prefs: screens.LocalPrefs{
 		GraphicsProtocol: "kitty", // changed
 		ImageViewer:      "terminal",
-	})
+	}})
 	if !ok || cmd == nil {
 		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
 	}
@@ -7535,7 +7535,7 @@ func TestHandleSettings_RevealContentWarningsPersists(t *testing.T) {
 	t.Setenv("USERPROFILE", dir)
 
 	a := loggedInApp()
-	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{RevealContentWarnings: true, ImageViewer: "terminal"})
+	_, cmd, ok := a.handleSettings(screens.SaveSettingsMsg{Prefs: screens.LocalPrefs{RevealContentWarnings: true, ImageViewer: "terminal"}})
 	if !ok || cmd == nil {
 		t.Fatal("expected handleSettings to handle SaveSettingsMsg with a non-nil cmd")
 	}

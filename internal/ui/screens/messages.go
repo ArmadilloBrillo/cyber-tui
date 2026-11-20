@@ -182,23 +182,9 @@ type LeaveChatroomsMsg struct{}
 // with unsaved changes. App.handleSettings calls UpdateSettings and returns
 // settingsSavedMsg or errMsg.
 type SaveSettingsMsg struct {
-	Settings                model.Settings
-	WanderLust              bool
-	FeedManualRefreshOnly   bool
-	TypingIndicatorsEnabled bool
-	DesktopNotifications    bool
-	ShowGlobeTab            bool
-	MaxThreadDepth          int
-	Timezone                string
-	ImageViewer             string
-	GraphicsProtocol        string
-	InlineImages            bool
-	Dithering               bool
-	KeywordAlerts           []string
-	HardBreakKey            string
-	RevealContentWarnings   bool
-	DebugLog                bool
-	RemoteChanged           bool // true when API-managed fields differ from the last saved baseline
+	Settings      model.Settings
+	Prefs         LocalPrefs
+	RemoteChanged bool // true when API-managed fields differ from the last saved baseline
 }
 
 // OpenKeywordEditorMsg is emitted by SettingsModel when Enter/Space is
