@@ -49,15 +49,19 @@ type LocalPrefs struct {
 }
 
 func (p LocalPrefs) equal(o LocalPrefs) bool {
-    a, b := p, o
-    a.KeywordAlerts, b.KeywordAlerts = nil, nil
-    return a == b && slices.Equal(p.KeywordAlerts, o.KeywordAlerts)
+    if !slices.Equal(p.KeywordAlerts, o.KeywordAlerts) {
+        return false
+    }
+    p.KeywordAlerts, o.KeywordAlerts = nil, nil
+    return reflect.DeepEqual(p, o)
 }
 ```
 
-`equal` blanks the one slice and compares the rest with `==`. If someone later
-adds a second slice or map field, `a == b` stops compiling, which forces them
-to extend `equal` rather than silently skipping the field.
+`KeywordAlerts` goes through `slices.Equal` so nil and empty stay equal (as
+`stringSlicesEqual` did); `reflect.DeepEqual` covers every other field, so a
+new field is never left out. (The first draft blanked the slice and used
+`==`, but Go rejects `==` on any struct type containing a slice, even a nil
+one; found when step 1 failed to compile.)
 
 Polarity stays as it is at runtime today: `TypingIndicatorsEnabled` and
 `ShowGlobeTab` positive, `FeedManualRefreshOnly` as stored. The inversion to
@@ -91,9 +95,9 @@ in this step, so `app.go` is untouched. The ctrl+s handler builds the
 existing flat `SaveSettingsMsg` from `m.local`.
 
 `settings_test.go` field accesses (`m.wanderLust`, `m.originalTimezone`, ...)
-are rewritten to `m.local.X` / `m.originalLocal.X`. No dedicated `equal`
-test: `==` cannot skip a scalar field, and the existing keyword-alerts
-dirty/revert test already covers the slice.
+are rewritten to `m.local.X` / `m.originalLocal.X`. One small
+`TestLocalPrefs_Equal` covers nil vs empty keyword lists, a keyword change and
+a scalar change.
 
 Test: `go test ./internal/ui/...`, `go vet ./...`.
 
