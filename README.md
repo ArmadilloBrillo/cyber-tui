@@ -179,7 +179,7 @@ You can add any of the following fields manually. Most are also editable live fr
 
 | Field | Default | Description |
 |---|---|---|
-| `hardBreakKey` | `"alt+enter"` | Key that inserts a hard line break while writing a post or reply (Enter inserts a paragraph break). A key combo with ctrl, alt or shift, e.g. `"ctrl+l"` for terminals that intercept `alt+enter`. Also editable in Settings under "compose": Enter on the row, then press the combo |
+| `hardBreakKey` | `"alt+enter"` | Key that inserts a hard line break while writing a post or reply (Enter inserts a paragraph break). A key combo with ctrl, alt or shift, e.g. `"ctrl+l"` for terminals that intercept `alt+enter`. Also editable in Settings under "chat & compose": Enter on the row, then press the combo |
 
 **Images** (config-file-only except `imageViewer`, which also has a Settings toggle)
 

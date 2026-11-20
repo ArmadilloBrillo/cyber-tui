@@ -75,7 +75,7 @@ type Settings struct {
 
 ## Local Setting: Hard Line Break Key
 
-Not part of the API settings. Stored as `hardBreakKey` in `~/.cyber-tui.json` and edited in the Settings screen under "compose" ("line break key"). It is the key that inserts a line break (default `alt+enter`): a markdown hard line break in post and reply compose, and a plain newline in the cIRC and C-Mail compose box. Any combo with a ctrl, alt or shift modifier. The row captures a keypress instead of offering a list: `enter` on the row, then press the combo, and it is bound at once; `esc` cancels. The value reaches every compose box through `SharedConfigMsg.HardBreakKey`. See `docs/00-project-reference.md` (Compose) for the rules on which keys can be bound.
+Not part of the API settings. Stored as `hardBreakKey` in `~/.cyber-tui.json` and edited in the Settings screen under "chat & compose" ("line break key"). It is the key that inserts a line break (default `alt+enter`): a markdown hard line break in post and reply compose, and a plain newline in the cIRC and C-Mail compose box. Any combo with a ctrl, alt or shift modifier. The row captures a keypress instead of offering a list: `enter` on the row, then press the combo, and it is bound at once; `esc` cancels. The value reaches every compose box through `SharedConfigMsg.HardBreakKey`. See `docs/00-project-reference.md` (Compose) for the rules on which keys can be bound.
 
 ---
 
@@ -129,7 +129,7 @@ Fixed via a 20s app-level tick (`relativeTimeTickMsg`, `internal/ui/app.go`) tha
 
 ## Settings Screen
 
-The Settings screen is the fourth tab (shortcut `4` or tab navigation with `←` / `→`). It is a full-screen, cursor-navigable list of editable preferences grouped under four headers: **notifications**, **content**, **social**, and **display**.
+The Settings screen is the fourth tab (shortcut `4` or tab navigation with `←` / `→`). It is a full-screen, cursor-navigable list of editable preferences grouped under six headers: **alerts**, **feed & posts**, **display**, **images**, **chat & compose**, and **advanced**. Rows backed by the API `Settings` struct and local-only config rows are mixed freely within a group; `ctrl+s` saves both.
 
 ### Key Bindings
 
@@ -138,7 +138,7 @@ The Settings screen is the fourth tab (shortcut `4` or tab navigation with `←`
 | `j` / `↓` | Move cursor down |
 | `k` / `↑` | Move cursor up |
 | `space` / `enter` | Toggle boolean setting |
-| `←` / `→` | Cycle enum option (e.g., time format) |
+| `tab` / `shift+tab` | Cycle enum option forward / backward (e.g., time format) |
 | `ctrl+s` | Save all pending changes |
 | `esc` | Revert unsaved changes |
 
@@ -148,21 +148,17 @@ Changes are accumulated in memory until `ctrl+s` is pressed. This respects the A
 
 ### Editable Fields
 
-**Notifications group:**
-- Bookmark alerts (bool)
-- Reply alerts (bool)
-- Poke alerts (bool)
+**alerts:** bookmark alerts, reply alerts, poke alerts, alert keywords (opens the keyword editor), desktop notifications (OSC 9)
 
-**Content group:**
-- Filter NSFW (bool)
+**feed & posts:** filter nsfw, show guild posts in feed, auto-refresh (background poll), always reveal content warnings, default public post, auto-watch on reply, show follower count
 
-**Social group:**
-- Show follower count (bool)
-- Auto-watch on reply (bool)
-- Default public post (bool)
+**display:** time format (datetime / relative / unix / swatch), timezone, thread depth, color nicknames, show globe tab
 
-**Display group:**
-- Time format (enum: datetime / relative / unix / swatch)
+**images:** image viewer, then (terminal viewer only) graphics protocol, inline images, dithering, and (dithering on only) sharpness and color
+
+**chat & compose:** line break key, typing indicators
+
+**advanced:** wander mode, debug log (on restart)
 
 ### Deferred Fields
 
@@ -174,7 +170,7 @@ The following settings require complex pickers and are deferred to a future feat
 `MutedTopics` (muted topics) shipped in Feature 54 — managed from the Topics
 tab, not this screen; included in `PATCH /v1/settings`. See `docs/54-muted-topics.md`.
 
-**Globe group (local-only, not part of the API `Settings` struct):**
+**Show globe tab (display group; local-only, not part of the API `Settings` struct):**
 - Show globe tab (bool) — toggles `config.Config.HideGlobeTab` (inverted:
   `App.showGlobeTab`). When off, Globe is excluded from the tab bar/nav
   sidebar, arrow-key cycling, and the `g l` leader chord — the same

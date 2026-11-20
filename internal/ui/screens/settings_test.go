@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -154,7 +155,7 @@ func TestSettings_Toggle_FilterNSFW(t *testing.T) {
 
 func TestSettings_Tab_CyclesEnum(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 8 // time format
+	m.cursor = itemIndex(t, m, "time format")
 	if m.settings.TimeDisplayFormat != "relative" {
 		t.Error("default TimeDisplayFormat should be 'relative'")
 	}
@@ -166,7 +167,7 @@ func TestSettings_Tab_CyclesEnum(t *testing.T) {
 
 func TestSettings_ShiftTab_CyclesEnum(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 8
+	m.cursor = itemIndex(t, m, "time format")
 	m, _ = m.Update(keyMsg("shift+tab"))
 	if m.settings.TimeDisplayFormat != "datetime" {
 		t.Error("shift+tab from 'relative' should cycle to 'datetime'")
@@ -175,7 +176,7 @@ func TestSettings_ShiftTab_CyclesEnum(t *testing.T) {
 
 func TestSettings_Enum_WrapsForward(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 8
+	m.cursor = itemIndex(t, m, "time format")
 	// Cycle from relative -> unix -> swatch -> datetime -> relative
 	m.settings.TimeDisplayFormat = "swatch"
 	m, _ = m.Update(keyMsg("tab"))
@@ -186,7 +187,7 @@ func TestSettings_Enum_WrapsForward(t *testing.T) {
 
 func TestSettings_Enum_WrapsBackward(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 8
+	m.cursor = itemIndex(t, m, "time format")
 	m.settings.TimeDisplayFormat = "datetime"
 	m, _ = m.Update(keyMsg("shift+tab"))
 	if m.settings.TimeDisplayFormat != "swatch" {
@@ -206,7 +207,7 @@ func TestSettings_Tab_OnBool_IsNoop(t *testing.T) {
 
 func TestSettings_ColorNicknames_SpaceTogglesAndMarksDirty(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 10 // color nicknames
+	m.cursor = itemIndex(t, m, "color nicknames")
 	if flatItems(m)[m.cursor].label != "color nicknames" {
 		t.Fatalf("item %d = %q, want color nicknames", m.cursor, flatItems(m)[m.cursor].label)
 	}
@@ -226,7 +227,25 @@ func TestSettings_ColorNicknames_SpaceTogglesAndMarksDirty(t *testing.T) {
 // now only owns the keywordAlerts draft/baseline and opens the popup.
 
 func keywordlistCursor(m SettingsModel) int {
-	return len(flatItems(m)) - 1 // "alert keywords" is the last item in the last group
+	for i, it := range flatItems(m) {
+		if it.kind == "keywordlist" {
+			return i
+		}
+	}
+	return -1
+}
+
+// itemIndex returns the flat index of the visible row with the given label, so
+// tests survive settings rows being regrouped or reordered.
+func itemIndex(t *testing.T, m SettingsModel, label string) int {
+	t.Helper()
+	for i, it := range flatItems(m) {
+		if it.label == label {
+			return i
+		}
+	}
+	t.Fatalf("no visible settings row labelled %q", label)
+	return -1
 }
 
 func TestSettings_Keywordlist_EnterOpensEditorPopup(t *testing.T) {
@@ -244,7 +263,7 @@ func TestSettings_Keywordlist_EnterOpensEditorPopup(t *testing.T) {
 func TestSettings_Keywordlist_GetSetAccessors(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetKeywordAlerts([]string{"foo", "bar"})
-	if !stringSlicesEqual(m.KeywordAlerts(), []string{"foo", "bar"}) {
+	if !slices.Equal(m.KeywordAlerts(), []string{"foo", "bar"}) {
 		t.Errorf("KeywordAlerts() = %v, want [foo bar]", m.KeywordAlerts())
 	}
 }
@@ -255,7 +274,7 @@ func TestSettings_Keywordlist_SetsDirtyAndReverts(t *testing.T) {
 	if m.IsDirty() {
 		t.Fatal("should start clean")
 	}
-	m.keywordAlerts = []string{"foo"}
+	m.local.KeywordAlerts = []string{"foo"}
 	if !m.IsDirty() {
 		t.Error("adding a keyword should set dirty")
 	}
@@ -263,8 +282,8 @@ func TestSettings_Keywordlist_SetsDirtyAndReverts(t *testing.T) {
 	if m.IsDirty() {
 		t.Error("esc should revert dirty state")
 	}
-	if len(m.keywordAlerts) != 0 {
-		t.Errorf("esc should revert keywordAlerts to original, got %v", m.keywordAlerts)
+	if len(m.local.KeywordAlerts) != 0 {
+		t.Errorf("esc should revert keywordAlerts to original, got %v", m.local.KeywordAlerts)
 	}
 }
 
@@ -315,7 +334,7 @@ func TestSettings_Esc_ClearsError(t *testing.T) {
 func TestSettings_SetSaved_ClearsError(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m = m.SetError(testErr)
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
+	m = m.SetSaved(LocalPrefs{WanderLust: false, FeedManualRefreshOnly: false, TypingIndicatorsEnabled: true, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: false, KeywordAlerts: nil})
 	if m.err != nil {
 		t.Error("SetSaved should clear error")
 	}
@@ -327,7 +346,7 @@ func TestSettings_SetSaved_AdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Error("should be dirty after change")
 	}
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
+	m = m.SetSaved(LocalPrefs{WanderLust: false, FeedManualRefreshOnly: false, TypingIndicatorsEnabled: true, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: false, KeywordAlerts: nil})
 	if m.IsDirty() {
 		t.Error("after SetSaved, should not be dirty")
 	}
@@ -349,11 +368,11 @@ func hasItemLabelled(m SettingsModel, sub string) bool {
 
 func TestSettings_Dithering_ShowIf_HiddenWhenBrowser(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.imageViewer = "terminal"
+	m.local.ImageViewer = "terminal"
 	if !hasItemLabelled(m, "dithering") {
 		t.Error("dithering item should be visible when imageViewer != browser")
 	}
-	m.imageViewer = "browser"
+	m.local.ImageViewer = "browser"
 	if hasItemLabelled(m, "dithering") {
 		t.Error("dithering item should be hidden when imageViewer == browser")
 	}
@@ -361,16 +380,16 @@ func TestSettings_Dithering_ShowIf_HiddenWhenBrowser(t *testing.T) {
 
 func TestSettings_Sharpness_ShowIf_HiddenUntilDitheringOn(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.imageViewer = "terminal"
-	m.dithering = false
+	m.local.ImageViewer = "terminal"
+	m.local.Dithering = false
 	if hasItemLabelled(m, "sharpness") {
 		t.Error("sharpness item should be hidden while dithering is off")
 	}
-	m.dithering = true
+	m.local.Dithering = true
 	if !hasItemLabelled(m, "sharpness") {
 		t.Error("sharpness item should be visible once dithering is on")
 	}
-	m.imageViewer = "browser"
+	m.local.ImageViewer = "browser"
 	if hasItemLabelled(m, "sharpness") {
 		t.Error("sharpness item should stay hidden when imageViewer == browser, even with dithering on")
 	}
@@ -378,16 +397,16 @@ func TestSettings_Sharpness_ShowIf_HiddenUntilDitheringOn(t *testing.T) {
 
 func TestSettings_ImageColor_ShowIf_HiddenUntilDitheringOn(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.imageViewer = "terminal"
-	m.dithering = false
+	m.local.ImageViewer = "terminal"
+	m.local.Dithering = false
 	if hasItemLabelled(m, "    color") {
 		t.Error("color item should be hidden while dithering is off")
 	}
-	m.dithering = true
+	m.local.Dithering = true
 	if !hasItemLabelled(m, "    color") {
 		t.Error("color item should be visible once dithering is on")
 	}
-	m.imageViewer = "browser"
+	m.local.ImageViewer = "browser"
 	if hasItemLabelled(m, "    color") {
 		t.Error("color item should stay hidden when imageViewer == browser, even with dithering on")
 	}
@@ -395,9 +414,9 @@ func TestSettings_ImageColor_ShowIf_HiddenUntilDitheringOn(t *testing.T) {
 
 func TestSettings_ImageColor_CycleTogglesAndSaves(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.imageViewer = "terminal"
-	m.dithering = true
-	m.originalDithering = true
+	m.local.ImageViewer = "terminal"
+	m.local.Dithering = true
+	m.originalLocal.Dithering = true
 	var item settingsItem
 	for _, it := range flatItems(m) {
 		if it.label == "    color" {
@@ -438,8 +457,8 @@ func TestSettings_ImageColor_CycleTogglesAndSaves(t *testing.T) {
 
 func TestSettings_Dithering_SaveMsg(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.dithering = true
-	m.originalDithering = false // make it dirty
+	m.local.Dithering = true
+	m.originalLocal.Dithering = false // make it dirty
 	m.settings.ImagePixelSize = "rough"
 	var got tea.Msg
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
@@ -450,7 +469,7 @@ func TestSettings_Dithering_SaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if !save.Dithering {
+	if !save.Prefs.Dithering {
 		t.Error("SaveSettingsMsg.Dithering should reflect current dithering value")
 	}
 	if save.Settings.ImagePixelSize != "rough" {
@@ -463,13 +482,13 @@ func TestSettings_Dithering_SaveMsg(t *testing.T) {
 
 func TestSettings_Dithering_SetSaved_AdvancesBaseline(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.dithering = true
-	m.originalDithering = false
+	m.local.Dithering = true
+	m.originalLocal.Dithering = false
 	if !m.IsDirty() {
 		t.Error("should be dirty before SetSaved")
 	}
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, true, nil)
-	if m.originalDithering != true {
+	m = m.SetSaved(LocalPrefs{WanderLust: false, FeedManualRefreshOnly: false, TypingIndicatorsEnabled: true, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: true, KeywordAlerts: nil})
+	if m.originalLocal.Dithering != true {
 		t.Error("SetSaved should update originalDithering to the saved value")
 	}
 	if m.IsDirty() {
@@ -538,20 +557,20 @@ func TestSettings_SharedConfigMsg_SeedsPrefsAfterSetSettings(t *testing.T) {
 		GraphicsProtocol: "sixel",
 	})
 
-	if !m.wanderLust {
+	if !m.local.WanderLust {
 		t.Error("wanderLust should be seeded from SharedConfigMsg even after a prior SetSettings call")
 	}
-	if m.maxThreadDepth != 20 {
-		t.Errorf("maxThreadDepth = %d, want 20", m.maxThreadDepth)
+	if m.local.MaxThreadDepth != 20 {
+		t.Errorf("maxThreadDepth = %d, want 20", m.local.MaxThreadDepth)
 	}
-	if !m.inlineImages {
+	if !m.local.InlineImages {
 		t.Error("inlineImages should be seeded from SharedConfigMsg even after a prior SetSettings call")
 	}
-	if !m.dithering {
+	if !m.local.Dithering {
 		t.Error("dithering should be seeded from SharedConfigMsg even after a prior SetSettings call")
 	}
-	if m.graphicsProtocol != "sixel" {
-		t.Errorf("graphicsProtocol = %q, want sixel", m.graphicsProtocol)
+	if m.local.GraphicsProtocol != "sixel" {
+		t.Errorf("graphicsProtocol = %q, want sixel", m.local.GraphicsProtocol)
 	}
 }
 
@@ -587,8 +606,9 @@ func TestSettings_IsDirty_FalseAfterSetSettings(t *testing.T) {
 
 func TestSettings_View_ContainsSectionHeaders(t *testing.T) {
 	m := initSettings(defaultSettings())
+	m.height = 100 // fit every group on screen; the default 24 rows scrolls the lower ones out
 	view := m.View()
-	headers := []string{"notifications", "content", "social", "display"}
+	headers := []string{"alerts", "feed & posts", "display", "images", "chat & compose", "advanced"}
 	for _, h := range headers {
 		if !containsSubstring(view, h) {
 			t.Errorf("View should contain section header '%s'", h)
@@ -616,7 +636,7 @@ func TestSettings_View_ShowsCheckboxFalse(t *testing.T) {
 
 func TestSettings_View_ShowsEnumValue(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 8 // time format
+	m.cursor = itemIndex(t, m, "time format")
 	view := m.View()
 	if !containsSubstring(view, "relative") {
 		t.Error("View should show the current enum value")
@@ -632,12 +652,12 @@ func TestSettings_View_DirtyFooterHint(t *testing.T) {
 	}
 }
 
-func TestSettings_View_SavedMessage(t *testing.T) {
+func TestSettings_View_DirtyFooterKeepsKeyHints(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	view := m.View()
-	if !containsSubstring(view, "saved!") {
-		t.Error("View should show 'saved!' when saved=true")
+	if !containsSubstring(view, "tab · cycle enum") || !containsSubstring(view, "ctrl+s · save") {
+		t.Error("dirty footer should show both the key hints and the save hint")
 	}
 }
 
@@ -652,32 +672,24 @@ func TestSettings_View_ErrorMessage(t *testing.T) {
 
 // --- WanderLust Tests ---
 
-func TestSettings_WanderGroup_Visible(t *testing.T) {
-	m := initSettings(defaultSettings())
-	view := m.View()
-	if !containsSubstring(view, "wander") {
-		t.Error("View should contain 'wander' group header")
-	}
-}
-
 func TestSettings_WanderToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.wanderLust = true
-	m.cursor = 16 // wander mode item (shifted by the dithering and color nicknames toggles above it)
+	m.local.WanderLust = true
+	m.cursor = itemIndex(t, m, "wander mode")
 	m, _ = m.Update(keyMsg("enter"))
-	if m.wanderLust {
+	if m.local.WanderLust {
 		t.Error("toggling wander mode should flip wanderLust to false")
 	}
 }
 
 func TestSettings_WanderDirty(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.wanderLust = true
-	m.originalWanderLust = true
+	m.local.WanderLust = true
+	m.originalLocal.WanderLust = true
 	if m.IsDirty() {
 		t.Error("should not be dirty before change")
 	}
-	m.wanderLust = false
+	m.local.WanderLust = false
 	if !m.IsDirty() {
 		t.Error("IsDirty should return true when wanderLust differs from original")
 	}
@@ -685,8 +697,8 @@ func TestSettings_WanderDirty(t *testing.T) {
 
 func TestSettings_WanderSaveMsg(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.wanderLust = false
-	m.originalWanderLust = true // make it dirty
+	m.local.WanderLust = false
+	m.originalLocal.WanderLust = true // make it dirty
 	var got tea.Msg
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cmd != nil {
@@ -696,17 +708,17 @@ func TestSettings_WanderSaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if save.WanderLust != false {
+	if save.Prefs.WanderLust != false {
 		t.Error("SaveSettingsMsg.WanderLust should reflect current wanderLust value")
 	}
 }
 
 func TestSettings_WanderSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.wanderLust = true
-	m.originalWanderLust = false // dirty
-	m = m.SetSaved(true, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
-	if m.originalWanderLust != true {
+	m.local.WanderLust = true
+	m.originalLocal.WanderLust = false // dirty
+	m = m.SetSaved(LocalPrefs{WanderLust: true, FeedManualRefreshOnly: false, TypingIndicatorsEnabled: true, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: false, KeywordAlerts: nil})
+	if m.originalLocal.WanderLust != true {
 		t.Error("SetSaved should update originalWanderLust to the saved value")
 	}
 	if m.IsDirty() {
@@ -731,7 +743,7 @@ func TestSettings_FeedGroup_Visible(t *testing.T) {
 
 func TestSettings_FeedAutoRefreshToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.feedManualRefreshOnly = false // auto-refresh currently on
+	m.local.FeedManualRefreshOnly = false // auto-refresh currently on
 
 	items := flatItems(m)
 	idx := -1
@@ -746,19 +758,19 @@ func TestSettings_FeedAutoRefreshToggle(t *testing.T) {
 	}
 	m.cursor = idx
 	m, _ = m.Update(keyMsg("enter"))
-	if !m.feedManualRefreshOnly {
+	if !m.local.FeedManualRefreshOnly {
 		t.Error("toggling auto-refresh off should flip feedManualRefreshOnly to true")
 	}
 }
 
 func TestSettings_FeedAutoRefreshDirty(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.feedManualRefreshOnly = true
-	m.originalFeedManualRefreshOnly = true
+	m.local.FeedManualRefreshOnly = true
+	m.originalLocal.FeedManualRefreshOnly = true
 	if m.IsDirty() {
 		t.Error("should not be dirty before change")
 	}
-	m.feedManualRefreshOnly = false
+	m.local.FeedManualRefreshOnly = false
 	if !m.IsDirty() {
 		t.Error("IsDirty should return true when feedManualRefreshOnly differs from original")
 	}
@@ -766,8 +778,8 @@ func TestSettings_FeedAutoRefreshDirty(t *testing.T) {
 
 func TestSettings_FeedAutoRefreshSaveMsg(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.feedManualRefreshOnly = true
-	m.originalFeedManualRefreshOnly = false // make it dirty
+	m.local.FeedManualRefreshOnly = true
+	m.originalLocal.FeedManualRefreshOnly = false // make it dirty
 	var got tea.Msg
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cmd != nil {
@@ -777,17 +789,17 @@ func TestSettings_FeedAutoRefreshSaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if save.FeedManualRefreshOnly != true {
+	if save.Prefs.FeedManualRefreshOnly != true {
 		t.Error("SaveSettingsMsg.FeedManualRefreshOnly should reflect current feedManualRefreshOnly value")
 	}
 }
 
 func TestSettings_FeedAutoRefreshSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.feedManualRefreshOnly = true
-	m.originalFeedManualRefreshOnly = false // dirty
-	m = m.SetSaved(false, true, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
-	if m.originalFeedManualRefreshOnly != true {
+	m.local.FeedManualRefreshOnly = true
+	m.originalLocal.FeedManualRefreshOnly = false // dirty
+	m = m.SetSaved(LocalPrefs{WanderLust: false, FeedManualRefreshOnly: true, TypingIndicatorsEnabled: true, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: false, KeywordAlerts: nil})
+	if m.originalLocal.FeedManualRefreshOnly != true {
 		t.Error("SetSaved should update originalFeedManualRefreshOnly to the saved value")
 	}
 	if m.IsDirty() {
@@ -800,17 +812,9 @@ func TestSettings_FeedAutoRefreshSetSaved(t *testing.T) {
 // throughout (typingIndicatorsEnabled), so no display-label inversion is
 // needed in the settings item's getBool/toggle closures.
 
-func TestSettings_CMailGroup_Visible(t *testing.T) {
-	m := initSettings(defaultSettings())
-	view := m.View()
-	if !containsSubstring(view, "c-mail") {
-		t.Error("View should contain 'c-mail' group header")
-	}
-}
-
 func TestSettings_TypingIndicatorsToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.typingIndicatorsEnabled = true
+	m.local.TypingIndicatorsEnabled = true
 
 	items := flatItems(m)
 	idx := -1
@@ -825,19 +829,19 @@ func TestSettings_TypingIndicatorsToggle(t *testing.T) {
 	}
 	m.cursor = idx
 	m, _ = m.Update(keyMsg("enter"))
-	if m.typingIndicatorsEnabled {
+	if m.local.TypingIndicatorsEnabled {
 		t.Error("toggling typing indicators should flip typingIndicatorsEnabled to false")
 	}
 }
 
 func TestSettings_TypingIndicatorsDirty(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.typingIndicatorsEnabled = true
-	m.originalTypingIndicatorsEnabled = true
+	m.local.TypingIndicatorsEnabled = true
+	m.originalLocal.TypingIndicatorsEnabled = true
 	if m.IsDirty() {
 		t.Error("should not be dirty before change")
 	}
-	m.typingIndicatorsEnabled = false
+	m.local.TypingIndicatorsEnabled = false
 	if !m.IsDirty() {
 		t.Error("IsDirty should return true when typingIndicatorsEnabled differs from original")
 	}
@@ -845,8 +849,8 @@ func TestSettings_TypingIndicatorsDirty(t *testing.T) {
 
 func TestSettings_TypingIndicatorsSaveMsg(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.typingIndicatorsEnabled = false
-	m.originalTypingIndicatorsEnabled = true // make it dirty
+	m.local.TypingIndicatorsEnabled = false
+	m.originalLocal.TypingIndicatorsEnabled = true // make it dirty
 	var got tea.Msg
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cmd != nil {
@@ -856,17 +860,17 @@ func TestSettings_TypingIndicatorsSaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if save.TypingIndicatorsEnabled != false {
+	if save.Prefs.TypingIndicatorsEnabled != false {
 		t.Error("SaveSettingsMsg.TypingIndicatorsEnabled should reflect current typingIndicatorsEnabled value")
 	}
 }
 
 func TestSettings_TypingIndicatorsSetSaved(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.typingIndicatorsEnabled = false
-	m.originalTypingIndicatorsEnabled = true // dirty
-	m = m.SetSaved(false, false, false, false, true, 3, "UTC", "terminal", "", false, false, nil)
-	if m.originalTypingIndicatorsEnabled != false {
+	m.local.TypingIndicatorsEnabled = false
+	m.originalLocal.TypingIndicatorsEnabled = true // dirty
+	m = m.SetSaved(LocalPrefs{WanderLust: false, FeedManualRefreshOnly: false, TypingIndicatorsEnabled: false, DesktopNotifications: false, ShowGlobeTab: true, MaxThreadDepth: 3, Timezone: "UTC", ImageViewer: "terminal", GraphicsProtocol: "", InlineImages: false, Dithering: false, KeywordAlerts: nil})
+	if m.originalLocal.TypingIndicatorsEnabled != false {
 		t.Error("SetSaved should update originalTypingIndicatorsEnabled to the saved value")
 	}
 	if m.IsDirty() {
@@ -878,7 +882,7 @@ func TestSettings_TypingIndicatorsSetSaved(t *testing.T) {
 
 func TestSettings_ShowGlobeTabToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.showGlobeTab = true
+	m.local.ShowGlobeTab = true
 
 	items := flatItems(m)
 	idx := -1
@@ -893,19 +897,19 @@ func TestSettings_ShowGlobeTabToggle(t *testing.T) {
 	}
 	m.cursor = idx
 	m, _ = m.Update(keyMsg("enter"))
-	if m.showGlobeTab {
+	if m.local.ShowGlobeTab {
 		t.Error("toggling show globe tab should flip showGlobeTab to false")
 	}
 }
 
 func TestSettings_ShowGlobeTabDirty(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.showGlobeTab = true
-	m.originalShowGlobeTab = true
+	m.local.ShowGlobeTab = true
+	m.originalLocal.ShowGlobeTab = true
 	if m.IsDirty() {
 		t.Error("should not be dirty before change")
 	}
-	m.showGlobeTab = false
+	m.local.ShowGlobeTab = false
 	if !m.IsDirty() {
 		t.Error("IsDirty should return true when showGlobeTab differs from original")
 	}
@@ -913,8 +917,8 @@ func TestSettings_ShowGlobeTabDirty(t *testing.T) {
 
 func TestSettings_ShowGlobeTabSaveMsg(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.showGlobeTab = false
-	m.originalShowGlobeTab = true // make it dirty
+	m.local.ShowGlobeTab = false
+	m.originalLocal.ShowGlobeTab = true // make it dirty
 	var got tea.Msg
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cmd != nil {
@@ -924,7 +928,7 @@ func TestSettings_ShowGlobeTabSaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if save.ShowGlobeTab != false {
+	if save.Prefs.ShowGlobeTab != false {
 		t.Error("SaveSettingsMsg.ShowGlobeTab should reflect current showGlobeTab value")
 	}
 }
@@ -933,48 +937,49 @@ func TestSettings_ShowGlobeTabSaveMsg(t *testing.T) {
 
 func TestSettings_Timezone_CyclesForward(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.timezone = "UTC"
-	m.originalTimezone = "UTC"
-	m.cursor = 11 // timezone item
+	m.local.Timezone = "UTC"
+	m.originalLocal.Timezone = "UTC"
+	m.cursor = itemIndex(t, m, "timezone")
 	m, _ = m.Update(keyMsg("tab"))
-	if m.timezone == "UTC" {
+	if m.local.Timezone == "UTC" {
 		t.Error("tab should advance timezone from UTC")
 	}
 }
 
 func TestSettings_Timezone_CyclesBackward(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.timezone = "UTC"
-	m.originalTimezone = "UTC"
-	m.cursor = 11
+	m.local.Timezone = "UTC"
+	m.originalLocal.Timezone = "UTC"
+	m.cursor = itemIndex(t, m, "timezone")
 	m, _ = m.Update(keyMsg("shift+tab"))
-	if m.timezone == "UTC" {
+	if m.local.Timezone == "UTC" {
 		t.Error("shift+tab should cycle timezone backward from UTC")
 	}
 }
 
 func TestSettings_Timezone_Wraps(t *testing.T) {
 	m := initSettings(defaultSettings())
-	items := flatItems(m)
-	last := items[11].options[len(items[11].options)-1]
-	m.timezone = last
-	m.originalTimezone = last
-	m.cursor = 11
+	idx := itemIndex(t, m, "timezone")
+	opts := flatItems(m)[idx].options
+	last := opts[len(opts)-1]
+	m.local.Timezone = last
+	m.originalLocal.Timezone = last
+	m.cursor = idx
 	m, _ = m.Update(keyMsg("tab"))
-	first := items[11].options[0]
-	if m.timezone != first {
-		t.Errorf("tab from last timezone should wrap to first, got %s", m.timezone)
+	first := opts[0]
+	if m.local.Timezone != first {
+		t.Errorf("tab from last timezone should wrap to first, got %s", m.local.Timezone)
 	}
 }
 
 func TestSettings_Timezone_IsDirty(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.timezone = "UTC"
-	m.originalTimezone = "UTC"
+	m.local.Timezone = "UTC"
+	m.originalLocal.Timezone = "UTC"
 	if m.IsDirty() {
 		t.Error("should not be dirty before change")
 	}
-	m.timezone = "UTC+2"
+	m.local.Timezone = "UTC+2"
 	if !m.IsDirty() {
 		t.Error("changing timezone should make IsDirty true")
 	}
@@ -982,18 +987,18 @@ func TestSettings_Timezone_IsDirty(t *testing.T) {
 
 func TestSettings_Timezone_Esc_Reverts(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.timezone = "UTC+2"
-	m.originalTimezone = "UTC"
+	m.local.Timezone = "UTC+2"
+	m.originalLocal.Timezone = "UTC"
 	m, _ = m.Update(keyMsg("esc"))
-	if m.timezone != "UTC" {
-		t.Errorf("esc should revert timezone to original, got %s", m.timezone)
+	if m.local.Timezone != "UTC" {
+		t.Errorf("esc should revert timezone to original, got %s", m.local.Timezone)
 	}
 }
 
 func TestSettings_Timezone_SaveMsg(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.timezone = "UTC+2"
-	m.originalTimezone = "UTC"
+	m.local.Timezone = "UTC+2"
+	m.originalLocal.Timezone = "UTC"
 	var got tea.Msg
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cmd != nil {
@@ -1003,27 +1008,27 @@ func TestSettings_Timezone_SaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatal("ctrl+s should emit SaveSettingsMsg")
 	}
-	if save.Timezone != "UTC+2" {
-		t.Errorf("SaveSettingsMsg.Timezone should be UTC+2, got %s", save.Timezone)
+	if save.Prefs.Timezone != "UTC+2" {
+		t.Errorf("SaveSettingsMsg.Timezone should be UTC+2, got %s", save.Prefs.Timezone)
 	}
 }
 
 func TestSettings_SharedConfigMsg_SetsTimezone(t *testing.T) {
 	m := NewSettingsModel()
 	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 24, Settings: defaultSettings(), Timezone: "UTC+5:30"})
-	if m.timezone != "UTC+5:30" {
-		t.Errorf("SharedConfigMsg should set timezone, got %s", m.timezone)
+	if m.local.Timezone != "UTC+5:30" {
+		t.Errorf("SharedConfigMsg should set timezone, got %s", m.local.Timezone)
 	}
-	if m.originalTimezone != "UTC+5:30" {
-		t.Errorf("SharedConfigMsg should set originalTimezone, got %s", m.originalTimezone)
+	if m.originalLocal.Timezone != "UTC+5:30" {
+		t.Errorf("SharedConfigMsg should set originalTimezone, got %s", m.originalLocal.Timezone)
 	}
 }
 
 func TestSettings_SharedConfigMsg_DefaultsTimezoneToUTC(t *testing.T) {
 	m := NewSettingsModel()
 	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 24, Settings: defaultSettings(), Timezone: ""})
-	if m.timezone != "UTC" {
-		t.Errorf("empty Timezone in SharedConfigMsg should default to UTC, got %s", m.timezone)
+	if m.local.Timezone != "UTC" {
+		t.Errorf("empty Timezone in SharedConfigMsg should default to UTC, got %s", m.local.Timezone)
 	}
 }
 
@@ -1038,7 +1043,7 @@ type mockErr struct {
 func (e *mockErr) Error() string { return e.msg }
 
 func containsSubstring(s, sub string) bool {
-	return len(s) > 0 && len(sub) > 0 && (s == sub || len(sub) <= len(s))
+	return strings.Contains(s, sub)
 }
 
 // --- Hard line break key Tests ---
@@ -1057,7 +1062,7 @@ func hardBreakCursor(m SettingsModel) int {
 func bindingSettings(t *testing.T) SettingsModel {
 	t.Helper()
 	m := initSettings(defaultSettings())
-	m.hardBreakKey, m.originalHardBreakKey = DefaultHardBreakKey, DefaultHardBreakKey
+	m.local.HardBreakKey, m.originalLocal.HardBreakKey = DefaultHardBreakKey, DefaultHardBreakKey
 	m.cursor = hardBreakCursor(m)
 	if m.cursor < 0 {
 		t.Fatal("no keybind row found")
@@ -1098,8 +1103,8 @@ func TestSettings_HardBreak_ComboBindsImmediately(t *testing.T) {
 	if m.Capturing() {
 		t.Error("a valid combo should finish capture")
 	}
-	if m.hardBreakKey != "ctrl+l" {
-		t.Errorf("hardBreakKey = %q, want %q", m.hardBreakKey, "ctrl+l")
+	if m.local.HardBreakKey != "ctrl+l" {
+		t.Errorf("hardBreakKey = %q, want %q", m.local.HardBreakKey, "ctrl+l")
 	}
 	if !m.IsDirty() {
 		t.Error("changing the key should set dirty")
@@ -1111,10 +1116,10 @@ func TestSettings_HardBreak_ComboBindsImmediately(t *testing.T) {
 
 func TestSettings_HardBreak_AltEnterBackToDefaultIsClean(t *testing.T) {
 	m := bindingSettings(t)
-	m.hardBreakKey = "ctrl+l"
+	m.local.HardBreakKey = "ctrl+l"
 	m = capture(t, m, keyMsg("enter"), tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
-	if m.hardBreakKey != "alt+enter" || m.Capturing() {
-		t.Errorf("hardBreakKey = %q capturing=%v, want alt+enter and finished", m.hardBreakKey, m.Capturing())
+	if m.local.HardBreakKey != "alt+enter" || m.Capturing() {
+		t.Errorf("hardBreakKey = %q capturing=%v, want alt+enter and finished", m.local.HardBreakKey, m.Capturing())
 	}
 	if m.IsDirty() {
 		t.Error("returning to the saved default should not be dirty")
@@ -1124,22 +1129,22 @@ func TestSettings_HardBreak_AltEnterBackToDefaultIsClean(t *testing.T) {
 func TestSettings_HardBreak_ShiftComboAccepted(t *testing.T) {
 	m := bindingSettings(t)
 	m = capture(t, m, keyMsg("enter"), tea.KeyMsg{Type: tea.KeyShiftUp})
-	if m.hardBreakKey != "shift+up" {
-		t.Errorf("hardBreakKey = %q, want shift+up", m.hardBreakKey)
+	if m.local.HardBreakKey != "shift+up" {
+		t.Errorf("hardBreakKey = %q, want shift+up", m.local.HardBreakKey)
 	}
 }
 
 func TestSettings_HardBreak_EscCancelsCaptureKeepingOtherEdits(t *testing.T) {
 	m := bindingSettings(t)
-	m.wanderLust = true // an unsaved edit elsewhere
+	m.local.WanderLust = true // an unsaved edit elsewhere
 	m = capture(t, m, keyMsg("enter"), keyMsg("esc"))
 	if m.Capturing() {
 		t.Error("esc should end capture")
 	}
-	if m.hardBreakKey != DefaultHardBreakKey {
-		t.Errorf("cancelled capture changed the key to %q", m.hardBreakKey)
+	if m.local.HardBreakKey != DefaultHardBreakKey {
+		t.Errorf("cancelled capture changed the key to %q", m.local.HardBreakKey)
 	}
-	if !m.wanderLust {
+	if !m.local.WanderLust {
 		t.Error("esc during capture must not revert other unsaved settings")
 	}
 }
@@ -1159,8 +1164,8 @@ func TestSettings_HardBreak_RejectsUnbindableKeys(t *testing.T) {
 		if !m.Capturing() || m.captureErr == "" {
 			t.Errorf("%s: should stay capturing with a rejection reason (capturing=%v err=%q)", name, m.Capturing(), m.captureErr)
 		}
-		if m.hardBreakKey != DefaultHardBreakKey {
-			t.Errorf("%s: key changed to %q", name, m.hardBreakKey)
+		if m.local.HardBreakKey != DefaultHardBreakKey {
+			t.Errorf("%s: key changed to %q", name, m.local.HardBreakKey)
 		}
 	}
 }
@@ -1175,7 +1180,7 @@ func TestSettings_HardBreak_RejectionShownInFooter(t *testing.T) {
 
 func TestSettings_HardBreak_CaptureSwallowsNavigationAndSave(t *testing.T) {
 	m := bindingSettings(t)
-	m.wanderLust = true // dirty, so ctrl+s would normally save
+	m.local.WanderLust = true // dirty, so ctrl+s would normally save
 	cursor := m.cursor
 	m = capture(t, m, keyMsg("enter"), keyMsg("j"))
 	if m.cursor != cursor {
@@ -1198,8 +1203,8 @@ func TestSettings_HardBreak_SaveMsg(t *testing.T) {
 	if !ok {
 		t.Fatalf("ctrl+s produced %T, want SaveSettingsMsg", cmd())
 	}
-	if save.HardBreakKey != "ctrl+l" {
-		t.Errorf("SaveSettingsMsg.HardBreakKey = %q, want %q", save.HardBreakKey, "ctrl+l")
+	if save.Prefs.HardBreakKey != "ctrl+l" {
+		t.Errorf("SaveSettingsMsg.HardBreakKey = %q, want %q", save.Prefs.HardBreakKey, "ctrl+l")
 	}
 }
 
@@ -1209,25 +1214,28 @@ func TestSettings_HardBreak_SetSavedAdvancesBaseline(t *testing.T) {
 	if !m.IsDirty() {
 		t.Fatal("should be dirty before saving")
 	}
-	m = m.SetSavedHardBreakKey("ctrl+l")
+	m = m.SetSaved(m.local)
 	if m.IsDirty() {
-		t.Error("should be clean after SetSavedHardBreakKey")
+		t.Error("should be clean after SetSaved")
+	}
+	if m.originalLocal.HardBreakKey != "ctrl+l" {
+		t.Errorf("baseline HardBreakKey = %q, want ctrl+l", m.originalLocal.HardBreakKey)
 	}
 }
 
 func TestSettings_HardBreak_EscRevertsUnsavedKey(t *testing.T) {
 	m := bindingSettings(t)
 	m = capture(t, m, keyMsg("enter"), tea.KeyMsg{Type: tea.KeyCtrlL}, keyMsg("esc"))
-	if m.hardBreakKey != DefaultHardBreakKey || m.IsDirty() {
-		t.Errorf("esc should revert to %q, got %q (dirty=%v)", DefaultHardBreakKey, m.hardBreakKey, m.IsDirty())
+	if m.local.HardBreakKey != DefaultHardBreakKey || m.IsDirty() {
+		t.Errorf("esc should revert to %q, got %q (dirty=%v)", DefaultHardBreakKey, m.local.HardBreakKey, m.IsDirty())
 	}
 }
 
 func TestSettings_HardBreak_SeededFromSharedConfig(t *testing.T) {
 	m := NewSettingsModel()
 	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 24, HardBreakKey: "ctrl+l"})
-	if m.hardBreakKey != "ctrl+l" || m.originalHardBreakKey != "ctrl+l" {
-		t.Errorf("seeded key = %q / baseline %q, want %q", m.hardBreakKey, m.originalHardBreakKey, "ctrl+l")
+	if m.local.HardBreakKey != "ctrl+l" || m.originalLocal.HardBreakKey != "ctrl+l" {
+		t.Errorf("seeded key = %q / baseline %q, want %q", m.local.HardBreakKey, m.originalLocal.HardBreakKey, "ctrl+l")
 	}
 	if m.IsDirty() {
 		t.Error("seeding must not mark the screen dirty")
@@ -1250,8 +1258,8 @@ func TestSettings_RevealCW_ToggleDirtySaveRevert(t *testing.T) {
 	}
 	m.cursor = idx
 	m, _ = m.Update(keyMsg("enter"))
-	if !m.revealCW || !m.IsDirty() {
-		t.Fatalf("toggle: revealCW = %v, dirty = %v, want both true", m.revealCW, m.IsDirty())
+	if !m.local.RevealContentWarnings || !m.IsDirty() {
+		t.Fatalf("toggle: revealCW = %v, dirty = %v, want both true", m.local.RevealContentWarnings, m.IsDirty())
 	}
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
@@ -1259,12 +1267,12 @@ func TestSettings_RevealCW_ToggleDirtySaveRevert(t *testing.T) {
 		t.Fatal("ctrl+s should emit a cmd")
 	}
 	save, ok := cmd().(SaveSettingsMsg)
-	if !ok || !save.RevealContentWarnings {
+	if !ok || !save.Prefs.RevealContentWarnings {
 		t.Errorf("SaveSettingsMsg = %+v, want RevealContentWarnings true", save)
 	}
 
 	m, _ = m.Update(keyMsg("esc"))
-	if m.revealCW {
+	if m.local.RevealContentWarnings {
 		t.Error("esc should revert revealCW to the saved baseline")
 	}
 }
@@ -1272,7 +1280,7 @@ func TestSettings_RevealCW_ToggleDirtySaveRevert(t *testing.T) {
 func TestSettings_RevealCW_SeededFromSharedConfig(t *testing.T) {
 	m := NewSettingsModel()
 	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 40, RevealContentWarnings: true})
-	if !m.revealCW {
+	if !m.local.RevealContentWarnings {
 		t.Error("expected revealCW seeded from SharedConfigMsg")
 	}
 	if m.IsDirty() {
@@ -1294,26 +1302,39 @@ func TestSettings_DebugLog_ToggleSaveRevertSeed(t *testing.T) {
 	}
 	m.cursor = idx
 	m, _ = m.Update(keyMsg("enter"))
-	if !m.debugLog || !m.IsDirty() {
-		t.Fatalf("toggle: debugLog = %v, dirty = %v, want both true", m.debugLog, m.IsDirty())
+	if !m.local.DebugLog || !m.IsDirty() {
+		t.Fatalf("toggle: debugLog = %v, dirty = %v, want both true", m.local.DebugLog, m.IsDirty())
 	}
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if cmd == nil {
 		t.Fatal("ctrl+s should emit a cmd")
 	}
-	if save, ok := cmd().(SaveSettingsMsg); !ok || !save.DebugLog {
+	if save, ok := cmd().(SaveSettingsMsg); !ok || !save.Prefs.DebugLog {
 		t.Errorf("SaveSettingsMsg = %+v, want DebugLog true", save)
 	}
 
 	m, _ = m.Update(keyMsg("esc"))
-	if m.debugLog {
+	if m.local.DebugLog {
 		t.Error("esc should revert debugLog to the saved baseline")
 	}
 
 	m = NewSettingsModel()
 	m, _ = m.Update(SharedConfigMsg{Width: 80, Height: 40, DebugLog: true})
-	if !m.debugLog || m.IsDirty() {
-		t.Errorf("seed: debugLog = %v, dirty = %v, want true/false", m.debugLog, m.IsDirty())
+	if !m.local.DebugLog || m.IsDirty() {
+		t.Errorf("seed: debugLog = %v, dirty = %v, want true/false", m.local.DebugLog, m.IsDirty())
+	}
+}
+
+func TestLocalPrefs_Equal(t *testing.T) {
+	base := LocalPrefs{Timezone: "UTC", KeywordAlerts: nil}
+	if !base.equal(LocalPrefs{Timezone: "UTC", KeywordAlerts: []string{}}) {
+		t.Error("nil and empty keyword lists should compare equal")
+	}
+	if base.equal(LocalPrefs{Timezone: "UTC", KeywordAlerts: []string{"x"}}) {
+		t.Error("different keyword lists should not compare equal")
+	}
+	if base.equal(LocalPrefs{Timezone: "UTC+1"}) {
+		t.Error("different scalar fields should not compare equal")
 	}
 }

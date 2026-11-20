@@ -54,11 +54,11 @@ When `wanderLust` is absent from the JSON file, `Load()` inserts a default of `t
 
 ### `internal/ui/screens/settings.go` / `shared.go`
 
-- `settingsGroups` — new `"wander"` group with a single `"wander mode"` bool item (flat index 11).
-- `SettingsModel.wanderLust` / `.originalWanderLust` — track the local config value separately from API settings.
+- `settingsGroups` — `"wander mode"` bool item in the `"advanced"` group.
+- `LocalPrefs.WanderLust` — held in `SettingsModel.local` / `.originalLocal`, tracked separately from API settings.
 - `SharedConfigMsg.WanderLust` — carries the current value in the broadcast from App.
-- `SaveSettingsMsg.WanderLust` — piggy-backs the local config change onto the API save message.
-- `SetSaved(wanderLust bool)` — resets `originalWanderLust` alongside the API settings baseline.
+- `SaveSettingsMsg.Prefs.WanderLust` — piggy-backs the local config change onto the API save message.
+- `SetSaved(LocalPrefs)` — advances the local prefs baseline alongside the API settings baseline.
 
 ### `internal/ui/app.go`
 
@@ -70,7 +70,7 @@ When `wanderLust` is absent from the JSON file, `Load()` inserts a default of `t
 - Handlers for `wanderTickMsg` and `wanderDoneMsg`.
 - `App.wanderLust bool` — cached local config value; defaults to `true`; set in `WithSavedSession` and updated when settings are saved.
 - `broadcastConfig()` — includes `WanderLust` in the `SharedConfigMsg`.
-- `handleSettings` — on save, loads config, writes `WanderLust`, and passes the value through `settingsSavedMsg`.
+- `handleSettings` — passes `LocalPrefs` through `settingsSavedMsg`, then loads config and writes `WanderLust` from it.
 
 ---
 
