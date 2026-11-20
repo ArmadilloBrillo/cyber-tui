@@ -719,3 +719,47 @@ func TestFeed_ContentWarning_SettingRevealsCards(t *testing.T) {
 		t.Errorf("expected revealed card with CW label after the setting is on, got: %q", view)
 	}
 }
+
+// --- repliesDisabled ---
+
+func TestFeed_Reply_RepliesDisabled_EmitsNoticeNotCompose(t *testing.T) {
+	m := screens.NewFeedModel()
+	m = m.SetPosts([]model.Post{{ID: "p1", AuthorUsername: "alice", Content: "closed", RepliesDisabled: true}}, "")
+
+	_, cmd := m.Update(keyRune("r"))
+	if cmd == nil {
+		t.Fatal("expected a cmd on r")
+	}
+	if msg := cmd(); msg != (screens.RepliesDisabledMsg{}) {
+		t.Errorf("r on closed post = %T, want RepliesDisabledMsg", msg)
+	}
+	if !m.SelectedRepliesDisabled() {
+		t.Error("SelectedRepliesDisabled() = false, want true")
+	}
+}
+
+func TestFeed_View_RepliesDisabled_ShowsMarker(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = m.SetPosts([]model.Post{{ID: "p1", AuthorUsername: "alice", Content: "closed", RepliesDisabled: true}}, "")
+	if !strings.Contains(m.View(), "[replies off]") {
+		t.Error("feed card missing [replies off] marker")
+	}
+}
+
+func TestFeed_ComposeSubmit_CarriesNoReplies(t *testing.T) {
+	m := screens.NewFeedModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = m.Update(keyRune("n"))
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab}) // title wraps back to the last toggle
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+
+	_, cmd := m.Update(screens.ComposeSubmitMsg{Content: "hello"})
+	got, ok := cmd().(screens.SubmitNewPostMsg)
+	if !ok {
+		t.Fatalf("submit cmd produced %T, want SubmitNewPostMsg", cmd())
+	}
+	if !got.RepliesDisabled {
+		t.Error("SubmitNewPostMsg.RepliesDisabled = false after ticking no replies, want true")
+	}
+}

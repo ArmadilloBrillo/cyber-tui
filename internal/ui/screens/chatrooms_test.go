@@ -2773,3 +2773,16 @@ func TestChatrooms_HistoryRecall_MultiLineResizesBox(t *testing.T) {
 		t.Errorf("recalled %q at height %d, want the 3-line message at height 3", m.input.Value(), m.input.Height())
 	}
 }
+
+// TestIsKnownSlashCommand_SpinAndTarot covers the v0.9.4 commands in both
+// chat types: cIRC passes circOnlySlashCommands as extra, C-Mail passes nil.
+func TestIsKnownSlashCommand_SpinAndTarot(t *testing.T) {
+	for _, cmd := range []string{"/spin", "/tarot"} {
+		if !isKnownSlashCommand(cmd, circOnlySlashCommands) {
+			t.Errorf("isKnownSlashCommand(%q) in cIRC = false, want true", cmd)
+		}
+		if !isKnownSlashCommand(cmd, nil) {
+			t.Errorf("isKnownSlashCommand(%q) in C-Mail = false, want true", cmd)
+		}
+	}
+}

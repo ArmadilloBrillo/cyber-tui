@@ -424,3 +424,64 @@ func TestPostComposePanel_CW_PanelHeightMatchesView(t *testing.T) {
 		t.Errorf("edit: rendered height = %d, PanelHeight() = %d", got, want)
 	}
 }
+
+func TestPostComposePanel_NoReplies_TabReachesToggleAndSpaceFlipsIt(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.Open(false)
+	m.focus = postFieldBork
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != postFieldNoReplies {
+		t.Fatalf("focus after Tab from bork = %v, want postFieldNoReplies", m.focus)
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if !m.NoReplies() {
+		t.Error("NoReplies() = false after Space on the toggle, want true")
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "[x] no replies") {
+		t.Errorf("expected a ticked no-replies box in the view, got: %q", view)
+	}
+}
+
+func TestPostComposePanel_NoReplies_HiddenAndSkippedInEditMode(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m, _ = m.OpenForEdit(model.Post{Content: "hi"})
+	if view := ansi.Strip(m.View()); strings.Contains(view, "no replies") {
+		t.Errorf("edit mode shows the no-replies toggle: %q", view)
+	}
+	m.focus = postFieldBork
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus == postFieldNoReplies {
+		t.Error("Tab from bork landed on the hidden no-replies toggle in edit mode")
+	}
+	m.noReplies = true
+	if m.NoReplies() {
+		t.Error("NoReplies() = true in edit mode, want false (field is fixed once published)")
+	}
+}
+
+func TestPostComposePanel_NoReplies_ResetsOnOpen(t *testing.T) {
+	m := NewPostComposePanel(80)
+	m.noReplies = true
+	m, _ = m.Open(false)
+	if m.NoReplies() {
+		t.Error("NoReplies() = true after Open(), want false")
+	}
+}
+
+// TestPostComposePanel_TogglesRow_FitsAt80Columns guards the togglesW math:
+// an undersized topics row wraps the no-replies toggle onto an extra line,
+// so the rendered height drifts from PanelHeight and App's layout breaks.
+func TestPostComposePanel_TogglesRow_FitsAt80Columns(t *testing.T) {
+	for _, editing := range []bool{false, true} {
+		m := NewPostComposePanel(80)
+		if editing {
+			m, _ = m.OpenForEdit(model.Post{Content: "hi"})
+		} else {
+			m, _ = m.Open(false)
+		}
+		view := m.View()
+		if got, want := strings.Count(view, "\n")+1, m.PanelHeight(); got != want {
+			t.Errorf("editing=%v: rendered %d rows, PanelHeight() = %d: %q", editing, got, want, ansi.Strip(view))
+		}
+	}
+}

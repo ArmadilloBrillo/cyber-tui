@@ -13,7 +13,7 @@ import (
 // table (docs/00-latest-api-reference.md's Commands section).
 const mockHelpReply = "Commands: /me <action> · /poke /hug /hi5 /slap [@user] · " +
 	"/dice, /dice:SIDES, /dice:SIDES:COUNT, or notation (4d6kh3, 2d6+3, adv, d%, 6x4d6kh3) · " +
-	"/8ball <question> · /fortune · /gif <url> · /song <url> | artist | title [| genre] · /help"
+	"/coin · /spin · /8ball <question> · /fortune · /tarot [question] · /gif <url> · /song <url> | artist | title [| genre] · /help"
 
 // MockClient implements Client with static fake data.
 // Used during development before the real API is available.
@@ -186,13 +186,14 @@ func (m *MockClient) GetFeed(cursor string) ([]model.Post, string, error) {
 			Topics:         []string{"cyberspace", "philosophy"},
 		},
 		{
-			ID:             "p2",
-			AuthorID:       "2",
-			AuthorUsername: "molly_millions",
-			Content:        "the matrix has its roots in primitive arcade games",
-			CreatedAt:      time.Now().Add(-1 * time.Hour),
-			Topics:         []string{"history"},
-			IsNSFW:         true,
+			ID:              "p2",
+			AuthorID:        "2",
+			AuthorUsername:  "molly_millions",
+			Content:         "the matrix has its roots in primitive arcade games",
+			CreatedAt:       time.Now().Add(-1 * time.Hour),
+			Topics:          []string{"history"},
+			IsNSFW:          true,
+			RepliesDisabled: true,
 		},
 		{
 			ID:             "p3",
@@ -242,23 +243,24 @@ func (m *MockClient) GetPostReplies(postID string) ([]model.Reply, error) {
 	}, nil
 }
 
-func (m *MockClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
+func (m *MockClient) CreatePost(content, title, slug string, topics []string, isPublic, isNSFW, repliesDisabled bool, contentWarning string, attachment *model.Attachment) (model.Post, error) {
 	var attachments []model.Attachment
 	if attachment != nil {
 		attachments = []model.Attachment{*attachment}
 	}
 	return model.Post{
-		ID:             "new-1",
-		AuthorID:       mockUsers[0].ID,
-		AuthorUsername: mockUsers[0].Username,
-		Content:        content,
-		Title:          title,
-		CreatedAt:      time.Now(),
-		Topics:         topics,
-		IsPublic:       isPublic,
-		IsNSFW:         isNSFW,
-		ContentWarning: contentWarning,
-		Attachments:    attachments,
+		ID:              "new-1",
+		AuthorID:        mockUsers[0].ID,
+		AuthorUsername:  mockUsers[0].Username,
+		Content:         content,
+		Title:           title,
+		CreatedAt:       time.Now(),
+		Topics:          topics,
+		IsPublic:        isPublic,
+		IsNSFW:          isNSFW,
+		ContentWarning:  contentWarning,
+		RepliesDisabled: repliesDisabled,
+		Attachments:     attachments,
 	}, nil
 }
 

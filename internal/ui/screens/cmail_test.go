@@ -259,6 +259,8 @@ func TestCMail_Send_KnownCommandStillSends(t *testing.T) {
 		"/song https://youtu.be/x | artist | title",
 		"/dice 4d6kh3",
 		"/dice:20:2",
+		"/spin",
+		"/tarot will it ship?",
 	}
 	for _, body := range cases {
 		t.Run(body, func(t *testing.T) {

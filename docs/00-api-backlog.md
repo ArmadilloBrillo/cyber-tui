@@ -1,6 +1,6 @@
 # API Backlog — Outstanding Features & Known Issues
 
-Tracks gaps between the cyberspace.online API (v0.9.1) and what is currently implemented in the TUI client.
+Tracks gaps between the cyberspace.online API (v0.9.4) and what is currently implemented in the TUI client.
 Update this file whenever a feature is implemented or an issue is discovered/resolved.
 
 ---
@@ -34,6 +34,7 @@ These bugs exist in the server — no client-side fix is possible. Report to the
 | `/docs.md` | GET | **Resolved — client updated same day** | `docs.md` now reports v0.8.7 live (previous snapshot on file was v0.8.6, one version behind — that jump wasn't separately logged here). `docs/00-latest-api-reference.md` re-fetched and diffed. Real content changes: (1) `attachments` on `POST`/`PATCH /v1/posts` and `POST /v1/replies` now rejects `type: "image"` with `400` — images are website-upload-only, travelling as inline markdown (`![alt](https://bunker.cyberspace.online/...)`), and even that markdown 400s if the URL isn't bunker-hosted; `artist`/`title`/`genre` on a `type: "audio"` attachment are now documented as all required (max 100/150/50 chars, genre lowercase) — client updated same day, see `docs/50-post-reply-attachments.md`. (2) `websiteImageUrl` removed from `PATCH /v1/users/me` — the profile's 88×31 button is now website-set only (still returned on reads) — **client updated same day**: `updateProfileRequest`/`ProfileUpdate` no longer send it, and the profile edit form's now-dead input field was removed entirely (`internal/ui/screens/profile.go`), guarded by `TestProfileEditForm_NoWebsiteImageUrlField`. (3) New "Programs" section (`GET`/`POST`/`DELETE /v1/programs`, `GET /v1/programs/:id/source`) — a terminal program registry (`web`/`term`/`wasm` runtimes) for the website's `/terminal` gallery; entirely new surface, not evaluated for cyber-tui relevance yet — see Unimplemented API Features below for a placeholder if prioritized. | 2026-08-28 |
 | `/docs.md` | GET | **Resolved — client updated same day** | `docs.md` now reports v0.8.10 live (previous snapshot on file was v0.8.9, one version behind — that jump wasn't separately logged here). Real content changes: `isSupporter` on `GET /v1/users/me`/`GET /v1/users/:username` (already implemented, feature 48); 4 new notification types (`guild_chat_message`, `moderator_permissions_changed`, `edit_access_granted`/`edit_access_removed`, `gift_received`/`gift_sent`) — **client updated same day**, see Notifications v0.8.10 row below; `GET /v1/cmail` conversations now flag a departed `otherUser` with `deleted: true` — **client updated same day**, see C-Mail section below. | 2026-09-16 |
 | `/docs.md` | GET | **Resolved — client updated same day** | `docs.md` now reports v0.8.11 live. Only content change: `GET /v1/notifications/unread-count`'s docs now state that switched-off notification types never affect `exact` (example given: `{ "count": 2, "exact": true }` with 2 visible unread and a muted pile) — fixes the count/list skew logged in the `/v1/notifications` vs `/v1/notifications/unread-count` row above. `docs/00-latest-api-reference.md` re-fetched and diffed (only the version header and this one paragraph changed); the TUI's client-side pagination workaround for the same bug was reverted the same day, back to calling `GetUnreadNotificationCount()` directly. | 2026-09-22 |
+| `/docs.md` | GET | **Resolved** | `docs.md` now reports v0.9.4 live (previous snapshot on file was v0.9.2; v0.9.3 was never captured). `docs/00-latest-api-reference.md` re-fetched and diffed, see `docs/api-diff-v0.9.2-to-v0.9.4.diff`. Changes: `repliesDisabled` on entries, `/spin` and `/tarot` commands, `isTarot`/`tarot` message fields. Added to the API v0.9.4 section below; plan in `docs/61-api-v0.9.4.md`. | 2026-11-19 |
 
 ---
 
@@ -325,6 +326,17 @@ Changes from v0.8.12, see `docs/api-diff-v0.8.12-to-v0.9.0.diff`.
 | Area | Description | Priority |
 |---|---|---|
 | Multi-line cIRC and C-Mail messages | `content` on `POST /v1/circ/:roomId` and `POST /v1/cmail/:id` may contain `\n`: up to 10 lines and 2048 characters. Runs of blank lines collapse to one and lines past the tenth join it with spaces; in cIRC a styled message's line breaks become spaces. Both compose boxes are now a growing textarea (1 to 5 rows); the line break key inserts a newline, the box mirrors the server's line rules, `/art` is exempt (up to 25 art lines, stored as-is), and C-Mail bubbles render line breaks. | **Done**, see `docs/plan-chat-multiline.md` |
+
+### API v0.9.4 (2026-11-19)
+
+Changes from v0.9.2, see `docs/api-diff-v0.9.2-to-v0.9.4.diff`. Plan in `docs/61-api-v0.9.4.md`.
+
+| Area | Description | Priority |
+|---|---|---|
+| `repliesDisabled` on entries (read) | Entries carry `repliesDisabled: true` when nobody can reply, the author included. `POST /v1/replies` returns `403` for such an entry; clients should hide their reply action. | **Done**: `r` shows a notice instead of opening compose in feed and post detail, the reply hint is hidden, `[replies off]` badge on feed cards and the full post, a 403 from `POST /v1/replies` shows the same notice. See `docs/61-api-v0.9.4.md` Stories 1-2 |
+| `repliesDisabled` on entries (create) | Optional boolean on `POST /v1/posts`. Fixed once published: sending it on `PATCH /v1/posts/:id` returns `400`. | **Done**: `[ ] no replies` toggle in the new-post compose panel (hidden and skipped by tab when editing), sent as `repliesDisabled` only when ticked. See `docs/61-api-v0.9.4.md` Story 3 |
+| `/spin` command | cIRC and C-Mail. Spins the bottle: in cIRC it points at an awake room member, alone at you or nobody; in C-Mail at either participant. | **Done**: allowed in cIRC and C-Mail. See `docs/61-api-v0.9.4.md` Story 4 |
+| `/tarot [question]` command | cIRC and C-Mail. Posts `pulled <card>: <fortune>`. Messages carry `isTarot` and a `tarot` object (`id`, `name`, `reversed`, `fortune`, `image`, `keywords`, `meaning`); `content` is complete on its own, so the client renders from `content` and does not parse `tarot`. | Planned (Story 4) |
 
 ### Replies
 

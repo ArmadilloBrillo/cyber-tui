@@ -485,9 +485,16 @@ func (m PostDetailModel) SetLocation(loc *time.Location) PostDetailModel {
 	return m
 }
 
+// RepliesDisabled reports whether the open post has replies disabled, so the
+// status bar can hide the reply hint.
+func (m PostDetailModel) RepliesDisabled() bool { return m.post.RepliesDisabled }
+
 // OpenCompose opens the compose box targeting the currently selected item.
 // Returns (model, cmd) where cmd starts the cursor blink animation.
 func (m PostDetailModel) OpenCompose() (PostDetailModel, tea.Cmd) {
+	if m.post.RepliesDisabled {
+		return m, func() tea.Msg { return RepliesDisabledMsg{} }
+	}
 	m.replyPostID = m.post.ID
 	m.replyAudioAttachment = nil
 	var ctx string
@@ -1048,6 +1055,9 @@ func (m PostDetailModel) renderFullPost(selected bool) (string, []postImageSlot)
 	}
 	if m.post.IsPublic {
 		badgeParts = append(badgeParts, theme.Subtle.Render("[public]"))
+	}
+	if m.post.RepliesDisabled {
+		badgeParts = append(badgeParts, theme.Subtle.Render("[replies off]"))
 	}
 	badges := strings.Join(badgeParts, "  ")
 

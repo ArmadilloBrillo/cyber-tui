@@ -333,7 +333,11 @@ func (l TabsLayout) screenHints(a *App) []hint {
 			}
 			return append(h, hint{"Esc", "cancel"})
 		}
-		hints := []hint{{"↑↓", "navigate"}, {"enter", "open"}, {"r", "reply"}, {"n", "new"}, {"b", "bookmark"}, {"w", "watch"}, {"l", "copy link"}, {"c", "message"}}
+		hints := []hint{{"↑↓", "navigate"}, {"enter", "open"}}
+		if !a.feed.SelectedRepliesDisabled() {
+			hints = append(hints, hint{"r", "reply"})
+		}
+		hints = append(hints, hint{"n", "new"}, hint{"b", "bookmark"}, hint{"w", "watch"}, hint{"l", "copy link"}, hint{"c", "message"})
 		if a.feed.CanEditSelected() {
 			hints = append(hints, hint{"e", "edit"})
 		}
@@ -342,7 +346,11 @@ func (l TabsLayout) screenHints(a *App) []hint {
 		if a.postDetail.ComposeActive() {
 			return []hint{{"Ctrl+s", "send"}, {"Esc", "cancel"}}
 		}
-		hints := []hint{{"↑↓", "navigate"}, {"r", "reply"}, {"b", "bookmark"}, {"w", "watch"}, {"l", "copy link"}, {"c", "message"}}
+		hints := []hint{{"↑↓", "navigate"}}
+		if !a.postDetail.RepliesDisabled() {
+			hints = append(hints, hint{"r", "reply"})
+		}
+		hints = append(hints, hint{"b", "bookmark"}, hint{"w", "watch"}, hint{"l", "copy link"}, hint{"c", "message"})
 		if a.postDetail.CanEditSelected() {
 			hints = append(hints, hint{"e", "edit"})
 		}
@@ -508,7 +516,11 @@ func (l TabsLayout) renderHelpModal(a App) string {
 	switch a.active {
 	case screenFeed:
 		if a.feed.ComposeActive() {
-			localSection = section("feed (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"), row("tab, space", "tick public / nsfw / bork"))
+			toggles := "tick public / nsfw / bork / no replies"
+			if a.feed.ComposeEditing() {
+				toggles = "tick public / nsfw / bork"
+			}
+			localSection = section("feed (compose)", row("Enter", "paragraph"), row(screens.HardBreakLabel(a.hardBreakKey), "line break"), row("tab, space", toggles))
 		} else {
 			localSection = section("feed",
 				row("p", "view profile"),

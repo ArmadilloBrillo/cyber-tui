@@ -1384,6 +1384,10 @@ func (a *App) handleFeed(msg tea.Msg) (*App, tea.Cmd, bool) {
 		a.active = screenPostDetail
 		a.postDetail = a.postDetail.SetPost(msg.Post)
 		return a, a.loadRepliesCmd(msg.Post.ID), true
+	case screens.RepliesDisabledMsg:
+		var cmd tea.Cmd
+		*a, cmd = a.notify(notifyInfo, "replies are disabled on this post")
+		return a, cmd, true
 	case screens.ShowPostForReplyMsg:
 		a.postDetailReturn = screenFeed
 		a.active = screenPostDetail
@@ -1442,7 +1446,7 @@ func (a *App) handlePostDetail(msg tea.Msg) (*App, tea.Cmd, bool) {
 		}
 		return a, nil, true
 	case screens.SubmitNewPostMsg:
-		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.ContentWarning, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.AudioAttachment), true
+		return a, a.createPostCmd(msg.Content, msg.Title, msg.Slug, msg.ContentWarning, msg.Topics, msg.IsPublic, msg.IsNSFW, msg.RepliesDisabled, msg.AudioAttachment), true
 	case postCreatedMsg:
 		a.feed = a.feed.CloseComposeAfterSuccess()
 		return a, a.loadFeedCmd(), true
@@ -5509,6 +5513,12 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string, audioAttachm
 	return func() tea.Msg {
 		reply, err := a.client.CreateReply(postID, content, parentReplyID, audioAttachment)
 		if err != nil {
+			// The 'r' guard should prevent this; a 403 means an endpoint
+			// returned the post without repliesDisabled.
+			var apiErr *api.APIError
+			if errors.As(err, &apiErr) && apiErr.Status == 403 {
+				return notifyMsg{level: notifyError, text: "replies are disabled on this post"}
+			}
 			return actionErrMsg{err}
 		}
 		return replyCreatedMsg{postID: postID, replyID: reply.ID}
@@ -5518,9 +5528,9 @@ func (a *App) createReplyCmd(postID, content, parentReplyID string, audioAttachm
 // createPostCmd sends a post with its audio attachment, if any (native
 // image/gif post attachments were removed — API v0.8.7 rejects type:"image"
 // in a post's attachments array).
-func (a *App) createPostCmd(content, title, slug, contentWarning string, topics []string, isPublic, isNSFW bool, audioAttachment *model.Attachment) tea.Cmd {
+func (a *App) createPostCmd(content, title, slug, contentWarning string, topics []string, isPublic, isNSFW, repliesDisabled bool, audioAttachment *model.Attachment) tea.Cmd {
 	return func() tea.Msg {
-		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, contentWarning, audioAttachment)
+		post, err := a.client.CreatePost(content, title, slug, topics, isPublic, isNSFW, repliesDisabled, contentWarning, audioAttachment)
 		if err != nil {
 			if errors.Is(err, api.ErrUnauthorized) {
 				return actionErrMsg{err} // let handleUnauthorized redirect to login
@@ -6595,7 +6605,7 @@ func (a *App) deleteRoomMessageCmd(roomID, messageID string) tea.Cmd {
 // Published notes have no title, are private, and not marked NSFW.
 func (a *App) publishNoteCmd(content string, topics []string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := a.client.CreatePost(content, "", "", topics, false, false, "", nil)
+		_, err := a.client.CreatePost(content, "", "", topics, false, false, false, "", nil)
 		if err != nil {
 			if errors.Is(err, api.ErrUnauthorized) {
 				return actionErrMsg{err} // let handleUnauthorized redirect to login
