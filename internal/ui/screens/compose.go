@@ -257,21 +257,10 @@ func (m ComposeModel) recalcHeight() ComposeModel {
 		// When the editor grows, the new height fits all content —
 		// viewport.YOffset must be 0. SetHeight only updates the height; it
 		// leaves the internal viewport's YOffset stale from the previous scroll.
-		// Re-setting the value resets the viewport to the top (via
-		// textarea.Reset → GotoTop) and re-inserts the content with cursor at
-		// end. Skipped on shrink to avoid moving the cursor when the user is
+		// Skipped on shrink to avoid touching the view while the user is
 		// deleting content mid-text.
 		if growing {
-			val := m.textarea.Value()
-			m.textarea.SetValue(val)
-			// SetValue resets viewport.YOffset to 0 (via Reset→GotoTop). When
-			// content exceeds the viewport height (e.g. ENTER inserts \n\n,
-			// adding 2 lines while the viewport only grows by 1), the cursor
-			// lands off-screen. Sending KeyEnd triggers the textarea's internal
-			// repositionView(), scrolling the viewport down just enough to show
-			// the cursor. It's a no-op for cursor position since the cursor is
-			// already at the end of the last line.
-			m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnd})
+			m.textarea = resetTextareaView(m.textarea)
 		}
 	}
 	return m
@@ -665,11 +654,27 @@ func (m PostComposePanel) recalcBodyHeight() PostComposePanel {
 	m.bodyLines = n
 	m.textarea.SetHeight(n)
 	if growing {
-		val := m.textarea.Value()
-		m.textarea.SetValue(val)
-		m.textarea, _ = m.textarea.Update(tea.KeyMsg{Type: tea.KeyEnd})
+		m.textarea = resetTextareaView(m.textarea)
 	}
 	return m
+}
+
+// resetTextareaView scrolls the viewport back to the top while keeping the
+// cursor where it was. SetValue is the only way to reset the stale YOffset,
+// but it leaves the cursor at the end of the text, so the cursor's line and
+// column are restored afterwards. CursorUp moves by visual row, hence the loop
+// on the logical line. Update(nil) then scrolls just enough to show the cursor.
+func resetTextareaView(ta textarea.Model) textarea.Model {
+	row := ta.Line()
+	li := ta.LineInfo()
+	col := li.StartColumn + li.ColumnOffset
+	ta.SetValue(ta.Value())
+	for ta.Line() > row {
+		ta.CursorUp()
+	}
+	ta.SetCursor(col)
+	ta, _ = ta.Update(nil)
+	return ta
 }
 
 // SetHardBreakKey sets the key that inserts a hard line break in the body. An

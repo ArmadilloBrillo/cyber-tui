@@ -485,3 +485,33 @@ func TestPostComposePanel_TogglesRow_FitsAt80Columns(t *testing.T) {
 		}
 	}
 }
+
+// TestPostComposePanel_BreakMidText_KeepsCursor: a paragraph or hard break
+// typed mid-text grows the editor, which must not move the cursor to the end.
+func TestPostComposePanel_BreakMidText_KeepsCursor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyMsg
+		want string
+	}{
+		{"enter", tea.KeyMsg{Type: tea.KeyEnter}, "aaa\n\nXbbb\nccc\nddd"},
+		{"alt+enter", tea.KeyMsg{Type: tea.KeyEnter, Alt: true}, "aaa  \nXbbb\nccc\nddd"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewPostComposePanel(80)
+			m, _ = m.OpenForEdit(model.Post{Content: "aaabbb\nccc\nddd"})
+			for range 2 {
+				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+			}
+			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
+			for range 3 {
+				m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+			}
+			m, _ = m.Update(tc.key)
+			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+			if got := m.textarea.Value(); got != tc.want {
+				t.Errorf("value = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
