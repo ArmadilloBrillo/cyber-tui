@@ -356,7 +356,7 @@ Cross-screen message types and shared enums.
 | `SharedConfigMsg` | Broadcast by App on resize or settings change (Width, Height, Loc, Relaxed, Settings) |
 | `ShowUserProfileMsg` | Emitted by Feed/PostDetail/Notifications on `p` (Username to look up) |
 | `BackFromProfileMsg` | Emitted by Profile on ESC in read-only mode |
-| `SaveSettingsMsg` | Emitted by Settings on ctrl+s (carries updated Settings) |
+| `SaveSettingsMsg` | Emitted by Settings on ctrl+s (carries updated Settings and LocalPrefs) |
 
 #### `login.go`
 
