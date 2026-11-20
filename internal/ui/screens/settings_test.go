@@ -154,7 +154,7 @@ func TestSettings_Toggle_FilterNSFW(t *testing.T) {
 
 func TestSettings_Tab_CyclesEnum(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 8 // time format
+	m.cursor = itemIndex(t, m, "time format")
 	if m.settings.TimeDisplayFormat != "relative" {
 		t.Error("default TimeDisplayFormat should be 'relative'")
 	}
@@ -166,7 +166,7 @@ func TestSettings_Tab_CyclesEnum(t *testing.T) {
 
 func TestSettings_ShiftTab_CyclesEnum(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 8
+	m.cursor = itemIndex(t, m, "time format")
 	m, _ = m.Update(keyMsg("shift+tab"))
 	if m.settings.TimeDisplayFormat != "datetime" {
 		t.Error("shift+tab from 'relative' should cycle to 'datetime'")
@@ -175,7 +175,7 @@ func TestSettings_ShiftTab_CyclesEnum(t *testing.T) {
 
 func TestSettings_Enum_WrapsForward(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 8
+	m.cursor = itemIndex(t, m, "time format")
 	// Cycle from relative -> unix -> swatch -> datetime -> relative
 	m.settings.TimeDisplayFormat = "swatch"
 	m, _ = m.Update(keyMsg("tab"))
@@ -186,7 +186,7 @@ func TestSettings_Enum_WrapsForward(t *testing.T) {
 
 func TestSettings_Enum_WrapsBackward(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 8
+	m.cursor = itemIndex(t, m, "time format")
 	m.settings.TimeDisplayFormat = "datetime"
 	m, _ = m.Update(keyMsg("shift+tab"))
 	if m.settings.TimeDisplayFormat != "swatch" {
@@ -206,7 +206,7 @@ func TestSettings_Tab_OnBool_IsNoop(t *testing.T) {
 
 func TestSettings_ColorNicknames_SpaceTogglesAndMarksDirty(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 10 // color nicknames
+	m.cursor = itemIndex(t, m, "color nicknames")
 	if flatItems(m)[m.cursor].label != "color nicknames" {
 		t.Fatalf("item %d = %q, want color nicknames", m.cursor, flatItems(m)[m.cursor].label)
 	}
@@ -226,7 +226,25 @@ func TestSettings_ColorNicknames_SpaceTogglesAndMarksDirty(t *testing.T) {
 // now only owns the keywordAlerts draft/baseline and opens the popup.
 
 func keywordlistCursor(m SettingsModel) int {
-	return len(flatItems(m)) - 1 // "alert keywords" is the last item in the last group
+	for i, it := range flatItems(m) {
+		if it.kind == "keywordlist" {
+			return i
+		}
+	}
+	return -1
+}
+
+// itemIndex returns the flat index of the visible row with the given label, so
+// tests survive settings rows being regrouped or reordered.
+func itemIndex(t *testing.T, m SettingsModel, label string) int {
+	t.Helper()
+	for i, it := range flatItems(m) {
+		if it.label == label {
+			return i
+		}
+	}
+	t.Fatalf("no visible settings row labelled %q", label)
+	return -1
 }
 
 func TestSettings_Keywordlist_EnterOpensEditorPopup(t *testing.T) {
@@ -587,8 +605,9 @@ func TestSettings_IsDirty_FalseAfterSetSettings(t *testing.T) {
 
 func TestSettings_View_ContainsSectionHeaders(t *testing.T) {
 	m := initSettings(defaultSettings())
+	m.height = 100 // fit every group on screen; the default 24 rows scrolls the lower ones out
 	view := m.View()
-	headers := []string{"notifications", "content", "social", "display"}
+	headers := []string{"alerts", "feed & posts", "display", "images", "chat & compose", "advanced"}
 	for _, h := range headers {
 		if !containsSubstring(view, h) {
 			t.Errorf("View should contain section header '%s'", h)
@@ -616,7 +635,7 @@ func TestSettings_View_ShowsCheckboxFalse(t *testing.T) {
 
 func TestSettings_View_ShowsEnumValue(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m.cursor = 8 // time format
+	m.cursor = itemIndex(t, m, "time format")
 	view := m.View()
 	if !containsSubstring(view, "relative") {
 		t.Error("View should show the current enum value")
@@ -632,12 +651,12 @@ func TestSettings_View_DirtyFooterHint(t *testing.T) {
 	}
 }
 
-func TestSettings_View_SavedMessage(t *testing.T) {
+func TestSettings_View_DirtyFooterKeepsKeyHints(t *testing.T) {
 	m := initSettings(defaultSettings())
-	m = m.SetSaved(false, false, true, false, true, 3, "UTC", "terminal", "", false, false, nil)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	view := m.View()
-	if !containsSubstring(view, "saved!") {
-		t.Error("View should show 'saved!' when saved=true")
+	if !containsSubstring(view, "tab · cycle enum") || !containsSubstring(view, "ctrl+s · save") {
+		t.Error("dirty footer should show both the key hints and the save hint")
 	}
 }
 
@@ -652,18 +671,10 @@ func TestSettings_View_ErrorMessage(t *testing.T) {
 
 // --- WanderLust Tests ---
 
-func TestSettings_WanderGroup_Visible(t *testing.T) {
-	m := initSettings(defaultSettings())
-	view := m.View()
-	if !containsSubstring(view, "wander") {
-		t.Error("View should contain 'wander' group header")
-	}
-}
-
 func TestSettings_WanderToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.wanderLust = true
-	m.cursor = 16 // wander mode item (shifted by the dithering and color nicknames toggles above it)
+	m.cursor = itemIndex(t, m, "wander mode")
 	m, _ = m.Update(keyMsg("enter"))
 	if m.wanderLust {
 		t.Error("toggling wander mode should flip wanderLust to false")
@@ -800,14 +811,6 @@ func TestSettings_FeedAutoRefreshSetSaved(t *testing.T) {
 // throughout (typingIndicatorsEnabled), so no display-label inversion is
 // needed in the settings item's getBool/toggle closures.
 
-func TestSettings_CMailGroup_Visible(t *testing.T) {
-	m := initSettings(defaultSettings())
-	view := m.View()
-	if !containsSubstring(view, "c-mail") {
-		t.Error("View should contain 'c-mail' group header")
-	}
-}
-
 func TestSettings_TypingIndicatorsToggle(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.typingIndicatorsEnabled = true
@@ -935,7 +938,7 @@ func TestSettings_Timezone_CyclesForward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.timezone = "UTC"
 	m.originalTimezone = "UTC"
-	m.cursor = 11 // timezone item
+	m.cursor = itemIndex(t, m, "timezone")
 	m, _ = m.Update(keyMsg("tab"))
 	if m.timezone == "UTC" {
 		t.Error("tab should advance timezone from UTC")
@@ -946,7 +949,7 @@ func TestSettings_Timezone_CyclesBackward(t *testing.T) {
 	m := initSettings(defaultSettings())
 	m.timezone = "UTC"
 	m.originalTimezone = "UTC"
-	m.cursor = 11
+	m.cursor = itemIndex(t, m, "timezone")
 	m, _ = m.Update(keyMsg("shift+tab"))
 	if m.timezone == "UTC" {
 		t.Error("shift+tab should cycle timezone backward from UTC")
@@ -955,13 +958,14 @@ func TestSettings_Timezone_CyclesBackward(t *testing.T) {
 
 func TestSettings_Timezone_Wraps(t *testing.T) {
 	m := initSettings(defaultSettings())
-	items := flatItems(m)
-	last := items[11].options[len(items[11].options)-1]
+	idx := itemIndex(t, m, "timezone")
+	opts := flatItems(m)[idx].options
+	last := opts[len(opts)-1]
 	m.timezone = last
 	m.originalTimezone = last
-	m.cursor = 11
+	m.cursor = idx
 	m, _ = m.Update(keyMsg("tab"))
-	first := items[11].options[0]
+	first := opts[0]
 	if m.timezone != first {
 		t.Errorf("tab from last timezone should wrap to first, got %s", m.timezone)
 	}
@@ -1038,7 +1042,7 @@ type mockErr struct {
 func (e *mockErr) Error() string { return e.msg }
 
 func containsSubstring(s, sub string) bool {
-	return len(s) > 0 && len(sub) > 0 && (s == sub || len(sub) <= len(s))
+	return strings.Contains(s, sub)
 }
 
 // --- Hard line break key Tests ---

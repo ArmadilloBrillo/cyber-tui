@@ -36,7 +36,7 @@ type settingsGroup struct {
 
 var settingsGroups = []settingsGroup{
 	{
-		title: "notifications",
+		title: "alerts",
 		items: []settingsItem{
 			{
 				label: "bookmark alerts", kind: "bool",
@@ -62,10 +62,32 @@ var settingsGroups = []settingsGroup{
 					return m
 				},
 			},
+			{
+				// Words/phrases that raise a Notifications-tab entry (and,
+				// subject to the desktop-notifications toggle above, an OSC 9
+				// toast) wherever content is scanned — cIRC, C-Mail, posts,
+				// and post topics/tags. Edited in place (kind
+				// "keywordlist" has its own key handling in Update/View,
+				// there being only one such row, unlike bool/enum's
+				// getter/setter closures).
+				label: "alert keywords", kind: "keywordlist",
+			},
+			{
+				// OS desktop notification (OSC 9 escape) for new C-Mail /
+				// activity while backgrounded — see
+				// docs/53-desktop-notifications.md. Silently does nothing on
+				// terminals without OSC 9 support.
+				label: "desktop notifications (OSC 9)", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.desktopNotifications },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.desktopNotifications = !m.desktopNotifications
+					return m
+				},
+			},
 		},
 	},
 	{
-		title: "content",
+		title: "feed & posts",
 		items: []settingsItem{
 			{
 				label: "filter nsfw", kind: "bool",
@@ -80,16 +102,27 @@ var settingsGroups = []settingsGroup{
 					return m
 				},
 			},
-		},
-	},
-	{
-		title: "social",
-		items: []settingsItem{
 			{
-				label: "show follower count", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.settings.ShowFollowerCount },
+				// Internally tracked as feedManualRefreshOnly (true = off);
+				// inverted here so "on" reads as the enabled state — see
+				// docs/39-feed-background-poll.md.
+				label: "auto-refresh (background poll)", kind: "bool",
+				getBool: func(m SettingsModel) bool { return !m.feedManualRefreshOnly },
 				toggle: func(m SettingsModel) SettingsModel {
-					m.settings.ShowFollowerCount = !m.settings.ShowFollowerCount
+					m.feedManualRefreshOnly = !m.feedManualRefreshOnly
+					return m
+				},
+			},
+			{
+				label: "always reveal content warnings", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.revealCW },
+				toggle:  func(m SettingsModel) SettingsModel { m.revealCW = !m.revealCW; return m },
+			},
+			{
+				label: "default public post", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.DefaultPublicPost },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.settings.DefaultPublicPost = !m.settings.DefaultPublicPost
 					return m
 				},
 			},
@@ -102,10 +135,10 @@ var settingsGroups = []settingsGroup{
 				},
 			},
 			{
-				label: "default public post", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.settings.DefaultPublicPost },
+				label: "show follower count", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.settings.ShowFollowerCount },
 				toggle: func(m SettingsModel) SettingsModel {
-					m.settings.DefaultPublicPost = !m.settings.DefaultPublicPost
+					m.settings.ShowFollowerCount = !m.settings.ShowFollowerCount
 					return m
 				},
 			},
@@ -120,6 +153,24 @@ var settingsGroups = []settingsGroup{
 				getEnum: func(m SettingsModel) string { return m.settings.TimeDisplayFormat },
 				cycle: func(m SettingsModel, delta int) SettingsModel {
 					m.settings.TimeDisplayFormat = cycleStringEnum(m.settings.TimeDisplayFormat, []string{"datetime", "relative", "unix", "swatch"}, delta)
+					return m
+				},
+			},
+			{
+				label: "timezone", kind: "enum",
+				options: config.AvailableTimezones,
+				getEnum: func(m SettingsModel) string {
+					if m.timezone == "" {
+						return "UTC"
+					}
+					return m.timezone
+				},
+				cycle: func(m SettingsModel, delta int) SettingsModel {
+					tz := m.timezone
+					if tz == "" {
+						tz = "UTC"
+					}
+					m.timezone = cycleStringEnum(tz, config.AvailableTimezones, delta)
 					return m
 				},
 			},
@@ -149,23 +200,18 @@ var settingsGroups = []settingsGroup{
 				},
 			},
 			{
-				label: "timezone", kind: "enum",
-				options: config.AvailableTimezones,
-				getEnum: func(m SettingsModel) string {
-					if m.timezone == "" {
-						return "UTC"
-					}
-					return m.timezone
-				},
-				cycle: func(m SettingsModel, delta int) SettingsModel {
-					tz := m.timezone
-					if tz == "" {
-						tz = "UTC"
-					}
-					m.timezone = cycleStringEnum(tz, config.AvailableTimezones, delta)
+				label: "show globe tab", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.showGlobeTab },
+				toggle: func(m SettingsModel) SettingsModel {
+					m.showGlobeTab = !m.showGlobeTab
 					return m
 				},
 			},
+		},
+	},
+	{
+		title: "images",
+		items: []settingsItem{
 			{
 				label: "image viewer", kind: "enum",
 				options: []string{"terminal", "browser"},
@@ -268,38 +314,7 @@ var settingsGroups = []settingsGroup{
 		},
 	},
 	{
-		title: "wander",
-		items: []settingsItem{
-			{
-				label: "wander mode", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.wanderLust },
-				toggle:  func(m SettingsModel) SettingsModel { m.wanderLust = !m.wanderLust; return m },
-			},
-		},
-	},
-	{
-		title: "feed",
-		items: []settingsItem{
-			{
-				// Internally tracked as feedManualRefreshOnly (true = off);
-				// inverted here so "on" reads as the enabled state — see
-				// docs/39-feed-background-poll.md.
-				label: "auto-refresh (background poll)", kind: "bool",
-				getBool: func(m SettingsModel) bool { return !m.feedManualRefreshOnly },
-				toggle: func(m SettingsModel) SettingsModel {
-					m.feedManualRefreshOnly = !m.feedManualRefreshOnly
-					return m
-				},
-			},
-			{
-				label: "always reveal content warnings", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.revealCW },
-				toggle:  func(m SettingsModel) SettingsModel { m.revealCW = !m.revealCW; return m },
-			},
-		},
-	},
-	{
-		title: "compose",
+		title: "chat & compose",
 		items: []settingsItem{
 			{
 				// The key that inserts a line break: a markdown hard break
@@ -309,11 +324,6 @@ var settingsGroups = []settingsGroup{
 				// in Update/handleCapture and View, like "keywordlist".
 				label: "line break key", kind: "keybind",
 			},
-		},
-	},
-	{
-		title: "c-mail",
-		items: []settingsItem{
 			{
 				label: "typing indicators", kind: "bool",
 				getBool: func(m SettingsModel) bool { return m.typingIndicatorsEnabled },
@@ -325,57 +335,17 @@ var settingsGroups = []settingsGroup{
 		},
 	},
 	{
-		title: "desktop",
+		title: "advanced",
 		items: []settingsItem{
 			{
-				// OS desktop notification (OSC 9 escape) for new C-Mail /
-				// activity while backgrounded — see
-				// docs/53-desktop-notifications.md. Silently does nothing on
-				// terminals without OSC 9 support.
-				label: "notifications (OSC 9 terminals)", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.desktopNotifications },
-				toggle: func(m SettingsModel) SettingsModel {
-					m.desktopNotifications = !m.desktopNotifications
-					return m
-				},
+				label: "wander mode", kind: "bool",
+				getBool: func(m SettingsModel) bool { return m.wanderLust },
+				toggle:  func(m SettingsModel) SettingsModel { m.wanderLust = !m.wanderLust; return m },
 			},
-		},
-	},
-	{
-		title: "globe",
-		items: []settingsItem{
-			{
-				label: "show globe tab", kind: "bool",
-				getBool: func(m SettingsModel) bool { return m.showGlobeTab },
-				toggle: func(m SettingsModel) SettingsModel {
-					m.showGlobeTab = !m.showGlobeTab
-					return m
-				},
-			},
-		},
-	},
-	{
-		title: "diagnostics",
-		items: []settingsItem{
 			{
 				label: "debug log (on restart)", kind: "bool",
 				getBool: func(m SettingsModel) bool { return m.debugLog },
 				toggle:  func(m SettingsModel) SettingsModel { m.debugLog = !m.debugLog; return m },
-			},
-		},
-	},
-	{
-		title: "keyword alerts",
-		items: []settingsItem{
-			{
-				// Words/phrases that raise a Notifications-tab entry (and,
-				// subject to the desktop-notifications toggle above, an OSC 9
-				// toast) wherever content is scanned — cIRC, C-Mail, posts,
-				// and post topics/tags. Edited in place (kind
-				// "keywordlist" has its own key handling in Update/View,
-				// there being only one such row, unlike bool/enum's
-				// getter/setter closures).
-				label: "alert keywords", kind: "keywordlist",
 			},
 		},
 	},
@@ -915,14 +885,18 @@ func (m SettingsModel) View() string {
 		footer = theme.Subtle.Render("press the key combo   esc · cancel")
 	case m.err != nil:
 		footer = theme.Error.Render("error: " + m.err.Error())
-	case m.IsDirty():
-		footer = theme.Subtle.Render("ctrl+s · save   esc · revert")
-	case selectedKind == "keywordlist":
-		footer = theme.Subtle.Render("enter · edit keywords")
-	case selectedKind == "keybind":
-		footer = theme.Subtle.Render("enter · set combo")
 	default:
-		footer = theme.Subtle.Render("space/enter · toggle   tab · cycle enum")
+		hint := "space/enter · toggle   tab · cycle enum"
+		switch selectedKind {
+		case "keywordlist":
+			hint = "enter · edit keywords"
+		case "keybind":
+			hint = "enter · set combo"
+		}
+		if m.IsDirty() {
+			hint += "   ctrl+s · save   esc · revert"
+		}
+		footer = theme.Subtle.Render(hint)
 	}
 	visible = append(visible, footer)
 
